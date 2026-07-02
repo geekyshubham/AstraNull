@@ -1,8 +1,41 @@
-.data/
-.playwright-cli/
-coverage/
+# Dependencies
 node_modules/
+
+# Local runtime / dev data
+.data/
 output/
-npm-debug.log*
+coverage/
+
+# Environment and secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Certificates and key material
+*.pem
+*.key
+*.p12
+*.crt
+*.cer
+
+# OS / editor / agent tooling
 .DS_Store
+Thumbs.db
 .codex/
+.cursor/
+.vscode/
+.idea/
+*.swp
+*~
+
+# Playwright / browser automation artifacts
+.playwright-cli/
+
+# Logs and debug output
+npm-debug.log*
+*.log
+debug.log
+
+# AI orchestration skills (local dev only, not product source)
+.agents/
+grokorches-skill.md
