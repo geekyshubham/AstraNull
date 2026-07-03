@@ -11,8 +11,6 @@ export function getPublicSiteConfig(runtimeConfig) {
     signup_enabled: signupEnabled,
     signup_path: '/signup',
     customer_portal_path: '/app',
-    internal_admin_path: '/internal/admin',
-    staff_login_path: '/internal/admin/login',
     auth_mode: runtimeConfig.authMode ?? 'dev-headers',
     bundled_staging_login_enabled: runtimeConfig.bundledStagingOidc === true,
     feature_flags: {

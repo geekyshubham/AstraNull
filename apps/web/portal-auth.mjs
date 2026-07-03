@@ -24,7 +24,7 @@ export async function fetchPortalConfig() {
     bundledLoginEnabled: siteConfig.bundled_staging_login_enabled === true,
     loginUrl: String(siteConfig.login_url ?? '/login'),
     portalPath: String(siteConfig.customer_portal_path ?? '/app'),
-    staffLoginPath: String(siteConfig.staff_login_path ?? '/internal/admin/login'),
+    staffLoginPath: '/internal/admin/login',
   };
 }
 

@@ -41,7 +41,7 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .public-error { color: var(--danger); margin-top: 0.75rem; }
 .login-card { max-width: 520px; margin: 0 auto; }
 .login-footnote { font-size: 0.85rem; margin-top: 1rem; }
-.login-staff-link { margin-top: 1.25rem; font-size: 0.9rem; }
+
 .login-credentials-hint { background: #f8fbfd; border-color: #c5e3eb; margin-bottom: 1rem; }
 .login-credentials-hint strong { display: block; margin-bottom: 0.35rem; }
 .login-credential-list { margin: 0.5rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }

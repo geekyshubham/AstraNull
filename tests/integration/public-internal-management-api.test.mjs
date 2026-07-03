@@ -39,6 +39,7 @@ describe('public landing and internal management APIs', () => {
     const navMatch = landing.text.match(/<nav class="public-nav">([\s\S]*?)<\/nav>/);
     assert.ok(navMatch);
     assert.doesNotMatch(navMatch[1], /internal\/admin/);
+    assert.doesNotMatch(landing.text, /internal\/admin|staff-login|Internal management sign-in/);
     assert.match(landing.text, /\/login/);
 
     const appShell = await request(baseUrl, 'GET', '/app');
@@ -49,6 +50,8 @@ describe('public landing and internal management APIs', () => {
     assert.equal(config.status, 200);
     assert.equal(config.json.product_name, 'AstraNull');
     assert.equal(config.json.customer_portal_path, '/app');
+    assert.equal(config.json.staff_login_path, undefined);
+    assert.equal(config.json.internal_admin_path, undefined);
     assert.equal(config.json.safety_framing.no_default_cloud_access, true);
     assert.equal(typeof config.json.feature_flags, 'object');
     assert.equal(typeof config.json.feature_flags.waf_posture, 'boolean');
@@ -57,10 +60,7 @@ describe('public landing and internal management APIs', () => {
     const loginPage = await request(baseUrl, 'GET', '/login');
     assert.equal(loginPage.status, 200);
     assert.match(loginPage.text, /Customer portal/);
-
-    const staffLoginPage = await request(baseUrl, 'GET', '/internal/admin/login');
-    assert.equal(staffLoginPage.status, 200);
-    assert.match(staffLoginPage.text, /Staff sign-in/);
+    assert.doesNotMatch(loginPage.text, /internal\/admin|Internal management sign-in|AstraNull staff/);
 
     const loginModuleRes = await fetch(`${baseUrl}/login.mjs`);
     assert.equal(loginModuleRes.status, 200);
