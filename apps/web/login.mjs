@@ -38,13 +38,19 @@ if (!config.bundledLoginEnabled && config.authMode !== 'dev-headers') {
   if (submitBtn) submitBtn.disabled = true;
 }
 
-form?.addEventListener('submit', async (event) => {
-  event.preventDefault();
+async function handleLoginSubmit(event) {
+  event?.preventDefault();
   showError('');
 
   const userId = document.getElementById('userId')?.value?.trim() ?? 'usr_admin';
   const tenantId = tenantInput?.value?.trim() ?? 'ten_demo';
   const role = roleSelect?.value ?? 'admin';
+
+  let navigated = false;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Signing in…';
+  }
 
   if (config.authMode === 'dev-headers') {
     saveSession({
@@ -54,6 +60,7 @@ form?.addEventListener('submit', async (event) => {
       user_id: userId,
       role,
     });
+    navigated = true;
     window.location.replace(config.portalPath);
     return;
   }
@@ -71,12 +78,29 @@ form?.addEventListener('submit', async (event) => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      showError(data.message ?? data.error ?? 'Login failed.');
+      showError(data.message ?? data.error ?? `Login failed (${res.status}).`);
       return;
     }
-    saveSession(sessionFromLoginResponse(data));
+    try {
+      saveSession(sessionFromLoginResponse(data));
+    } catch (storageErr) {
+      showError(storageErr instanceof Error ? storageErr.message : 'Could not save session in this browser.');
+      return;
+    }
+    navigated = true;
     window.location.replace(config.portalPath);
   } catch (err) {
     showError(err instanceof Error ? err.message : 'Login failed.');
+  } finally {
+    if (!navigated && submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Continue to portal';
+    }
   }
+}
+
+form?.addEventListener('submit', handleLoginSubmit);
+submitBtn?.addEventListener('click', (event) => {
+  if (event.target?.form) return;
+  handleLoginSubmit(event);
 });

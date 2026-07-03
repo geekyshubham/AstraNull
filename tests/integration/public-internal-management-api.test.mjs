@@ -54,6 +54,18 @@ describe('public landing and internal management APIs', () => {
     const loginPage = await request(baseUrl, 'GET', '/login');
     assert.equal(loginPage.status, 200);
     assert.match(loginPage.text, /Customer portal/);
+
+    const staffLoginPage = await request(baseUrl, 'GET', '/internal/admin/login');
+    assert.equal(staffLoginPage.status, 200);
+    assert.match(staffLoginPage.text, /Staff sign-in/);
+
+    const loginModuleRes = await fetch(`${baseUrl}/login.mjs`);
+    assert.equal(loginModuleRes.status, 200);
+    assert.match(loginModuleRes.headers.get('content-type') ?? '', /javascript/);
+
+    const portalAuthRes = await fetch(`${baseUrl}/portal-auth.mjs`);
+    assert.equal(portalAuthRes.status, 200);
+    assert.match(portalAuthRes.headers.get('content-type') ?? '', /javascript/);
   });
 
   it('accepts public signup requests and exposes public status', async () => {

@@ -20,7 +20,12 @@ export async function request(baseUrl, method, path, { headers = {}, body, rawBo
   } catch {
     json = { raw: text };
   }
-  return { status: res.status, json, text };
+  return {
+    status: res.status,
+    json,
+    text,
+    headers: Object.fromEntries(res.headers.entries()),
+  };
 }
 
 export function demoHeaders(role = 'admin', tenant = 'ten_demo', user = 'usr_admin') {

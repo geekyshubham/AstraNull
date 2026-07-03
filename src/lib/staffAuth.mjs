@@ -13,7 +13,9 @@ export function isInternalAdminApiRoute(pathname, method) {
 }
 
 export function isInternalAdminPageRoute(pathname, method) {
-  return method === 'GET' && (pathname === '/internal/admin' || pathname === '/internal/admin/');
+  if (method !== 'GET') return false;
+  if (pathname === '/internal/admin/login') return true;
+  return pathname === '/internal/admin' || pathname === '/internal/admin/';
 }
 
 export function isPublicApiRoute(pathname, method) {

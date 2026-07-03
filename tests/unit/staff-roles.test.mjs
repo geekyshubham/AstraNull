@@ -34,6 +34,8 @@ describe('staff roles and route boundaries', () => {
     assert.equal(isInternalAdminRoute('/internal/admin/tenants'), true);
     assert.equal(isInternalAdminRoute('/internal/soc/kill-switch'), false);
     assert.equal(isInternalAdminPageRoute('/internal/admin', 'GET'), true);
+    assert.equal(isInternalAdminPageRoute('/internal/admin/login', 'GET'), true);
+    assert.equal(isInternalAdminApiRoute('/internal/admin/login', 'GET'), false);
     assert.equal(isInternalAdminApiRoute('/internal/admin', 'GET'), false);
     assert.equal(isInternalAdminApiRoute('/internal/admin/tenants', 'GET'), true);
   });
