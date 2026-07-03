@@ -3465,6 +3465,51 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal('token' in (auditEvents[0].metadata ?? {}), false);
   });
 
+  it('serves WAF coverage trend from persisted daily rollups when available', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const { repositories, repoCalls } = createRecordingWafPostureRepositories({
+      listWafAssets: async () => [
+        { id: 'waf_1', target_group_id: 'tg_1' },
+      ],
+      listCurrentPostureSnapshots: async () => [
+        { waf_asset_id: 'waf_1', status: 'protected' },
+      ],
+    });
+    repositories.wafPosture.listWafCoverageDailyRollups = async (...args) => {
+      repoCalls.push({ method: 'listWafCoverageDailyRollups', args });
+      return [
+        {
+          rollup_date: '2026-07-02',
+          total_assets: 2,
+          protected: 1,
+          underprotected: 0,
+          unprotected: 1,
+          unknown: 0,
+          excluded: 0,
+          coverage_ratio: 0.5,
+        },
+      ];
+    };
+    const svc = createPostgresWafPostureServices(repositories);
+
+    const coverage = await svc.getWafCoverage(ctx, { windowDays: 30 });
+
+    assert.equal(coverage.protected, 1);
+    assert.deepEqual(coverage.trend, [{
+      date: '2026-07-02',
+      coverage_ratio: 0.5,
+      protected: 1,
+      underprotected: 0,
+      unprotected: 1,
+      unknown: 0,
+      excluded: 0,
+      total_assets: 2,
+    }]);
+    const rollupCall = repoCalls.find((call) => call.method === 'listWafCoverageDailyRollups');
+    assert.ok(rollupCall);
+    assert.equal(rollupCall.args[1].windowDays, 30);
+  });
+
   it('does not reference dev-json memory store or dev WAF service in adapter source', () => {
     assert.equal(/\bgetStore\b/.test(WAF_POSTURE_ADAPTER_SOURCE), false);
     assert.equal(/\bpersistStore\b/.test(WAF_POSTURE_ADAPTER_SOURCE), false);

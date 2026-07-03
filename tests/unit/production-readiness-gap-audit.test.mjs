@@ -6,8 +6,11 @@ import { afterEach, describe, it } from 'node:test';
 import { PRODUCTION_RELEASE_EVIDENCE_KINDS } from '../../src/contracts/productionReleaseEvidence.mjs';
 import {
   aggregateProductionReadinessGapAudit,
+  buildProductionReadinessScorecard,
   EXTERNAL_PRODUCTION_GATE_CATEGORIES,
   gapAuditExitCode,
+  resolveExternalGateStatuses,
+  resolveMergeHygieneOk,
   loadReleaseDocGateCounts,
   main,
   parseArgs,
@@ -35,17 +38,7 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-const STAGING_E2E_MATRIX = {
-  schema_version: 1,
-  artifact_type: 'staging_e2e_matrix_evidence',
-  created_at: '2026-07-02T00:00:00.000Z',
-  release_id: 'rel-2026-07-02',
-  environment: 'staging',
-  scenarios: [{ id: 'sso-ui', status: 'passed' }],
-  overall_status: 'passed',
-  signoff: { owner: 'qa-lead', reference: 'signoff://qa/staging-e2e' },
-  evidence_uri: 'evidence://qa/staging-e2e',
-};
+const STAGING_E2E_MATRIX = PRODUCTION_RELEASE_EVIDENCE_COMPLETE.staging_e2e_matrix;
 
 const CONTROL_PLANE_CONTAINER_RELEASE = {
   schema_version: 1,
@@ -246,6 +239,99 @@ Not a checklist - [ ] fake
     assert.equal(report.release_checklist_gates.combined.external_blockers, 1);
     assert.equal(gapAuditExitCode(report, { allowExternalBlockersOnly: true }), 0);
     assert.equal(gapAuditExitCode(report), 1);
+  });
+
+  it('accepts legacy soc-approval-gate scenario id for SOC external gate', () => {
+    const records = [{
+      kind: 'staging_e2e_matrix',
+      status: 'accepted',
+      evidence: {
+        ...STAGING_E2E_MATRIX,
+        scenarios: [{ scenario_id: 'soc-approval-gate', status: 'passed' }],
+      },
+    }];
+    const soc = resolveExternalGateStatuses(records).find((entry) => entry.id === 'soc');
+    assert.equal(soc?.status, 'satisfied_by_staging_evidence');
+  });
+
+  it('marks staging and SOC external gates satisfied when staging_e2e_matrix passed', () => {
+    const records = [{
+      kind: 'staging_e2e_matrix',
+      status: 'accepted',
+      evidence: STAGING_E2E_MATRIX,
+    }];
+    const categories = resolveExternalGateStatuses(records);
+    const staging = categories.find((entry) => entry.id === 'staging');
+    const soc = categories.find((entry) => entry.id === 'soc');
+    assert.equal(staging?.status, 'satisfied_by_staging_evidence');
+    assert.equal(soc?.status, 'satisfied_by_staging_evidence');
+  });
+
+  it('does not satisfy external gates from malformed or rejected evidence', () => {
+    const categories = resolveExternalGateStatuses([
+      {
+        kind: 'staging_e2e_matrix',
+        status: 'accepted',
+        evidence: {
+          ...STAGING_E2E_MATRIX,
+          scenarios: [
+            ...STAGING_E2E_MATRIX.scenarios.slice(0, -1),
+            { ...STAGING_E2E_MATRIX.scenarios.at(-1), status: 'failed' },
+          ],
+        },
+      },
+      {
+        kind: 'third_party_security_review',
+        status: 'accepted',
+        evidence: {
+          ...PRODUCTION_RELEASE_EVIDENCE_COMPLETE.third_party_security_review,
+          password: 'forbidden',
+        },
+      },
+      {
+        kind: 'compliance_legal_signoff',
+        status: 'rejected',
+        evidence: PRODUCTION_RELEASE_EVIDENCE_COMPLETE.compliance_legal_signoff,
+      },
+    ]);
+
+    assert.equal(categories.find((entry) => entry.id === 'staging')?.status, 'external_gate_required');
+    assert.equal(categories.find((entry) => entry.id === 'soc')?.status, 'external_gate_required');
+    assert.equal(categories.find((entry) => entry.id === 'security')?.status, 'external_gate_required');
+    assert.equal(categories.find((entry) => entry.id === 'legal')?.status, 'external_gate_required');
+  });
+
+  it('resolveMergeHygieneOk honors explicit override and env flag', () => {
+    assert.equal(resolveMergeHygieneOk(true), true);
+    assert.equal(resolveMergeHygieneOk(false), false);
+    assert.equal(resolveMergeHygieneOk(undefined, { ASTRANULL_MERGE_HYGIENE_OK: '0' }), false);
+    assert.equal(resolveMergeHygieneOk(undefined, { ASTRANULL_MERGE_HYGIENE_OK: '1' }), true);
+  });
+
+  it('builds 100% production readiness scorecard for complete hosted inventory', () => {
+    const records = completeEvidenceRecords(PRODUCTION_RELEASE_EVIDENCE_KINDS).map((entry) => ({
+      ...entry,
+      status: 'accepted',
+    }));
+    records.push({
+      kind: 'staging_e2e_matrix',
+      status: 'accepted',
+      evidence: STAGING_E2E_MATRIX,
+    });
+    const report = aggregateProductionReadinessGapAudit(
+      { releaseId: 'rel_score', records },
+      {
+        ...closedChecklistOptions,
+        scorecard: {
+          mergeHygieneOk: true,
+          customerPortalBrowserE2e: { ok: true, release_id: 'rel_score' },
+        },
+      },
+    );
+    assert.equal(report.production_ready, true);
+    assert.equal(report.production_readiness_scorecard.overall_percent, 100);
+    assert.equal(report.production_readiness_scorecard.areas.customer_facing_production_launch.percent, 100);
+    assert.equal(report.external_gates.local_developer_validation_cannot_satisfy, false);
   });
 
   it('keeps production_ready false when evidence is complete but checklist gates remain open', () => {

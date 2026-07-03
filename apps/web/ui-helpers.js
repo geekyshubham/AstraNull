@@ -1715,6 +1715,8 @@ export const WAF_REPORT_EXPORT_KINDS = Object.freeze([
   { id: 'technical_evidence', label: 'Technical evidence' },
   { id: 'drift_audit', label: 'Drift audit' },
   { id: 'connector_health', label: 'Connector health' },
+  { id: 'compliance_audit', label: 'Compliance audit' },
+  { id: 'board_roadmap_brief', label: 'Board roadmap brief' },
 ]);
 
 /**

@@ -263,6 +263,8 @@ describe('ui and api smoke', () => {
     assert.ok(css.text.includes('.waf-connectors-panel'));
     assert.ok(css.text.includes('.waf-connectors-table'));
     assert.ok(uiHelpers.text.includes('renderWafReportsPanel'));
+    assert.ok(uiHelpers.text.includes('compliance_audit'), 'waf compliance report picker option');
+    assert.ok(uiHelpers.text.includes('board_roadmap_brief'), 'waf board roadmap report picker option');
     assert.ok(uiHelpers.text.includes('renderWafCriticalityCard'));
     assert.ok(uiHelpers.text.includes('buildRetestMapByDriftEventId'));
     assert.ok(uiHelpers.text.includes('renderWafDriftQueue'));

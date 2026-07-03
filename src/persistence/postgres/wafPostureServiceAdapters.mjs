@@ -951,10 +951,14 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
 
     async getWafCoverage(ctx, options = {}) {
       const context = await gatherPostgresWafAnalyticsContext(ctx, wafRepo, coreCatalog, options);
+      const coverageRollups = typeof wafRepo.listWafCoverageDailyRollups === 'function'
+        ? await wafRepo.listWafCoverageDailyRollups(ctx, { windowDays: context.windowDays })
+        : [];
       return buildCoverageSummary({
         assets: context.assets,
         currentSnapshotsByAsset: context.currentSnapshotsByAsset,
         historicalSnapshots: context.historicalSnapshots,
+        coverageRollups,
         windowDays: context.windowDays,
       });
     },

@@ -3,6 +3,7 @@
  * Customer-only browser E2E: landing → login → all portal routes.
  * Asserts staff login is not exposed on any customer-facing page.
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -149,7 +150,23 @@ export async function runCustomerBrowserE2e(baseUrl) {
     console.log('404 urls:', JSON.stringify([...new Set(notFoundUrls)].slice(0, 20), null, 2));
   }
 
-  const result = { ok: failures.length === 0, failures, consoleErrorCount: consoleErrors.length, notFoundCount: notFoundUrls.length };
+  const result = {
+    schema_version: 1,
+    artifact_type: 'customer_portal_browser_e2e',
+    created_at: new Date().toISOString(),
+    base_url: baseUrl,
+    ok: failures.length === 0,
+    failures,
+    consoleErrorCount: consoleErrors.length,
+    notFoundCount: notFoundUrls.length,
+  };
+  try {
+    const outDir = path.join(REPO_ROOT, 'output/release-evidence');
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(path.join(outDir, 'customer_portal_browser_e2e.json'), `${JSON.stringify(result, null, 2)}\n`);
+  } catch {
+    // attest artifact is best-effort for local runs
+  }
   console.log(JSON.stringify(result, null, 2));
   return failures.length === 0 ? 0 : 1;
 }

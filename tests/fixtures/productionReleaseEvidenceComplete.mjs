@@ -405,9 +405,9 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
         evidence_uri: 'evidence://e2e/catalog-target-group',
       },
       {
-        scenario_id: 'soc-approval-gate',
+        scenario_id: 'soc_high_scale_governance',
         status: 'passed',
-        evidence_uri: 'evidence://e2e/soc-approval',
+        evidence_uri: 'evidence://e2e/soc_high_scale_governance',
       },
     ],
     overall_status: 'passed',

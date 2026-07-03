@@ -3,8 +3,13 @@
  * Staff-only browser E2E (unlinked surface): direct URL login → internal admin routes.
  * Not part of customer-facing verification.
  */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..');
 const STAFF_ROUTES = ['overview', 'signup-queue', 'tenants', 'approvals', 'audit'];
 
 function parseArgs(argv = []) {
@@ -15,6 +20,16 @@ function parseArgs(argv = []) {
     else if (arg === '--base-url') opts.baseUrl = argv[++i];
   }
   return opts;
+}
+
+function ensurePlaywrightCore() {
+  const check = spawnSync('npm', ['ls', 'playwright-core', '--depth=0'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  if (check.status !== 0) {
+    const install = spawnSync('npm', ['install', '--no-save', 'playwright-core@1.52.0'], {
+      cwd: REPO_ROOT, stdio: 'inherit',
+    });
+    if (install.status !== 0) throw new Error('Failed to install playwright-core');
+  }
 }
 
 async function runStaffBrowserE2e(baseUrl) {
@@ -69,7 +84,21 @@ async function runStaffBrowserE2e(baseUrl) {
     await browser.close();
   }
 
-  const result = { ok: failures.length === 0, failures };
+  const result = {
+    schema_version: 1,
+    artifact_type: 'staff_portal_browser_e2e',
+    created_at: new Date().toISOString(),
+    base_url: baseUrl,
+    ok: failures.length === 0,
+    failures,
+  };
+  try {
+    const outDir = path.join(REPO_ROOT, 'output/release-evidence');
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(path.join(outDir, 'staff_portal_browser_e2e.json'), `${JSON.stringify(result, null, 2)}\n`);
+  } catch {
+    // best-effort attest artifact
+  }
   console.log(JSON.stringify(result, null, 2));
   return failures.length === 0 ? 0 : 1;
 }
@@ -80,9 +109,16 @@ async function main() {
     console.log('Usage: node scripts/staff-portal-browser-e2e.mjs [--base-url URL]');
     return 0;
   }
+  ensurePlaywrightCore();
   return runStaffBrowserE2e(String(opts.baseUrl).replace(/\/$/, ''));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  main().then((code) => process.exit(code ?? 0));
+  main().then(
+    (code) => process.exit(code ?? 0),
+    (err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    },
+  );
 }

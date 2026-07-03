@@ -41,6 +41,7 @@ import {
   renderWafVendorMixCard,
   renderWafGeographyCard,
   renderWafRoadmapPanel,
+  renderWafReportsPanel,
   renderWafPostureTabs,
   renderWafAssetsTable,
   renderWafAssetEffectivenessSection,
@@ -1070,6 +1071,19 @@ describe('ui-helpers', () => {
     assert.match(html, /app\.example\.com/);
     assert.match(html, /waf-roadmap-factors/);
     assert.match(html, /Deploy WAF/);
+  });
+
+  it('renderWafReportsPanel exposes compliance and board report kinds', () => {
+    const html = renderWafReportsPanel({
+      selectedKind: 'compliance_audit',
+      selectedFormat: 'json',
+    });
+    assert.match(html, /value="executive_coverage"/);
+    assert.match(html, /value="compliance_audit" selected/);
+    assert.match(html, /Compliance audit/);
+    assert.match(html, /value="board_roadmap_brief"/);
+    assert.match(html, /Board roadmap brief/);
+    assert.equal(html.includes('raw payload'), false);
   });
 
   it('renderWafPostureTabs marks active tab', () => {

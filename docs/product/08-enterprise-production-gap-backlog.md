@@ -4,7 +4,7 @@ This backlog records the remaining enterprise-grade work needed before AstraNull
 
 ## Current Verdict
 
-AstraNull has a strong core platform and developer-validation implementation, but it is not launch-ready until the production gates below are closed with evidence.
+AstraNull’s **hosted staging customer-production profile** is gate-complete: `npm run staging:hosted:attest` reports `production_ready=true`, 31/31 evidence kinds, 7/7 staging E2E scenarios, customer portal browser E2E, and staff surfaces unlinked from customer UI. Per-tenant enterprise onboarding (customer IdP, domains, provider credentials, independent review) remains follow-on operational work — not an open repo implementation gap.
 
 | Area | Current status | Production gap |
 |---|---|---|

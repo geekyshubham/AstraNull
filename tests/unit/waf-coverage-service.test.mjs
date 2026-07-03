@@ -83,6 +83,43 @@ describe('wafCoverageService', () => {
     assert.equal(rollup.coverage_ratio, 0.5);
   });
 
+  it('uses persisted daily rollups for coverage trend when provided', () => {
+    const summary = buildCoverageSummary({
+      assets,
+      currentSnapshotsByAsset: snapshots,
+      coverageRollups: [
+        {
+          rollup_date: '2026-07-01',
+          total_assets: 10,
+          protected: 4,
+          underprotected: 1,
+          unprotected: 3,
+          unknown: 2,
+          excluded: 0,
+          coverage_ratio: 0.4,
+        },
+        {
+          rollup_date: '2026-07-02',
+          total_assets: 10,
+          protected: 5,
+          underprotected: 1,
+          unprotected: 2,
+          unknown: 2,
+          excluded: 0,
+          coverage_ratio: 0.5,
+        },
+      ],
+      windowDays: 7,
+      now: new Date('2026-07-03T12:00:00.000Z'),
+    });
+
+    assert.equal(summary.trend.length, 2);
+    assert.deepEqual(summary.trend.map((entry) => entry.date), ['2026-07-01', '2026-07-02']);
+    assert.equal(summary.trend[0].coverage_ratio, 0.4);
+    assert.equal(summary.trend[1].total_assets, 10);
+    assert.equal(summary.protected, 1);
+  });
+
   it('rolls up vendor mix for executive charts', () => {
     const vendors = buildVendorBreakdown({
       assets,

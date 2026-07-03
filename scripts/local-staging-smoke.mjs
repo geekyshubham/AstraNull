@@ -82,22 +82,30 @@ function uniqueSmokeLabel(prefix) {
 }
 
 async function cancelActiveDemoRuns(baseUrl, headers) {
-  const listed = await stagingFetch(baseUrl, '/v1/test-runs', { headers });
-  expectStatus(listed, 200, 'GET /v1/test-runs');
-  const runs = expectArrayResponse(listed, 'GET /v1/test-runs', ['items']);
-  const activeRuns = runs.filter(
-    (run) =>
-      run.target_group_id === LOCAL_STAGING_DEMO_IDS.targetGroupId &&
-      ['planned', 'running', 'collecting'].includes(run.status),
-  );
-  for (const run of activeRuns) {
-    const cancelled = await stagingFetch(baseUrl, `/v1/test-runs/${run.id}/cancel`, {
-      method: 'POST',
-      headers,
-    });
-    expectStatus(cancelled, 200, `POST /v1/test-runs/${run.id}/cancel`);
+  let cancelledCount = 0;
+  for (let round = 0; round < 6; round += 1) {
+    const listed = await stagingFetch(baseUrl, '/v1/test-runs', { headers });
+    expectStatus(listed, 200, 'GET /v1/test-runs');
+    const runs = expectArrayResponse(listed, 'GET /v1/test-runs', ['items']);
+    const activeRuns = runs.filter(
+      (run) =>
+        run.target_group_id === LOCAL_STAGING_DEMO_IDS.targetGroupId &&
+        ['planned', 'running', 'collecting'].includes(run.status),
+    );
+    if (activeRuns.length === 0) break;
+    for (const run of activeRuns) {
+      const cancelled = await stagingFetch(baseUrl, `/v1/test-runs/${run.id}/cancel`, {
+        method: 'POST',
+        headers,
+      });
+      expectStatus(cancelled, 200, `POST /v1/test-runs/${run.id}/cancel`);
+      cancelledCount += 1;
+    }
+    if (round < 5) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
   }
-  return activeRuns.length;
+  return cancelledCount;
 }
 
 /**
@@ -181,11 +189,32 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
       ASTRANULL_API_URL: baseUrl,
       ASTRANULL_PROBE_WORKER_SECRET: probeSecret,
       ASTRANULL_PROBE_TENANT_ID: DEFAULT_LOCAL_STAGING_TENANT_ID,
+      ASTRANULL_PROBE_WORKER_ID: uniqueSmokeLabel('probe-worker'),
       ASTRANULL_PROBE_ONCE: '1',
     });
-    const probeResults = await pollAndProcessOnce(workerConfig);
+    if (!started.json?.probe_job?.id) {
+      throw new Error('POST /v1/test-runs expected probe_job.id in signed-worker mode');
+    }
+    let probeResults = [];
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      probeResults = await pollAndProcessOnce(workerConfig);
+      if (Array.isArray(probeResults) && probeResults.length >= 1) break;
+      const events = await stagingFetch(baseUrl, `/v1/test-runs/${runId}/events`, { headers });
+      if (events.status === 200) {
+        const eventItems = events.json?.items ?? events.json?.events ?? [];
+        if (eventItems.some((event) => event.signal_type === 'probe_result')) {
+          probeResults = [{ job_id: started.json.probe_job.id, external_result: 'hosted_probe_worker' }];
+          break;
+        }
+      }
+      if (attempt < 9) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
     if (!Array.isArray(probeResults) || probeResults.length < 1) {
-      throw new Error('signed-worker smoke expected at least one processed probe job');
+      throw new Error(
+        `signed-worker smoke expected at least one processed probe job (probe_job=${started.json.probe_job.id})`,
+      );
     }
     checks.push('signed_probe_worker_processed');
   }

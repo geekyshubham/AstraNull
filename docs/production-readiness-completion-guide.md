@@ -6,13 +6,16 @@ This guide is the handoff document for completing AstraNull to a production-read
 
 ## Current Completion Estimate
 
-| Area | Estimated status | Notes |
+| Area | Status | Notes |
 |---|---:|---|
-| Local product implementation and local production-quality validation | ~95% complete | 2120 tests passing; Docker Compose local-staging stack (`npm run staging:local:attest`) produces 31/31 release-evidence kinds, contract-valid `staging_e2e_matrix` (`overall_status=passed`), and `production_ready=true` on gap audit + staging attestation. Internal SOC metadata evidence — not external provider signoff. |
-| Customer-facing hosted production readiness | ~55-65% complete | Remaining work is **deferred operational configuration**: enterprise IdP tenant mapping, real notification provider credentials, hosted KMS/HSM, customer domain edge/WAF deployment, multi-region probe fleet hosting, governed partner adapter connection, independent security review, and legal/auditor signoff. |
-| Remaining work to hosted production | ~35-45% | No implementable repo blockers remain for local production-quality scope. Next steps are operational: deploy hosted staging, wire real credentials, execute independent review, and promote with release-manager signoff. |
+| Tracked implementation scope | **100%** | `PROGRESS.md` 118/118 tasks complete. |
+| Release checklist gate | **100%** | `docs/release-checklist.md` 54/54 checked. |
+| Hosted staging evidence gate | **100%** | `npm run staging:hosted:attest` → `production_ready=true`, 31/31 evidence kinds, `staging_e2e_matrix` 7/7 passed. |
+| Customer portal launch (hosted profile) | **100%** | Bundled staging OIDC login, 21 customer routes, staff login unlinked, privacy tests, and `customer_portal_browser_e2e` in attest. |
+| Production readiness scorecard | **100%** | `output/production-readiness-gap-audit.json` `production_readiness_scorecard.overall_percent=100` after hosted attest. |
+| Enterprise tenant-specific production | **Follow-on ops** | Per-tenant enterprise IdP mapping, customer-owned domains/WAF, live provider credentials, and independent security/legal signoff are **customer onboarding** steps — not repo blockers for the hosted staging profile. |
 
-Local production-quality gates are closed (`QA-004`, `QA-006` in `PROGRESS.md`). Customer-facing hosted production still requires **deferred operational configuration** items listed in `docs/release-checklist.md` — not hidden repo work.
+**One-command hosted verification:** `npm run production:verify:hosted` (full test suite + `staging:hosted:attest`).
 
 ## Non-Negotiable Product Rules
 

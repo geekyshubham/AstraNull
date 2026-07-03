@@ -17,12 +17,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 function shell(command, options = {}) {
-  return execSync(command, {
+  const output = execSync(command, {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     stdio: options.stdio ?? 'pipe',
     ...options,
-  }).trim();
+  });
+  return typeof output === 'string' ? output.trim() : '';
 }
 
 /**
@@ -119,6 +120,8 @@ export async function runHostedStagingStack(opts) {
     case 'attest': {
       await runHostedStagingStack({ ...opts, command: 'smoke' });
       await runHostedStagingStack({ ...opts, command: 'e2e-matrix' });
+      shell(`node scripts/hosted-portal-browser-e2e.mjs --base-url ${JSON.stringify(baseUrl)}`, { stdio: 'inherit' });
+      shell(`node scripts/staff-portal-browser-e2e.mjs --base-url ${JSON.stringify(baseUrl)}`, { stdio: 'inherit' });
       await runHostedStagingStack({ ...opts, command: 'collect-evidence' });
       shell('npm run release:gap-audit:staging', { stdio: 'inherit' });
       shell('npm run release:staging-attestation:hosted', { stdio: 'inherit' });

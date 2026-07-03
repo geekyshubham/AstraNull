@@ -127,6 +127,26 @@ export function buildCoverageTrend({
   return trend;
 }
 
+function normalizeCoverageRollupTrend(coverageRollups = []) {
+  return coverageRollups
+    .map((row) => {
+      const date = row.rollup_date ?? row.date;
+      if (!date) return null;
+      return {
+        date: String(date).slice(0, 10),
+        coverage_ratio: Number(row.coverage_ratio ?? 0),
+        protected: Number(row.protected ?? 0),
+        underprotected: Number(row.underprotected ?? 0),
+        unprotected: Number(row.unprotected ?? 0),
+        unknown: Number(row.unknown ?? 0),
+        excluded: Number(row.excluded ?? 0),
+        total_assets: Number(row.total_assets ?? row.total ?? 0),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export function computeCoverageDailyRollup({
   assets = [],
   currentSnapshotsByAsset = new Map(),
@@ -155,6 +175,7 @@ export function buildCoverageSummary({
   assets = [],
   currentSnapshotsByAsset = new Map(),
   historicalSnapshots = [],
+  coverageRollups = [],
   windowDays = 90,
   now = new Date(),
 } = {}) {
@@ -167,13 +188,16 @@ export function buildCoverageSummary({
   const total = assets.length;
   const coverage_ratio = coverageRatioFromCounts(counts, total);
   const percentages = percentagesFromCounts(counts, total);
-  const trend = buildCoverageTrend({
-    assets,
-    historicalSnapshots,
-    currentSnapshotsByAsset,
-    windowDays,
-    now,
-  });
+  const rollupTrend = normalizeCoverageRollupTrend(coverageRollups);
+  const trend = rollupTrend.length > 0
+    ? rollupTrend
+    : buildCoverageTrend({
+      assets,
+      historicalSnapshots,
+      currentSnapshotsByAsset,
+      windowDays,
+      now,
+    });
 
   return {
     total,
