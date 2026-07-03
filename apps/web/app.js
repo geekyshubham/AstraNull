@@ -483,7 +483,7 @@ function renderReadinessGauge(score, max = 100) {
     ? `<path d="M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}" fill="none" stroke="${VIZ_STROKE.accent}" stroke-width="8" stroke-linecap="round"/>`
     : '';
   return `<div class="readiness-gauge" role="img" aria-label="Readiness score ${s}">
-    <svg viewBox="0 0 100 56" width="100%" height="auto" preserveAspectRatio="xMidYMid meet">
+    <svg viewBox="0 0 100 56" width="100%" preserveAspectRatio="xMidYMid meet">
       <path d="M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}" fill="none" stroke="#e8eef3" stroke-width="8" stroke-linecap="round"/>
       ${arc}
       <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="14" font-weight="600" fill="#17202a">${s}</text>
@@ -529,7 +529,7 @@ function renderReadinessRadar(factors) {
     return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
   }).join(' ');
   return `<div class="readiness-radar" role="img" aria-label="Readiness factor radar">
-    <svg viewBox="0 0 120 120" width="100%" height="auto" preserveAspectRatio="xMidYMid meet">${grid}${axes}
+    <svg viewBox="0 0 120 120" width="100%" preserveAspectRatio="xMidYMid meet">${grid}${axes}
       <polygon points="${poly}" fill="rgba(18,107,131,0.22)" stroke="${VIZ_STROKE.accent}" stroke-width="1.5"/>
     </svg>
   </div>`;
@@ -603,7 +603,7 @@ function renderScoreTrend(runsPayload, currentScore) {
     return `${x},${y}`;
   }).join(' ');
   return `<div class="score-trend" role="img" aria-label="Readiness score trend">
-    <svg viewBox="0 0 ${w} ${h}" width="100%" height="auto" preserveAspectRatio="none">
+    <svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="none">
       <polyline points="${coords}" fill="none" stroke="${VIZ_STROKE.accent}" stroke-width="2" vector-effect="non-scaling-stroke"/>
       ${points.map((p, i) => {
         const x = pad + (i * (w - pad * 2)) / Math.max(1, points.length - 1);
@@ -706,7 +706,16 @@ function isDiscoveryFeatureDisabledError(err) {
   return msg === 'discovery_feature_disabled' || msg.includes('discovery_feature_disabled');
 }
 
+function applyFeatureFlagsFromSiteConfig(config) {
+  const flags = config?.siteConfig?.feature_flags;
+  if (!flags || typeof flags !== 'object') return false;
+  if (typeof flags.waf_posture === 'boolean') wafFeatureEnabled = flags.waf_posture;
+  if (typeof flags.external_discovery === 'boolean') discoveryFeatureEnabled = flags.external_discovery;
+  return true;
+}
+
 async function refreshFeatureFlags() {
+  if (applyFeatureFlagsFromSiteConfig(portalState?.config)) return;
   try {
     await api('/v1/waf/coverage');
     wafFeatureEnabled = true;

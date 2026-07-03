@@ -50,6 +50,9 @@ describe('public landing and internal management APIs', () => {
     assert.equal(config.json.product_name, 'AstraNull');
     assert.equal(config.json.customer_portal_path, '/app');
     assert.equal(config.json.safety_framing.no_default_cloud_access, true);
+    assert.equal(typeof config.json.feature_flags, 'object');
+    assert.equal(typeof config.json.feature_flags.waf_posture, 'boolean');
+    assert.equal(typeof config.json.feature_flags.external_discovery, 'boolean');
 
     const loginPage = await request(baseUrl, 'GET', '/login');
     assert.equal(loginPage.status, 200);

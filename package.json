@@ -40,6 +40,7 @@
     "staging:hosted:e2e-matrix": "node scripts/hosted-staging-stack.mjs e2e-matrix",
     "staging:hosted:evidence": "node scripts/hosted-staging-stack.mjs collect-evidence",
     "staging:hosted:attest": "node scripts/hosted-staging-stack.mjs attest",
+    "staging:portal-browser-e2e": "node scripts/hosted-portal-browser-e2e.mjs",
     "release:gap-audit:staging": "node scripts/collect-release-evidence.mjs --environment staging --release-id rel-hosted-staging-2026-07-03 && node scripts/production-readiness-gap-audit.mjs --evidence output/release-evidence/records.json",
     "release:staging-attestation:hosted": "node scripts/staging-readiness-attestation.mjs --input output/release-evidence/records.json --out output/staging-readiness-attestation-hosted.json --release-id rel-hosted-staging-2026-07-03",
     "postgres:startup-check": "node scripts/postgres-startup-check.mjs",

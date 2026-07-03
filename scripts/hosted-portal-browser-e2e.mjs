@@ -69,6 +69,7 @@ async function runBrowserE2e(baseUrl) {
   const { chromium } = await import('playwright-core');
   const failures = [];
   const consoleErrors = [];
+  const notFoundUrls = [];
 
   function fail(step, detail) {
     failures.push({ step, detail });
@@ -91,6 +92,9 @@ async function runBrowserE2e(baseUrl) {
   page.on('pageerror', (err) => consoleErrors.push(String(err)));
   page.on('console', (msg) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
+  });
+  page.on('response', (resp) => {
+    if (resp.status() === 404) notFoundUrls.push(resp.url());
   });
 
   try {
@@ -209,7 +213,15 @@ async function runBrowserE2e(baseUrl) {
     console.log('console errors:', JSON.stringify(consoleErrors.slice(0, 10), null, 2));
   }
 
-  const result = { ok: failures.length === 0, failures, consoleErrorCount: consoleErrors.length };
+  if (notFoundUrls.length) {
+    console.log('404 urls:', JSON.stringify([...new Set(notFoundUrls)].slice(0, 20), null, 2));
+  }
+  const result = {
+    ok: failures.length === 0,
+    failures,
+    consoleErrorCount: consoleErrors.length,
+    notFoundCount: notFoundUrls.length,
+  };
   console.log(JSON.stringify(result, null, 2));
   return failures.length === 0 ? 0 : 1;
 }

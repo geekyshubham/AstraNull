@@ -15,6 +15,11 @@ export function getPublicSiteConfig(runtimeConfig) {
     staff_login_path: '/internal/admin/login',
     auth_mode: runtimeConfig.authMode ?? 'dev-headers',
     bundled_staging_login_enabled: runtimeConfig.bundledStagingOidc === true,
+    feature_flags: {
+      waf_posture: runtimeConfig.featureFlags?.wafPostureEnabled === true,
+      external_discovery: runtimeConfig.featureFlags?.externalDiscoveryEnabled === true,
+      connectors_default: runtimeConfig.featureFlags?.connectorsEnabledDefault === true,
+    },
     plans: Object.values(SUBSCRIPTION_PLANS).map((p) => ({
       id: p.id,
       name: p.name,
