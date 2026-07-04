@@ -713,6 +713,20 @@ CREATE TABLE waf_baselines (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE waf_exceptions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  waf_asset_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  scope_hash TEXT,
+  approved_at TIMESTAMPTZ NOT NULL,
+  approved_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE waf_validation_plans (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -1080,6 +1094,9 @@ ALTER TABLE waf_posture_snapshots ADD CONSTRAINT fk_waf_posture_snapshots_waf_as
   FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets (tenant_id, id);
 ALTER TABLE waf_baselines ADD CONSTRAINT fk_waf_baselines_waf_asset_tenant
   FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets (tenant_id, id);
+ALTER TABLE waf_exceptions ADD CONSTRAINT waf_exceptions_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE waf_exceptions ADD CONSTRAINT fk_waf_exceptions_waf_asset_tenant
+  FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets (tenant_id, id);
 ALTER TABLE waf_validation_plans ADD CONSTRAINT fk_waf_validation_plans_target_group_tenant
   FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
 ALTER TABLE waf_baseline_approvals ADD CONSTRAINT fk_waf_baseline_approvals_baseline_tenant
@@ -1171,6 +1188,8 @@ CREATE INDEX idx_waf_retest_requests_drift ON waf_retest_requests(tenant_id, dri
 CREATE INDEX idx_waf_validation_plans_execution_lock ON waf_validation_plans(tenant_id, execution_lock_expires_at) WHERE execution_lock_token IS NOT NULL;
 CREATE INDEX idx_waf_retest_requests_execution_lock ON waf_retest_requests(tenant_id, execution_lock_expires_at) WHERE execution_lock_token IS NOT NULL;
 CREATE INDEX idx_waf_baseline_approvals_baseline ON waf_baseline_approvals(tenant_id, baseline_id, created_at DESC);
+CREATE INDEX idx_waf_exceptions_tenant_expires ON waf_exceptions(tenant_id, expires_at);
+CREATE INDEX idx_waf_exceptions_tenant_asset ON waf_exceptions(tenant_id, waf_asset_id);
 CREATE INDEX idx_waf_connector_snapshots_history ON waf_connector_snapshots(tenant_id, connector_id, provider, observed_at DESC);
 CREATE INDEX idx_cve_pipeline_items_lookup ON cve_pipeline_items(tenant_id, cve_id);
 CREATE UNIQUE INDEX uniq_cve_asset_matches_dedupe ON cve_asset_matches(tenant_id, cve_pipeline_item_id, waf_asset_id);
@@ -1270,6 +1289,8 @@ ALTER TABLE waf_posture_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waf_posture_snapshots FORCE ROW LEVEL SECURITY;
 ALTER TABLE waf_baselines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waf_baselines FORCE ROW LEVEL SECURITY;
+ALTER TABLE waf_exceptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE waf_exceptions FORCE ROW LEVEL SECURITY;
 ALTER TABLE waf_validation_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waf_validation_plans FORCE ROW LEVEL SECURITY;
 ALTER TABLE waf_baseline_approvals ENABLE ROW LEVEL SECURITY;
@@ -1411,6 +1432,9 @@ CREATE POLICY tenant_isolation_waf_posture_snapshots ON waf_posture_snapshots
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_waf_baselines ON waf_baselines
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_waf_exceptions ON waf_exceptions
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_waf_validation_plans ON waf_validation_plans

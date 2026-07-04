@@ -143,6 +143,38 @@ describe('production release evidence API', () => {
     assert.equal(getStore().productionReleaseEvidence.length, 0);
   });
 
+  it('returns invalid field errors and does not persist weak agent install evidence', async () => {
+    const admin = demoHeaders('admin');
+    const evidence = structuredClone(PRODUCTION_RELEASE_EVIDENCE_COMPLETE.agent_install_matrix);
+    evidence.overall_status = 'incomplete';
+    evidence.rows = evidence.rows.slice(0, 1);
+    evidence.coverage_gaps = {
+      ...evidence.coverage_gaps,
+      missing_formats: ['deb', 'rpm', 'container', 'kubernetes'],
+    };
+    const created = await request(baseUrl, 'POST', '/v1/production-release-evidence', {
+      headers: admin,
+      body: {
+        kind: 'agent_install_matrix',
+        evidence,
+      },
+    });
+    assert.equal(created.status, 400);
+    assert.equal(created.json.error, 'invalid_evidence_fields');
+    assert.ok(created.json.invalid_fields.some((entry) => entry.field === 'overall_status'));
+    assert.ok(
+      created.json.invalid_fields.some(
+        (entry) => entry.field === 'coverage_gaps.missing_formats',
+      ),
+    );
+    assert.ok(
+      created.json.invalid_fields.some(
+        (entry) => entry.field === 'rows' && entry.reason === 'missing_format',
+      ),
+    );
+    assert.equal(getStore().productionReleaseEvidence.length, 0);
+  });
+
   it('returns forbidden field errors and does not persist raw or secret-bearing evidence', async () => {
     const admin = demoHeaders('admin');
     const created = await request(baseUrl, 'POST', '/v1/production-release-evidence', {

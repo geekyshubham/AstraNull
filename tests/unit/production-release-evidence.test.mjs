@@ -7,6 +7,12 @@ import {
 } from '../../src/contracts/productionReleaseEvidence.mjs';
 import { PRODUCTION_RELEASE_EVIDENCE_COMPLETE as COMPLETE } from '../fixtures/productionReleaseEvidenceComplete.mjs';
 
+function hasInvalidField(result, field, reason = null) {
+  return result.invalid_fields.some(
+    (entry) => entry.field === field && (reason === null || entry.reason === reason),
+  );
+}
+
 describe('production release evidence contracts', () => {
   it('defines all production release evidence kinds', () => {
     assert.deepEqual(PRODUCTION_RELEASE_EVIDENCE_KINDS, [
@@ -189,6 +195,142 @@ describe('production release evidence contracts', () => {
     );
   });
 
+  it('rejects incomplete agent install matrix evidence', () => {
+    const evidence = structuredClone(COMPLETE.agent_install_matrix);
+    evidence.overall_status = 'incomplete';
+    evidence.rows[0].status = 'incomplete';
+    evidence.rows[0].checks.heartbeat = 'not_run';
+    evidence.rows[0].check_details.no_inbound_port.inbound_listener_count = 1;
+    const result = validateProductionReleaseEvidence('agent_install_matrix', evidence);
+    assert.equal(result.ok, false);
+    assert.ok(hasInvalidField(result, 'overall_status', 'matrix_not_passed'));
+    assert.ok(hasInvalidField(result, 'rows[0].status', 'row_not_passed'));
+    assert.ok(hasInvalidField(result, 'rows[0].checks.heartbeat', 'check_not_passed'));
+    assert.ok(
+      hasInvalidField(
+        result,
+        'rows[0].check_details.no_inbound_port.inbound_listener_count',
+        'inbound_listener_count_not_zero',
+      ),
+    );
+  });
+
+  it('rejects agent install matrix evidence missing required coverage', () => {
+    const evidence = structuredClone(COMPLETE.agent_install_matrix);
+    evidence.required_formats = evidence.required_formats.filter((format) => format !== 'rpm');
+    evidence.required_checks = evidence.required_checks.filter((check) => check !== 'signature_verify');
+    evidence.coverage_gaps.missing_formats = ['rpm'];
+    evidence.coverage_gaps.failed_checks = ['deb.signature_verify'];
+    evidence.rows = evidence.rows.filter((row) => row.format !== 'rpm');
+    delete evidence.rows[0].check_details.signature_verify.trust_anchor_reference;
+    const result = validateProductionReleaseEvidence('agent_install_matrix', evidence);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.invalid_fields.some(
+        (entry) => entry.field === 'required_formats' && entry.format === 'rpm',
+      ),
+    );
+    assert.ok(
+      result.invalid_fields.some(
+        (entry) => entry.field === 'required_checks' && entry.check === 'signature_verify',
+      ),
+    );
+    assert.ok(hasInvalidField(result, 'coverage_gaps.missing_formats', 'missing_formats_present'));
+    assert.ok(hasInvalidField(result, 'coverage_gaps.failed_checks', 'failed_checks_present'));
+    assert.ok(
+      result.invalid_fields.some((entry) => entry.field === 'rows' && entry.format === 'rpm'),
+    );
+    assert.ok(
+      hasInvalidField(
+        result,
+        'rows[0].check_details.signature_verify.trust_anchor_reference',
+        'missing_trust_anchor_reference',
+      ),
+    );
+  });
+
+  it('rejects agent mTLS gateway evidence when proof or signoff is incomplete', () => {
+    const evidence = structuredClone(COMPLETE.agent_mtls_gateway);
+    evidence.validation.ok = false;
+    evidence.staging_proof_summary.fingerprint_match_confirmed = false;
+    evidence.rotation_revocation_summary.revocation_tested = false;
+    delete evidence.security_signoff.signoff_reference;
+    const result = validateProductionReleaseEvidence('agent_mtls_gateway', evidence);
+    assert.equal(result.ok, false);
+    assert.ok(hasInvalidField(result, 'validation.ok', 'validation_not_ok'));
+    assert.ok(
+      hasInvalidField(
+        result,
+        'staging_proof_summary.fingerprint_match_confirmed',
+        'fingerprint_match_not_confirmed',
+      ),
+    );
+    assert.ok(
+      hasInvalidField(
+        result,
+        'rotation_revocation_summary.revocation_tested',
+        'revocation_not_tested',
+      ),
+    );
+    assert.ok(
+      hasInvalidField(
+        result,
+        'security_signoff.signoff_reference',
+        'missing_security_signoff_field',
+      ),
+    );
+  });
+
+  it('rejects agent trust-key ceremony evidence with weak custody or fingerprint', () => {
+    const evidence = structuredClone(COMPLETE.agent_trust_key_ceremony);
+    evidence.validation.ok = false;
+    evidence.validation.missing_signoff = true;
+    evidence.ceremony_summary.active_fingerprint_sha256 = 'not-a-fingerprint';
+    evidence.ceremony_summary.custody_uri_count = 0;
+    evidence.custody_uris = [];
+    const result = validateProductionReleaseEvidence('agent_trust_key_ceremony', evidence);
+    assert.equal(result.ok, false);
+    assert.ok(hasInvalidField(result, 'validation.ok', 'validation_not_ok'));
+    assert.ok(hasInvalidField(result, 'validation.missing_signoff', 'missing_signoff'));
+    assert.ok(
+      hasInvalidField(
+        result,
+        'ceremony_summary.active_fingerprint_sha256',
+        'invalid_sha256',
+      ),
+    );
+    assert.ok(
+      hasInvalidField(
+        result,
+        'ceremony_summary.custody_uri_count',
+        'invalid_custody_uri_count',
+      ),
+    );
+    assert.ok(hasInvalidField(result, 'custody_uris', 'missing_custody_uris'));
+  });
+
+  it('rejects hollow agent SBOM and provenance evidence', () => {
+    const evidence = structuredClone(COMPLETE.agent_sbom_provenance);
+    evidence.package_format = 'zip';
+    evidence.package.sha256 = 'not-a-digest';
+    evidence.sbom.summary.sbom_format = 'unknown';
+    evidence.sbom.summary.component_count = 0;
+    evidence.provenance.summary.subject_count = 0;
+    evidence.provenance.summary.materials_count = 0;
+    const result = validateProductionReleaseEvidence('agent_sbom_provenance', evidence);
+    assert.equal(result.ok, false);
+    assert.ok(hasInvalidField(result, 'package_format', 'unsupported_package_format'));
+    assert.ok(hasInvalidField(result, 'package.sha256', 'invalid_sha256'));
+    assert.ok(hasInvalidField(result, 'sbom.summary.sbom_format', 'unsupported_sbom_format'));
+    assert.ok(hasInvalidField(result, 'sbom.summary.component_count', 'invalid_component_count'));
+    assert.ok(
+      hasInvalidField(result, 'provenance.summary.subject_count', 'invalid_subject_count'),
+    );
+    assert.ok(
+      hasInvalidField(result, 'provenance.summary.materials_count', 'invalid_materials_count'),
+    );
+  });
+
   it('rejects raw or secret-bearing evidence fields', () => {
     const evidence = {
       ...COMPLETE.operator_runbook_exercise,
@@ -211,6 +353,8 @@ describe('production release evidence contracts', () => {
       { kind: 'gateway_load_abuse', path: 'rate_limit_results[0].payload' },
       { kind: 'staging_e2e_matrix', path: 'scenarios[0].token' },
       { kind: 'authorization_custody', path: 'required_artifacts[0].raw_log' },
+      { kind: 'agent_install_matrix', path: 'rows[0].check_details.install.raw_log' },
+      { kind: 'agent_sbom_provenance', path: 'sbom.raw_log' },
     ];
     for (const { kind, path } of cases) {
       const evidence = structuredClone(COMPLETE[kind]);

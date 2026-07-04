@@ -16,6 +16,7 @@ import {
   normalizeScenarioIntakeInput,
   normalizeWafAssetInput,
   normalizeWafEvidenceSummary,
+  normalizeWafExceptionBody,
   normalizeWafValidationRequest,
   REMEDIATION_CONNECTOR_TYPES,
   validateActionItem,
@@ -99,6 +100,7 @@ function ensureStoreShape() {
     'wafPostureSnapshots',
     'wafDriftEvents',
     'wafExceptions',
+    'wafCoverageDailyRollups',
     'wafConnectors',
     'wafConnectorSnapshots',
     'wafActionItems',
@@ -932,6 +934,20 @@ function gatherWafAnalyticsContext(ctx, options = {}) {
   };
 }
 
+function listWafCoverageRollups(ctx, windowDays = 90) {
+  ensureStoreShape();
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - Math.max(1, Number(windowDays) || 90));
+  const cutoffDate = cutoff.toISOString().slice(0, 10);
+  return getStore().wafCoverageDailyRollups
+    .filter((row) =>
+      row.tenant_id === ctx.tenantId
+      && typeof row.rollup_date === 'string'
+      && row.rollup_date >= cutoffDate,
+    )
+    .sort((a, b) => String(a.rollup_date).localeCompare(String(b.rollup_date)));
+}
+
 function buildRiskAssessmentForFinalize(ctx, asset, snapshot, summary) {
   const targetGroup =
     getStore().targetGroups.find(
@@ -1025,6 +1041,7 @@ export function getWafCoverage(ctx, options = {}) {
     assets: context.assets,
     currentSnapshotsByAsset: context.currentSnapshotsByAsset,
     historicalSnapshots: context.historicalSnapshots,
+    coverageRollups: listWafCoverageRollups(ctx, context.windowDays),
     windowDays: context.windowDays,
   });
 }
@@ -2571,6 +2588,19 @@ export function buildRemediationPayload(actionItem, connectorType) {
  * - POST /v1/waf/action-items/:id/deliver  requires waf:write
  */
 
+function formatWafException(entry) {
+  return {
+    ...(entry.id ? { id: entry.id } : {}),
+    waf_asset_id: entry.waf_asset_id,
+    owner: entry.owner,
+    reason: entry.reason,
+    expires_at: entry.expires_at,
+    scope_hash: entry.scope_hash ?? null,
+    approved_at: entry.approved_at,
+    approved_by: entry.approved_by,
+  };
+}
+
 export function listWafExceptions(ctx) {
   ensureStoreShape();
   const now = Date.now();
@@ -2580,15 +2610,52 @@ export function listWafExceptions(ctx) {
       const expiresAt = entry.expires_at ? Date.parse(entry.expires_at) : Number.NaN;
       return Number.isFinite(expiresAt) && expiresAt > now;
     })
-    .map((entry) => ({
-      ...(entry.id ? { id: entry.id } : {}),
-      waf_asset_id: entry.waf_asset_id,
-      owner: entry.owner,
-      reason: entry.reason,
-      expires_at: entry.expires_at,
-      scope_hash: entry.scope_hash ?? null,
-      ...(entry.approved_at ? { approved_at: entry.approved_at } : {}),
-    }));
+    .map((entry) => formatWafException(entry));
+}
+
+export function createWafException(ctx, wafAssetId, body = {}) {
+  ensureStoreShape();
+  const asset = findAsset(ctx, wafAssetId);
+  if (!asset) {
+    return { error: 'waf_asset_not_found', status: 404 };
+  }
+  try {
+    assertNoRawWafEvidence(body);
+    const normalized = normalizeWafExceptionBody(body);
+    const now = new Date().toISOString();
+    const id = newId('wafexc');
+    const record = {
+      id,
+      tenant_id: ctx.tenantId,
+      waf_asset_id: wafAssetId,
+      ...normalized,
+      approved_at: now,
+      approved_by: ctx.userId,
+    };
+    getStore().wafExceptions.push(record);
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'waf.exception.created',
+      resource_type: 'waf_exception',
+      resource_id: id,
+      metadata: {
+        waf_asset_id: wafAssetId,
+        owner: record.owner,
+        expires_at: record.expires_at,
+        ...(record.scope_hash ? { scope_hash: record.scope_hash } : {}),
+      },
+    });
+    persistStore();
+    const current = getCurrentSnapshot(ctx, wafAssetId);
+    return {
+      exception: formatWafException(record),
+      posture: current ? formatSnapshot(current) : null,
+    };
+  } catch (err) {
+    return contractError(err);
+  }
 }
 
 function listCveItemsForWafReport(ctx, assetIds) {

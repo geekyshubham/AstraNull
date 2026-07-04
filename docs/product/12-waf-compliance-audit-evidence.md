@@ -26,6 +26,8 @@ Update `WAF_REPORT_KINDS` in implementation when this doc is built.
 | Drift and exceptions | Open/resolved drift counts; approved exceptions with owner and expiry |
 | Connector attestation | Connector health, last poll, permission gaps (metadata only) |
 | CVE exposure summary | Open pipeline items affecting in-scope assets |
+
+Postgres developer-validation parity: `runtime.services.wafPosture.exportWafReport` receives the shared CVE pipeline repository and durable `waf_exceptions` repository, so in-scope CVE exposure rows and active approved exceptions are included in `compliance_audit` without deployment-specific hooks. Exceptions are created through `POST /v1/waf/assets/:id/exception`, listed through `GET /v1/waf/exceptions`, reject raw evidence fields, and require future expiry.
 | Custody manifest | Existing `buildCustodyManifest` digest and schema version |
 
 ## Control mapping appendix

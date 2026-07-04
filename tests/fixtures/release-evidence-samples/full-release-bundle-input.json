@@ -89,6 +89,7 @@
         },
         "sbom": {
           "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 2048,
           "summary": {
             "sbom_format": "cyclonedx",
             "component_count": 12
@@ -96,6 +97,7 @@
         },
         "provenance": {
           "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "size": 1024,
           "summary": {
             "subject_count": 1,
             "materials_count": 3
@@ -110,13 +112,170 @@
         "created_at": "2026-07-02T00:00:00.000Z",
         "matrix_id": "agent-install-2026-07-02",
         "overall_status": "passed",
+        "required_formats": [
+          "generic",
+          "deb",
+          "rpm",
+          "container",
+          "kubernetes"
+        ],
+        "required_checks": [
+          "install",
+          "heartbeat",
+          "job_poll",
+          "upgrade_rollback",
+          "revoke",
+          "uninstall",
+          "no_inbound_port",
+          "signature_verify"
+        ],
+        "coverage_gaps": {
+          "missing_formats": [],
+          "failed_checks": [],
+          "formats_covered": [
+            "generic",
+            "deb",
+            "rpm",
+            "container",
+            "kubernetes"
+          ]
+        },
         "rows": [
           {
-            "format": "container",
+            "format": "generic",
+            "environment": "staging",
             "status": "passed",
             "checks": {
-              "install": {
-                "status": "passed"
+              "install": "passed",
+              "heartbeat": "passed",
+              "job_poll": "passed",
+              "upgrade_rollback": "passed",
+              "revoke": "passed",
+              "uninstall": "passed",
+              "no_inbound_port": "passed",
+              "signature_verify": "passed"
+            },
+            "failed_checks": [],
+            "check_details": {
+              "no_inbound_port": {
+                "status": "passed",
+                "inbound_listener_count": 0
+              },
+              "signature_verify": {
+                "status": "passed",
+                "signing_format": "tarball",
+                "trust_anchor_reference": "trust://agent-signing/generic"
+              }
+            }
+          },
+          {
+            "format": "deb",
+            "environment": "staging",
+            "status": "passed",
+            "checks": {
+              "install": "passed",
+              "heartbeat": "passed",
+              "job_poll": "passed",
+              "upgrade_rollback": "passed",
+              "revoke": "passed",
+              "uninstall": "passed",
+              "no_inbound_port": "passed",
+              "signature_verify": "passed"
+            },
+            "failed_checks": [],
+            "check_details": {
+              "no_inbound_port": {
+                "status": "passed",
+                "inbound_listener_count": 0
+              },
+              "signature_verify": {
+                "status": "passed",
+                "signing_format": "deb",
+                "trust_anchor_reference": "trust://agent-signing/deb"
+              }
+            }
+          },
+          {
+            "format": "rpm",
+            "environment": "staging",
+            "status": "passed",
+            "checks": {
+              "install": "passed",
+              "heartbeat": "passed",
+              "job_poll": "passed",
+              "upgrade_rollback": "passed",
+              "revoke": "passed",
+              "uninstall": "passed",
+              "no_inbound_port": "passed",
+              "signature_verify": "passed"
+            },
+            "failed_checks": [],
+            "check_details": {
+              "no_inbound_port": {
+                "status": "passed",
+                "inbound_listener_count": 0
+              },
+              "signature_verify": {
+                "status": "passed",
+                "signing_format": "rpm",
+                "trust_anchor_reference": "trust://agent-signing/rpm"
+              }
+            }
+          },
+          {
+            "format": "container",
+            "environment": "staging",
+            "runtime": "docker",
+            "status": "passed",
+            "checks": {
+              "install": "passed",
+              "heartbeat": "passed",
+              "job_poll": "passed",
+              "upgrade_rollback": "passed",
+              "revoke": "passed",
+              "uninstall": "passed",
+              "no_inbound_port": "passed",
+              "signature_verify": "passed"
+            },
+            "failed_checks": [],
+            "check_details": {
+              "no_inbound_port": {
+                "status": "passed",
+                "inbound_listener_count": 0
+              },
+              "signature_verify": {
+                "status": "passed",
+                "signing_format": "container",
+                "trust_anchor_reference": "trust://agent-signing/container"
+              }
+            }
+          },
+          {
+            "format": "kubernetes",
+            "environment": "staging",
+            "runtime": "kubernetes",
+            "deployment_mode": "daemonset",
+            "status": "passed",
+            "checks": {
+              "install": "passed",
+              "heartbeat": "passed",
+              "job_poll": "passed",
+              "upgrade_rollback": "passed",
+              "revoke": "passed",
+              "uninstall": "passed",
+              "no_inbound_port": "passed",
+              "signature_verify": "passed"
+            },
+            "failed_checks": [],
+            "check_details": {
+              "no_inbound_port": {
+                "status": "passed",
+                "inbound_listener_count": 0
+              },
+              "signature_verify": {
+                "status": "passed",
+                "signing_format": "kubernetes",
+                "trust_anchor_reference": "trust://agent-signing/kubernetes"
               }
             }
           }
@@ -184,7 +343,8 @@
           "custody_uri_count": 2
         },
         "custody_uris": [
-          "custody://security/agent-trust-key-ceremony/2026-07-02"
+          "custody://security/agent-trust-key-ceremony/2026-07-02",
+          "custody://security/agent-trust-key-rotation/2026-07-02"
         ],
         "evidence_uri": "evidence://agent/trust-key-ceremony"
       }

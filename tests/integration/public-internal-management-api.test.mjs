@@ -91,11 +91,22 @@ describe('public landing and internal management APIs', () => {
   });
 
   it('denies customer principals on internal admin routes', async () => {
-    const denied = await request(baseUrl, 'GET', '/internal/admin/signup-requests', {
-      headers: demoHeaders('admin'),
-    });
-    assert.equal(denied.status, 403);
-    assert.equal(denied.json.error, 'staff_forbidden');
+    const routes = [
+      ['GET', '/internal/admin/overview'],
+      ['GET', '/internal/admin/signup-requests'],
+      ['GET', '/internal/admin/tenants'],
+      ['GET', '/internal/admin/approval-requests'],
+      ['GET', '/internal/admin/audit-log'],
+      ['POST', '/internal/admin/tenants/ten_demo/entitlements'],
+    ];
+    for (const [method, route] of routes) {
+      const denied = await request(baseUrl, method, route, {
+        headers: demoHeaders('admin'),
+        body: method === 'POST' ? { feature: 'safe_validation', enabled: true } : undefined,
+      });
+      assert.equal(denied.status, 403, `${method} ${route}`);
+      assert.equal(denied.json.error, 'staff_forbidden', `${method} ${route}`);
+    }
   });
 
   it('allows staff review, provisioning, subscription enforcement, and audit', async () => {
@@ -128,6 +139,22 @@ describe('public landing and internal management APIs', () => {
     assert.ok(store.tenantSubscriptions.some((s) => s.tenant_id === tenantId));
     assert.ok(store.internalAuditLog.some((a) => a.action === 'signup.request_approved'));
 
+    const auditLog = await request(baseUrl, 'GET', '/internal/admin/audit-log?limit=50', {
+      headers: staffHeaders('internal_admin'),
+    });
+    assert.equal(auditLog.status, 200);
+    assert.ok(
+      auditLog.json.items.some(
+        (a) => a.action === 'signup.request_approved' && a.resource_id === requestId,
+      ),
+    );
+
+    const customerAuditDenied = await request(baseUrl, 'GET', '/internal/admin/audit-log', {
+      headers: demoHeaders('admin'),
+    });
+    assert.equal(customerAuditDenied.status, 403);
+    assert.equal(customerAuditDenied.json.error, 'staff_forbidden');
+
     const suspended = await request(baseUrl, 'PATCH', `/internal/admin/tenants/${tenantId}`, {
       headers: staffHeaders('internal_admin'),
       body: { lifecycle_state: 'suspended', reason: 'policy hold' },
@@ -136,6 +163,83 @@ describe('public landing and internal management APIs', () => {
     assert.equal(suspended.json.account.lifecycle_state, 'suspended');
 
     const storeAfterSuspend = getStore();
+    const supportEntitlementDenied = await request(
+      baseUrl,
+      'POST',
+      `/internal/admin/tenants/${tenantId}/entitlements`,
+      {
+        headers: staffHeaders('support_engineer', 'staff_support'),
+        body: { feature: 'safe_validation', enabled: true, reason: 'support cannot grant' },
+      },
+    );
+    assert.equal(supportEntitlementDenied.status, 403);
+    assert.equal(supportEntitlementDenied.json.error, 'forbidden');
+    assert.equal(supportEntitlementDenied.json.permission, 'staff:entitlement:write');
+
+    const entitlementGrant = await request(
+      baseUrl,
+      'POST',
+      `/internal/admin/tenants/${tenantId}/entitlements`,
+      {
+        headers: staffHeaders('internal_admin'),
+        body: { feature: 'safe_validation', enabled: true, reason: 'verified plan exception' },
+      },
+    );
+    assert.equal(entitlementGrant.status, 200);
+    assert.equal(entitlementGrant.json.tenant_id, tenantId);
+    assert.equal(entitlementGrant.json.feature, 'safe_validation');
+    assert.ok(
+      getStore().internalAuditLog.some(
+        (a) => a.action === 'staff.entitlement.granted' && a.tenant_id === tenantId,
+      ),
+    );
+
+    const approvalId = 'iar_public_boundary_demo';
+    storeAfterSuspend.internalApprovalRequests.push({
+      id: approvalId,
+      tenant_id: tenantId,
+      kind: 'subscription_exception',
+      state: 'submitted',
+      created_at: '2026-07-04T00:00:00.000Z',
+      updated_at: '2026-07-04T00:00:00.000Z',
+      summary: 'Metadata-only approval request for integration coverage.',
+    });
+    const approvalQueue = await request(baseUrl, 'GET', '/internal/admin/approval-requests', {
+      headers: staffHeaders('internal_admin'),
+    });
+    assert.equal(approvalQueue.status, 200);
+    assert.ok(approvalQueue.json.items.some((item) => item.id === approvalId));
+
+    const supportApprovalDenied = await request(
+      baseUrl,
+      'POST',
+      `/internal/admin/approval-requests/${approvalId}/decision`,
+      {
+        headers: staffHeaders('support_engineer', 'staff_support'),
+        body: { decision: 'approve', reason: 'support cannot approve' },
+      },
+    );
+    assert.equal(supportApprovalDenied.status, 403);
+    assert.equal(supportApprovalDenied.json.error, 'forbidden');
+    assert.equal(supportApprovalDenied.json.permission, 'staff:approval:decide');
+
+    const approvalDecision = await request(
+      baseUrl,
+      'POST',
+      `/internal/admin/approval-requests/${approvalId}/decision`,
+      {
+        headers: staffHeaders('internal_admin'),
+        body: { decision: 'approve', reason: 'verified approval workflow' },
+      },
+    );
+    assert.equal(approvalDecision.status, 200);
+    assert.equal(approvalDecision.json.request.state, 'approved');
+    assert.ok(
+      getStore().internalAuditLog.some(
+        (a) => a.action === 'staff.approval.approved' && a.resource_id === approvalId,
+      ),
+    );
+
     const tgId = 'tg_contoso_demo';
     storeAfterSuspend.targetGroups.push({
       id: tgId,
@@ -163,6 +267,60 @@ describe('public landing and internal management APIs', () => {
     });
     assert.equal(blockedRun.status, 403);
     assert.equal(blockedRun.json.error, 'tenant_suspended');
+  });
+
+  it('enforces subscription safe-run plan caps before starting validation runs', async () => {
+    const created = await request(baseUrl, 'POST', '/v1/signup-requests', {
+      body: {
+        ...signupPayload(),
+        organization_name: 'Plan Cap Test Co',
+        contact_email: 'limits@plancap.example',
+      },
+    });
+    assert.equal(created.status, 201);
+    const requestId = created.json.request.id;
+
+    const approved = await request(baseUrl, 'POST', `/internal/admin/signup-requests/${requestId}/approve`, {
+      headers: staffHeaders('internal_admin'),
+      body: { reason: 'Verified plan-cap test organization' },
+    });
+    assert.equal(approved.status, 200);
+    const tenantId = approved.json.provisioning.tenant_id;
+    const store = getStore();
+    const subscription = store.tenantSubscriptions.find((s) => s.tenant_id === tenantId);
+    assert.ok(subscription);
+    subscription.limits.safe_runs_per_hour = 0;
+
+    const tgId = 'tg_plan_cap_demo';
+    store.targetGroups.push({
+      id: tgId,
+      tenant_id: tenantId,
+      environment_id: approved.json.provisioning.environment_id,
+      name: 'Plan Cap Origin Group',
+      expected_behavior_default: 'must_block_before_origin',
+    });
+    store.targets.push({
+      id: 'tgt_plan_cap_1',
+      tenant_id: tenantId,
+      target_group_id: tgId,
+      kind: 'fqdn',
+      value: 'origin.plancap.example',
+      expected_behavior: 'must_block_before_origin',
+    });
+
+    const blockedRun = await request(baseUrl, 'POST', '/v1/test-runs', {
+      headers: { ...demoHeaders('engineer'), 'x-tenant-id': tenantId, 'x-user-id': 'usr_owner' },
+      body: {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: tgId,
+        target_id: 'tgt_plan_cap_1',
+      },
+    });
+    assert.equal(blockedRun.status, 403);
+    assert.equal(blockedRun.json.error, 'entitlement_limit_exceeded');
+    assert.equal(blockedRun.json.metric, 'safe_runs_per_hour');
+    assert.equal(blockedRun.json.limit, 0);
+    assert.equal(blockedRun.json.current, 0);
   });
 
   it('records staff rejection with customer-safe notice', async () => {

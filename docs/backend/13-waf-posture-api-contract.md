@@ -26,6 +26,7 @@ Reuse AstraNull bearer auth, service accounts, tenant isolation, and audit.
 | GET | `/v1/waf/assets/:id` | `waf:read` | - | `{ asset, current_posture, latest_validation, baseline, drift, recommendations }`. |
 | PATCH | `/v1/waf/assets/:id` | `waf:write` | partial metadata | `{ asset }`. |
 | POST | `/v1/waf/assets/:id/exception` | `waf:write` | `{ reason, expires_at, owner, scope_hash? }` | `{ exception, posture }`. |
+| GET | `/v1/waf/exceptions` | `waf:read` | - | `{ items }` active non-expired approved exceptions for the tenant. |
 
 ## Coverage APIs
 
@@ -93,7 +94,7 @@ Developer-validation metadata-only exports with custody manifests. **Not** immut
 
 Allowed `kind`: `executive_coverage`, `technical_evidence`, `drift_audit`, `connector_health`, `compliance_audit`, `board_roadmap_brief`.
 
-`board_roadmap_brief`: CISO/board audience; includes coverage trend, Tier 1–2 summary counts, vendor mix, geography highlights, procurement justification narrative (metadata only), and links to roadmap API — no raw policy bodies. Payloads use declared assets, coverage, validation runs, drift events, and connector metadata only—no raw bodies, headers, tokens, secrets, or provider URLs. `compliance_audit` adds control-mapping appendix and exception register per [WAF Compliance Audit Evidence](../product/12-waf-compliance-audit-evidence.md). Audits `waf.report.exported` with digest metadata in dev-json; Postgres uses `runtime.services.wafPosture.exportWafReport` with `auditRepository.appendAuditEvent`. Immutable retention/signing remains **open**.
+`board_roadmap_brief`: CISO/board audience; includes coverage trend, Tier 1–2 summary counts, vendor mix, geography highlights, procurement justification narrative (metadata only), and links to roadmap API — no raw policy bodies. Payloads use declared assets, coverage, validation runs, drift events, connector metadata, CVE exposure metadata, and active approved WAF exceptions only—no raw bodies, headers, tokens, secrets, or provider URLs. `compliance_audit` adds control-mapping appendix, CVE exposure summary, and exception register per [WAF Compliance Audit Evidence](../product/12-waf-compliance-audit-evidence.md). Audits `waf.report.exported` with digest metadata in dev-json; Postgres uses `runtime.services.wafPosture.exportWafReport` with `auditRepository.appendAuditEvent`, the injected CVE pipeline repository, and durable `waf_exceptions` persistence for active exception rows. Immutable retention/signing remains **open**.
 
 ### API artifact sync rule
 
@@ -154,7 +155,7 @@ Routes are under `/v1/waf/cve-pipeline` (WAF add-on namespace). See [Live Exposu
 | POST | `/v1/waf/cve-pipeline/:id/recommend` | `waf:write` | `{ vendor }` | `201 { recommendation }`. |
 | PATCH | `/v1/waf/cve-pipeline/:id/stage` | `waf:write` | `{ stage }` | `200 { item }`. |
 
-### Multi-vendor CVE playbook APIs (planned — WAF-020)
+### Multi-vendor CVE playbook APIs (developer validation — WAF-020)
 
 When asset matches span multiple vendors, grouped playbooks coordinate mitigation and retest. See [Multi-Vendor CVE Mitigation Playbook](../detection/17-multi-vendor-cve-mitigation-playbook.md).
 
@@ -162,7 +163,7 @@ When asset matches span multiple vendors, grouped playbooks coordinate mitigatio
 |---|---|---|---|---|
 | GET | `/v1/waf/cve-pipeline/:id/playbook` | `waf:read` | - | `{ playbook }` with `vendor_slices[]`. |
 | POST | `/v1/waf/cve-pipeline/:id/playbook/approve` | `waf:write` | `{ note? }` | `{ playbook }` ready for ticketing. |
-| POST | `/v1/waf/cve-pipeline/playbooks/:id/retest` | `waf:run` | - | `201` coordinated safe retest across vendor slices. |
+| POST | `/v1/waf/cve-pipeline/:id/coordinated-retest` | `waf:run` | - | `201` coordinated safe retest across vendor slices. |
 
 ## Recommendation APIs
 
@@ -272,4 +273,5 @@ Completion checklist for this contract (not all items are satisfied yet):
 - [x] Machine-readable OpenAPI artifact published from this contract (**local** — [`docs/api/waf-posture-openapi.json`](../api/waf-posture-openapi.json), validated by `npm run api:waf:openapi:check`; live endpoint parity and external signoff **open**).
 - [x] Postgres plan/retest execute concurrent tick coordination via developer-validation-hardened DB execution leases (`execution_lock_token`, `execution_lock_expires_at`; claim-before-`startTestRun`; claim/finish lifecycle-gate plan states and retest statuses; claim miss re-read maps lifecycle errors; TTL at least safe-run `timeout_ms` + 30s buffer or larger configured lease; validation-plan cancel atomically clears active leases and best-effort cancels delegated safe runs on the returned cancelled row snapshot (`delegated_jobs` on `200 { validation_plan }`); `409 waf_orchestrator_execution_in_progress` only for true lease conflicts; matching-token finish/release; compensating cancel of just-started safe runs when finish returns null or throws, plus best-effort release on finish null/throw—cannot resurrect `cancelled`).
 - [x] Crash-safe delegation outbox in `delegated_jobs_json` (`0013_waf_delegation_outbox.sql`): `pending_start` reservation before `startTestRun`, `starting` staging with run ids after success, `delegated` on finish, `failed` on start failure or stale reconciliation; `stageValidationPlanDelegation` / `stageRetestDelegation` persist while holding execution lease. **Open:** staging kill/crash evidence between `starting` and `delegated` finish (reconciliation path implemented; production proof still required).
-- [ ] Externally scheduled orchestrator runner staging/live execution evidence; live/staging DB acceptance; provider connector workers; WAF security/observability/release signoff (**open**—WAF orchestrator not production-ready until closed).
+
+Open production evidence gates remain outside this local completion checklist: externally scheduled orchestrator runner staging/live execution evidence, live/staging DB acceptance, provider connector workers, and WAF security/observability/release signoff. The WAF orchestrator is not production-ready until those gates close.

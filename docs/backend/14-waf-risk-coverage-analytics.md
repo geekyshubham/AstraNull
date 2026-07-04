@@ -151,7 +151,7 @@ Query params: `entity_id`, `region_code`, `vendor`, `min_score`, `limit_per_tier
 | Drift event open/resolve | Recompute affected asset; refresh roadmap slice. |
 | CVE asset match created/resolved | Adjust vulnerability factor. |
 | Connector snapshot ingest | Refresh rule-count/staleness factors when connector mode enabled. |
-| Nightly worker | Recompute tenant rollups and trend buckets; Postgres `GET /v1/waf/coverage` reads persisted daily rollups for `trend[]` when present and falls back to snapshot-derived trend when no rollups exist. |
+| Nightly worker | Recompute tenant rollups and trend buckets; dev-json and Postgres `GET /v1/waf/coverage` read persisted daily rollups for `trend[]` when present and fall back to snapshot-derived trend when no rollups exist. |
 
 ## Executive report payloads (R7/R8 — developer validation)
 

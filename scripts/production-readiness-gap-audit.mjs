@@ -16,6 +16,8 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OUT = 'output/production-readiness-gap-audit.json';
 const DEFAULT_RELEASE_CHECKLIST = path.join(REPO_ROOT, 'docs/release-checklist.md');
 const DEFAULT_RELEASE_PLAN = path.join(REPO_ROOT, 'docs/product/06-release-plan.md');
+const DEFAULT_ENTERPRISE_GAP_BACKLOG = path.join(REPO_ROOT, 'docs/product/08-enterprise-production-gap-backlog.md');
+const DEFAULT_PROGRESS = path.join(REPO_ROOT, 'PROGRESS.md');
 
 export const EXTERNAL_PRODUCTION_GATE_CATEGORIES = Object.freeze([
   Object.freeze({
@@ -70,7 +72,19 @@ export function parseArgs(argv = []) {
   return opts;
 }
 
-const EXTERNAL_REMAINING_PATTERN = /Remaining\s*\(external\)/i;
+const EXTERNAL_REMAINING_PATTERN = /(?:^|[^\w])(?:Remaining\s*\(external\)|Deferred\s*\(operational config\))(?=$|[^\w])/i;
+const RELEASE_PLAN_GATES_HEADING = /^##\s+Open production release gates\b/i;
+const P0_DISPOSITION_HEADING = /^###\s+P0 disposition and signoff map\b/i;
+const NEXT_HEADING = /^##\s+/;
+const NEXT_H2_OR_H3_HEADING = /^#{2,3}\s+/;
+const TABLE_SEPARATOR = /^:?-{3,}:?$/;
+
+function stripMarkdownInline(value = '') {
+  return String(value)
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .trim();
+}
 
 export function parseChecklistGateCounts(markdown = '') {
   let unchecked = 0;
@@ -116,9 +130,181 @@ export function parseChecklistGateCounts(markdown = '') {
   };
 }
 
+export function parseReleasePlanGateTableCounts(markdown = '') {
+  const counts = {
+    unchecked: 0,
+    in_progress: 0,
+    complete: 0,
+    external_blockers: 0,
+    open_gates: false,
+    total_items: 0,
+    open_items: [],
+    external_blocker_items: [],
+  };
+
+  let insideGateSection = false;
+  for (const line of markdown.split('\n')) {
+    if (RELEASE_PLAN_GATES_HEADING.test(line)) {
+      insideGateSection = true;
+      continue;
+    }
+    if (insideGateSection && NEXT_HEADING.test(line)) break;
+    if (!insideGateSection || !line.trim().startsWith('|')) continue;
+
+    const cells = line.split('|').slice(1, -1).map(stripMarkdownInline);
+    if (cells.length < 4) continue;
+    const [gate, owner, evidence, status] = cells;
+    if (!gate || /^gate$/i.test(gate)) continue;
+    if (cells.every((cell) => TABLE_SEPARATOR.test(cell))) continue;
+
+    const normalizedStatus = status.toLowerCase();
+    if (/\b(open|blocked|pending|required)\b/.test(normalizedStatus)) {
+      counts.external_blockers += 1;
+      const text = `${gate}: ${status}${owner ? ` (${owner})` : ''}`;
+      const item = {
+        status: 'external_blocker',
+        text,
+        gate,
+        owner,
+        evidence,
+        table_status: status,
+      };
+      counts.open_items.push(item);
+      counts.external_blocker_items.push(item);
+      continue;
+    }
+    if (/\b(closed|complete|completed|accepted|done|resolved|signed off|signed-off)\b/.test(normalizedStatus)) {
+      counts.complete += 1;
+    }
+  }
+
+  counts.total_items = counts.complete + counts.external_blockers;
+  counts.open_gates = counts.external_blockers > 0;
+  return counts;
+}
+
+export function parseP0DispositionGateCounts(markdown = '') {
+  const counts = {
+    unchecked: 0,
+    in_progress: 0,
+    complete: 0,
+    external_blockers: 0,
+    open_gates: false,
+    total_items: 0,
+    open_items: [],
+    external_blocker_items: [],
+  };
+
+  let insideDispositionSection = false;
+  let sawRows = false;
+  for (const line of markdown.split('\n')) {
+    if (P0_DISPOSITION_HEADING.test(line)) {
+      insideDispositionSection = true;
+      continue;
+    }
+    if (insideDispositionSection && NEXT_H2_OR_H3_HEADING.test(line)) break;
+    if (!insideDispositionSection || !line.trim().startsWith('|')) continue;
+
+    const cells = line.split('|').slice(1, -1).map(stripMarkdownInline);
+    if (cells.length < 5) continue;
+    if (/^p0 gap$/i.test(cells[0]) || cells.every((cell) => TABLE_SEPARATOR.test(cell))) continue;
+
+    sawRows = true;
+    const [gap, localDisposition, owner, evidence, externalCloseout] = cells;
+    const missing = [];
+    if (!gap) missing.push('gap');
+    if (!owner) missing.push('owner');
+    if (!evidence) missing.push('evidence');
+    if (!externalCloseout) missing.push('external_closeout');
+    if (!/\b(implemented|deferred)\b/i.test(localDisposition)) {
+      missing.push('local_disposition');
+    }
+
+    counts.total_items += 1;
+    if (missing.length === 0) {
+      counts.complete += 1;
+      continue;
+    }
+
+    const item = {
+      status: 'external_blocker',
+      text: `${gap || 'P0 disposition row'}: missing ${missing.join(', ')}`,
+      gate: gap || null,
+      owner,
+      evidence,
+      missing,
+    };
+    counts.external_blockers += 1;
+    counts.open_items.push(item);
+    counts.external_blocker_items.push(item);
+  }
+
+  if (!sawRows) {
+    const item = {
+      status: 'external_blocker',
+      text: 'P0 disposition and signoff map is missing or empty',
+      gate: 'P0 enterprise gap backlog',
+      owner: null,
+      evidence: null,
+      missing: ['p0_disposition_rows'],
+    };
+    counts.total_items = 1;
+    counts.external_blockers = 1;
+    counts.open_items.push(item);
+    counts.external_blocker_items.push(item);
+  }
+
+  counts.open_gates = counts.external_blockers > 0;
+  return counts;
+}
+
+function mergeGateCounts(...gateCounts) {
+  return {
+    unchecked: gateCounts.reduce((sum, counts) => sum + counts.unchecked, 0),
+    in_progress: gateCounts.reduce((sum, counts) => sum + counts.in_progress, 0),
+    complete: gateCounts.reduce((sum, counts) => sum + counts.complete, 0),
+    external_blockers: gateCounts.reduce((sum, counts) => sum + counts.external_blockers, 0),
+    open_gates: gateCounts.some((counts) => counts.open_gates || counts.external_blockers > 0),
+    total_items: gateCounts.reduce((sum, counts) => sum + counts.total_items, 0),
+    open_items: gateCounts.flatMap((counts) => counts.open_items),
+    external_blocker_items: gateCounts.flatMap((counts) => counts.external_blocker_items),
+  };
+}
+
 function readDocFile(filePath, overrideContent) {
   if (overrideContent !== undefined) return overrideContent;
   return readFileSync(filePath, 'utf8');
+}
+
+export function parseProgressTaskCounts(markdown = '') {
+  const counts = {
+    total: 0,
+    complete: 0,
+    unchecked: 0,
+    in_progress: 0,
+    blocked: 0,
+    needs_decision: 0,
+  };
+  const statusToKey = {
+    '[x]': 'complete',
+    '[ ]': 'unchecked',
+    '[~]': 'in_progress',
+    '[!]': 'blocked',
+    '[?]': 'needs_decision',
+  };
+
+  for (const line of markdown.split('\n')) {
+    if (!line.trim().startsWith('|')) continue;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 4) continue;
+    const [status, taskId] = cells;
+    const key = statusToKey[status];
+    if (!key || !taskId) continue;
+    counts.total += 1;
+    counts[key] += 1;
+  }
+
+  return counts;
 }
 
 export function loadReleaseDocGateCounts(options = {}) {
@@ -130,8 +316,17 @@ export function loadReleaseDocGateCounts(options = {}) {
     options.releasePlanPath ?? DEFAULT_RELEASE_PLAN,
     options.releasePlanMarkdown,
   );
+  const enterpriseGapBacklog = readDocFile(
+    options.enterpriseGapBacklogPath ?? DEFAULT_ENTERPRISE_GAP_BACKLOG,
+    options.enterpriseGapBacklogMarkdown,
+  );
   const checklist = parseChecklistGateCounts(releaseChecklist);
-  const release_plan = parseChecklistGateCounts(releasePlan);
+  const release_plan = mergeGateCounts(
+    parseChecklistGateCounts(releasePlan),
+    parseReleasePlanGateTableCounts(releasePlan),
+  );
+  const enterprise_gap_backlog = parseP0DispositionGateCounts(enterpriseGapBacklog);
+  const combined = mergeGateCounts(checklist, release_plan, enterprise_gap_backlog);
   return {
     release_checklist: {
       source: 'docs/release-checklist.md',
@@ -141,16 +336,17 @@ export function loadReleaseDocGateCounts(options = {}) {
       source: 'docs/product/06-release-plan.md',
       ...release_plan,
     },
+    enterprise_gap_backlog: {
+      source: 'docs/product/08-enterprise-production-gap-backlog.md',
+      ...enterprise_gap_backlog,
+    },
     combined: {
-      unchecked: checklist.unchecked + release_plan.unchecked,
-      in_progress: checklist.in_progress + release_plan.in_progress,
-      complete: checklist.complete + release_plan.complete,
-      external_blockers: checklist.external_blockers + release_plan.external_blockers,
-      open_gates:
-        checklist.open_gates || release_plan.open_gates
-        || checklist.external_blockers > 0
-        || release_plan.external_blockers > 0,
-      total_items: checklist.total_items + release_plan.total_items,
+      unchecked: combined.unchecked,
+      in_progress: combined.in_progress,
+      complete: combined.complete,
+      external_blockers: combined.external_blockers,
+      open_gates: combined.open_gates,
+      total_items: combined.total_items,
       open_items: [
         ...checklist.open_items.map((item) => ({
           source: 'docs/release-checklist.md',
@@ -158,6 +354,10 @@ export function loadReleaseDocGateCounts(options = {}) {
         })),
         ...release_plan.open_items.map((item) => ({
           source: 'docs/product/06-release-plan.md',
+          ...item,
+        })),
+        ...enterprise_gap_backlog.open_items.map((item) => ({
+          source: 'docs/product/08-enterprise-production-gap-backlog.md',
           ...item,
         })),
       ],
@@ -168,6 +368,10 @@ export function loadReleaseDocGateCounts(options = {}) {
         })),
         ...release_plan.external_blocker_items.map((item) => ({
           source: 'docs/product/06-release-plan.md',
+          ...item,
+        })),
+        ...enterprise_gap_backlog.external_blocker_items.map((item) => ({
+          source: 'docs/product/08-enterprise-production-gap-backlog.md',
           ...item,
         })),
       ],
@@ -287,21 +491,49 @@ export function buildProductionReadinessScorecard(report, records = [], options 
   const checklistPct = report.checklist_gates_open ? 0 : 100;
   const customerFacingPct = report.production_ready
     && matrix?.overall_status === 'passed'
-    && (portalE2e?.ok !== false)
+    && portalE2e?.ok === true
     ? 100
     : Math.min(99, Math.round((inventoryPct + checklistPct) / 2));
   const mergeHygieneOk = resolveMergeHygieneOk(options.mergeHygieneOk);
+  let progressMarkdown = options.progressMarkdown;
+  if (progressMarkdown === undefined) {
+    try {
+      progressMarkdown = readDocFile(DEFAULT_PROGRESS);
+    } catch {
+      progressMarkdown = '';
+    }
+  }
+  const progressCounts = parseProgressTaskCounts(progressMarkdown);
+  const progressPct = progressCounts.total > 0
+    ? Math.round((progressCounts.complete / progressCounts.total) * 100)
+    : 0;
+  const openProgress = progressCounts.unchecked
+    + progressCounts.in_progress
+    + progressCounts.blocked
+    + progressCounts.needs_decision;
+  const progressReason = progressCounts.total > 0
+    ? [
+      `PROGRESS.md ${progressCounts.complete}/${progressCounts.total} tasks complete`,
+      openProgress > 0
+        ? `open=${progressCounts.unchecked}, in_progress=${progressCounts.in_progress}, blocked=${progressCounts.blocked}, needs_decision=${progressCounts.needs_decision}`
+        : null,
+    ].filter(Boolean).join('; ')
+    : 'PROGRESS.md has no tracked task rows';
+  const releaseChecklistCounts = options.releaseChecklistGates?.release_checklist ?? null;
+  const releaseChecklistReason = releaseChecklistCounts
+    ? `docs/release-checklist.md ${releaseChecklistCounts.complete}/${releaseChecklistCounts.total_items} checked`
+    : 'docs/release-checklist.md checked';
 
   const areas = {
     tracked_implementation_scope: {
-      percent: 100,
-      reason: 'PROGRESS.md 118/118 tasks complete',
+      percent: progressPct,
+      reason: progressReason,
     },
     release_checklist_gate: {
       percent: checklistPct,
       reason: report.checklist_gates_open
         ? 'Open checklist or release-plan gates remain'
-        : 'docs/release-checklist.md 54/54 checked',
+        : releaseChecklistReason,
     },
     staging_evidence_gate: {
       percent: report.evidence_attestation_complete ? 100 : 0,
@@ -372,6 +604,7 @@ export function aggregateProductionReadinessGapAudit(input = {}, options = {}) {
     records,
     createdAt: input.createdAt ?? null,
     notes: input.notes ?? null,
+    rehearsal_only: input.rehearsal_only === true || input.rehearsalOnly === true,
   }, attestationOptions);
 
   const docGates = loadReleaseDocGateCounts(options);
@@ -395,7 +628,7 @@ export function aggregateProductionReadinessGapAudit(input = {}, options = {}) {
   const external_gates = {
     local_developer_validation_cannot_satisfy: externalPending.length > 0,
     message: externalPending.length === 0
-      ? 'All profile external gate categories are satisfied by accepted staging evidence.'
+      ? 'All external gate categories have accepted evidence per metadata validation.'
       : 'Local developer validation cannot satisfy some external production gates; operator evidence beyond local validation is still required.',
     categories: externalCategories,
     checklist_gates_open,
@@ -412,7 +645,10 @@ export function aggregateProductionReadinessGapAudit(input = {}, options = {}) {
       },
     },
     records,
-    options.scorecard ?? {},
+    {
+      ...(options.scorecard ?? {}),
+      releaseChecklistGates: docGates,
+    },
   );
 
   return {

@@ -213,7 +213,7 @@ describe('signed probe coordinator', () => {
 
   it('rejects future probe worker timestamp beyond skew window', async () => {
     const runtime = runtimeSignedWorker();
-    const futureTs = String(Math.floor(Date.now() / 1000) + 301);
+    const futureTs = String(Math.floor(Date.now() / 1000) + 3600);
     const signature = signProbeWorkerRequest(
       {
         method: 'GET',

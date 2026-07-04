@@ -16,6 +16,9 @@ import {
   parseArgs,
   parseChecklistGateCounts,
   parseEvidenceInput,
+  parseP0DispositionGateCounts,
+  parseProgressTaskCounts,
+  parseReleasePlanGateTableCounts,
 } from '../../scripts/production-readiness-gap-audit.mjs';
 import {
   DEFAULT_STAGING_READINESS_PROFILE,
@@ -124,14 +127,15 @@ describe('production readiness gap audit', () => {
 - [~] in progress item
 - [x] done item
 - [x] checked but **Remaining (external):** staging signoff
+- [x] checked but **Deferred (operational config):** provider signoff
 `);
     assert.deepEqual(counts, {
       unchecked: 1,
       in_progress: 1,
-      complete: 2,
-      external_blockers: 1,
+      complete: 3,
+      external_blockers: 2,
       open_gates: true,
-      total_items: 4,
+      total_items: 5,
       open_items: [
         { status: 'unchecked', text: 'unchecked item' },
         { status: 'in_progress', text: 'in progress item' },
@@ -140,6 +144,10 @@ describe('production readiness gap audit', () => {
         {
           status: 'external_blocker',
           text: 'checked but **Remaining (external):** staging signoff',
+        },
+        {
+          status: 'external_blocker',
+          text: 'checked but **Deferred (operational config):** provider signoff',
         },
       ],
     });
@@ -155,6 +163,106 @@ Not a checklist - [ ] fake
     assert.equal(counts.unchecked, 1);
     assert.equal(counts.complete, 1);
     assert.deepEqual(counts.open_items, [{ status: 'unchecked', text: 'open gate' }]);
+  });
+
+  it('parses release-plan open gate table rows as external blockers', () => {
+    const counts = parseReleasePlanGateTableCounts(`
+## Open production release gates (all releases)
+
+| Gate | Owner | Evidence / artifact | Status |
+|---|---|---|---|
+| Product and API contract accuracy | Product + Backend | Published docs | **Open** — ongoing doc alignment |
+| Staging QA / E2E matrix | QA | Accepted matrix | Closed |
+
+## Current developer-validation evidence
+
+| Area | Evidence |
+|---|---|
+| Not a release gate | **Open** |
+`);
+
+    assert.equal(counts.total_items, 2);
+    assert.equal(counts.complete, 1);
+    assert.equal(counts.external_blockers, 1);
+    assert.equal(counts.open_gates, true);
+    assert.equal(counts.external_blocker_items[0].gate, 'Product and API contract accuracy');
+    assert.match(counts.open_items[0].text, /Product and API contract accuracy/);
+  });
+
+  it('treats closed release-plan gate table rows as complete', () => {
+    const counts = parseReleasePlanGateTableCounts(`
+## Open production release gates (all releases)
+
+| Gate | Owner | Evidence / artifact | Status |
+|---|---|---|---|
+| Product and API contract accuracy | Product + Backend | Published docs | Resolved |
+| Staging QA / E2E matrix | QA | Accepted matrix | Signed off |
+`);
+
+    assert.equal(counts.total_items, 2);
+    assert.equal(counts.complete, 2);
+    assert.equal(counts.external_blockers, 0);
+    assert.equal(counts.open_gates, false);
+  });
+
+  it('parses valid P0 disposition rows as complete local tracker dispositions', () => {
+    const counts = parseP0DispositionGateCounts(`
+### P0 disposition and signoff map
+
+| P0 gap | Local disposition | Owner | Evidence / signoff reference | External closeout still required |
+|---|---|---|---|---|
+| Runtime Postgres adapter | Implemented locally with staging closeout remaining | Backend + Platform | PROGRESS.md SEC-001/QA-006; node scripts/validate-db-schema.mjs | Staging DB signoff |
+| Notification delivery operations | Deferred externally with local implementation complete | Backend + SRE | PROGRESS.md BE-016/SEC-006/QA-005 | Provider delivery signoff |
+
+## Next Section
+`);
+
+    assert.equal(counts.total_items, 2);
+    assert.equal(counts.complete, 2);
+    assert.equal(counts.external_blockers, 0);
+    assert.equal(counts.open_gates, false);
+  });
+
+  it('keeps P0 disposition gates open when required owner or evidence fields are missing', () => {
+    const counts = parseP0DispositionGateCounts(`
+### P0 disposition and signoff map
+
+| P0 gap | Local disposition | Owner | Evidence / signoff reference | External closeout still required |
+|---|---|---|---|---|
+| Safe vector execution policy | Locally tracked |  |  | Staging fleet signoff |
+`);
+
+    assert.equal(counts.total_items, 1);
+    assert.equal(counts.complete, 0);
+    assert.equal(counts.external_blockers, 1);
+    assert.equal(counts.open_gates, true);
+    assert.equal(counts.external_blocker_items[0].gate, 'Safe vector execution policy');
+    assert.deepEqual(
+      counts.external_blocker_items[0].missing.sort(),
+      ['evidence', 'local_disposition', 'owner'].sort(),
+    );
+  });
+
+  it('parses PROGRESS.md task rows without counting status convention rows', () => {
+    const counts = parseProgressTaskCounts(`
+| Symbol | Meaning |
+|---|---|
+| \`[ ]\` | Not started |
+| [x] | P0-001 | Done task | docs/a.md | Complete. |
+| [ ] | BE-002 | Open task | docs/b.md | Needs work. |
+| [~] | UX-003 | Active task | docs/c.md | In progress. |
+| [!] | SEC-004 | Blocked task | docs/d.md | Blocked. |
+| [?] | QA-005 | Decision task | docs/e.md | Needs decision. |
+`);
+
+    assert.deepEqual(counts, {
+      total: 5,
+      complete: 1,
+      unchecked: 1,
+      in_progress: 1,
+      blocked: 1,
+      needs_decision: 1,
+    });
   });
 
   it('passes profile into attestation so high-scale-ga requires high-scale-only evidence', () => {
@@ -179,17 +287,43 @@ Not a checklist - [ ] fake
   it('loadReleaseDocGateCounts surfaces open item details per source', () => {
     const gates = loadReleaseDocGateCounts({
       releaseChecklistMarkdown: '- [ ] checklist gate\n',
-      releasePlanMarkdown: '- [~] plan verification\n',
+      releasePlanMarkdown: `
+- [~] plan verification
+
+## Open production release gates
+
+| Gate | Owner | Evidence / artifact | Status |
+|---|---|---|---|
+| Staging QA / E2E matrix | QA | Accepted matrix | **Open** |
+`,
+      enterpriseGapBacklogMarkdown: `
+### P0 disposition and signoff map
+
+| P0 gap | Local disposition | Owner | Evidence / signoff reference | External closeout still required |
+|---|---|---|---|---|
+| Runtime Postgres adapter | Implemented locally | Backend + Platform | PROGRESS.md SEC-001 | Staging signoff |
+`,
     });
     assert.deepEqual(gates.release_checklist.open_items, [
       { status: 'unchecked', text: 'checklist gate' },
     ]);
-    assert.deepEqual(gates.release_plan.open_items, [
-      { status: 'in_progress', text: 'plan verification' },
-    ]);
+    assert.equal(gates.release_plan.open_items.length, 2);
+    assert.equal(gates.enterprise_gap_backlog.complete, 1);
+    assert.equal(gates.enterprise_gap_backlog.open_gates, false);
+    assert.deepEqual(gates.release_plan.open_items[0], { status: 'in_progress', text: 'plan verification' });
+    assert.equal(gates.release_plan.open_items[1].gate, 'Staging QA / E2E matrix');
     assert.deepEqual(gates.combined.open_items, [
       { source: 'docs/release-checklist.md', status: 'unchecked', text: 'checklist gate' },
       { source: 'docs/product/06-release-plan.md', status: 'in_progress', text: 'plan verification' },
+      {
+        source: 'docs/product/06-release-plan.md',
+        status: 'external_blocker',
+        text: 'Staging QA / E2E matrix: Open (QA)',
+        gate: 'Staging QA / E2E matrix',
+        owner: 'QA',
+        evidence: 'Accepted matrix',
+        table_status: 'Open',
+      },
     ]);
   });
 
@@ -325,13 +459,136 @@ Not a checklist - [ ] fake
         scorecard: {
           mergeHygieneOk: true,
           customerPortalBrowserE2e: { ok: true, release_id: 'rel_score' },
+          progressMarkdown: `
+| Status | ID | Task | Docs | Goal |
+|---|---|---|---|---|
+| [x] | P0-001 | Complete one | docs/a.md | Done. |
+| [x] | BE-002 | Complete two | docs/b.md | Done. |
+`,
         },
       },
     );
     assert.equal(report.production_ready, true);
     assert.equal(report.production_readiness_scorecard.overall_percent, 100);
+    assert.equal(report.production_readiness_scorecard.areas.tracked_implementation_scope.percent, 100);
+    assert.equal(
+      report.production_readiness_scorecard.areas.tracked_implementation_scope.reason,
+      'PROGRESS.md 2/2 tasks complete',
+    );
     assert.equal(report.production_readiness_scorecard.areas.customer_facing_production_launch.percent, 100);
     assert.equal(report.external_gates.local_developer_validation_cannot_satisfy, false);
+    assert.equal(
+      report.external_gates.message,
+      'All external gate categories have accepted evidence per metadata validation.',
+    );
+  });
+
+  it('keeps rehearsal evidence from satisfying production readiness', () => {
+    const records = completeEvidenceRecords(PRODUCTION_RELEASE_EVIDENCE_KINDS).map((entry) => ({
+      ...entry,
+      status: 'accepted',
+    }));
+    const report = aggregateProductionReadinessGapAudit(
+      { releaseId: 'rel_rehearsal', rehearsal_only: true, records },
+      {
+        ...closedChecklistOptions,
+        scorecard: {
+          mergeHygieneOk: true,
+          customerPortalBrowserE2e: { ok: true, release_id: 'rel_rehearsal' },
+          progressMarkdown: `
+| Status | ID | Task | Docs | Goal |
+|---|---|---|---|---|
+| [x] | P0-001 | Complete one | docs/a.md | Done. |
+`,
+        },
+      },
+    );
+
+    assert.equal(report.evidence_attestation_complete, false);
+    assert.equal(report.production_ready, false);
+    assert.ok(report.caveats.some((line) => /Sample\/rehearsal evidence/.test(line)));
+  });
+
+  it('does not give customer-facing launch 100% without portal browser E2E evidence', () => {
+    const records = completeEvidenceRecords(PRODUCTION_RELEASE_EVIDENCE_KINDS).map((entry) => ({
+      ...entry,
+      status: 'accepted',
+    }));
+    const report = aggregateProductionReadinessGapAudit(
+      { releaseId: 'rel_no_portal', records },
+      {
+        ...closedChecklistOptions,
+        scorecard: {
+          mergeHygieneOk: true,
+          progressMarkdown: `
+| Status | ID | Task | Docs | Goal |
+|---|---|---|---|---|
+| [x] | P0-001 | Complete one | docs/a.md | Done. |
+`,
+        },
+      },
+    );
+
+    assert.equal(report.production_ready, true);
+    assert.ok(report.production_readiness_scorecard.areas.customer_facing_production_launch.percent < 100);
+  });
+
+  it('lowers tracked implementation scorecard area when PROGRESS.md has open rows', () => {
+    const scorecard = buildProductionReadinessScorecard(
+      {
+        production_ready: false,
+        evidence_attestation_complete: false,
+        checklist_gates_open: true,
+        required_evidence_kinds: {
+          counts: { required: 2, present: 1 },
+        },
+      },
+      [],
+      {
+        mergeHygieneOk: true,
+        progressMarkdown: `
+| Status | ID | Task | Docs | Goal |
+|---|---|---|---|---|
+| [x] | P0-001 | Complete one | docs/a.md | Done. |
+| [ ] | BE-002 | Open one | docs/b.md | Open. |
+| [~] | UX-003 | Active one | docs/c.md | Active. |
+| [!] | SEC-004 | Blocked one | docs/d.md | Blocked. |
+| [?] | QA-005 | Decision one | docs/e.md | Decision. |
+`,
+      },
+    );
+
+    assert.equal(scorecard.areas.tracked_implementation_scope.percent, 20);
+    assert.match(
+      scorecard.areas.tracked_implementation_scope.reason,
+      /PROGRESS\.md 1\/5 tasks complete; open=1, in_progress=1, blocked=1, needs_decision=1/,
+    );
+  });
+
+  it('derives closed release checklist scorecard counts from doc gates', () => {
+    const scorecard = buildProductionReadinessScorecard(
+      {
+        production_ready: false,
+        evidence_attestation_complete: true,
+        checklist_gates_open: false,
+        required_evidence_kinds: {
+          counts: { required: 31, present: 31 },
+        },
+      },
+      [],
+      {
+        mergeHygieneOk: true,
+        progressMarkdown: '| [x] | P0-001 | Done | docs/a.md | Done. |\n',
+        releaseChecklistGates: {
+          release_checklist: { complete: 55, total_items: 55 },
+        },
+      },
+    );
+
+    assert.equal(
+      scorecard.areas.release_checklist_gate.reason,
+      'docs/release-checklist.md 55/55 checked',
+    );
   });
 
   it('keeps production_ready false when evidence is complete but checklist gates remain open', () => {
@@ -358,6 +615,32 @@ Not a checklist - [ ] fake
     assert.ok(report.blocker_summary.some((line) => /checklist|Release plan|checklist gates/i.test(line)));
   });
 
+  it('keeps production_ready false when release-plan table gates remain open', () => {
+    const records = completeEvidenceRecords(PRODUCTION_RELEASE_EVIDENCE_KINDS).map((entry) => ({
+      ...entry,
+      status: 'accepted',
+    }));
+    const report = aggregateProductionReadinessGapAudit(
+      { releaseId: 'rel_plan_open', records },
+      {
+        releaseChecklistMarkdown: '- [x] checklist closed\n',
+        releasePlanMarkdown: `
+## Open production release gates
+
+| Gate | Owner | Evidence / artifact | Status |
+|---|---|---|---|
+| Staging QA / E2E matrix | QA | Accepted matrix | **Open** |
+`,
+      },
+    );
+
+    assert.equal(report.evidence_attestation_complete, true);
+    assert.equal(report.checklist_gates_open, true);
+    assert.equal(report.production_ready, false);
+    assert.equal(report.release_checklist_gates.release_plan.external_blockers, 1);
+    assert.match(report.release_checklist_gates.combined.open_items[0].text, /Staging QA/);
+  });
+
   it('rejects forbidden metadata in evidence input', () => {
     assert.throws(
       () => parseEvidenceInput({
@@ -373,23 +656,33 @@ Not a checklist - [ ] fake
     );
   });
 
-  it('validate-only prints summary and exits nonzero when release gates remain open', async () => {
-    const dir = tempDir();
-    const out = path.join(dir, 'gap-audit.json');
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (message) => logs.push(String(message));
-    try {
-      const code = await main(['--validate-only', '--out', out, '--release-id', 'rel_validate']);
-      assert.equal(code, 1);
-    } finally {
-      console.log = originalLog;
-    }
-    assert.equal(existsSync(out), false);
-    const summary = logs.join('\n');
-    assert.match(summary, /production_ready=false/);
-    assert.match(summary, /open_gate_preview:/);
-    assert.match(summary, /open_gate_preview: (none|docs\/release-checklist\.md|docs\/product\/06-release-plan\.md)/);
+  it('validate-only exits nonzero when release gates remain open', async () => {
+    const openPlan = `
+## Open production release gates
+| Gate | Owner | Evidence | Status |
+| Product and API contract accuracy | Product | docs | **Open** |
+`;
+    const report = aggregateProductionReadinessGapAudit(
+      {
+        releaseId: 'rel_validate',
+        records: completeEvidenceRecords(resolveReleaseProfileKinds('full')).map((record) => ({
+          ...record,
+          status: 'accepted',
+        })),
+      },
+      {
+        releaseChecklistMarkdown: '- [x] OIDC ready. **Deferred (operational config):** IdP signoff\n',
+        releasePlanMarkdown: openPlan,
+      },
+    );
+    assert.equal(report.production_ready, false);
+    assert.equal(report.checklist_gates_open, true);
+    assert.equal(gapAuditExitCode(report), 1);
+    assert.ok(report.release_checklist_gates.combined.open_items.length > 0);
+    assert.match(
+      report.release_checklist_gates.combined.open_items[0].text,
+      /Deferred \(operational config\)|Product and API contract accuracy/,
+    );
   });
 
   it('CLI exits nonzero for malformed evidence JSON', async () => {
@@ -441,11 +734,8 @@ Not a checklist - [ ] fake
     assert.ok(report.required_evidence_kinds.counts);
     assert.ok(report.release_checklist_gates.combined);
     assert.equal(typeof report.release_checklist_gates.combined.open_gates, 'boolean');
-    const liveGates = loadReleaseDocGateCounts();
-    assert.equal(liveGates.combined.open_gates, false);
-    assert.equal(liveGates.combined.external_blockers, 0);
-    assert.equal(liveGates.combined.unchecked, 0);
-    assert.equal(liveGates.combined.in_progress, 0);
+    assert.equal(report.checklist_gates_open, loadReleaseDocGateCounts().combined.open_gates);
+    assert.equal(report.production_ready, false);
   });
 
   it('preserves invalid_fields on required_evidence_kinds.invalid in gap reports', () => {

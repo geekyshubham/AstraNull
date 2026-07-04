@@ -7,6 +7,7 @@ import {
   mapWafConnectorSnapshotRow,
   mapWafCoverageDailyRollupRow,
   mapWafDriftEventRow,
+  mapWafExceptionRow,
   mapWafPostureSnapshotRow,
   mapWafValidationRunRow,
 } from '../../src/persistence/postgres/wafPostureRepository.mjs';
@@ -768,6 +769,102 @@ describe('postgres WAF posture repository', () => {
     assertTenantWrapped(pool.client);
     assert.equal(items.length, 1);
     assert.equal(items[0].protected, 2);
+  });
+
+  it('maps waf exception rows to route-facing shape', () => {
+    const mapped = mapWafExceptionRow({
+      id: 'wafexc_1',
+      tenant_id: CTX.tenantId,
+      waf_asset_id: 'waf_1',
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: new Date('2099-01-01T00:00:00.000Z'),
+      scope_hash: 'scope_abc',
+      approved_at: new Date(FIXED_NOW),
+      approved_by: 'usr_admin',
+      created_at: new Date(FIXED_NOW),
+      updated_at: new Date(FIXED_NOW),
+    });
+    assert.equal(mapped.id, 'wafexc_1');
+    assert.equal(mapped.waf_asset_id, 'waf_1');
+    assert.equal(mapped.expires_at, '2099-01-01T00:00:00.000Z');
+    assert.equal(mapped.scope_hash, 'scope_abc');
+    assert.equal(mapped.approved_at, FIXED_NOW);
+    assert.equal(mapped.approved_by, 'usr_admin');
+  });
+
+  it('lists active waf exceptions with tenant scope and expiry filter', async () => {
+    const pool = createRecordingPool((sql, params) => {
+      if (/FROM waf_exceptions/i.test(sql)) {
+        assertTenantScoped(sql, params);
+        assert.match(sql, /expires_at > NOW\(\)/i);
+        assert.deepEqual(params, [CTX.tenantId]);
+        return {
+          rows: [
+            {
+              id: 'wafexc_1',
+              tenant_id: CTX.tenantId,
+              waf_asset_id: 'waf_1',
+              owner: 'edge-team',
+              reason: 'Legacy sunset',
+              expires_at: new Date('2099-01-01T00:00:00.000Z'),
+              scope_hash: null,
+              approved_at: new Date(FIXED_NOW),
+              approved_by: 'usr_admin',
+              created_at: new Date(FIXED_NOW),
+              updated_at: new Date(FIXED_NOW),
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createWafPostureRepository(pool);
+    const items = await repo.listWafExceptions(CTX);
+    assertTenantWrapped(pool.client);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].owner, 'edge-team');
+  });
+
+  it('creates waf exceptions with tenant-scoped insert', async () => {
+    const pool = createRecordingPool((sql, params) => {
+      if (/INSERT INTO waf_exceptions/i.test(sql)) {
+        assertTenantScoped(sql, params);
+        return {
+          rows: [
+            {
+              id: 'wafexc_1',
+              tenant_id: CTX.tenantId,
+              waf_asset_id: 'waf_1',
+              owner: 'edge-team',
+              reason: 'Legacy sunset',
+              expires_at: new Date('2099-01-01T00:00:00.000Z'),
+              scope_hash: 'scope_abc',
+              approved_at: new Date(FIXED_NOW),
+              approved_by: 'usr_admin',
+              created_at: new Date(FIXED_NOW),
+              updated_at: new Date(FIXED_NOW),
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createWafPostureRepository(pool);
+    const created = await repo.createWafException(CTX, {
+      id: 'wafexc_1',
+      waf_asset_id: 'waf_1',
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      scope_hash: 'scope_abc',
+      approved_at: FIXED_NOW,
+      approved_by: 'usr_admin',
+      created_at: FIXED_NOW,
+      updated_at: FIXED_NOW,
+    });
+    assertTenantWrapped(pool.client);
+    assert.equal(created.scope_hash, 'scope_abc');
   });
 
   it('patchWafDriftEvent is tenant-scoped and metadata-only', async () => {

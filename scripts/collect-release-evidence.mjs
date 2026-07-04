@@ -288,10 +288,12 @@ export function extractProductionReleaseRecord(kind, artifact, context) {
         },
         sbom: {
           sha256: artifact.sbom?.sha256,
+          size: artifact.sbom?.size,
           summary: artifact.sbom?.summary,
         },
         provenance: {
           sha256: artifact.provenance?.sha256,
+          size: artifact.provenance?.size,
           summary: artifact.provenance?.summary,
         },
         evidence_uri: context.evidenceUri(kind),

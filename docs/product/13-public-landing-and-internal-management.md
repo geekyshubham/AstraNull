@@ -224,4 +224,4 @@ All records must be tenant-scoped when they reference a customer tenant. Staff r
 [x] Add subscription and entitlement enforcement to service-layer checks.
 [x] Add audit events for all internal management mutations.
 [x] Add tests for public/customer/internal route separation and role gates.
-[x] Update release checklist evidence requirements for staff auth, subscription enforcement, and internal audit.
+[x] Update release checklist evidence requirements for staff auth, subscription enforcement, and internal audit (`docs/release-checklist.md` tracks the public entry and internal management boundary row).

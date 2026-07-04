@@ -455,6 +455,29 @@ const KILL_SWITCH_CLOSEOUT_REQUIRED_FIELDS = Object.freeze([
 
 const KILL_SWITCH_SOC_ACTOR_REQUIRED_FIELDS = Object.freeze(['actor_id', 'role']);
 
+const AGENT_INSTALL_MATRIX_FORMATS = Object.freeze([
+  'generic',
+  'deb',
+  'rpm',
+  'container',
+  'kubernetes',
+]);
+
+const AGENT_INSTALL_MATRIX_CHECKS = Object.freeze([
+  'install',
+  'heartbeat',
+  'job_poll',
+  'upgrade_rollback',
+  'revoke',
+  'uninstall',
+  'no_inbound_port',
+  'signature_verify',
+]);
+
+const AGENT_PACKAGE_FORMATS = new Set(['tar', 'deb', 'rpm', 'container', 'generic']);
+const AGENT_SBOM_FORMATS = new Set(['cyclonedx', 'spdx']);
+const SHA256_HEX = /^[a-f0-9]{64}$/i;
+
 function parseIsoMs(value) {
   if (!hasValue(value)) return null;
   const ms = Date.parse(value);
@@ -472,6 +495,36 @@ function missingNestedFieldPaths(object, requiredFields, prefix) {
 
 function pushInvalidField(invalid_fields, field, reason, extra = {}) {
   invalid_fields.push({ field, reason, ...extra });
+}
+
+function isPositiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function statusValue(check) {
+  return typeof check === 'string' ? check : check?.status;
+}
+
+function checkDetail(row, checkName) {
+  if (row?.check_details?.[checkName] && typeof row.check_details[checkName] === 'object') {
+    return row.check_details[checkName];
+  }
+  if (row?.checks?.[checkName] && typeof row.checks[checkName] === 'object') {
+    return row.checks[checkName];
+  }
+  return null;
+}
+
+function validateSha256Hex(value, invalid_fields, field) {
+  if (typeof value !== 'string' || !SHA256_HEX.test(value)) {
+    pushInvalidField(invalid_fields, field, 'invalid_sha256');
+  }
+}
+
+function validatePositiveSize(value, invalid_fields, field) {
+  if (!isPositiveNumber(value)) {
+    pushInvalidField(invalid_fields, field, 'invalid_size');
+  }
 }
 
 function appendExerciseValidationFailures(invalid_fields, exerciseValidation, prefix) {
@@ -665,7 +718,267 @@ function validateStagingE2eMatrixInvalidFields(evidence) {
   return invalid_fields;
 }
 
+function validateAgentInstallMatrixInvalidFields(evidence) {
+  const invalid_fields = [];
+
+  if (evidence?.overall_status !== 'passed') {
+    pushInvalidField(invalid_fields, 'overall_status', 'matrix_not_passed', {
+      allowed: ['passed'],
+      status: evidence?.overall_status ?? null,
+    });
+  }
+
+  const requiredFormats = Array.isArray(evidence?.required_formats)
+    ? evidence.required_formats
+    : AGENT_INSTALL_MATRIX_FORMATS;
+  const requiredChecks = Array.isArray(evidence?.required_checks)
+    ? evidence.required_checks
+    : AGENT_INSTALL_MATRIX_CHECKS;
+
+  for (const format of AGENT_INSTALL_MATRIX_FORMATS) {
+    if (!requiredFormats.includes(format)) {
+      pushInvalidField(invalid_fields, 'required_formats', 'missing_required_format', { format });
+    }
+  }
+  for (const check of AGENT_INSTALL_MATRIX_CHECKS) {
+    if (!requiredChecks.includes(check)) {
+      pushInvalidField(invalid_fields, 'required_checks', 'missing_required_check', { check });
+    }
+  }
+
+  const coverageGaps = evidence?.coverage_gaps;
+  if (Array.isArray(coverageGaps?.missing_formats) && coverageGaps.missing_formats.length > 0) {
+    pushInvalidField(
+      invalid_fields,
+      'coverage_gaps.missing_formats',
+      'missing_formats_present',
+      { formats: coverageGaps.missing_formats },
+    );
+  }
+  if (Array.isArray(coverageGaps?.failed_checks) && coverageGaps.failed_checks.length > 0) {
+    pushInvalidField(
+      invalid_fields,
+      'coverage_gaps.failed_checks',
+      'failed_checks_present',
+      { checks: coverageGaps.failed_checks },
+    );
+  }
+
+  const rows = evidence?.rows;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    pushInvalidField(invalid_fields, 'rows', 'invalid_rows');
+    return invalid_fields;
+  }
+
+  const formatsPresent = new Set();
+  rows.forEach((row, index) => {
+    const format = row?.format;
+    if (!AGENT_INSTALL_MATRIX_FORMATS.includes(format)) {
+      pushInvalidField(invalid_fields, `rows[${index}].format`, 'unsupported_format', {
+        format: format ?? null,
+        allowed: AGENT_INSTALL_MATRIX_FORMATS,
+      });
+    } else {
+      formatsPresent.add(format);
+    }
+
+    if (row?.status !== 'passed') {
+      pushInvalidField(invalid_fields, `rows[${index}].status`, 'row_not_passed', {
+        format: format ?? null,
+        status: row?.status ?? null,
+      });
+    }
+
+    const checks = row?.checks;
+    if (!checks || typeof checks !== 'object' || Array.isArray(checks)) {
+      pushInvalidField(invalid_fields, `rows[${index}].checks`, 'missing_checks');
+      return;
+    }
+
+    for (const checkName of AGENT_INSTALL_MATRIX_CHECKS) {
+      const status = statusValue(checks[checkName]);
+      if (status !== 'passed') {
+        pushInvalidField(invalid_fields, `rows[${index}].checks.${checkName}`, 'check_not_passed', {
+          format: format ?? null,
+          check: checkName,
+          status: status ?? null,
+        });
+      }
+    }
+
+    const inboundDetail = checkDetail(row, 'no_inbound_port');
+    if (
+      inboundDetail
+      && typeof inboundDetail.inbound_listener_count === 'number'
+      && inboundDetail.inbound_listener_count !== 0
+    ) {
+      pushInvalidField(
+        invalid_fields,
+        `rows[${index}].check_details.no_inbound_port.inbound_listener_count`,
+        'inbound_listener_count_not_zero',
+        { format: format ?? null, inbound_listener_count: inboundDetail.inbound_listener_count },
+      );
+    }
+
+    const signatureDetail = checkDetail(row, 'signature_verify');
+    if (signatureDetail) {
+      if (!hasValue(signatureDetail.signing_format)) {
+        pushInvalidField(
+          invalid_fields,
+          `rows[${index}].check_details.signature_verify.signing_format`,
+          'missing_signing_format',
+          { format: format ?? null },
+        );
+      }
+      if (!hasValue(signatureDetail.trust_anchor_reference)) {
+        pushInvalidField(
+          invalid_fields,
+          `rows[${index}].check_details.signature_verify.trust_anchor_reference`,
+          'missing_trust_anchor_reference',
+          { format: format ?? null },
+        );
+      }
+    } else {
+      pushInvalidField(
+        invalid_fields,
+        `rows[${index}].check_details.signature_verify`,
+        'missing_signature_verify_detail',
+        { format: format ?? null },
+      );
+    }
+  });
+
+  for (const format of AGENT_INSTALL_MATRIX_FORMATS) {
+    if (!formatsPresent.has(format)) {
+      pushInvalidField(invalid_fields, 'rows', 'missing_format', { format });
+    }
+  }
+
+  return invalid_fields;
+}
+
+function validateAgentMtlsGatewayInvalidFields(evidence) {
+  const invalid_fields = [];
+
+  if (evidence?.validation?.ok !== true) {
+    pushInvalidField(invalid_fields, 'validation.ok', 'validation_not_ok');
+  }
+  if (evidence?.staging_proof_summary?.fingerprint_match_confirmed !== true) {
+    pushInvalidField(
+      invalid_fields,
+      'staging_proof_summary.fingerprint_match_confirmed',
+      'fingerprint_match_not_confirmed',
+    );
+  }
+  if (evidence?.rotation_revocation_summary?.rotation_tested !== true) {
+    pushInvalidField(
+      invalid_fields,
+      'rotation_revocation_summary.rotation_tested',
+      'rotation_not_tested',
+    );
+  }
+  if (evidence?.rotation_revocation_summary?.revocation_tested !== true) {
+    pushInvalidField(
+      invalid_fields,
+      'rotation_revocation_summary.revocation_tested',
+      'revocation_not_tested',
+    );
+  }
+
+  for (const field of ['owner', 'signed_at', 'signoff_reference']) {
+    if (!hasValue(evidence?.security_signoff?.[field])) {
+      pushInvalidField(invalid_fields, `security_signoff.${field}`, 'missing_security_signoff_field');
+    }
+  }
+
+  return invalid_fields;
+}
+
+function validateAgentTrustKeyCeremonyInvalidFields(evidence) {
+  const invalid_fields = [];
+
+  if (evidence?.validation?.ok !== true) {
+    pushInvalidField(invalid_fields, 'validation.ok', 'validation_not_ok');
+  }
+  if (evidence?.validation?.missing_signoff === true) {
+    pushInvalidField(invalid_fields, 'validation.missing_signoff', 'missing_signoff');
+  }
+  validateSha256Hex(
+    evidence?.ceremony_summary?.active_fingerprint_sha256,
+    invalid_fields,
+    'ceremony_summary.active_fingerprint_sha256',
+  );
+  if (!isPositiveNumber(evidence?.ceremony_summary?.custody_uri_count)) {
+    pushInvalidField(
+      invalid_fields,
+      'ceremony_summary.custody_uri_count',
+      'invalid_custody_uri_count',
+    );
+  }
+  const custodyUris = evidence?.custody_uris;
+  if (!Array.isArray(custodyUris) || custodyUris.length === 0) {
+    pushInvalidField(invalid_fields, 'custody_uris', 'missing_custody_uris');
+  } else if (
+    isPositiveNumber(evidence?.ceremony_summary?.custody_uri_count)
+    && custodyUris.length !== evidence.ceremony_summary.custody_uri_count
+  ) {
+    pushInvalidField(invalid_fields, 'custody_uris', 'custody_uri_count_mismatch', {
+      expected: evidence.ceremony_summary.custody_uri_count,
+      actual: custodyUris.length,
+    });
+  }
+
+  return invalid_fields;
+}
+
+function validateAgentSbomProvenanceInvalidFields(evidence) {
+  const invalid_fields = [];
+
+  if (hasValue(evidence?.package_format) && !AGENT_PACKAGE_FORMATS.has(evidence.package_format)) {
+    pushInvalidField(invalid_fields, 'package_format', 'unsupported_package_format', {
+      allowed: [...AGENT_PACKAGE_FORMATS],
+    });
+  }
+
+  validateSha256Hex(evidence?.package?.sha256, invalid_fields, 'package.sha256');
+  validatePositiveSize(evidence?.package?.size, invalid_fields, 'package.size');
+  validateSha256Hex(evidence?.sbom?.sha256, invalid_fields, 'sbom.sha256');
+  validatePositiveSize(evidence?.sbom?.size, invalid_fields, 'sbom.size');
+  validateSha256Hex(evidence?.provenance?.sha256, invalid_fields, 'provenance.sha256');
+  validatePositiveSize(evidence?.provenance?.size, invalid_fields, 'provenance.size');
+
+  const sbomFormat = evidence?.sbom?.summary?.sbom_format;
+  if (!AGENT_SBOM_FORMATS.has(sbomFormat)) {
+    pushInvalidField(invalid_fields, 'sbom.summary.sbom_format', 'unsupported_sbom_format', {
+      allowed: [...AGENT_SBOM_FORMATS],
+    });
+  }
+  if (!isPositiveNumber(evidence?.sbom?.summary?.component_count)) {
+    pushInvalidField(invalid_fields, 'sbom.summary.component_count', 'invalid_component_count');
+  }
+  if (!isPositiveNumber(evidence?.provenance?.summary?.subject_count)) {
+    pushInvalidField(invalid_fields, 'provenance.summary.subject_count', 'invalid_subject_count');
+  }
+  if (!isPositiveNumber(evidence?.provenance?.summary?.materials_count)) {
+    pushInvalidField(invalid_fields, 'provenance.summary.materials_count', 'invalid_materials_count');
+  }
+
+  return invalid_fields;
+}
+
 function validateKindSpecificInvalidFields(kind, evidence) {
+  if (kind === 'agent_sbom_provenance') {
+    return validateAgentSbomProvenanceInvalidFields(evidence);
+  }
+  if (kind === 'agent_install_matrix') {
+    return validateAgentInstallMatrixInvalidFields(evidence);
+  }
+  if (kind === 'agent_mtls_gateway') {
+    return validateAgentMtlsGatewayInvalidFields(evidence);
+  }
+  if (kind === 'agent_trust_key_ceremony') {
+    return validateAgentTrustKeyCeremonyInvalidFields(evidence);
+  }
   if (kind === 'governed_adapter') {
     return validateGovernedAdapterInvalidFields(evidence);
   }

@@ -50,9 +50,9 @@ export function buildDefaultOperatorRunbookEvidence(input = {}) {
     runbook_version: input.runbookVersion ?? '2026-07-03',
     exercise_window: `${createdAt}/${endAt}`,
     operator: input.operator ?? 'release-manager',
-    evidence_uri: `evidence://runbook/${environment}-exercise`,
-    exceptions: [],
-    signoff_reference: 'signoff://ops-security/staging-sim',
+    evidence_uri: input.evidence_uri ?? `evidence://runbook/${environment}-exercise`,
+    exceptions: input.exceptions ?? [],
+    signoff_reference: input.signoff_reference ?? `signoff://ops-security/${environment}`,
   };
 }
 

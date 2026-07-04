@@ -86,7 +86,7 @@ npm run staging:local:up
 npm run staging:local:attest
 ```
 
-`staging:local:attest` runs seed, Postgres verify, smoke, E2E matrix, evidence collection (31 kinds), `release:gap-audit:local`, `release:staging-attestation:local`, and API evidence submit. Expect `production_ready=true` when checklist gates are closed.
+`staging:local:attest` runs seed, Postgres verify, smoke, E2E matrix, evidence collection (31 kinds), `release:gap-audit:local`, `release:staging-attestation:local`, and API evidence submit. Expect `release:staging-attestation:local` to report inventory complete once all evidence kinds are present; expect `release:gap-audit:local` to remain `production_ready=false` until both checklist items and the release-plan promotion gate table are closed.
 
 Cross-check attestation, required kinds from `src/contracts/productionReleaseEvidence.mjs`, and open rows in `docs/release-checklist.md`. The audit exits **nonzero** when `production_ready=false` (missing/invalid inventory and/or open checklist gates). Strict evidence kinds (including `governed_adapter` and kill-switch drill contracts) surface failures as `invalid_fields` during bundle validation and on `/v1/production-release-evidence` as `invalid_evidence_fields`.
 
@@ -432,7 +432,7 @@ Agent identity file (validation agent): packaged default `/var/lib/astranull/ide
 make verify
 ```
 
-Runs lint, unit tests, integration tests (including security polish), e2e flows, UI smoke, `scripts/safety-check.mjs`, and `scripts/postgres-tenant-query-audit.mjs` using Node directly (no npm on PATH required). Override Node with `make NODE=/path/to/node verify`. Latest local verification: `npm test` 2142 passing; `npm run staging:local:attest` reports `production_ready=true` for local-staging inventory. A green local verify is local production-quality evidence — not customer-facing hosted production promotion. See `npm run staging:local:attest` for the full Docker Compose gate.
+Runs lint, unit tests, integration tests (including security polish), e2e flows, UI smoke, `scripts/safety-check.mjs`, and `scripts/postgres-tenant-query-audit.mjs` using Node directly (no npm on PATH required). Override Node with `make NODE=/path/to/node verify`. Latest local verification: `npm test` 2163 passing; `npm run release:staging-attestation:local` reports complete local-staging inventory, while `npm run release:gap-audit:local` fails closed until release-plan promotion gates are closed. A green local verify is local production-quality evidence — not customer-facing hosted production promotion. See `npm run staging:local:attest` for the full Docker Compose gate.
 
 Agent update releases require `distribution: { manifest_url, signature_url, artifact_url }` on `POST /v1/agent-updates`; agents polling `GET /v1/agents/:id/update` receive `download` with the same three URLs. In Postgres mode the route family persists through `runtime.services.agentUpdates`; developer validation uses the JSON store. Host apply: `agents/linux/astranull-agent.mjs --download-and-apply-update` (see [`docs/agent/07-agent-lifecycle.md`](agent/07-agent-lifecycle.md)). Production still requires CDN/mirror custody runbooks, unattended daemon restart, and fleet rollout drills.
 

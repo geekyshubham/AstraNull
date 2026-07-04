@@ -32,7 +32,7 @@ Add `region` to allowed `entity_type` values to match [Enhanced External Discove
 
 ## `waf_coverage_daily_rollups` (new table)
 
-Tenant-level trend buckets for dashboard/API `trend[]`. Postgres `GET /v1/waf/coverage` reads these persisted rows when present and falls back to snapshot-derived buckets when no rollups exist yet.
+Tenant-level trend buckets for dashboard/API `trend[]`. Dev-json and Postgres `GET /v1/waf/coverage` read these persisted rows when present and fall back to snapshot-derived buckets when no rollups exist yet.
 
 | Column | Type | Notes |
 |---|---|---|

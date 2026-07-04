@@ -170,9 +170,10 @@ agents/linux/install.sh \
   --agent-source agents/linux/astranull-agent.mjs \
   --install-root /tmp/astranull-staged \
   --no-start \
-  --api http://127.0.0.1:3000 \
-  --allow-insecure-localhost-api
+  --api http://127.0.0.1:3000
 ```
+
+`install.sh` verifies the artifact SHA-256 and writes the staged service/env files. For localhost HTTP developer validation, set `ASTRANULL_ALLOW_INSECURE_LOCALHOST_API=1` in the staged agent environment or pass `--allow-insecure-localhost-api` to `astranull-agent.mjs` when running the agent directly; it is not an installer flag.
 
 ## Supported Linux distributions
 

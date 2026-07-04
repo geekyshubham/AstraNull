@@ -7,17 +7,18 @@ const ARTIFACT_REL = 'docs/api/waf-posture-openapi.json';
 const REQUIRED_PATHS = [
   '/v1/waf/assets',
   '/v1/waf/assets/{id}',
+  '/v1/waf/assets/{id}/exception',
+  '/v1/waf/exceptions',
   '/v1/waf/coverage',
   '/v1/waf/coverage/vendors',
   '/v1/waf/coverage/entities',
   '/v1/waf/coverage/criticality',
   '/v1/waf/coverage/geography',
-  '/v1/waf/coverage/criticality',
   '/v1/waf/coverage/risk-roadmap',
   '/v1/waf/coverage/vendor-consolidation',
   '/v1/waf/cve-pipeline/{id}/playbook',
   '/v1/waf/cve-pipeline/{id}/playbook/approve',
-  '/v1/waf/cve-pipeline/playbooks/{id}/retest',
+  '/v1/waf/cve-pipeline/{id}/coordinated-retest',
   '/v1/waf/validations',
   '/v1/waf/validation-plans',
   '/v1/waf/validation-plans/scheduled',
@@ -38,6 +39,7 @@ const REQUIRED_SCHEMAS = [
   'WafRetestRequest',
   'DelegatedJob',
   'WafActionItem',
+  'WafException',
   'ApiError',
   'WafPostureSnapshot',
   'WafDriftEvent',
@@ -46,6 +48,8 @@ const REQUIRED_SCHEMAS = [
 
 const REQUIRED_ERROR_CODES = [
   'waf_feature_disabled',
+  'invalid_waf_exception',
+  'unsafe_waf_evidence',
   'postgres_waf_orchestrator_unavailable',
   'unsafe_orchestrator_plan',
   'validation_plan_not_found',
@@ -63,6 +67,65 @@ const REQUIRED_ERROR_CODES = [
   'waf_drift_event_not_found',
   'waf_report_kind_invalid',
 ];
+
+const OPERATION_METHODS = ['get', 'post', 'put', 'patch', 'delete'];
+
+const REQUIRED_OPERATION_SECURITY = [
+  {
+    path: '/v1/waf/cve-pipeline/{id}/playbook',
+    method: 'get',
+    scopes: ['waf:read'],
+  },
+  {
+    path: '/v1/waf/cve-pipeline/{id}/playbook/approve',
+    method: 'post',
+    scopes: ['waf:write'],
+  },
+  {
+    path: '/v1/waf/cve-pipeline/{id}/coordinated-retest',
+    method: 'post',
+    scopes: ['waf:run'],
+  },
+  {
+    path: '/v1/waf/assets/{id}/exception',
+    method: 'post',
+    scopes: ['waf:write'],
+  },
+  {
+    path: '/v1/waf/exceptions',
+    method: 'get',
+    scopes: ['waf:read'],
+  },
+];
+
+function getOperation(pathObj, pathName, method) {
+  const pathDef = pathObj[pathName];
+  if (!pathDef || typeof pathDef !== 'object') return null;
+  const operation = /** @type {Record<string, unknown>} */ (pathDef)[method];
+  return operation && typeof operation === 'object'
+    ? /** @type {Record<string, unknown>} */ (operation)
+    : null;
+}
+
+function collectBearerScopes(operation) {
+  const security = operation.security;
+  if (!Array.isArray(security)) return [];
+  const scopes = [];
+  for (const entry of security) {
+    if (!entry || typeof entry !== 'object') continue;
+    const bearer = /** @type {Record<string, unknown>} */ (entry).bearerAuth;
+    if (Array.isArray(bearer)) {
+      scopes.push(...bearer.filter((scope) => typeof scope === 'string'));
+    }
+  }
+  return scopes;
+}
+
+function sameStringSet(actual, expected) {
+  if (actual.length !== expected.length) return false;
+  const actualSet = new Set(actual);
+  return expected.every((item) => actualSet.has(item));
+}
 
 /**
  * @param {unknown} doc
@@ -108,6 +171,40 @@ export function validateWafOpenApi(doc) {
         errors.push(`missing path: ${p}`);
       }
     }
+    for (const p of REQUIRED_PATHS) {
+      const pathDef = pathObj[p];
+      if (!pathDef || typeof pathDef !== 'object') continue;
+      const operations = /** @type {Record<string, unknown>} */ (pathDef);
+      for (const method of OPERATION_METHODS) {
+        const operation = operations[method];
+        if (!operation || typeof operation !== 'object') continue;
+        const opObj = /** @type {Record<string, unknown>} */ (operation);
+        const text = `${String(opObj.summary ?? '')}\n${String(opObj.description ?? '')}`;
+        if (/Planned route/i.test(text)) {
+          errors.push(`${method.toUpperCase()} ${p} must not describe implemented route as Planned route`);
+        }
+      }
+    }
+    for (const required of REQUIRED_OPERATION_SECURITY) {
+      const operation = getOperation(pathObj, required.path, required.method);
+      if (!operation) {
+        errors.push(`missing operation: ${required.method.toUpperCase()} ${required.path}`);
+        continue;
+      }
+      const scopes = collectBearerScopes(operation);
+      if (!sameStringSet(scopes, required.scopes)) {
+        errors.push(
+          `${required.method.toUpperCase()} ${required.path} bearerAuth scopes must be `
+            + `${required.scopes.join(', ')} (got ${scopes.join(', ') || 'none'})`,
+        );
+      }
+    }
+  }
+
+  const serialized = JSON.stringify(root);
+  const staleScope = /cve_pipeline:(read|write|run)/.exec(serialized);
+  if (staleScope) {
+    errors.push(`OpenAPI artifact must not contain stale CVE pipeline security scope: ${staleScope[0]}`);
   }
 
   const components = root.components;

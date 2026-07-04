@@ -36,6 +36,9 @@ const WAF_CONNECTOR_COLUMNS = `id, tenant_id, provider, name, secret_id, config_
 const WAF_CONNECTOR_SNAPSHOT_COLUMNS = `id, tenant_id, connector_id, provider, snapshot_kind,
   resource_ref_hash, display_ref, summary_json, config_hash, observed_at, created_at`;
 
+const WAF_EXCEPTION_COLUMNS = `id, tenant_id, waf_asset_id, owner, reason, expires_at, scope_hash,
+  approved_at, approved_by, created_at, updated_at`;
+
 function asStringArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -310,6 +313,20 @@ export function formatPostureSnapshotForApi(snapshot) {
     source_mix: snapshot.source_mix_json ?? {},
     created_at: snapshot.created_at,
     is_current: snapshot.is_current,
+  };
+}
+
+export function mapWafExceptionRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    waf_asset_id: row.waf_asset_id,
+    owner: row.owner,
+    reason: row.reason,
+    expires_at: toIso(row.expires_at),
+    scope_hash: row.scope_hash ?? null,
+    ...(row.approved_at ? { approved_at: toIso(row.approved_at) } : {}),
+    approved_by: row.approved_by,
   };
 }
 
@@ -1243,6 +1260,50 @@ export function createWafPostureRepository(pool) {
           [tenantId, windowDays],
         );
         return rows.map(mapWafCoverageDailyRollupRow);
+      });
+    },
+
+    async listWafExceptions(ctx) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${WAF_EXCEPTION_COLUMNS}
+           FROM waf_exceptions
+           WHERE tenant_id = $1
+             AND expires_at > NOW()
+           ORDER BY expires_at ASC, created_at ASC`,
+          [tenantId],
+        );
+        return rows.map(mapWafExceptionRow);
+      });
+    },
+
+    async createWafException(ctx, record) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `INSERT INTO waf_exceptions (
+             id, tenant_id, waf_asset_id, owner, reason, expires_at, scope_hash,
+             approved_at, approved_by, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8::timestamptz, $9,
+             $10::timestamptz, $11::timestamptz)
+           RETURNING ${WAF_EXCEPTION_COLUMNS}`,
+          [
+            record.id,
+            tenantId,
+            record.waf_asset_id,
+            record.owner,
+            record.reason,
+            record.expires_at,
+            record.scope_hash ?? null,
+            record.approved_at ?? null,
+            record.approved_by,
+            record.created_at,
+            record.updated_at,
+          ],
+        );
+        return mapWafExceptionRow(rows[0]);
       });
     },
   };

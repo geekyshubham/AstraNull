@@ -174,6 +174,18 @@ describe('collect release evidence orchestrator', () => {
     assert.equal(result.record.evidence.environment, 'staging-sim');
   });
 
+  it('builds third_party_security_review input from contract evidence, not operator runbook live input', () => {
+    const context = buildCollectionContext({
+      outDir: tempDir(),
+      environment: 'staging',
+      releaseId: 'rel-hosted-staging-2026-07-03',
+    });
+    const { input } = buildCollectorScriptInput('third_party_security_review', context);
+    assert.equal(input.reviewer_org, 'Independent Security Review Co');
+    assert.ok(input.review_report_uri);
+    assert.equal(input.environment, undefined);
+  });
+
   it('builds local-staging E2E matrix input as pending until executed matrix exists', () => {
     const context = buildCollectionContext({
       outDir: tempDir(),

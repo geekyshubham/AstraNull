@@ -46,7 +46,7 @@
     },
     {
       "name": "waf-cve-playbooks",
-      "description": "Multi-vendor CVE mitigation playbooks with coordinated safe retest. Permissions `cve_pipeline:read`, `cve_pipeline:write`, `waf:run`."
+      "description": "Multi-vendor CVE mitigation playbooks with coordinated safe retest. Permissions `waf:read`, `waf:write`, `waf:run`."
     }
   ],
   "paths": {
@@ -177,6 +177,68 @@
             }
           },
           "404": { "$ref": "#/components/responses/WafFeatureDisabled" }
+        }
+      }
+    },
+    "/v1/waf/assets/{id}/exception": {
+      "post": {
+        "tags": ["waf-assets"],
+        "summary": "Create approved WAF exception",
+        "description": "Creates a tenant-scoped, metadata-only, future-expiring WAF exception for a declared asset. Raw payload/body/header/packet fields and secrets are rejected.",
+        "operationId": "createWafException",
+        "security": [{ "bearerAuth": ["waf:write"] }],
+        "parameters": [{ "$ref": "#/components/parameters/WafAssetId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WafExceptionCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Approved exception created and audited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WafExceptionCreateResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/ApiErrorResponse" },
+          "403": { "$ref": "#/components/responses/RbacDenied" },
+          "404": { "$ref": "#/components/responses/ApiErrorResponse" },
+          "503": { "$ref": "#/components/responses/ApiErrorResponse" }
+        }
+      }
+    },
+    "/v1/waf/exceptions": {
+      "get": {
+        "tags": ["waf-assets"],
+        "summary": "List active WAF exceptions",
+        "operationId": "listWafExceptions",
+        "security": [{ "bearerAuth": ["waf:read"] }],
+        "responses": {
+          "200": {
+            "description": "Active non-expired WAF exceptions for the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/WafException" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/RbacDenied" },
+          "404": { "$ref": "#/components/responses/WafFeatureDisabled" },
+          "503": { "$ref": "#/components/responses/ApiErrorResponse" }
         }
       }
     },
@@ -759,9 +821,9 @@
       "get": {
         "tags": ["waf-cve-playbooks"],
         "summary": "Get grouped CVE mitigation playbook",
-        "description": "Returns a metadata-only multi-vendor playbook for a CVE pipeline item with ordered vendor slices. Planned route (WAF-020); contract documented for OpenAPI parity.",
+        "description": "Returns a metadata-only multi-vendor playbook for a CVE pipeline item with ordered vendor slices.",
         "operationId": "getCveMitigationPlaybook",
-        "security": [{ "bearerAuth": ["cve_pipeline:read"] }],
+        "security": [{ "bearerAuth": ["waf:read"] }],
         "parameters": [{ "$ref": "#/components/parameters/CvePipelineItemId" }],
         "responses": {
           "200": {
@@ -786,9 +848,9 @@
       "post": {
         "tags": ["waf-cve-playbooks"],
         "summary": "Approve CVE mitigation playbook for ticketing",
-        "description": "Human approval gate before ticketing. Planned route (WAF-020).",
+        "description": "Human approval gate before ticketing.",
         "operationId": "approveCveMitigationPlaybook",
-        "security": [{ "bearerAuth": ["cve_pipeline:write"] }],
+        "security": [{ "bearerAuth": ["waf:write"] }],
         "parameters": [{ "$ref": "#/components/parameters/CvePipelineItemId" }],
         "requestBody": {
           "content": {
@@ -821,14 +883,14 @@
         }
       }
     },
-    "/v1/waf/cve-pipeline/playbooks/{id}/retest": {
+    "/v1/waf/cve-pipeline/{id}/coordinated-retest": {
       "post": {
         "tags": ["waf-cve-playbooks"],
         "summary": "Coordinated safe retest across playbook vendor slices",
-        "description": "Starts bounded safe retest across all assets in an approved playbook. Planned route (WAF-020).",
+        "description": "Starts bounded safe retest across all assets in an approved playbook.",
         "operationId": "retestCveMitigationPlaybook",
         "security": [{ "bearerAuth": ["waf:run"] }],
-        "parameters": [{ "$ref": "#/components/parameters/CvePlaybookId" }],
+        "parameters": [{ "$ref": "#/components/parameters/CvePipelineItemId" }],
         "responses": {
           "201": {
             "description": "Coordinated retest started",
@@ -1030,10 +1092,13 @@
               "waf_feature_disabled",
               "waf_asset_not_found",
               "waf_asset_not_approved",
+              "invalid_waf_exception",
+              "unsafe_waf_evidence",
               "unsafe_waf_profile",
               "marker_profile_required",
               "unsafe_orchestrator_plan",
               "postgres_waf_orchestrator_unavailable",
+              "postgres_route_not_wired",
               "validation_plan_not_found",
               "validation_plan_already_completed",
               "validation_plan_cancelled",
@@ -1111,6 +1176,46 @@
           "expected_vendor_hint": { "type": "string" }
         },
         "description": "Partial metadata only; raw payload/header/body fields are rejected."
+      },
+      "WafException": {
+        "type": "object",
+        "required": ["id", "waf_asset_id", "owner", "reason", "expires_at", "approved_at", "approved_by"],
+        "properties": {
+          "id": { "type": "string" },
+          "waf_asset_id": { "type": "string" },
+          "owner": { "type": "string" },
+          "reason": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "scope_hash": { "type": "string", "nullable": true },
+          "approved_at": { "type": "string", "format": "date-time" },
+          "approved_by": { "type": "string" }
+        },
+        "description": "Approved metadata-only WAF exception. Active listings include only non-expired rows."
+      },
+      "WafExceptionCreate": {
+        "type": "object",
+        "required": ["owner", "reason", "expires_at"],
+        "additionalProperties": false,
+        "properties": {
+          "owner": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "expires_at": { "type": "string", "format": "date-time" },
+          "scope_hash": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "description": "Metadata-only exception request. `expires_at` must be a future timestamp; raw evidence, headers, payloads, logs, and secrets are rejected by runtime contracts."
+      },
+      "WafExceptionCreateResponse": {
+        "type": "object",
+        "required": ["exception", "posture"],
+        "properties": {
+          "exception": { "$ref": "#/components/schemas/WafException" },
+          "posture": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/WafPostureSnapshot" },
+              { "type": "null" }
+            ]
+          }
+        }
       },
       "WafAssetDetail": {
         "type": "object",

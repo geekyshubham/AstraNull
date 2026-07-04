@@ -1,6 +1,6 @@
 # AstraNull Production Readiness Completion Guide
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 This guide is the handoff document for completing AstraNull to a production-ready state. It is intentionally stricter than the local developer scaffold status: passing local tests or having mocked evidence is not the same as production readiness.
 
@@ -8,12 +8,12 @@ This guide is the handoff document for completing AstraNull to a production-read
 
 | Area | Status | Notes |
 |---|---:|---|
-| Tracked implementation scope | **100%** | `PROGRESS.md` 118/118 tasks complete. |
-| Release checklist gate | **100%** | `docs/release-checklist.md` 54/54 checked. |
-| Hosted staging evidence gate | **100%** | `npm run staging:hosted:attest` → `production_ready=true`, 31/31 evidence kinds, `staging_e2e_matrix` 7/7 passed. |
-| Customer portal launch (hosted profile) | **100%** | Bundled staging OIDC login, 21 customer routes, staff login unlinked, privacy tests, and `customer_portal_browser_e2e` in attest. |
-| Production readiness scorecard | **100%** | `output/production-readiness-gap-audit.json` `production_readiness_scorecard.overall_percent=100` after hosted attest. |
-| Enterprise tenant-specific production | **Follow-on ops** | Per-tenant enterprise IdP mapping, customer-owned domains/WAF, live provider credentials, and independent security/legal signoff are **customer onboarding** steps — not repo blockers for the hosted staging profile. |
+| Tracked implementation scope | Audit-derived | Current `PROGRESS.md` task counts are derived by the production-readiness gap audit and reported in `output/production-readiness-gap-audit.json`. |
+| Release checklist gate | Checklist closed; promotion gates open | `docs/release-checklist.md` checklist rows are checked, but `docs/product/06-release-plan.md` still has 13 `Open` production-promotion gates. |
+| Hosted/local staging evidence inventory | Complete inventory | Staging/local evidence collection covers 31/31 evidence kinds and contract-valid `staging_e2e_matrix` evidence. Attestation inventory completion is not promotion approval. |
+| Customer portal launch evidence | Evidence inventory complete | Bundled staging OIDC login, customer routes, staff login unlinked, privacy tests, and `customer_portal_browser_e2e` are covered by hosted evidence, but release promotion still depends on open gate closure. |
+| Production readiness scorecard | Fails closed | `output/production-readiness-gap-audit.json` reports `production_ready=false` while release-plan promotion gates remain `Open`. |
+| Enterprise tenant-specific production | Promotion blocker | Per-tenant enterprise IdP mapping, customer-owned domains/WAF, live provider credentials, independent security/legal signoff, KMS/signing, SOC/provider drills, and support/observability signoff remain release-promotion gates. |
 
 **One-command hosted verification:** `npm run production:verify:hosted` (full test suite + `staging:hosted:attest`).
 
@@ -358,4 +358,3 @@ AstraNull is production-ready only when all of the following are true:
 - Evidence is immutable, retained, and tied to verdicts.
 - Security, compliance, SOC, ops, and product signoffs are attached.
 - `npm test`, lint, safety, schema validation, tenant audit, OpenAPI validation, release evidence bundle, staging attestation, release gap audit, and `git diff --check` are green.
-

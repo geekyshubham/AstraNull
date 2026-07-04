@@ -44,6 +44,7 @@ import {
   createPostgresInternalManagementServices,
 } from './serviceAdapters.mjs';
 import { createPostgresCvePipelineServices } from './cvePipelineServiceAdapters.mjs';
+import { createCvePipelineRepository } from './cvePipelineRepository.mjs';
 import { createPostgresExternalDiscoveryServices } from './externalDiscoveryServiceAdapters.mjs';
 import { createPostgresSupplyChainRiskServices } from './supplyChainRiskServiceAdapters.mjs';
 import { createPostgresActionItemServices } from './actionItemServiceAdapters.mjs';
@@ -190,12 +191,24 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     });
     const productionReleaseEvidenceServices =
       createPostgresProductionReleaseEvidenceServices(repositories);
-    const wafPostureServices = createPostgresWafPostureServices(repositories);
+    const cvePipelineRepository = createCvePipelineRepository(pool);
+    const repositoriesWithCve = {
+      ...repositories,
+      cvePipeline: cvePipelineRepository,
+    };
+    const wafPostureServices = createPostgresWafPostureServices(repositoriesWithCve);
     const wafOrchestratorServices = createPostgresWafOrchestratorServices(repositories, {
       ...(options.wafOrchestratorServiceOptions ?? {}),
       testRuns: validationServices.testRuns,
     });
-    const cvePipelineServices = createPostgresCvePipelineServices(pool);
+    const cvePipelineServices = createPostgresCvePipelineServices(pool, {
+      repositories: {
+        cvePipeline: cvePipelineRepository,
+        wafPosture: repositories.wafPosture,
+        audit: repositories.audit,
+        actionItems: repositories.actionItems,
+      },
+    });
     const externalDiscoveryServices = createPostgresExternalDiscoveryServices(repositories, { pool });
     const supplyChainRiskServices = createPostgresSupplyChainRiskServices(pool);
     const actionItemServices = createPostgresActionItemServices(pool);

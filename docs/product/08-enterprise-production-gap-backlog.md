@@ -4,7 +4,7 @@ This backlog records the remaining enterprise-grade work needed before AstraNull
 
 ## Current Verdict
 
-AstraNull’s **hosted staging customer-production profile** is gate-complete: `npm run staging:hosted:attest` reports `production_ready=true`, 31/31 evidence kinds, 7/7 staging E2E scenarios, customer portal browser E2E, and staff surfaces unlinked from customer UI. Per-tenant enterprise onboarding (customer IdP, domains, provider credentials, independent review) remains follow-on operational work — not an open repo implementation gap.
+AstraNull’s hosted staging profile has complete evidence inventory: hosted attest/evidence collection covers 31/31 evidence kinds, 7/7 staging E2E scenarios, customer portal browser E2E, and staff surfaces unlinked from customer UI. It is **not production-promotion complete** while the release-plan promotion table still has `Open` gates for enterprise IdP, domains, provider credentials, independent review, and other operator signoffs.
 
 | Area | Current status | Production gap |
 |---|---|---|
@@ -32,6 +32,18 @@ AstraNull’s **hosted staging customer-production profile** is gate-complete: `
 | P1 | UX onboarding wizard | Guided create tenant/environment/target group/install agent/run first check path. |
 | P1 | Evidence chain of custody | Immutable evidence snapshots, signed report hashes, audit export, retention, legal hold, and custody metadata. |
 | P2 | Compliance report templates | DORA, NIS2, ISO 27001, SOC 2, internal audit, board, executive, technical, and SOC report variants. |
+
+### P0 disposition and signoff map
+
+These dispositions close the local tracker ambiguity only. They do not close the release-plan promotion gates until the external evidence in the final column is attached through governed custody.
+
+| P0 gap | Local disposition | Owner | Evidence / signoff reference | External closeout still required |
+|---|---|---|---|---|
+| Authorization proof workflow | Implemented locally with external custody closeout remaining | SOC + Product | `PROGRESS.md` SOC-009/SOC-010; `docs/release-checklist.md` "High-scale authorization proof workflow"; `tests/integration/hardening.test.mjs`; `npm run soc:authorization-custody:evidence` | Customer ownership/control proof, business/legal approval, provider approval evidence, scoped rates/dates/vectors, retained artifacts, and SOC staging review. |
+| Agent placement validation | Implemented locally with staging placement closeout remaining | Detection + QA | `PROGRESS.md` DET-014/UX-013/QA-004; `docs/release-checklist.md` verdict UX and placement confidence rows; `tests/unit/verdict-explanation.test.mjs`; `npm run placement:staging:evidence` | Live placement-mode matrix, browser/accessibility execution, and staging/live DB acceptance for verdict/report export paths. |
+| Runtime Postgres adapter | Implemented locally with staging/live DB acceptance closeout remaining | Backend + Platform | `PROGRESS.md` SEC-001/QA-006; `docs/release-checklist.md` Data plane rows; `node scripts/validate-db-schema.mjs`; `npm run postgres:tenant-query:audit`; `npm run postgres:concurrency:evidence` | Migrations applied in target environments, runtime smoke against target Postgres, tenant concurrency under realistic load, and DB/operator signoff. |
+| Notification delivery operations | Implemented locally with provider delivery closeout remaining | Backend + SRE | `PROGRESS.md` BE-016/SEC-006/QA-005; `docs/release-checklist.md` Notifications row; `tests/unit/notifications.test.mjs`; `tests/integration/notification-provider-credentials-api.test.mjs`; `npm run notification:provider:evidence` | Real provider credentials, staging delivery/redrive drill, always-on scheduler deployment, alert routing, and SRE signoff. |
+| Safe vector execution policy | Implemented locally with staged fleet evidence remaining | Detection + Security | `PROGRESS.md` DET-015/SEC-001/QA-005; `docs/release-checklist.md` feature flag/vector rows; `tests/unit/vectors.test.mjs`; `tests/unit/vector-safety-policy-evidence.test.mjs`; `npm run vector:safety:evidence` | Live/staging signed-worker fleet matrix, provider stop-path evidence where relevant, and security/SOC release signoff. |
 
 ## Agent Detection And Confidence
 
@@ -241,7 +253,7 @@ Do not add:
 | `npm run rollback:evidence` | `rollback_fixforward` | Staging rollback/fix-forward drill execution and DB signoff |
 | `npm run release:evidence:bundle` | (multi-kind) | Bundle validation only; each kind still needs external evidence |
 | `npm run release:staging-attestation:local` / `npm run release:staging-attestation` | (profile inventory) | Local-staging: `production_ready: true` with 31/31 kinds (not customer-facing promotion) |
-| `npm run release:gap-audit:local` / `npm run release:gap-audit` | (inventory + checklist) | Local-staging: `production_ready=true` when inventory complete and checklist gates closed |
+| `npm run release:gap-audit:local` / `npm run release:gap-audit` | (inventory + checklist + release-plan promotion gates) | Local-staging: fails closed while any release-plan promotion gate remains `Open`; `production_ready=true` only when inventory is complete and checklist/release-plan gates are closed |
 | `npm run release:sample-evidence` | (rehearsal fixtures) | Replace every sample before any production claim |
 | `npm run oidc:prod:preflight` | `oidc_prod_auth_preflight` | Real IdP login, MFA, staging auth signoff |
 | `npm run edge:protection:evidence` | `edge_protection` | Deployed WAF/gateway config and staging abuse drill |

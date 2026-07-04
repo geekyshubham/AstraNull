@@ -12,6 +12,7 @@ import {
 import { requireStaffPermission } from './lib/staffRbac.mjs';
 import * as signupIntake from './services/signupIntake.mjs';
 import * as internalManagement from './services/internalManagement.mjs';
+import * as breakGlass from './services/breakGlass.mjs';
 import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
@@ -951,6 +952,30 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const result = await wafSvc.patchWafAsset(ctx, wafAssetMatch[1], body);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, { asset: result.asset });
+  }
+  const wafAssetExceptionMatch = path.match(/^\/v1\/waf\/assets\/([^/]+)\/exception$/);
+  if (wafAssetExceptionMatch && method === 'POST') {
+    const gate = requirePermission(ctx, 'waf:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof wafSvc.createWafException !== 'function') {
+      return json(res, 503, { error: 'postgres_route_not_wired' });
+    }
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await wafSvc.createWafException(ctx, wafAssetExceptionMatch[1], body);
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, {
+      exception: result.exception,
+      posture: result.posture ?? null,
+    });
+  }
+  if (method === 'GET' && path === '/v1/waf/exceptions') {
+    const gate = requirePermission(ctx, 'waf:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof wafSvc.listWafExceptions !== 'function') {
+      return json(res, 503, { error: 'postgres_route_not_wired' });
+    }
+    const items = await wafSvc.listWafExceptions(ctx);
+    return json(res, 200, { items: Array.isArray(items) ? items : [] });
   }
   if (method === 'GET' && path === '/v1/waf/coverage') {
     const gate = requirePermission(ctx, 'waf:read');
@@ -2401,6 +2426,23 @@ async function handleInternalAdminApi(req, res, url, ctx, runtimeConfig, options
         limit: Number(url.searchParams.get('limit') ?? 100),
       }),
     });
+  }
+
+  if (method === 'GET' && path === '/internal/admin/break-glass/status') {
+    const gate = requireStaffPermission(ctx, 'staff:audit:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    return json(res, 200, breakGlass.breakGlassStatus());
+  }
+
+  if (method === 'POST' && path === '/internal/admin/break-glass/activate') {
+    const gate = requireStaffPermission(ctx, 'staff:signup:decide');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = breakGlass.activateBreakGlass(ctx, body, {
+      audit: (event) => managementService.appendInternalAudit?.(ctx, event) ?? null,
+    });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, result);
   }
 
   return json(res, 404, { error: 'not_found' });

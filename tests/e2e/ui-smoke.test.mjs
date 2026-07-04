@@ -15,7 +15,6 @@ const REQUIRED_NAV_LABELS = [
   'Release Evidence',
   'Settings',
   'Notifications',
-  'SOC Console',
   'Vector coverage matrix',
   'WAF Posture',
 ];
@@ -121,6 +120,7 @@ describe('ui and api smoke', () => {
     assert.ok(uiHelpers.text.includes('renderReportBuilder'));
     assert.ok(uiHelpers.text.includes('renderSupportReadinessPanel'));
     assert.ok(uiHelpers.text.includes('buildSupportReadinessPreview'));
+    assert.ok(appJs.text.includes("['soc', 'SOC Console']"), 'SOC operator route still exists');
     assert.ok(appJs.text.includes('data-action="soc-review-pack"'));
     assert.ok(appJs.text.includes('data-action="soc-schedule"'));
     assert.ok(appJs.text.includes('data-action="soc-post-report"'));

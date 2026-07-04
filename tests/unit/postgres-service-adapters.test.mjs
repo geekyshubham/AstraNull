@@ -3321,8 +3321,26 @@ function createRecordingWafPostureRepositories(overrides = {}) {
       return [];
     },
   };
+  const cvePipeline = overrides.cvePipeline
+    ? {
+        listCvePipelineItems: async (...args) => {
+          repoCalls.push({ method: 'cvePipeline.listCvePipelineItems', args });
+          return overrides.cvePipeline.listCvePipelineItems(...args);
+        },
+        listCveAssetMatches: async (...args) => {
+          repoCalls.push({ method: 'cvePipeline.listCveAssetMatches', args });
+          return overrides.cvePipeline.listCveAssetMatches(...args);
+        },
+      }
+    : undefined;
   return {
-    repositories: { wafPosture, audit, coreCatalog, validationEvidence },
+    repositories: {
+      wafPosture,
+      audit,
+      coreCatalog,
+      validationEvidence,
+      ...(cvePipeline ? { cvePipeline } : {}),
+    },
     auditEvents,
     repoCalls,
     evidenceCalls,
@@ -3358,6 +3376,8 @@ describe('postgres WAF posture service adapters', () => {
       'updateConnectorStatus',
       'createConnectorSnapshots',
       'listConnectorSnapshots',
+      'listWafExceptions',
+      'createWafException',
     ]);
     assert.deepEqual(POSTGRES_WAF_POSTURE_SERVICE_METHODS, [
       'listWafAssets',
@@ -3387,6 +3407,8 @@ describe('postgres WAF posture service adapters', () => {
       'listConnectorSnapshots',
       'disableConnector',
       'exportWafReport',
+      'listWafExceptions',
+      'createWafException',
     ]);
   });
 
@@ -3430,6 +3452,119 @@ describe('postgres WAF posture service adapters', () => {
       () => createPostgresWafPostureServices(repositories),
       /requires validationEvidence\.listRunEvents/,
     );
+  });
+
+  it('creates WAF exceptions for known assets and rejects missing assets or raw evidence', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const fixed = new Date('2026-07-02T12:00:00.000Z');
+    const { repositories, auditEvents, repoCalls } = createRecordingWafPostureRepositories({
+      getWafAsset: async (_ctx, id) => (id === 'waf_1' ? { id: 'waf_1' } : null),
+      createWafException: async (_ctx, record) => ({
+        id: record.id,
+        waf_asset_id: record.waf_asset_id,
+        owner: record.owner,
+        reason: record.reason,
+        expires_at: record.expires_at,
+        scope_hash: record.scope_hash,
+        approved_at: record.approved_at,
+        approved_by: record.approved_by,
+      }),
+      getCurrentPostureSnapshot: async () => ({
+        id: 'snap_1',
+        waf_asset_id: 'waf_1',
+        status: 'excluded',
+        reason_codes: ['policy_exception_active'],
+        coverage_required: false,
+        confidence: 1,
+        source_mix_json: {},
+        created_at: fixed,
+        is_current: true,
+      }),
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => fixed,
+      newId: () => 'wafexc_pg_1',
+    });
+
+    const missing = await svc.createWafException(ctx, 'waf_missing', {
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
+    assert.equal(missing.error, 'waf_asset_not_found');
+    assert.equal(missing.status, 404);
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const unsafe = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      raw_payload: 'secret',
+    });
+    assert.equal(unsafe.status, 400);
+    assert.equal(unsafe.error, 'unsafe_waf_evidence');
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const unsafeValue = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'curl https://example.invalid --header Authorization: Bearer secret-token',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
+    assert.equal(unsafeValue.status, 400);
+    assert.equal(unsafeValue.error, 'unsafe_waf_evidence');
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const overlong = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'x'.repeat(501),
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
+    assert.equal(overlong.status, 400);
+    assert.equal(overlong.error, 'invalid_waf_exception');
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const unknown = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      approval_note: 'not allowed',
+    });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.error, 'invalid_waf_exception');
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const blankOwner = await svc.createWafException(ctx, 'waf_1', {
+      owner: ' ',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
+    assert.equal(blankOwner.status, 400);
+    assert.equal(blankOwner.error, 'invalid_waf_exception');
+
+    const expired = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2020-01-01T00:00:00.000Z',
+    });
+    assert.equal(expired.status, 400);
+    assert.equal(expired.error, 'invalid_waf_exception');
+    assert.equal(repoCalls.some((call) => call.method === 'createWafException'), false);
+
+    const created = await svc.createWafException(ctx, 'waf_1', {
+      owner: 'edge-team',
+      reason: 'Legacy sunset',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      scope_hash: 'scope_abc',
+    });
+    assert.equal(created.exception.id, 'wafexc_pg_1');
+    assert.equal(created.exception.waf_asset_id, 'waf_1');
+    assert.equal(created.exception.scope_hash, 'scope_abc');
+    assert.equal(created.exception.approved_by, 'usr_waf');
+    assert.equal(created.posture.status, 'excluded');
+    assert.equal(repoCalls.filter((call) => call.method === 'createWafException').length, 1);
+    assert.equal(auditEvents[0].action, 'waf.exception.created');
+    assert.equal(auditEvents[0].metadata.waf_asset_id, 'waf_1');
+    assert.equal('raw_payload' in (auditEvents[0].metadata ?? {}), false);
   });
 
   it('validates target group, persists asset, and audits metadata only', async () => {
@@ -4043,6 +4178,141 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(repoCalls.filter((call) => call.method === 'listWafScenarioResultsForRun').length, 1);
     assert.equal(JSON.stringify(technical).includes('must-not-render'), false);
     assert.equal(JSON.stringify(connector).includes('drop-me'), false);
+  });
+
+  it('populates Postgres compliance audit exceptions and in-scope CVE exposure sources', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const inScopeAsset = {
+      id: 'waf_in_scope',
+      tenant_id: ctx.tenantId,
+      target_group_id: 'tg_1',
+      canonical_url: 'https://app.example.com',
+      business_criticality: 'critical',
+    };
+    const outOfScopeAssetId = 'waf_out_of_scope';
+    const { repositories, repoCalls } = createRecordingWafPostureRepositories({
+      listWafAssets: async () => [inScopeAsset],
+      listCurrentPostureSnapshots: async () => [{
+        id: 'snap_1',
+        waf_asset_id: inScopeAsset.id,
+        status: 'underprotected',
+        reason_codes: ['marker_rule_not_blocking'],
+        risk_score: 80,
+        is_current: true,
+        created_at: '2026-07-02T00:00:00.000Z',
+      }],
+      listWafValidationRuns: async () => [],
+      listWafDriftEvents: async () => [],
+      listConnectors: async () => [],
+      listWafExceptions: async () => [
+        {
+          id: 'exc_in_scope',
+          waf_asset_id: inScopeAsset.id,
+          owner: 'edge-team',
+          reason: 'Temporary legacy bypass',
+          expires_at: '2099-01-01T00:00:00.000Z',
+          scope_hash: 'scope_in_scope',
+          approved_at: '2026-07-02T00:00:00.000Z',
+        },
+        {
+          id: 'exc_out_of_scope',
+          waf_asset_id: outOfScopeAssetId,
+          owner: 'edge-team',
+          reason: 'Other asset',
+          expires_at: '2099-01-01T00:00:00.000Z',
+          scope_hash: 'scope_out',
+        },
+        {
+          id: 'exc_expired_in_scope',
+          waf_asset_id: inScopeAsset.id,
+          owner: 'edge-team',
+          reason: 'Expired exception',
+          expires_at: '2020-01-01T00:00:00.000Z',
+          scope_hash: 'scope_expired',
+        },
+      ],
+      cvePipeline: {
+        listCvePipelineItems: async () => [
+          {
+            id: 'cve_item_in_scope',
+            cve_id: 'CVE-2026-12345',
+            stage: 'match',
+            severity: 'critical',
+            triage_result: { score: 91 },
+          },
+          {
+            id: 'cve_item_out_of_scope',
+            cve_id: 'CVE-2026-99999',
+            stage: 'match',
+            severity: 'high',
+            triage_result: { score: 70 },
+          },
+        ],
+        listCveAssetMatches: async (_ctx, itemId) => {
+          if (itemId === 'cve_item_in_scope') {
+            return [{
+              id: 'match_in_scope',
+              cve_pipeline_item_id: itemId,
+              waf_asset_id: inScopeAsset.id,
+              validation_status: 'pending',
+            }];
+          }
+          return [{
+            id: 'match_out_of_scope',
+            cve_pipeline_item_id: itemId,
+            waf_asset_id: outOfScopeAssetId,
+            validation_status: 'pending',
+          }];
+        },
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories);
+
+    const report = await svc.exportWafReport(ctx, 'compliance_audit', 'json');
+
+    assert.equal(report.payload.exception_register.length, 1);
+    assert.equal(report.payload.exception_register[0].id, 'exc_in_scope');
+    assert.equal(report.payload.exception_register[0].scope_hash, 'scope_in_scope');
+    assert.equal(JSON.stringify(report.payload.exception_register).includes('exc_expired_in_scope'), false);
+    assert.equal(report.payload.cve_exposure_summary.open_item_count, 1);
+    assert.equal(report.payload.cve_exposure_summary.items[0].id, 'cve_item_in_scope');
+    assert.equal(report.payload.cve_exposure_summary.items[0].status, 'matched');
+    assert.equal(report.payload.cve_exposure_summary.items[0].triage_score, 91);
+    assert.equal(JSON.stringify(report.payload).includes('CVE-2026-99999'), false);
+    assert.ok(repoCalls.some((call) => call.method === 'listWafExceptions'));
+    assert.ok(repoCalls.some((call) => call.method === 'cvePipeline.listCvePipelineItems'));
+    assert.equal(
+      repoCalls.filter((call) => call.method === 'cvePipeline.listCveAssetMatches').length,
+      2,
+    );
+  });
+
+  it('does not load optional compliance-only sources for non-compliance WAF reports', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const { repositories, repoCalls } = createRecordingWafPostureRepositories({
+      listWafAssets: async () => [],
+      listCurrentPostureSnapshots: async () => [],
+      listWafValidationRuns: async () => [],
+      listWafExceptions: async () => {
+        throw new Error('exceptions should not load for technical_evidence');
+      },
+      cvePipeline: {
+        listCvePipelineItems: async () => {
+          throw new Error('CVE items should not load for technical_evidence');
+        },
+        listCveAssetMatches: async () => [],
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories);
+
+    const report = await svc.exportWafReport(ctx, 'technical_evidence', 'json');
+
+    assert.equal(report.payload.report_kind, 'technical_evidence');
+    assert.equal(repoCalls.some((call) => call.method === 'listWafExceptions'), false);
+    assert.equal(
+      repoCalls.some((call) => call.method.startsWith('cvePipeline.')),
+      false,
+    );
   });
 
   it('validateConnector marks active or error locally without outbound calls', async () => {

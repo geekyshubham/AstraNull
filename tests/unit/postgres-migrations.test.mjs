@@ -599,7 +599,7 @@ describe('postgres migrations', () => {
   it('getLatestMigrationVersion returns last sorted file', () => {
     const files = listMigrationFiles(MIGRATIONS_DIR);
     const latest = getLatestMigrationVersion(files);
-    assert.equal(latest, '0021_internal_management');
+    assert.equal(latest, '0022_waf_exceptions');
     assert.equal(latest, files[files.length - 1].version);
   });
 
@@ -624,6 +624,21 @@ describe('postgres migrations', () => {
     assert.match(sql, /ALTER TABLE waf_baselines ADD COLUMN IF NOT EXISTS updated_at/);
     assert.match(sql, /tenant_isolation_waf_validation_plans/);
     assert.match(sql, /fk_waf_retest_requests_drift_event_tenant/);
+  });
+
+  it('0022 migration adds durable WAF exceptions with tenant RLS and composite FK', () => {
+    const sql = fs.readFileSync(
+      path.join(MIGRATIONS_DIR, '0022_waf_exceptions.sql'),
+      'utf8',
+    );
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS waf_exceptions/);
+    assert.match(sql, /waf_exceptions_tenant_id_id_key/);
+    assert.match(sql, /fk_waf_exceptions_waf_asset_tenant/);
+    assert.match(sql, /ALTER TABLE waf_exceptions ENABLE ROW LEVEL SECURITY/);
+    assert.match(sql, /ALTER TABLE waf_exceptions FORCE ROW LEVEL SECURITY/);
+    assert.match(sql, /tenant_isolation_waf_exceptions/);
+    assert.match(sql, /idx_waf_exceptions_tenant_expires/);
+    assert.match(sql, /idx_waf_exceptions_tenant_asset/);
   });
 
   it('0012 migration adds execution lease columns and partial lock indexes', () => {

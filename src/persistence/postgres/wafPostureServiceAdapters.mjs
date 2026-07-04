@@ -7,6 +7,7 @@ import {
   normalizeScenarioIntakeInput,
   normalizeWafAssetInput,
   normalizeWafEvidenceSummary,
+  normalizeWafExceptionBody,
   normalizeWafValidationRequest,
   WAF_EXPECTED_ACTIONS,
   WAF_SCENARIO_FAMILIES,
@@ -89,6 +90,8 @@ export const WAF_POSTURE_REPOSITORY_METHODS = Object.freeze([
   'updateConnectorStatus',
   'createConnectorSnapshots',
   'listConnectorSnapshots',
+  'listWafExceptions',
+  'createWafException',
 ]);
 
 export const POSTGRES_WAF_POSTURE_SERVICE_METHODS = Object.freeze([
@@ -119,6 +122,8 @@ export const POSTGRES_WAF_POSTURE_SERVICE_METHODS = Object.freeze([
   'listConnectorSnapshots',
   'disableConnector',
   'exportWafReport',
+  'listWafExceptions',
+  'createWafException',
 ]);
 
 function formatPostgresScenarioIntake(record) {
@@ -420,6 +425,81 @@ function assertWafPostureRepositories(repositories) {
       );
     }
   }
+}
+
+const CVE_REPORT_STATUS_BY_STAGE = Object.freeze({
+  ingest: 'ingested',
+  triage: 'triaged',
+  match: 'matched',
+  validate: 'validation_pending',
+  recommend: 'mitigation_recommended',
+  ticket: 'mitigation_recommended',
+  retest: 'exposed',
+  resolved: 'resolved',
+});
+
+function normalizeCveReportStatus(item = {}) {
+  const raw = String(item.status ?? item.stage ?? item.state ?? '').trim();
+  return CVE_REPORT_STATUS_BY_STAGE[raw] ?? raw;
+}
+
+function normalizePostgresCveItemForReport(item = {}) {
+  const triageResult = item.triage_result ?? item.triage_summary_json?.triage_result ?? null;
+  return {
+    id: item.id,
+    cve_id: item.cve_id,
+    status: normalizeCveReportStatus(item),
+    severity: item.severity ?? null,
+    triage_score: item.triage_score ?? triageResult?.score ?? null,
+  };
+}
+
+function normalizePostgresCveMatchForReport(match = {}) {
+  return {
+    waf_asset_id: match.waf_asset_id,
+    cve_pipeline_item_id: match.cve_pipeline_item_id ?? match.cve_item_id ?? null,
+    cve_item_id: match.cve_item_id ?? match.cve_pipeline_item_id ?? null,
+  };
+}
+
+async function listPostgresWafExceptionsForReport(wafRepo, ctx, assetIds) {
+  const now = Date.now();
+  const records = await wafRepo.listWafExceptions(ctx);
+  return (Array.isArray(records) ? records : [])
+    .filter((entry) => assetIds.has(entry.waf_asset_id))
+    .filter((entry) => {
+      const expiresAt = entry.expires_at ? Date.parse(entry.expires_at) : Number.NaN;
+      return Number.isFinite(expiresAt) && expiresAt > now;
+    });
+}
+
+async function listPostgresCveSourcesForReport(cveRepo, ctx, assetIds) {
+  if (
+    !cveRepo
+    || typeof cveRepo.listCvePipelineItems !== 'function'
+    || typeof cveRepo.listCveAssetMatches !== 'function'
+  ) {
+    return { cveItems: [], cveMatches: [] };
+  }
+
+  const items = await cveRepo.listCvePipelineItems(ctx);
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const cveMatches = [];
+  const matchedItemIds = new Set();
+  for (const item of normalizedItems) {
+    const matches = await cveRepo.listCveAssetMatches(ctx, item.id);
+    for (const match of Array.isArray(matches) ? matches : []) {
+      if (!assetIds.has(match.waf_asset_id)) continue;
+      cveMatches.push(normalizePostgresCveMatchForReport(match));
+      matchedItemIds.add(item.id);
+    }
+  }
+
+  const cveItems = normalizedItems
+    .filter((item) => matchedItemIds.has(item.id))
+    .map((item) => normalizePostgresCveItemForReport(item));
+
+  return { cveItems, cveMatches };
 }
 
 async function deriveWafSignalsFromBoundRun(validationEvidence, ctx, testRunId) {
@@ -778,6 +858,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
   const auditRepo = repositories.audit;
   const validationEvidence = repositories.validationEvidence;
   const secretVaultRepo = repositories.secretVault;
+  const cveRepo = repositories.cvePipeline;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
   const encryptionKey = options.encryptionKey
@@ -1765,6 +1846,13 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       const connectors = needsConnectors
         ? (await wafRepo.listConnectors(ctx)).map((connector) => formatConnectorForApi(connector))
         : [];
+      const assetIds = new Set(assets.map((asset) => asset.id));
+      const exceptions = needsComplianceAudit
+        ? await listPostgresWafExceptionsForReport(wafRepo, ctx, assetIds)
+        : [];
+      const cveSources = needsComplianceAudit
+        ? await listPostgresCveSourcesForReport(cveRepo, ctx, assetIds)
+        : { cveItems: [], cveMatches: [] };
 
       const counts = {
         protected: 0,
@@ -1838,9 +1926,9 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         driftEvents,
         driftEventsTruncation,
         connectors,
-        exceptions: [],
-        cveItems: [],
-        cveMatches: [],
+        exceptions,
+        cveItems: cveSources.cveItems,
+        cveMatches: cveSources.cveMatches,
         riskRoadmap,
         vendorBreakdown,
         geographyRollup,
@@ -1889,6 +1977,54 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       const items = (await wafRepo.listWafScenarioIntakes(ctx))
         .map(formatPostgresScenarioIntake);
       return { items };
+    },
+
+    async listWafExceptions(ctx) {
+      return wafRepo.listWafExceptions(ctx);
+    },
+
+    async createWafException(ctx, wafAssetId, body = {}) {
+      const asset = await wafRepo.getWafAsset(ctx, wafAssetId);
+      if (!asset) {
+        return { error: 'waf_asset_not_found', status: 404 };
+      }
+      try {
+        assertNoRawWafEvidence(body);
+        const nowDate = nowFn();
+        const normalized = normalizeWafExceptionBody(body, { nowMs: nowDate.getTime() });
+        const now = nowDate.toISOString();
+        const id = newIdFn('wafexc');
+        const exception = await wafRepo.createWafException(ctx, {
+          id,
+          waf_asset_id: wafAssetId,
+          ...normalized,
+          approved_at: now,
+          approved_by: ctx.userId,
+          created_at: now,
+          updated_at: now,
+        });
+        await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'waf.exception.created',
+          resource_type: 'waf_exception',
+          resource_id: id,
+          metadata: redactObject({
+            waf_asset_id: wafAssetId,
+            owner: exception.owner,
+            expires_at: exception.expires_at,
+            ...(exception.scope_hash ? { scope_hash: exception.scope_hash } : {}),
+          }),
+        });
+        const current = await wafRepo.getCurrentPostureSnapshot(ctx, wafAssetId);
+        return {
+          exception,
+          posture: current ? formatPostureSnapshotForApi(current) : null,
+        };
+      } catch (err) {
+        return contractError(err);
+      }
     },
 
     async submitScenarioIntake(ctx, body = {}) {

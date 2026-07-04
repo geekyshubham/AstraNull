@@ -502,6 +502,37 @@ describe('WAF posture API', () => {
     assert.ok(Array.isArray(posture.risk_factors));
   });
 
+  it('serves coverage trend from persisted daily rollups when present in dev-json', async () => {
+    const engineer = demoHeaders('engineer');
+    await createDemoAsset(baseUrl, engineer);
+    const rollupDate = new Date();
+    rollupDate.setUTCDate(rollupDate.getUTCDate() - 3);
+    const date = rollupDate.toISOString().slice(0, 10);
+    getStore().wafCoverageDailyRollups.push({
+      id: 'waf_cov_rollup_test',
+      tenant_id: 'ten_demo',
+      rollup_date: date,
+      coverage_ratio: 0.25,
+      protected: 1,
+      underprotected: 2,
+      unprotected: 3,
+      unknown: 4,
+      excluded: 5,
+      total_assets: 15,
+      created_at: `${date}T00:00:00.000Z`,
+    });
+
+    const coverage = await request(baseUrl, 'GET', '/v1/waf/coverage?window_days=30', { headers: engineer });
+    assert.equal(coverage.status, 200);
+    assert.equal(coverage.json.total_assets, 1);
+    const persisted = coverage.json.trend.find((entry) => entry.date === date);
+    assert.ok(persisted);
+    assert.equal(persisted.coverage_ratio, 0.25);
+    assert.equal(persisted.protected, 1);
+    assert.equal(persisted.unprotected, 3);
+    assert.equal(persisted.total_assets, 15);
+  });
+
   it('serves coverage analytics and roadmap APIs with metadata-only payloads', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer, {
@@ -1827,20 +1858,196 @@ describe('WAF report export API', () => {
     assert.ok(viewerAllowed.json.custody?.content_sha256);
   });
 
+  it('creates durable WAF exceptions via POST and omits expired entries from list/export', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+
+    const missing = await request(
+      baseUrl,
+      'POST',
+      `/v1/waf/assets/waf_missing/exception`,
+      {
+        headers: engineer,
+        body: {
+          owner: 'edge-team',
+          reason: 'Legacy sunset',
+          expires_at: '2099-01-01T00:00:00.000Z',
+        },
+      },
+    );
+    assert.equal(missing.status, 404);
+    assert.equal(missing.json.error, 'waf_asset_not_found');
+
+    const unsafe = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        raw_payload: 'must-not-persist',
+      },
+    });
+    assert.equal(unsafe.status, 400);
+    assert.equal(unsafe.json.error, 'unsafe_waf_evidence');
+
+    const unsafeValue = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Authorization: Bearer secret-token',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(unsafeValue.status, 400);
+    assert.equal(unsafeValue.json.error, 'unsafe_waf_evidence');
+
+    const overlong = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'x'.repeat(501),
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(overlong.status, 400);
+    assert.equal(overlong.json.error, 'invalid_waf_exception');
+
+    const unknown = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        approval_note: 'extra fields are not part of the metadata contract',
+      },
+    });
+    assert.equal(unknown.status, 400);
+    assert.equal(unknown.json.error, 'invalid_waf_exception');
+
+    const blankOwner = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: ' ',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(blankOwner.status, 400);
+    assert.equal(blankOwner.json.error, 'invalid_waf_exception');
+
+    const invalidScope = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        scope_hash: ' ',
+      },
+    });
+    assert.equal(invalidScope.status, 400);
+    assert.equal(invalidScope.json.error, 'invalid_waf_exception');
+
+    const viewerDenied = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: demoHeaders('viewer', 'ten_demo', 'usr_viewer'),
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(viewerDenied.status, 403);
+    assert.equal(viewerDenied.json.permission, 'waf:write');
+
+    const otherTenantCreate = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: demoHeaders('engineer', 'ten_other', 'usr_other'),
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy sunset',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(otherTenantCreate.status, 404);
+    assert.equal(otherTenantCreate.json.error, 'waf_asset_not_found');
+
+    const created = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy app sunset Q4',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        scope_hash: 'scope_abc123',
+      },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.exception.waf_asset_id, asset.id);
+    assert.equal(created.json.exception.scope_hash, 'scope_abc123');
+    assert.equal(created.json.exception.approved_by, 'usr_admin');
+    assert.ok(created.json.exception.approved_at);
+    assert.equal(created.json.posture, null);
+
+    const expiredCreate = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Expired exception',
+        expires_at: '2020-01-01T00:00:00.000Z',
+      },
+    });
+    assert.equal(expiredCreate.status, 400);
+    assert.equal(expiredCreate.json.error, 'invalid_waf_exception');
+
+    getStore().wafExceptions.push({
+      id: 'waf_exc_expired',
+      tenant_id: 'ten_demo',
+      waf_asset_id: asset.id,
+      owner: 'edge-team',
+      reason: 'Expired',
+      expires_at: '2020-01-01T00:00:00.000Z',
+      approved_at: '2020-01-01T00:00:00.000Z',
+      approved_by: 'usr_eng',
+    });
+
+    const listed = await request(baseUrl, 'GET', '/v1/waf/exceptions', { headers: engineer });
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.items.length, 1);
+    assert.equal(listed.json.items[0].id, created.json.exception.id);
+    assert.equal(listed.json.items[0].approved_by, 'usr_admin');
+
+    const otherTenantList = await request(baseUrl, 'GET', '/v1/waf/exceptions', {
+      headers: demoHeaders('engineer', 'ten_other', 'usr_other'),
+    });
+    assert.equal(otherTenantList.status, 200);
+    assert.deepEqual(otherTenantList.json.items, []);
+
+    const audits = getStore().auditLog.filter((entry) => entry.action === 'waf.exception.created');
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].resource_id, created.json.exception.id);
+  });
+
   it('exports metadata-only compliance_audit JSON with control mapping, exceptions, and custody', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     await finalizeProtectedPosture(baseUrl, engineer, asset);
 
+    const exceptionRes = await request(baseUrl, 'POST', `/v1/waf/assets/${asset.id}/exception`, {
+      headers: engineer,
+      body: {
+        owner: 'edge-team',
+        reason: 'Legacy app sunset Q4',
+        expires_at: '2099-01-01T00:00:00.000Z',
+        scope_hash: 'scope_abc123',
+      },
+    });
+    assert.equal(exceptionRes.status, 201);
     getStore().wafExceptions.push({
-      id: 'waf_exc_1',
+      id: 'waf_exc_expired_export',
       tenant_id: 'ten_demo',
       waf_asset_id: asset.id,
       owner: 'edge-team',
-      reason: 'Legacy app sunset Q4',
-      expires_at: '2027-12-31T00:00:00.000Z',
-      scope_hash: 'scope_abc123',
-      approved_at: new Date().toISOString(),
+      reason: 'Expired',
+      expires_at: '2020-01-01T00:00:00.000Z',
+      approved_at: '2020-01-01T00:00:00.000Z',
+      approved_by: 'usr_eng',
     });
 
     const exported = await request(

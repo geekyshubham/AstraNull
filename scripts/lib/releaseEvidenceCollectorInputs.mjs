@@ -126,6 +126,16 @@ export function hostedStagingE2eMatrixInputPath(context = {}) {
   return path.join(outDir, 'hosted-staging-e2e-matrix-input.json');
 }
 
+function loadLiveEvidenceInput(context, filename) {
+  const inputPath = path.join(context.outDir ?? 'output/release-evidence', filename);
+  if (!existsSync(inputPath)) return null;
+  try {
+    return JSON.parse(readFileSync(inputPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export function loadExecutedHostedStagingE2eMatrix(context = {}) {
   const inputPath = hostedStagingE2eMatrixInputPath(context);
   if (!existsSync(inputPath)) return null;
@@ -369,9 +379,15 @@ export function buildCollectorScriptInput(kind, context = {}) {
 
   switch (kind) {
     case 'third_party_security_review':
-    case 'migration_apply':
-    case 'operator_runbook_exercise':
       return { input: adaptContractEvidence(kind, context) };
+
+    case 'migration_apply':
+      return { input: adaptContractEvidence(kind, context) };
+
+    case 'operator_runbook_exercise': {
+      const live = loadLiveEvidenceInput(context, 'operator-runbook-exercise-input.json');
+      return { input: live ?? adaptContractEvidence(kind, context) };
+    }
 
     case 'edge_protection':
       return {
@@ -581,6 +597,17 @@ export function buildCollectorScriptInput(kind, context = {}) {
       return { input: buildSnapshotBatch() };
 
     case 'ui_accessibility_matrix': {
+      const live = loadLiveEvidenceInput(context, 'ui-accessibility-matrix-input.json');
+      if (live?.runs?.length) {
+        return {
+          input: {
+            schema_version: 1,
+            artifact_type: 'ui_accessibility_matrix_input',
+            captured_at: createdAt,
+            runs: live.runs,
+          },
+        };
+      }
       const runs = [];
       for (const page of REQUIRED_PAGES) {
         runs.push({

@@ -2,6 +2,66 @@
  * Complete metadata-only production release evidence samples for every contract kind.
  * Used by bundle and contract unit tests; not for API submission without operator signoff.
  */
+const AGENT_INSTALL_MATRIX_FORMATS = Object.freeze([
+  'generic',
+  'deb',
+  'rpm',
+  'container',
+  'kubernetes',
+]);
+
+const AGENT_INSTALL_MATRIX_CHECKS = Object.freeze([
+  'install',
+  'heartbeat',
+  'job_poll',
+  'upgrade_rollback',
+  'revoke',
+  'uninstall',
+  'no_inbound_port',
+  'signature_verify',
+]);
+
+function agentInstallCheckDetail(format, checkName) {
+  const detail = {
+    status: 'passed',
+    observed_at: '2026-07-02T00:00:00.000Z',
+  };
+  if (checkName === 'heartbeat') detail.heartbeat_count = 3;
+  if (checkName === 'job_poll') detail.job_poll_count = 2;
+  if (checkName === 'no_inbound_port') detail.inbound_listener_count = 0;
+  if (checkName === 'signature_verify') {
+    detail.signing_format = format === 'generic' ? 'tarball' : format;
+    detail.trust_anchor_reference = `trust://agent-signing/${format}`;
+  }
+  return detail;
+}
+
+function agentInstallMatrixRow(format) {
+  const runtimeFields = {};
+  if (format === 'container') {
+    runtimeFields.runtime = 'docker';
+    runtimeFields.image_reference_redacted = 'registry.example/astranull-agent:rel-2026-07-02';
+  }
+  if (format === 'kubernetes') {
+    runtimeFields.runtime = 'kubernetes';
+    runtimeFields.deployment_mode = 'daemonset';
+    runtimeFields.namespace_redacted = 'astranull-agents';
+    runtimeFields.helm_release_redacted = 'astranull-agent';
+  }
+  return {
+    format,
+    environment: 'staging',
+    distro: ['deb', 'rpm', 'generic'].includes(format) ? 'linux' : null,
+    ...runtimeFields,
+    status: 'passed',
+    checks: Object.fromEntries(AGENT_INSTALL_MATRIX_CHECKS.map((check) => [check, 'passed'])),
+    failed_checks: [],
+    check_details: Object.fromEntries(
+      AGENT_INSTALL_MATRIX_CHECKS.map((check) => [check, agentInstallCheckDetail(format, check)]),
+    ),
+  };
+}
+
 export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
   third_party_security_review: {
     reviewer_org: 'Independent Security Review Co',
@@ -54,15 +114,32 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
     created_at: '2026-07-02T00:00:00.000Z',
     package_format: 'container',
     package: { name: 'astranull-agent', sha256: 'a'.repeat(64), size: 1024 },
-    sbom: { sha256: 'b'.repeat(64), summary: { sbom_format: 'cyclonedx', component_count: 12 } },
-    provenance: { sha256: 'c'.repeat(64), summary: { subject_count: 1, materials_count: 3 } },
+    sbom: {
+      sha256: 'b'.repeat(64),
+      size: 2048,
+      summary: { sbom_format: 'cyclonedx', component_count: 12 },
+    },
+    provenance: {
+      sha256: 'c'.repeat(64),
+      size: 1024,
+      summary: { subject_count: 1, materials_count: 3 },
+    },
     evidence_uri: 'evidence://agent/sbom-provenance',
   },
   agent_install_matrix: {
+    schema_version: 1,
+    artifact_type: 'agent_install_matrix_evidence',
     created_at: '2026-07-02T00:00:00.000Z',
     matrix_id: 'agent-install-2026-07-02',
     overall_status: 'passed',
-    rows: [{ format: 'container', status: 'passed', checks: { install: { status: 'passed' } } }],
+    required_formats: [...AGENT_INSTALL_MATRIX_FORMATS],
+    required_checks: [...AGENT_INSTALL_MATRIX_CHECKS],
+    coverage_gaps: {
+      missing_formats: [],
+      failed_checks: [],
+      formats_covered: [...AGENT_INSTALL_MATRIX_FORMATS],
+    },
+    rows: AGENT_INSTALL_MATRIX_FORMATS.map((format) => agentInstallMatrixRow(format)),
     evidence_uri: 'evidence://agent/install-matrix',
   },
   agent_mtls_gateway: {
@@ -109,7 +186,10 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
       active_fingerprint_sha256: 'a'.repeat(64),
       custody_uri_count: 2,
     },
-    custody_uris: ['custody://security/agent-trust-key-ceremony/2026-07-02'],
+    custody_uris: [
+      'custody://security/agent-trust-key-ceremony/2026-07-02',
+      'custody://security/agent-trust-key-rotation/2026-07-02',
+    ],
     evidence_uri: 'evidence://agent/trust-key-ceremony',
   },
   governed_adapter: {

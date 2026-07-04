@@ -59,8 +59,12 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 |---|---|---|---|
 | GET | `/health` | — | Liveness: `{ status, service }` (`service` is `astranull`). |
 | GET | `/ready` | — | Readiness for deploy gates: `{ status, service, auth_mode, persistence, probe_mode, probe_worker_secret_configured, timestamp }` (no secrets or database URLs); `503` with `status: not_ready` when the store is unavailable. |
-| GET | `/metrics` | — | Metrics endpoint; production must be authenticated/scraped per observability policy. |
+| GET | `/metrics` | — | Metrics endpoint. The in-process route is unauthenticated; production deployments must restrict scrape access at the gateway/network layer per observability policy. |
 | GET | `/`, `/app.js`, `/styles.css` | — | Static web UI. |
+| GET | `/v1/public/site-config` | — | Public landing/login/signup configuration with no secrets. |
+| POST | `/v1/auth/bundled-staging-login` | — | Bundled staging login exchange for hosted/local staging. Not a production enterprise IdP substitute. |
+| POST | `/v1/signup-requests` | — | Public account request intake. Returns `201 { request }`, `400 validation_failed`, `403 signup_disabled`, `409 duplicate_request`, or `429 rate_limited`. |
+| GET | `/v1/signup-requests/:id` | — | Public-safe signup request status (`{ request }`) or `404`. |
 | GET | `/v1/checks` | — | Global check catalog. **Production gate:** tenant-aware RBAC if catalog is customized per tenant. |
 | GET | `/v1/state` | `tenant:read` | Dashboard aggregate. In `postgres` mode uses `runtime.services.state.getState` (evidence-backed readiness from Postgres repositories); high-scale counts and kill-switch state return explicit not-wired metadata until those route families migrate. |
 | GET | `/v1/placement/reviews` | `target_group:read` | Optional query `target_group_id`. Metadata-only per-target-group placement diagnostics (`proven`, `needs_baseline`, `missing_agent`, `misplaced_risk`) with summary counts, bound/online agent ids, recent observation counts, and warnings. `404` `not_found` when `target_group_id` is not declared for the tenant. Postgres mode uses `runtime.services.placement.listPlacementReviews`. |
@@ -82,11 +86,37 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | GET | `/v1/target-groups` | `target_group:read` | — | `{ items }`. |
 | POST | `/v1/target-groups` | `target_group:write` | `{ name, environment_id?, description?, timezone?, safe_test_windows?, safety_policy? }` | `201` group. `safe_test_windows`: `[{ start_at, end_at, reason? }]`. `safety_policy`: `{ max_runs_per_hour?, min_seconds_between_runs? }` (defaults `60` / `0`). |
 | GET | `/v1/target-groups/:id` | `target_group:read` | — | Group with `targets[]`. |
+| PATCH | `/v1/target-groups/:id` | `target_group:write` | partial group fields | Updated group or `404`. |
+| DELETE | `/v1/target-groups/:id` | `target_group:write` | — | Archives the group or returns `409 target_group_active_run` while an active run still references it. |
 | POST | `/v1/target-groups/:id/targets` | `target_group:write` | target declaration | `201` target. |
+| PATCH | `/v1/target-groups/:id/targets/:targetId` | `target_group:write` | partial target fields | Updated target or `404`. |
+| DELETE | `/v1/target-groups/:id/targets/:targetId` | `target_group:write` | — | Deletes/archives the declared target or returns the service-layer conflict. |
+
+## Public signup and staff internal management
+
+Public signup routes are intentionally narrow and expose only sanitized request state. Staff routes require service-account or staff principal access with `staff:*` permissions; customer principals are denied with `403 staff_forbidden`. In Postgres mode these routes fail closed with `503 postgres_internal_admin_not_wired` unless the internal management service is injected.
+
+| Method | Path | Permission | Request | Response |
+|---|---|---|---|---|
+| GET | `/internal/admin/overview` | `staff:signup:read` | — | Internal queue and tenant summary. |
+| GET | `/internal/admin/signup-requests` | `staff:signup:read` | `state?` | `{ items }` signup queue. |
+| POST | `/internal/admin/signup-requests/:id/approve` | `staff:signup:decide` | approval payload | Creates/updates tenant onboarding state; `404` or `409` on invalid lifecycle. |
+| POST | `/internal/admin/signup-requests/:id/reject` | `staff:signup:decide` | rejection payload | Rejected request or `404`/`409`. |
+| GET | `/internal/admin/tenants` | `staff:tenant:read` | `q?` | `{ items }` tenant directory. |
+| GET | `/internal/admin/tenants/:id` | `staff:tenant:read` | — | Tenant detail or `404`. |
+| PATCH | `/internal/admin/tenants/:id` | `staff:tenant:write` | allowed tenant fields | Updated tenant detail or validation error. |
+| GET | `/internal/admin/tenants/:id/subscription` | `staff:subscription:read` | — | Subscription and entitlement summary. |
+| PATCH | `/internal/admin/tenants/:id/subscription` | `staff:subscription:write` | subscription fields | Updated subscription or validation error. |
+| POST | `/internal/admin/tenants/:id/entitlements` | `staff:entitlement:write` | entitlement grant | Upserted entitlement grant. |
+| POST | `/internal/admin/tenants/:id/users/:userId/resend-invite` | `staff:support:write` | invite metadata | Invite resend intent. |
+| POST | `/internal/admin/tenants/:id/users/:userId/disable` | `staff:support:write` | reason metadata | Disabled tenant user. |
+| GET | `/internal/admin/approval-requests` | `staff:approval:read` | `state?, kind?` | `{ items }` internal approval requests. |
+| POST | `/internal/admin/approval-requests/:id/decision` | `staff:approval:decide` | decision payload | Approval decision or lifecycle conflict. |
+| GET | `/internal/admin/audit-log` | `staff:audit:read` | `tenant_id?, staff_id?, action?, limit?` | `{ items }` internal audit rows. |
 
 ## WAF posture add-on
 
-**OpenAPI (contract draft):** [`docs/api/waf-posture-openapi.json`](api/waf-posture-openapi.json) — OpenAPI 3.1 artifact for WAF assets, coverage, safe validations, orchestrator execute/retest/cancel paths, action items, RBAC, and metadata-only safety notes. Coverage analytics and CVE playbook routes are contracted in [WAF API Contract](backend/13-waf-posture-api-contract.md) and land in OpenAPI under **WAF-022**. Check locally with `npm run api:waf:openapi:check`. This artifact does **not** close staging/live orchestrator, provider, or security/release signoff gates.
+**OpenAPI:** [`docs/api/waf-posture-openapi.json`](api/waf-posture-openapi.json) — OpenAPI 3.1 artifact for WAF assets, coverage analytics, safe validations, orchestrator execute/retest/cancel paths, CVE playbooks, action items, RBAC, and metadata-only safety notes. Check locally with `npm run api:waf:openapi:check`. This artifact does **not** close staging/live orchestrator, provider, or security/release signoff gates.
 
 Disabled by default. `ASTRANULL_WAF_POSTURE_ENABLED=1` enables the current route family; when disabled, `/v1/waf/*` returns `404 { "error": "waf_feature_disabled" }`. The add-on does **not** require cloud/WAF credentials for core no-access mode. PostgreSQL schema, migration support (`0008_waf_posture`), repository primitives, and `runtime.services.wafPosture` adapters exist for the WAF asset/coverage/validation/drift routes; in custom Postgres servers without an injected WAF service the API still fails closed with `503 { "error": "postgres_route_not_wired" }`.
 
@@ -98,7 +128,9 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 | POST | `/v1/waf/assets` | `waf:write` | `{ target_group_id, canonical_url? \| hostname?, target_id?, owner_hint?, expected_waf_required? }` | `201 { asset }`. Discovery candidates cannot be auto-approved through this route. |
 | GET | `/v1/waf/assets/:id` | `waf:read` | — | `{ asset, current_posture? }` or `404`. |
 | PATCH | `/v1/waf/assets/:id` | `waf:write` | metadata fields only | `{ asset }`; unsafe/raw fields are rejected. |
-| GET | `/v1/waf/coverage` | `waf:read` | `window_days?` | Today: status counts and `percentages`. **Planned (WAF-014):** add `coverage_ratio` and `trend[]` — see [WAF API Contract](backend/13-waf-posture-api-contract.md). |
+| POST | `/v1/waf/assets/:id/exception` | `waf:write` | `{ owner, reason, expires_at, scope_hash? }` | `201 { exception, posture }`; approved metadata-only exception is tenant-scoped, future-expiring, audited, and available to compliance exports. |
+| GET | `/v1/waf/exceptions` | `waf:read` | — | `{ items }` active, non-expired tenant-scoped WAF exceptions. |
+| GET | `/v1/waf/coverage` | `waf:read` | `window_days?` | Status counts, `percentages`, aggregate `coverage_ratio`, and `trend[]` rollups when available. |
 | POST | `/v1/waf/validations` | `waf:run` | `{ waf_asset_id, modes?, probe_profile?, marker_profile? }` | `201 { validation_run }`. Safe marker profiles enforce `max_requests` 1-5 and `timeout_ms` 100-5000. |
 | GET | `/v1/waf/validations` | `waf:read` | — | `{ items }` validation runs. |
 | GET | `/v1/waf/validations/:id` | `waf:read` | — | `{ validation_run, scenario_results }` or `404`. |
@@ -106,9 +138,9 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 | GET | `/v1/waf/drift-events` | `waf:read` | — | `{ items }` open and historical behavior-drift events. |
 | PATCH | `/v1/waf/drift-events/:id` | `waf:write` | `{ status, notes? }` | `{ drift_event }`; allowed statuses are `open`, `acknowledged`, `remediation_started`, `retest_pending`, `resolved`, `accepted_risk`, and `false_positive`. |
 
-### WAF coverage analytics (planned — WAF-014)
+### WAF coverage analytics
 
-Contracted in [WAF API Contract](backend/13-waf-posture-api-contract.md); not yet routed in `server.mjs` or `waf-posture-openapi.json` until WAF-014/WAF-022 land.
+Implemented as read-only WAF analytics routes in developer validation and documented in [WAF API Contract](backend/13-waf-posture-api-contract.md). They remain subject to staging export signoff, scheduled rollup evidence, and WAF add-on release approval before customer-facing promotion.
 
 | Method | Path | Permission | Response summary |
 |---|---|---|---|
@@ -118,8 +150,11 @@ Contracted in [WAF API Contract](backend/13-waf-posture-api-contract.md); not ye
 | GET | `/v1/waf/coverage/geography` | `waf:read` | Coverage by declared region. |
 | GET | `/v1/waf/coverage/risk-roadmap` | `waf:read` | Tier 1–4 deployment priorities. |
 | GET | `/v1/waf/coverage/vendor-consolidation` | `waf:read` | Read-only multi-vendor advisory. |
+| GET | `/v1/waf/products` | `waf:read` | Seeded WAF product catalog entries and metadata. |
+| GET | `/v1/waf/scenario-intake` | `waf:read` | Submitted product/scenario intake requests. |
+| POST | `/v1/waf/scenario-intake` | `waf:write` | `202` accepted metadata-only intake request; raw exploit/probe material is rejected by service contracts. |
 
-CVE playbook routes (`/v1/waf/cve-pipeline/:id/playbook`, etc.) are specified in [Multi-Vendor CVE Playbook](detection/17-multi-vendor-cve-mitigation-playbook.md) (WAF-020).
+CVE playbook routes (`/v1/waf/cve-pipeline/:id/playbook`, `/playbook/approve`, and `/coordinated-retest`) are implemented with `waf:read`, `waf:write`, and `waf:run` respectively; see [Multi-Vendor CVE Playbook](detection/17-multi-vendor-cve-mitigation-playbook.md).
 
 ### WAF connector framework
 

@@ -222,6 +222,14 @@ const FORBIDDEN_KEY_SET = new Set(
   FORBIDDEN_RAW_WAF_EVIDENCE_KEYS.map((k) => normalizeEvidenceKey(k)),
 );
 
+const WAF_EXCEPTION_ALLOWED_KEYS = new Set(['owner', 'reason', 'expires_at', 'scope_hash']);
+export const WAF_EXCEPTION_FIELD_LIMITS = Object.freeze({
+  owner: 120,
+  reason: 500,
+  scope_hash: 128,
+});
+const WAF_EXCEPTION_UNSAFE_VALUE_PATTERN =
+  /\b(?:bearer\s+[a-z0-9._~+/=-]+|token|secret|password|api[_\s-]?key|private\s+key|authorization\s*:|cookie\s*:|set-cookie\s*:|raw[_\s-]?(?:payload|body|headers?|logs?|packet)|request[_\s-]?(?:body|headers?)|response[_\s-]?(?:body|headers?)|header[_\s-]?(?:dump|body)?|packet[_\s-]?(?:capture)?|log[_\s-]?(?:dump|body)?|curl\s+|postgres(?:ql)?:\/\/|mysql:\/\/|mongodb:\/\/|redis:\/\/)\b/i;
 const CUSTOMER_SAFE_RISK_CLASSES = new Set(['safe', 'controlled']);
 const CUSTOMER_SAFE_EXPECTED_ACTIONS = new Set(WAF_EXPECTED_ACTIONS);
 const CUSTOMER_SAFE_MARKER_TYPES = new Set(WAF_MARKER_TYPES);
@@ -302,6 +310,82 @@ export function assertNoRawWafEvidence(value, path = '') {
     err.forbidden_paths = forbidden;
     throw err;
   }
+}
+
+function createWafExceptionError(message, code = 'invalid_waf_exception', details = {}) {
+  const err = new Error(message);
+  err.code = code;
+  Object.assign(err, details);
+  return err;
+}
+
+function assertSafeWafExceptionValue(field, value) {
+  if (WAF_EXCEPTION_UNSAFE_VALUE_PATTERN.test(value)) {
+    throw createWafExceptionError(
+      `Unsafe WAF exception value in ${field}.`,
+      'unsafe_waf_evidence',
+      { forbidden_paths: [field] },
+    );
+  }
+}
+
+function normalizeRequiredWafExceptionString(body, field) {
+  const value = typeof body[field] === 'string' ? body[field].trim() : '';
+  if (!value) {
+    throw createWafExceptionError(`${field} is required.`);
+  }
+  if (value.length > WAF_EXCEPTION_FIELD_LIMITS[field]) {
+    throw createWafExceptionError(
+      `${field} must be ${WAF_EXCEPTION_FIELD_LIMITS[field]} characters or less.`,
+    );
+  }
+  assertSafeWafExceptionValue(field, value);
+  return value;
+}
+
+export function normalizeWafExceptionBody(body, options = {}) {
+  if (body === null || body === undefined || typeof body !== 'object' || Array.isArray(body)) {
+    throw createWafExceptionError('WAF exception input must be a plain object.');
+  }
+  assertNoRawWafEvidence(body);
+  for (const key of Object.keys(body)) {
+    if (!WAF_EXCEPTION_ALLOWED_KEYS.has(key)) {
+      throw createWafExceptionError(`Unknown WAF exception field: ${key}`);
+    }
+  }
+
+  const owner = normalizeRequiredWafExceptionString(body, 'owner');
+  const reason = normalizeRequiredWafExceptionString(body, 'reason');
+
+  const expiresAtMs = Date.parse(body.expires_at);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw createWafExceptionError('expires_at must be a valid ISO-8601 timestamp.');
+  }
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  if (expiresAtMs <= nowMs) {
+    throw createWafExceptionError('expires_at must be in the future.');
+  }
+
+  let scope_hash = null;
+  if (body.scope_hash !== undefined && body.scope_hash !== null) {
+    if (typeof body.scope_hash !== 'string' || !body.scope_hash.trim()) {
+      throw createWafExceptionError('scope_hash must be a non-empty string when provided.');
+    }
+    scope_hash = body.scope_hash.trim();
+    if (scope_hash.length > WAF_EXCEPTION_FIELD_LIMITS.scope_hash) {
+      throw createWafExceptionError(
+        `scope_hash must be ${WAF_EXCEPTION_FIELD_LIMITS.scope_hash} characters or less.`,
+      );
+    }
+    assertSafeWafExceptionValue('scope_hash', scope_hash);
+  }
+
+  return {
+    owner,
+    reason,
+    expires_at: new Date(expiresAtMs).toISOString(),
+    scope_hash,
+  };
 }
 
 export function normalizeWafEvidenceSummary(input) {
