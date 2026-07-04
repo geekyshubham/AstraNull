@@ -18,7 +18,7 @@ function shell(command, inherit = false) {
   });
 }
 
-function parseArgs(argv = []) {
+export function parseArgs(argv = []) {
   const opts = {
     profile: 'hosted',
     baseUrl: process.env.ASTRANULL_HOSTED_STAGING_BASE_URL ?? '',

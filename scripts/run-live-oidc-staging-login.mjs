@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_OUT = path.join(REPO_ROOT, 'output/release-evidence/oidc-staging-login-input.json');
 
-function parseArgs(argv = []) {
+export function parseArgs(argv = []) {
   const opts = {
     baseUrl: process.env.ASTRANULL_HOSTED_STAGING_BASE_URL
       ?? process.env.ASTRANULL_LOCAL_STAGING_BASE_URL

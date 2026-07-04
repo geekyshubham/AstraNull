@@ -14,7 +14,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
-function parseArgs(argv = []) {
+export function parseArgs(argv = []) {
   const opts = {
     baseUrl: process.env.ASTRANULL_HOSTED_STAGING_BASE_URL
       ?? process.env.ASTRANULL_LOCAL_STAGING_BASE_URL
@@ -26,7 +26,11 @@ function parseArgs(argv = []) {
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    const next = () => argv[++i];
+    const next = () => {
+      i += 1;
+      if (i >= argv.length) throw new Error(`Missing value for ${arg}`);
+      return argv[i];
+    };
     if (arg === '--help' || arg === '-h') opts.help = true;
     else if (arg === '--base-url') opts.baseUrl = next();
     else if (arg === '--release-id') opts.releaseId = next();
