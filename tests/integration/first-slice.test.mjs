@@ -113,6 +113,10 @@ describe('integration first validation slice', () => {
     assert.equal(report.status, 201);
     assert.ok(report.json.summary.readiness_score >= 0);
 
+    const reports = await request(baseUrl, 'GET', '/v1/reports', { headers: demoHeaders('admin') });
+    assert.equal(reports.status, 200);
+    assert.ok(reports.json.items.some((item) => item.id === report.json.id));
+
     const reportExport = await request(
       baseUrl,
       'GET',

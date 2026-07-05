@@ -4,43 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AstraNull</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <meta name="description" content="AstraNull No-access-first DDoS readiness validation. Sign up for reviewed access or log in to the React readiness console." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/react-app.css" />
 </head>
 <body>
-  <div class="app" id="portalApp">
-    <aside class="sidebar">
-      <div class="brand"><a href="/app" class="brand-link">AstraNull</a></div>
-      <p class="portal-surface-label">Customer portal</p>
-      <div class="context" id="portalContext">
-        <label>Tenant</label>
-        <input id="tenantId" value="ten_demo" />
-        <label>Role</label>
-        <select id="role">
-          <option>admin</option>
-          <option>engineer</option>
-          <option>soc</option>
-          <option>viewer</option>
-          <option>auditor</option>
-          <option>owner</option>
-        </select>
-        <p class="muted portal-dev-hint">Developer validation headers (local mode only).</p>
-      </div>
-      <nav id="nav"></nav>
-      <p class="portal-sidebar-foot muted">
-        <a href="/">Public site</a> · <a href="#" id="portalLogout">Sign out</a>
-      </p>
-    </aside>
-    <main class="content">
-      <header class="topbar">
-        <div class="topbar-titles">
-          <h1 id="pageTitle">Dashboard</h1>
-          <p class="muted portal-user" id="portalUser" hidden></p>
-        </div>
-        <span class="badge" id="envBadge">Loading…</span>
-      </header>
-      <section id="view"><div class="card portal-loading">Loading your readiness workspace…</div></section>
-    </main>
-  </div>
-  <script type="module" src="/app.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/react-app.js"></script>
 </body>
 </html>

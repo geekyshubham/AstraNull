@@ -1299,6 +1299,67 @@ const WAF_CANARY_HINT_HEADERS = {
   'x-astranull-protected-path': 'protected_path',
 };
 
+function trimProbeEndpointString(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+function coerceProbeListenPort(value) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  const port = Number(value);
+  if (!Number.isInteger(port) || port <= 0) {
+    return undefined;
+  }
+  return port;
+}
+
+/**
+ * Build probe_endpoint heartbeat claim from operator-supplied env/CLI (no cloud metadata).
+ * @param {{ env?: Record<string, string|undefined>, args?: Record<string, unknown> }} [source]
+ * @returns {Record<string, unknown>|null}
+ */
+export function buildProbeEndpoint(source = {}) {
+  const env = source.env ?? process.env;
+  const agentArgs = source.args ?? {};
+
+  const declaredFqdn = trimProbeEndpointString(
+    agentArgs.publicFqdn ?? env.ASTRANULL_PUBLIC_FQDN,
+  );
+  const declaredIp = trimProbeEndpointString(
+    agentArgs.publicIp ?? env.ASTRANULL_PUBLIC_IP,
+  );
+  const listenPort = coerceProbeListenPort(
+    agentArgs.canaryListen ?? env.ASTRANULL_CANARY_LISTEN,
+  );
+  const pathPrefix = trimProbeEndpointString(
+    agentArgs.canaryPathPrefix ?? env.ASTRANULL_CANARY_PATH_PREFIX,
+  );
+
+  if (!declaredFqdn && !declaredIp) {
+    return null;
+  }
+
+  const out = {};
+  if (declaredFqdn) {
+    out.declared_fqdn = declaredFqdn;
+  }
+  if (declaredIp) {
+    out.declared_ip = declaredIp;
+  }
+  if (listenPort !== undefined) {
+    out.listen_port = listenPort;
+  }
+  if (pathPrefix) {
+    out.path_prefix = pathPrefix;
+  }
+  out.discovered_via = 'operator_env';
+  return out;
+}
+
 /** @returns {string[]} */
 export function buildAgentRegistrationCapabilities(agentArgs = {}) {
   const caps = new Set(['heartbeat', 'canary', 'waf_canary_observer', 'origin_path_observer']);
@@ -1507,6 +1568,9 @@ function parseArgs(argv) {
     else if (argv[i] === '--tenant') out.tenant = argv[++i];
     else if (argv[i] === '--once') out.once = true;
     else if (argv[i] === '--canary-listen') out.canaryListen = Number(argv[++i]);
+    else if (argv[i] === '--canary-path-prefix') out.canaryPathPrefix = argv[++i];
+    else if (argv[i] === '--public-fqdn') out.publicFqdn = argv[++i];
+    else if (argv[i] === '--public-ip') out.publicIp = argv[++i];
     else if (argv[i] === '--log-file') out.logFile = argv[++i];
     else if (argv[i] === '--packet-metadata-file') out.packetMetadataFile = argv[++i];
     else if (argv[i] === '--mirror-metadata-file') out.mirrorMetadataFile = argv[++i];
@@ -1994,7 +2058,12 @@ async function register(token, tokenFile) {
 }
 
 async function heartbeat(agentId) {
-  await api('POST', `/v1/agents/${agentId}/heartbeat`, { version: AGENT_VERSION });
+  const body = { version: AGENT_VERSION };
+  const probeEndpoint = buildProbeEndpoint({ args });
+  if (probeEndpoint) {
+    body.probe_endpoint = probeEndpoint;
+  }
+  await api('POST', `/v1/agents/${agentId}/heartbeat`, body);
 }
 
 export async function pollAndWork(agentId, options = {}) {

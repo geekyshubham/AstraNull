@@ -22,6 +22,7 @@ import {
 export const REPORT_REPOSITORY_METHODS = Object.freeze([
   'createReport',
   'getReport',
+  'listReports',
   'listRunsForReport',
   'listVerdictsForRunIds',
 ]);
@@ -40,6 +41,7 @@ export const REPORT_AUDIT_REPOSITORY_METHODS = Object.freeze(['appendAuditEvent'
 export const POSTGRES_REPORT_SERVICE_METHODS = Object.freeze([
   'createReport',
   'getReport',
+  'listReports',
   'exportReport',
   'exportFinding',
 ]);
@@ -309,6 +311,10 @@ export function createPostgresReportServices(repositories, options = {}) {
 
     async getReport(ctx, id) {
       return reportsRepo.getReport(ctx, id);
+    },
+
+    async listReports(ctx, options = {}) {
+      return reportsRepo.listReports(ctx, options);
     },
 
     async exportReport(ctx, id, format) {

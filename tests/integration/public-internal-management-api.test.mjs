@@ -36,15 +36,14 @@ describe('public landing and internal management APIs', () => {
     assert.equal(landing.status, 200);
     assert.match(landing.text, /No-access-first/);
     assert.match(landing.text, /Sign up/);
-    const navMatch = landing.text.match(/<nav class="public-nav">([\s\S]*?)<\/nav>/);
-    assert.ok(navMatch);
-    assert.doesNotMatch(navMatch[1], /internal\/admin/);
+    assert.match(landing.text, /id="root"/);
+    assert.match(landing.text, /react-app\.js/);
     assert.doesNotMatch(landing.text, /internal\/admin|staff-login|Internal management sign-in/);
-    assert.match(landing.text, /\/login/);
 
     const appShell = await request(baseUrl, 'GET', '/app');
     assert.equal(appShell.status, 200);
-    assert.match(appShell.text, /id="nav"/);
+    assert.match(appShell.text, /id="root"/);
+    assert.match(appShell.text, /react-app\.js/);
 
     const config = await request(baseUrl, 'GET', '/v1/public/site-config');
     assert.equal(config.status, 200);
@@ -59,16 +58,17 @@ describe('public landing and internal management APIs', () => {
 
     const loginPage = await request(baseUrl, 'GET', '/login');
     assert.equal(loginPage.status, 200);
-    assert.match(loginPage.text, /Customer portal/);
+    assert.match(loginPage.text, /id="root"/);
+    assert.match(loginPage.text, /react-app\.js/);
     assert.doesNotMatch(loginPage.text, /internal\/admin|Internal management sign-in|AstraNull staff/);
 
-    const loginModuleRes = await fetch(`${baseUrl}/login.mjs`);
+    const loginModuleRes = await fetch(`${baseUrl}/react-app.js`);
     assert.equal(loginModuleRes.status, 200);
     assert.match(loginModuleRes.headers.get('content-type') ?? '', /javascript/);
 
-    const portalAuthRes = await fetch(`${baseUrl}/portal-auth.mjs`);
+    const portalAuthRes = await fetch(`${baseUrl}/react-app.css`);
     assert.equal(portalAuthRes.status, 200);
-    assert.match(portalAuthRes.headers.get('content-type') ?? '', /javascript/);
+    assert.match(portalAuthRes.headers.get('content-type') ?? '', /css/);
   });
 
   it('accepts public signup requests and exposes public status', async () => {
@@ -138,6 +138,16 @@ describe('public landing and internal management APIs', () => {
     const store = getStore();
     assert.ok(store.tenantSubscriptions.some((s) => s.tenant_id === tenantId));
     assert.ok(store.internalAuditLog.some((a) => a.action === 'signup.request_approved'));
+
+    const currentSubscription = await request(baseUrl, 'GET', '/v1/subscription/current', {
+      headers: demoHeaders('admin', tenantId),
+    });
+    assert.equal(currentSubscription.status, 200);
+    assert.equal(currentSubscription.json.tenant_id, tenantId);
+    assert.equal(currentSubscription.json.subscription.plan_id, 'professional');
+    assert.equal(currentSubscription.json.plan.id, 'professional');
+    assert.equal(currentSubscription.json.support.owner, 'staff_admin');
+    assert.equal(currentSubscription.json.usage.target_groups, 0);
 
     const auditLog = await request(baseUrl, 'GET', '/internal/admin/audit-log?limit=50', {
       headers: staffHeaders('internal_admin'),
@@ -347,8 +357,8 @@ describe('public landing and internal management APIs', () => {
   it('serves internal management shell without customer nav leakage', async () => {
     const page = await request(baseUrl, 'GET', '/internal/admin');
     assert.equal(page.status, 200);
-    assert.match(page.text, /AstraNull Staff/);
-    assert.match(page.text, /Sign-up queue/);
-    assert.doesNotMatch(page.text, /Target Groups/);
+    assert.match(page.text, /id="root"/);
+    assert.match(page.text, /react-app\.js/);
+    assert.doesNotMatch(page.text, /internal-admin\.js/);
   });
 });

@@ -17,6 +17,7 @@ import {
   normalizeWafAssetInput,
   normalizeWafEvidenceSummary,
   normalizeWafExceptionBody,
+  normalizeSocOffensiveWafValidationRequest,
   normalizeWafValidationRequest,
   REMEDIATION_CONNECTOR_TYPES,
   validateActionItem,
@@ -1125,6 +1126,54 @@ export function getWafVendorConsolidation(ctx) {
     connectors: context.connectors,
     driftEvents: context.driftEvents,
   });
+}
+
+export function createSocOffensiveWafValidation(ctx, body) {
+  ensureStoreShape();
+  try {
+    const profile = normalizeSocOffensiveWafValidationRequest(body);
+    const asset = findAsset(ctx, profile.waf_asset_id);
+    if (!asset) {
+      return { error: 'waf_asset_not_found', status: 404 };
+    }
+    const id = newId('id');
+    const now = new Date().toISOString();
+    const run = {
+      id,
+      tenant_id: ctx.tenantId,
+      waf_asset_id: profile.waf_asset_id,
+      offensive_request_id: profile.offensive_request_id,
+      mode: profile.modes[0] ?? 'sqli_offensive',
+      status: 'planned',
+      execution_class: 'offensive_suite',
+      safety_profile_json: {
+        modes: profile.modes,
+        probe_profile: profile.probe_profile,
+        marker_profile: profile.marker_profile,
+        risk_class: 'soc_gated',
+      },
+      summary_json: {},
+      created_at: now,
+    };
+    getStore().wafValidationRuns.push(run);
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'waf.offensive_validation.started',
+      resource_type: 'waf_validation_run',
+      resource_id: id,
+      metadata: {
+        waf_asset_id: profile.waf_asset_id,
+        offensive_request_id: profile.offensive_request_id,
+        modes: profile.modes,
+      },
+    });
+    persistStore();
+    return { validation_run: run };
+  } catch (err) {
+    return contractError(err);
+  }
 }
 
 export function createWafValidation(ctx, body) {

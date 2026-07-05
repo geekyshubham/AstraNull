@@ -215,8 +215,10 @@ function invalidSocMarkerFields(check, policy) {
       reason: 'must_be_false',
     });
   }
-  if (!String(check.check_id ?? '').endsWith('.request_only')) {
-    invalid.push({ field: 'check_id', reason: 'soc_marker_must_use_request_only_suffix' });
+  const socMarkerSuffixes = ['.request_only', '.soc'];
+  const checkId = String(check.check_id ?? '');
+  if (!socMarkerSuffixes.some((suffix) => checkId.endsWith(suffix))) {
+    invalid.push({ field: 'check_id', reason: 'soc_marker_must_use_request_only_or_soc_suffix' });
   }
   if (check.probe_simulation_profile !== 'none' && check.probe_simulation_profile != null) {
     invalid.push({

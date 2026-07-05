@@ -1,0 +1,152 @@
+import type { LucideIcon } from 'lucide-react';
+
+export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'posture' | 'governance' | 'staff';
+
+export type RouteId =
+  | 'dashboard'
+  | 'onboarding'
+  | 'environments'
+  | 'target-groups'
+  | 'target-group-detail'
+  | 'agents'
+  | 'agent-detail'
+  | 'checks'
+  | 'test-policies'
+  | 'runs'
+  | 'run-detail'
+  | 'findings'
+  | 'evidence'
+  | 'waf-posture'
+  | 'waf-asset-detail'
+  | 'cve-pipeline'
+  | 'cve-detail'
+  | 'supply-chain'
+  | 'supply-chain-detail'
+  | 'remediation'
+  | 'discovery'
+  | 'discovery-entity'
+  | 'high-scale'
+  | 'soc'
+  | 'reports'
+  | 'report-detail'
+  | 'integrations'
+  | 'notifications'
+  | 'audit'
+  | 'release-evidence'
+  | 'settings'
+  | 'support'
+  | 'subscription'
+  | 'admin'
+  | 'tenant-detail'
+  | 'internal-soc';
+
+export type NavItem = {
+  id: RouteId;
+  label: string;
+  group: SurfaceKind;
+  description: string;
+  icon: LucideIcon;
+  count?: string;
+};
+
+export type Session = {
+  mode?: string;
+  principal?: string;
+  tenant_id?: string;
+  user_id?: string;
+  role?: string;
+  staff_id?: string;
+  staff_role?: string;
+  staff_login_path?: string;
+  access_token?: string;
+  expires_at?: number;
+};
+
+export type PortalConfig = {
+  authMode: string;
+  siteConfig: Record<string, unknown>;
+  bundledLoginEnabled: boolean;
+  loginUrl: string;
+  portalPath: string;
+  staffLoginPath: string;
+};
+
+export type ReadinessFactor = {
+  key?: string;
+  label?: string;
+  score?: number;
+  weight?: number;
+  reason?: string;
+  detail?: string;
+};
+
+export type StatePayload = {
+  tenant_id?: string;
+  readiness?: {
+    score?: number;
+    factors?: ReadinessFactor[];
+    summary?: string;
+  };
+  target_groups?: number;
+  agents_online?: number;
+  recent_runs?: DataItem[];
+  open_findings?: number;
+  high_scale_requests?: number;
+  kill_switch?: {
+    active?: boolean;
+    enabled?: boolean;
+    reason?: string;
+    updated_at?: string;
+  };
+};
+
+export type DataItem = Record<string, unknown>;
+
+export type PortalData = {
+  state: StatePayload | null;
+  tenant: DataItem | null;
+  targetGroups: DataItem[];
+  agents: DataItem[];
+  checks: DataItem[];
+  testPolicies: DataItem[];
+  runs: DataItem[];
+  findings: DataItem[];
+  evidence: DataItem[];
+  highScale: DataItem[];
+  reports: DataItem[];
+  notificationRules: DataItem[];
+  notificationEvents: DataItem[];
+  releaseEvidence: DataItem[];
+  releaseAttestation: DataItem | null;
+  audit: DataItem[];
+  connectors: DataItem[];
+  secrets: DataItem[];
+  bootstrapTokens: DataItem[];
+  serviceAccounts: DataItem[];
+  wafAssets: DataItem[];
+  wafCoverage: DataItem | null;
+  wafRiskRoadmap: DataItem | null;
+  wafValidations: DataItem[];
+  wafDriftEvents: DataItem[];
+  wafExceptions: DataItem[];
+  wafValidationPlans: DataItem[];
+  wafRetests: DataItem[];
+  wafActionItems: DataItem[];
+  cvePipeline: DataItem[];
+  supplyChainRisks: DataItem[];
+  discoveryEntities: DataItem[];
+  discoveryCandidates: DataItem[];
+  discoveryInbox: DataItem[];
+  discoverySummary: DataItem | null;
+  subscriptionSummary: DataItem | null;
+  internalOverview: DataItem | null;
+  internalSignupRequests: DataItem[];
+  internalTenants: DataItem[];
+  internalApprovalRequests: DataItem[];
+  internalAudit: DataItem[];
+  deploymentFeatures: DataItem | null;
+  loaded: boolean;
+  error: string | null;
+};
+
+export type BadgeTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';

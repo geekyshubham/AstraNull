@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstraNull — Product Features &amp; Functionality Guide</title>
+  <style>
+    :root {
+      --bg: #080c10;
+      --surface: #0f1419;
+      --surface-2: #161d27;
+      --border: #243044;
+      --text: #e8edf4;
+      --muted: #8b9bb4;
+      --accent: #2dd4bf;
+      --accent-dim: #14b8a6;
+      --blue: #3d8bfd;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #f87171;
+      --purple: #a78bfa;
+      --radius: 10px;
+      --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.65; font-size: 15px; }
+    .hero { background: linear-gradient(160deg, #0a1218 0%, #0d1a22 40%, #081018 100%); border-bottom: 1px solid var(--border); padding: 3.5rem 2rem 3rem; }
+    .hero-inner, .container { max-width: 1100px; margin: 0 auto; }
+    .badge { display: inline-block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); background: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.25); padding: 0.3rem 0.7rem; border-radius: 999px; margin-bottom: 1rem; }
+    h1 { font-size: clamp(1.9rem, 4vw, 2.7rem); font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; margin-bottom: 0.75rem; }
+    .hero p { color: var(--muted); font-size: 1.05rem; max-width: 760px; }
+    .hero-meta { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1.5rem; font-size: 0.85rem; color: var(--muted); }
+    nav.toc { position: sticky; top: 0; z-index: 100; background: rgba(8, 12, 16, 0.93); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0.75rem 2rem; overflow-x: auto; }
+    nav.toc ul { list-style: none; display: flex; gap: 0.2rem; max-width: 1100px; margin: 0 auto; white-space: nowrap; }
+    nav.toc a { color: var(--muted); text-decoration: none; font-size: 0.8rem; font-weight: 500; padding: 0.4rem 0.7rem; border-radius: 6px; transition: color 0.15s, background 0.15s; }
+    nav.toc a:hover { color: var(--text); background: var(--surface-2); }
+    main { padding: 2.5rem 2rem 4rem; }
+    section { margin-bottom: 3.5rem; scroll-margin-top: 4rem; }
+    h2 { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+    h3 { font-size: 1.1rem; font-weight: 600; margin: 1.75rem 0 0.75rem; }
+    h4 { font-size: 0.78rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    p { margin-bottom: 1rem; color: var(--muted); }
+    p.lead { font-size: 1.02rem; color: var(--text); }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.2rem; }
+    .card h3 { margin: 0 0 0.45rem; font-size: 0.98rem; }
+    .card p { margin: 0; font-size: 0.88rem; }
+    .card .tag { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 0.4rem; }
+    .card.optional .tag { color: var(--purple); }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.87rem; }
+    th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: var(--surface-2); color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    code, pre { font-family: var(--mono); font-size: 0.81rem; }
+    code { background: var(--surface-2); color: var(--accent); padding: 0.12rem 0.38rem; border-radius: 4px; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.2rem; overflow-x: auto; margin: 1rem 0; color: var(--text); line-height: 1.5; }
+    .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.4rem; margin: 1.25rem 0; overflow-x: auto; }
+    .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; font-size: 0.84rem; }
+    .flow-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.8rem; white-space: nowrap; }
+    .flow-box.accent { border-color: var(--accent); background: rgba(45,212,191,0.08); color: var(--accent); }
+    .flow-box.soc { border-color: var(--amber); background: rgba(251,191,36,0.08); color: var(--amber); }
+    .flow-arrow { color: var(--muted); }
+    .callout { border-left: 3px solid var(--accent); background: rgba(45,212,191,0.05); padding: 1rem 1.2rem; border-radius: 0 var(--radius) var(--radius) 0; margin: 1.25rem 0; }
+    .callout.warn { border-color: var(--amber); background: rgba(251,191,36,0.05); }
+    .callout strong { color: var(--text); display: block; margin-bottom: 0.3rem; }
+    .callout p { margin: 0; font-size: 0.9rem; }
+    .tier-row { display: grid; grid-template-columns: 80px 140px 1fr; gap: 0; border: 1px solid var(--border); border-top: none; font-size: 0.87rem; }
+    .tier-row:first-of-type { border-top: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+    .tier-row:last-of-type { border-radius: 0 0 var(--radius) var(--radius); }
+    .tier-row > div { padding: 0.7rem 1rem; border-left: 1px solid var(--border); color: var(--muted); }
+    .tier-row > div:first-child { border-left: none; font-weight: 700; color: var(--accent); }
+    .tier-row > div:nth-child(2) { color: var(--text); font-weight: 500; }
+    .page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.6rem; margin: 1rem 0; }
+    .page-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.85rem; font-size: 0.84rem; }
+    .page-chip strong { display: block; color: var(--text); font-size: 0.88rem; }
+    .page-chip span { color: var(--muted); font-size: 0.78rem; }
+    .page-chip.staff { border-color: rgba(251,191,36,0.3); }
+    .page-chip.optional { border-color: rgba(167,139,250,0.3); }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin: 1.2rem 0; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } .tier-row { grid-template-columns: 1fr; } .tier-row > div { border-left: none; border-top: 1px solid var(--border); } }
+    footer { border-top: 1px solid var(--border); padding: 2rem; text-align: center; color: var(--muted); font-size: 0.82rem; }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    .score-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 0.5rem 0 1rem; }
+    .score-bar div { flex: 1; }
+  </style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="badge">Complete Product Reference</span>
+    <h1>AstraNull Features &amp; Functionality</h1>
+    <p>
+      A no-access-first DDoS readiness validation platform. Customers declare target groups,
+      install outbound-only agents, and AstraNull correlates safe external probes with internal
+      observations to produce evidence-backed verdicts, findings, and reports.
+    </p>
+    <div class="hero-meta">
+      <span>Core promise: no cloud credentials required</span>
+      <span>49 versioned checks in catalog</span>
+      <span>3 trust surfaces: Customer · SOC · Staff</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#promise">Promise</a></li>
+    <li><a href="#modules">Modules</a></li>
+    <li><a href="#pages">Pages</a></li>
+    <li><a href="#flows">Flows</a></li>
+    <li><a href="#validation">Validation</a></li>
+    <li><a href="#agents">Agents</a></li>
+    <li><a href="#scoring">Scoring</a></li>
+    <li><a href="#soc">SOC</a></li>
+    <li><a href="#security">Security</a></li>
+    <li><a href="#integrations">Integrations</a></li>
+    <li><a href="#addons">Add-ons</a></li>
+    <li><a href="#roles">Roles</a></li>
+    <li><a href="#api">API</a></li>
+  </ul>
+</nav>
+
+<main class="container">
+
+<!-- PROMISE -->
+<section id="promise">
+  <h2>Product Promise &amp; Principles</h2>
+  <div class="callout">
+    <strong>What AstraNull proves</strong>
+    <p>DDoS readiness for <em>customer-declared targets</em> without requiring cloud credentials or automatic IP inventory discovery.</p>
+  </div>
+
+  <h3>Core Principles</h3>
+  <table>
+    <thead><tr><th>Principle</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><strong>No-access-first</strong></td><td>Core value works without AWS/GCP/Azure/CDN/WAF credentials.</td></tr>
+      <tr><td><strong>Customer-declared scope</strong></td><td>Customers explicitly define FQDNs, URLs, IPs, ports — no mandatory discovery.</td></tr>
+      <tr><td><strong>Agent-observed truth</strong></td><td>Strong verdicts require inside/outside correlation via outbound-only agents.</td></tr>
+      <tr><td><strong>Outbound-only control</strong></td><td>Agents call AstraNull over HTTPS; no inbound management ports required.</td></tr>
+      <tr><td><strong>SOC gates risk</strong></td><td>High-scale simulations are request-only; SOC approves, executes, and stops them.</td></tr>
+      <tr><td><strong>Evidence-first UX</strong></td><td>Every page answers: what was tested, what happened, what proof exists, what to do next.</td></tr>
+      <tr><td><strong>Safe by default</strong></td><td>Default checks are low-volume, bounded, and non-disruptive.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>What AstraNull Does Not Do</h3>
+  <table>
+    <thead><tr><th>Excluded</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Automatic IP/cloud inventory discovery</td><td>Conflicts with no-access-first; customer declares scope.</td></tr>
+      <tr><td>Self-service DDoS attack generation</td><td>Unsafe and legally risky; high-scale is SOC-gated.</td></tr>
+      <tr><td>Replacement for DDoS providers</td><td>Validates readiness; does not replace Cloudflare, Akamai, Shield, etc.</td></tr>
+      <tr><td>Mandatory cloud config audit</td><td>Requires credentials; optional connector mode only.</td></tr>
+      <tr><td>Autonomous WAF rule deployment</td><td>Human approval and change control required (WAF add-on).</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Product Tiers</h3>
+  <div class="tier-row"><div>T1</div><div>Safe Validation</div><div>Agent install, target groups, origin bypass, protected-path, L3/L4 low-rate, DNS, L7 safe checks.</div></div>
+  <div class="tier-row"><div>T2</div><div>Enterprise Evidence</div><div>Reports, RBAC, audit logs, integrations, readiness scoring, scheduled retesting, custody manifests.</div></div>
+  <div class="tier-row"><div>T3</div><div>SOC High-Scale</div><div>Request workflow, authorization pack, provider approval, SOC console, kill switch, post-test reports.</div></div>
+  <div class="tier-row"><div>T4</div><div>Enhanced Connectors</div><div>Optional read-only cloud/CDN/WAF/SIEM integrations for deeper evidence.</div></div>
+  <div class="tier-row"><div>T5</div><div>WAF Posture Add-on</div><div>Optional WAF coverage, marker validation, drift, CVE mitigation, discovery — feature-flagged.</div></div>
+</section>
+
+<!-- MODULES -->
+<section id="modules">
+  <h2>Platform Modules</h2>
+  <div class="card-grid">
+    <div class="card"><div class="tag">Core</div><h3>Organization &amp; Environment</h3><p>Multi-tenant orgs, prod/stage/lab environments, retention, RBAC, audit isolation.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Target Groups</h3><p>Customer-declared scope: targets, expected behavior, criticality, linked agents, enabled checks.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Agent Fleet</h3><p>Registration, heartbeat, capabilities, placement diagnostics, observation ingestion, upgrades.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Checks Library</h3><p>49 versioned check definitions with safety class, prerequisites, probe profiles, evidence schema.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Test Orchestration</h3><p>Planner, safe windows, rate caps, probe dispatch, correlation, verdicts, findings.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Findings</h3><p>Deduplication, severity, remediation, assignment, accept-risk, retest linkage.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Readiness Score</h3><p>Evidence-backed 0–100 score from coverage, agents, findings, freshness, SOC governance.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Reports</h3><p>Executive, technical, SOC, audit, compliance exports with custody manifests.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Notifications</h3><p>Webhook, email, Slack, Teams with delivery ledger, retry/DLQ metadata.</p></div>
+    <div class="card"><div class="tag soc">SOC</div><h3>SOC Console</h3><p>High-scale approval state machine, authorization pack, kill switch, live control room.</p></div>
+    <div class="card"><div class="tag soc">Staff</div><h3>Internal Management</h3><p>Sign-up queue, tenant lifecycle, subscriptions, entitlements, support, internal audit.</p></div>
+    <div class="card"><div class="tag">Core</div><h3>Settings &amp; Identity</h3><p>OIDC JWT auth, bootstrap tokens, service accounts, secret vault, privacy/retention.</p></div>
+  </div>
+
+  <h3>Core Objects</h3>
+  <table>
+    <thead><tr><th>Object</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>Organization / Environment</td><td>Tenant boundary; prod/stage/lab separation with safety profile.</td></tr>
+      <tr><td>Target Group</td><td>Primary validation scope — business service with declared targets and policy.</td></tr>
+      <tr><td>Target</td><td>Single FQDN, URL, IP, port, protocol, or canary endpoint.</td></tr>
+      <tr><td>Agent</td><td>Customer-installed observer with identity, health, placement, capabilities.</td></tr>
+      <tr><td>Check Definition</td><td>Reusable validation logic with vector, safety class, probe profile.</td></tr>
+      <tr><td>Test Policy</td><td>Enabled checks, schedule, caps, notification rules per target group.</td></tr>
+      <tr><td>Test Run</td><td>Execution instance with timeline, probe events, agent observations, verdict.</td></tr>
+      <tr><td>Verdict</td><td>Protected, bypassable, inconclusive, misplaced-agent — with placement confidence.</td></tr>
+      <tr><td>Finding</td><td>Work item from failing verdict with severity, owner, SLA, retest link.</td></tr>
+      <tr><td>SOC Request</td><td>High-scale scope, ROE, approvals, provider evidence, schedule, telemetry.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- PAGES -->
+<section id="pages">
+  <h2>Product Pages &amp; Navigation</h2>
+  <p class="lead">Three separate trust surfaces. Customer navigation must not include Internal Management or SOC Console.</p>
+
+  <h4>Customer Portal</h4>
+  <div class="page-grid">
+    <div class="page-chip"><strong>Dashboard</strong><span>Readiness score, vector heatmap, findings, agents, recent runs</span></div>
+    <div class="page-chip"><strong>Onboarding</strong><span>Wizard: env → target group → agent → heartbeat → first run</span></div>
+    <div class="page-chip"><strong>Environments</strong><span>Prod/stage/lab scope cards</span></div>
+    <div class="page-chip"><strong>Target Groups</strong><span>Declare scope, targets, policy, runs, findings</span></div>
+    <div class="page-chip"><strong>Agents</strong><span>Install tabs, fleet table, placement diagnostics</span></div>
+    <div class="page-chip"><strong>Checks Library</strong><span>Vector catalog, safety classes, probe profiles</span></div>
+    <div class="page-chip"><strong>Test Policies</strong><span>Enabled checks, schedules, caps per group</span></div>
+    <div class="page-chip"><strong>Test Runs</strong><span>Timeline, traffic path, truth table, verdict explanation</span></div>
+    <div class="page-chip"><strong>Findings</strong><span>Triage, assign, accept-risk, close, retest</span></div>
+    <div class="page-chip"><strong>Evidence Vault</strong><span>Immutable event chain, custody</span></div>
+    <div class="page-chip"><strong>High-Scale Requests</strong><span>Submit and track SOC-gated requests</span></div>
+    <div class="page-chip"><strong>Reports</strong><span>Executive, technical, SOC, audit, compliance export</span></div>
+    <div class="page-chip"><strong>Integrations</strong><span>Webhooks, Slack, Teams, SIEM, ticketing</span></div>
+    <div class="page-chip"><strong>Notifications</strong><span>Rules, triggers, delivery retry/DLQ visibility</span></div>
+    <div class="page-chip"><strong>Settings</strong><span>API keys, tokens, privacy, release evidence summary</span></div>
+    <div class="page-chip"><strong>Audit Log</strong><span>Filterable security-relevant actions</span></div>
+    <div class="page-chip"><strong>Release Evidence</strong><span>Production readiness ledger (metadata-only)</span></div>
+    <div class="page-chip"><strong>Support / Subscription</strong><span>On-call readiness preview, plan metadata</span></div>
+  </div>
+
+  <h4>Staff-Only Surfaces</h4>
+  <div class="page-grid">
+    <div class="page-chip staff"><strong>Internal Admin</strong><span>Sign-up queue, tenants, subscriptions, approvals</span></div>
+    <div class="page-chip staff"><strong>SOC Console</strong><span>Queue, preflight, schedule, execute, kill switch, close</span></div>
+    <div class="page-chip staff"><strong>Tenant Detail</strong><span>Lifecycle, entitlements, support notes</span></div>
+  </div>
+
+  <h4>Optional Add-on Pages (feature-flagged)</h4>
+  <div class="page-grid">
+    <div class="page-chip optional"><strong>WAF Posture</strong><span>Coverage, assets, drift, validation plans</span></div>
+    <div class="page-chip optional"><strong>CVE Pipeline</strong><span>CVE ingest, asset match, mitigation recommendations</span></div>
+    <div class="page-chip optional"><strong>Discovery</strong><span>Entity graph, candidate inbox, approval-gated import</span></div>
+    <div class="page-chip optional"><strong>Supply Chain</strong><span>Dangling DNS, dependency risk assessment</span></div>
+    <div class="page-chip optional"><strong>Remediation</strong><span>Action items, ticket/SIEM workflow</span></div>
+  </div>
+</section>
+
+<!-- FLOWS -->
+<section id="flows">
+  <h2>End-to-End Flows</h2>
+
+  <h3>Flow A — Customer Onboarding</h3>
+  <div class="diagram">
+    <div class="flow">
+      <span class="flow-box">Sign up</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Create environment</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Target group</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Declare targets</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Bootstrap token</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Install agent</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Verify heartbeat</span><span class="flow-arrow">→</span>
+      <span class="flow-box accent">First safe run</span>
+    </div>
+  </div>
+  <p>Install choices: Linux one-line, Debian/Ubuntu (.deb), RHEL/Amazon Linux (.rpm), generic tarball, Docker, Kubernetes (Helm), packet mirror collector.</p>
+
+  <h3>Flow B — Safe Validation Run</h3>
+  <div class="diagram">
+    <div class="flow">
+      <span class="flow-box">User clicks Run</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Planner validates scope</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Agent arms observation</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Probe sends nonce</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Agent uploads observation</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Correlation</span><span class="flow-arrow">→</span>
+      <span class="flow-box accent">Verdict + Finding</span>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>State</th><th>What Happens</th></tr></thead>
+    <tbody>
+      <tr><td>Planned</td><td>Select enabled checks, targets, safety caps, probe regions.</td></tr>
+      <tr><td>Agent Armed</td><td>Observation window opened before probe starts.</td></tr>
+      <tr><td>Probing</td><td>Signed probe worker sends bounded low-rate labeled probes.</td></tr>
+      <tr><td>Collecting</td><td>Backend waits for probe and agent events.</td></tr>
+      <tr><td>Correlating</td><td>Matches by test_id, nonce, target, time window.</td></tr>
+      <tr><td>Verdicted</td><td>Protected, Bypassable, Inconclusive, Misplaced Agent, Partial.</td></tr>
+      <tr><td>Reported</td><td>Findings, evidence timeline, notifications.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Flow C — High-Scale Request (SOC-Gated)</h3>
+  <div class="diagram">
+    <div class="flow">
+      <span class="flow-box">Customer requests</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Authorization pack</span><span class="flow-arrow">→</span>
+      <span class="flow-box soc">SOC review</span><span class="flow-arrow">→</span>
+      <span class="flow-box soc">Schedule + execute</span><span class="flow-arrow">→</span>
+      <span class="flow-box soc">Kill switch / stop</span><span class="flow-arrow">→</span>
+      <span class="flow-box">Post-test report</span><span class="flow-arrow">→</span>
+      <span class="flow-box accent">Closed</span>
+    </div>
+  </div>
+  <p>Customers can <em>request</em> high-scale tests but cannot start, execute, or stop them. SOC owns approval, scheduling, execution, and closure.</p>
+</section>
+
+<!-- VALIDATION -->
+<section id="validation">
+  <h2>Validation &amp; Detection</h2>
+
+  <h3>How Proof Works</h3>
+  <div class="diagram">
+    <div class="flow">
+      <span class="flow-box accent">Outside Probe</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">CDN / WAF / Scrubbing</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">Origin</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box accent">Inside Agent</span>
+    </div>
+  </div>
+  <p>Correlation matches probe nonce with agent observation (or non-observation) to determine whether traffic was blocked, penetrated, or bypassed.</p>
+
+  <h3>Vector Families</h3>
+  <table>
+    <thead><tr><th>Family</th><th>Example Checks</th><th>Who Runs</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Origin bypass</strong></td><td>Direct IP, Host/SNI bypass, stale DNS, CDN bypass</td><td>Customer (safe)</td></tr>
+      <tr><td><strong>L3/L4</strong></td><td>TCP connect, forbidden port, IPv6, protocol exposure</td><td>Customer (safe)</td></tr>
+      <tr><td><strong>DNS</strong></td><td>Resolver exposure, NXDOMAIN, DNSSEC, failover, AXFR</td><td>Customer (safe)</td></tr>
+      <tr><td><strong>L7 / API</strong></td><td>HTTP methods, WAF markers, rate limits, expensive endpoints, GraphQL</td><td>Customer (safe/controlled)</td></tr>
+      <tr><td><strong>TLS / Connection</strong></td><td>Handshake, slow headers, connection timeouts</td><td>Customer (safe)</td></tr>
+      <tr><td><strong>Protocols</strong></td><td>HTTP/2 rapid reset, HTTP/3/QUIC, gRPC, WebSocket</td><td>Customer (safe) / SOC</td></tr>
+      <tr><td><strong>WAF posture</strong></td><td>Fingerprint, marker rule, origin bypass, low-rate limit</td><td>Customer (WAF add-on)</td></tr>
+      <tr><td><strong>High-scale DDoS</strong></td><td>Multi-vector drills, connection exhaustion, provider telemetry</td><td><strong>SOC only</strong></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Check Risk Classification</h3>
+  <table>
+    <thead><tr><th>Class</th><th>Description</th><th>Execution Owner</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Safe</strong></td><td>Single/few labeled probes; non-disruptive.</td><td>Customer engineer</td></tr>
+      <tr><td><strong>Controlled</strong></td><td>Bounded repeated probes with explicit caps.</td><td>Customer admin/engineer</td></tr>
+      <tr><td><strong>SOC-gated</strong></td><td>High-scale or disruptive potential.</td><td>AstraNull SOC only</td></tr>
+      <tr><td><strong>Prohibited</strong></td><td>Exploit payloads, unmanaged attack generation.</td><td>Never customer-runnable</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Verdict Types</h3>
+  <table>
+    <thead><tr><th>Verdict</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>Protected</td><td>Traffic blocked/challenged before origin; agent did not observe nonce.</td></tr>
+      <tr><td>Bypassable / Penetrated</td><td>Traffic reached origin; agent observed nonce or direct path confirmed.</td></tr>
+      <tr><td>Inconclusive</td><td>Insufficient evidence — wrong placement, missing agent, probe blocked.</td></tr>
+      <tr><td>Misplaced Agent</td><td>Agent cannot observe traffic for this target group.</td></tr>
+      <tr><td>Partial</td><td>Some targets passed, others failed within same run.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Guardrails on Every Safe Run</h3>
+  <ul style="color:var(--muted);margin:0 0 1rem 1.25rem;font-size:0.9rem;">
+    <li>Target group safety policy and safe windows</li>
+    <li>Tenant rate budget and per-group cooldown</li>
+    <li>Per-run event caps and concurrent-run block</li>
+    <li>Signed probe jobs with max_requests / timeout_ms caps</li>
+    <li>Tenant kill switch auto-cancels active safe runs</li>
+    <li>Agent observations reject raw packet/body/header fields</li>
+  </ul>
+</section>
+
+<!-- AGENTS -->
+<section id="agents">
+  <h2>Agent Fleet</h2>
+  <p class="lead">Outbound-only Linux agent that registers, heartbeats, receives jobs, and uploads metadata-only observations.</p>
+
+  <h3>Installation Options</h3>
+  <table>
+    <thead><tr><th>Method</th><th>Best For</th></tr></thead>
+    <tbody>
+      <tr><td>Linux one-line installer</td><td>VM / bare metal quick start</td></tr>
+      <tr><td>Debian/Ubuntu .deb</td><td>Controlled package management</td></tr>
+      <tr><td>RHEL/Amazon Linux .rpm</td><td>Enterprise Linux</td></tr>
+      <tr><td>Signed generic tarball</td><td>Locked-down distros</td></tr>
+      <tr><td>Docker (non-root Alpine)</td><td>Canary container</td></tr>
+      <tr><td>Kubernetes Helm chart</td><td>GKE/EKS/AKS/OpenShift DaemonSet or Deployment</td></tr>
+      <tr><td>Packet mirror collector</td><td>Broad traffic observation via TAP/SPAN</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Detection Modes</h3>
+  <div class="card-grid">
+    <div class="card"><h3>Packet Metadata</h3><p>Local signal metadata only — no raw packets uploaded.</p></div>
+    <div class="card"><h3>Canary HTTP Listener</h3><p>Opt-in listener records safe metadata; customer approval required.</p></div>
+    <div class="card"><h3>Log-Tail Observation</h3><p>Hashes lines locally; evidence-gated upload; no raw logs.</p></div>
+    <div class="card"><h3>Packet Mirror Collector</h3><p>Metadata from TAP/SPAN mirror; raw fields rejected.</p></div>
+    <div class="card"><h3>WAF Observer</h3><p>Canary route, ingress label, WAF log pointer — nonce hash only (WAF add-on).</p></div>
+  </div>
+
+  <h3>Agent Lifecycle</h3>
+  <table>
+    <thead><tr><th>Capability</th><th>Details</th></tr></thead>
+    <tbody>
+      <tr><td>Registration</td><td>Bootstrap token (<code>ast_v1.…</code>) exchanged for addressed agent credential (<code>agc_v1.…</code>).</td></tr>
+      <tr><td>Heartbeat</td><td>Version, capabilities, placement, health, clock skew.</td></tr>
+      <tr><td>Job control</td><td>Outbound poll for observation windows; no inbound ports.</td></tr>
+      <tr><td>Placement confidence</td><td>Per-target-group status: proven, needs_baseline, missing_agent, misplaced_risk.</td></tr>
+      <tr><td>Auto-update</td><td>Signed manifest verification, staged rollout %, trust-key pinning, rollback.</td></tr>
+      <tr><td>Revoke / uninstall</td><td><code>POST /v1/agents/:id/revoke</code>; idempotent uninstall script.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- SCORING -->
+<section id="scoring">
+  <h2>Readiness Scoring &amp; Findings</h2>
+
+  <h3>Score Dimensions</h3>
+  <div class="score-bar">
+    <div style="background:var(--accent);flex:40" title="Coverage 40%"></div>
+    <div style="background:var(--blue);flex:25" title="Agents 25%"></div>
+    <div style="background:var(--amber);flex:25" title="Findings 25%"></div>
+    <div style="background:var(--green);flex:15" title="Freshness 15%"></div>
+    <div style="background:var(--purple);flex:10" title="SOC 10%"></div>
+  </div>
+  <table>
+    <thead><tr><th>Dimension</th><th>Weight</th><th>What It Measures</th></tr></thead>
+    <tbody>
+      <tr><td>Validation coverage</td><td>40%</td><td>Target groups with recent (≤30d) verdicted runs.</td></tr>
+      <tr><td>Agent placement &amp; health</td><td>25%</td><td>Active agents online with observation evidence.</td></tr>
+      <tr><td>Open findings impact</td><td>25%</td><td>Penalty for open findings; stale vs recent evidence.</td></tr>
+      <tr><td>Evidence freshness</td><td>15%</td><td>Recent evidence only — stale (&gt;30d) earns no credit.</td></tr>
+      <tr><td>SOC governance posture</td><td>10%</td><td>Dual SOC approval, authorization pack, kill-switch evidence.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Score Bands</h3>
+  <table>
+    <thead><tr><th>Score</th><th>Label</th></tr></thead>
+    <tbody>
+      <tr><td>90–100</td><td><strong style="color:var(--green)">Strong</strong> — readiness well-evidenced</td></tr>
+      <tr><td>75–89</td><td><strong style="color:var(--accent)">Good</strong> — minor gaps or stale evidence</td></tr>
+      <tr><td>50–74</td><td><strong style="color:var(--amber)">Needs attention</strong> — important gaps exist</td></tr>
+      <tr><td>25–49</td><td><strong style="color:var(--red)">Weak</strong> — multiple critical gaps</td></tr>
+      <tr><td>0–24</td><td>Unknown/critical — missing evidence or confirmed exposure</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Findings Workflow</h3>
+  <p>Findings are created from bypassable verdicts, missing controls, misplaced agents, or stale critical evidence. Workflow: open → assigned → remediation → retest → closed (or accept-risk with owner approval).</p>
+</section>
+
+<!-- SOC -->
+<section id="soc">
+  <h2>SOC &amp; High-Scale Workflow</h2>
+
+  <h3>High-Scale State Machine</h3>
+  <table>
+    <thead><tr><th>State</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>Draft → Submitted</td><td>Customer preparing and submitting request.</td></tr>
+      <tr><td>Authorization Pending</td><td>Customer/provider documents missing.</td></tr>
+      <tr><td>Ready for Preflight → Scheduled</td><td>SOC approved window exists.</td></tr>
+      <tr><td>Armed → Running</td><td>SOC-controlled execution active.</td></tr>
+      <tr><td>Stopping → Stopped</td><td>Kill switch or abort criteria met.</td></tr>
+      <tr><td>Evidence Review → Closed</td><td>Post-test report required; immutable final state.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>SOC Console Capabilities</h3>
+  <div class="card-grid">
+    <div class="card"><h3>Request Queue</h3><p>Review intake, scope, contacts, provider context.</p></div>
+    <div class="card"><h3>Authorization Pack</h3><p>Artifact upload with SHA-256 custody; review/approve gates.</p></div>
+    <div class="card"><h3>Two-Person Approval</h3><p>Dual SOC sign-off with declared-scope hash locking.</p></div>
+    <div class="card"><h3>Execution Console</h3><p>Schedule, dry-run adapter start/stop, live monitoring.</p></div>
+    <div class="card"><h3>Kill Switch</h3><p>Tenant-aware stop; auto-cancels safe runs and probe jobs.</p></div>
+    <div class="card"><h3>Post-Test Report</h3><p>Timeline, artifacts, SOC notes, telemetry summary.</p></div>
+    <div class="card"><h3>Provider Paths</h3><p>AWS, Azure, GCP, CDN, carrier, on-prem, partner approval models.</p></div>
+    <div class="card"><h3>Governed Adapter</h3><p>Partner start/stop interface; dry-run until certified for live feeds.</p></div>
+  </div>
+</section>
+
+<!-- SECURITY -->
+<section id="security">
+  <h2>Security, Compliance &amp; Operations</h2>
+  <table>
+    <thead><tr><th>Area</th><th>Capability</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Tenant isolation</strong></td><td>PostgreSQL RLS on all tenant tables; <code>withTenantContext</code> per transaction.</td></tr>
+      <tr><td><strong>Authentication</strong></td><td>OIDC JWT (RS256/JWKS) production default; addressed service-account tokens; bootstrap tokens.</td></tr>
+      <tr><td><strong>Secret vault</strong></td><td>AES-256-GCM envelopes; create/list/rotate; never return plaintext.</td></tr>
+      <tr><td><strong>Audit log</strong></td><td>Tamper-evident hash chain (sequence/prev_hash/entry_hash); no truncation.</td></tr>
+      <tr><td><strong>Chain of custody</strong></td><td>SHA-256 digest manifests on exports; <code>/v1/custody/verify</code> endpoint.</td></tr>
+      <tr><td><strong>Privacy &amp; retention</strong></td><td>Metadata retention policies, legal hold gate, purge audits.</td></tr>
+      <tr><td><strong>Safe testing policy</strong></td><td>Prohibited exploit payloads; SOC gates high-scale; signed probe caps.</td></tr>
+      <tr><td><strong>Observability</strong></td><td><code>/metrics</code>, <code>/v1/observability</code>, SLO targets, alert contracts.</td></tr>
+      <tr><td><strong>Disaster recovery</strong></td><td>Backup/restore scripts, DR evidence validator, Postgres migration runner.</td></tr>
+      <tr><td><strong>Compliance reports</strong></td><td>SOC2, ISO27001, DORA, NIS2, internal audit mapping templates.</td></tr>
+      <tr><td><strong>Production release evidence</strong></td><td>31 evidence kinds ledger; gap audit scorecard; operator validators.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- INTEGRATIONS -->
+<section id="integrations">
+  <h2>Integrations &amp; Notifications</h2>
+  <table>
+    <thead><tr><th>Channel</th><th>Status</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td>Webhook (HTTPS)</td><td>Implemented</td><td>Redacted JSON event delivery with retry/DLQ ledger.</td></tr>
+      <tr><td>Email (SMTP)</td><td>Implemented</td><td>Redacted HTML body; STARTTLS; bounded timeout.</td></tr>
+      <tr><td>Slack</td><td>Implemented</td><td>Block Kit JSON via webhook.</td></tr>
+      <tr><td>Microsoft Teams</td><td>Implemented</td><td>Adaptive Card JSON via webhook.</td></tr>
+      <tr><td>Jira / ServiceNow</td><td>Payload builders (WAF add-on)</td><td>Remediation tickets with evidence links.</td></tr>
+      <tr><td>Splunk / Sentinel / XSOAR</td><td>Payload builders (WAF add-on)</td><td><code>astranull.waf_event.v1</code> redacted event stream.</td></tr>
+      <tr><td>WAF/CDN/Cloud connectors</td><td>Framework wired; live workers open</td><td>Read-only config summaries (Cloudflare, AWS, Azure, GCP, etc.).</td></tr>
+    </tbody>
+  </table>
+  <p>Default delivery mode is <strong>metadata-only</strong> (no outbound I/O). Opt-in provider delivery requires explicit <code>ASTRANULL_NOTIFICATION_DELIVERY_MODE</code> configuration.</p>
+</section>
+
+<!-- ADDONS -->
+<section id="addons">
+  <h2>Optional Add-ons (Feature-Flagged)</h2>
+  <div class="two-col">
+    <div class="card optional">
+      <div class="tag">T5 — WAF Posture</div>
+      <h3>WAF Posture Management</h3>
+      <p>Enable: <code>ASTRANULL_WAF_POSTURE_ENABLED=1</code></p>
+      <p style="margin-top:0.5rem">WAF/CDN coverage, vendor fingerprinting, safe marker validation, origin-bypass, drift detection, risk scoring, CVE-to-mitigation, compliance exports.</p>
+      <p style="margin-top:0.5rem"><a href="waf-posture-integration-guide.html" style="color:var(--accent)">→ Full WAF integration guide</a></p>
+    </div>
+    <div class="card optional">
+      <div class="tag">M2 — Discovery</div>
+      <h3>Enhanced External Discovery</h3>
+      <p>Enable: <code>ASTRANULL_EXTERNAL_DISCOVERY_ENABLED=1</code></p>
+      <p style="margin-top:0.5rem">Entity graph (parent/subsidiary/brand), candidate inbox, approval-gated import into target groups. No tests on unapproved candidates.</p>
+    </div>
+    <div class="card optional">
+      <div class="tag">M3 — CVE</div>
+      <h3>CVE-to-Mitigation Pipeline</h3>
+      <p>CVE ingest → triage → asset match → WAF rule recommendations → coordinated multi-vendor retest playbooks.</p>
+    </div>
+    <div class="card optional">
+      <div class="tag">Supply Chain</div>
+      <h3>Active Protection &amp; Supply Chain</h3>
+      <p>Dangling DNS, takeover risk, page-dependency assessment. AP0 metadata-only; legal gates for acquisition paths.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ROLES -->
+<section id="roles">
+  <h2>Roles &amp; Permissions</h2>
+
+  <h3>Customer Roles</h3>
+  <table>
+    <thead><tr><th>Role</th><th>Key Permissions</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Owner</strong></td><td>Full org management, users, SSO, tokens, safe runs, high-scale requests, accept risk.</td></tr>
+      <tr><td><strong>Admin</strong></td><td>Target groups, checks, reports, findings, tokens; no SOC execution.</td></tr>
+      <tr><td><strong>Engineer</strong></td><td>Install agents, run safe checks, view runs/findings/reports.</td></tr>
+      <tr><td><strong>Auditor</strong></td><td>Read-only reports, evidence, audit logs.</td></tr>
+      <tr><td><strong>Viewer</strong></td><td>Dashboard and reports only.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Internal Staff Roles</h3>
+  <table>
+    <thead><tr><th>Role</th><th>Scope</th></tr></thead>
+    <tbody>
+      <tr><td><code>internal_admin</code></td><td>Tenant lifecycle, sign-up review, subscriptions, entitlements.</td></tr>
+      <tr><td><code>billing_ops</code></td><td>Subscription status, billing references, entitlement requests.</td></tr>
+      <tr><td><code>support_engineer</code></td><td>Support context, invite resend, role corrections.</td></tr>
+      <tr><td><code>soc_analyst</code></td><td>High-scale review, authorization validation, monitoring, notes.</td></tr>
+      <tr><td><code>soc_lead</code></td><td>Final approval, schedule/start/stop/close, kill-switch decisions.</td></tr>
+      <tr><td><code>security_admin</code></td><td>Internal audit, legal hold, data export approval.</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <strong>Separate trust surfaces</strong>
+    <p>Customer tenant roles do not grant access to <code>/internal/admin</code> or SOC console. Staff roles are assigned through the staff identity provider only.</p>
+  </div>
+</section>
+
+<!-- API -->
+<section id="api">
+  <h2>API Surface Overview</h2>
+  <p>REST API under <code>/v1/*</code> with bearer auth, tenant isolation, and audit on security-relevant actions.</p>
+
+  <h3>Core API Groups</h3>
+  <table>
+    <thead><tr><th>Prefix</th><th>Examples</th></tr></thead>
+    <tbody>
+      <tr><td><code>/v1/target-groups</code></td><td>CRUD target groups and nested targets</td></tr>
+      <tr><td><code>/v1/agents</code></td><td>Register, heartbeat, jobs, observations, revoke, updates</td></tr>
+      <tr><td><code>/v1/checks</code></td><td>Versioned check catalog</td></tr>
+      <tr><td><code>/v1/test-runs</code></td><td>Start, cancel, events, verdicts, finalize</td></tr>
+      <tr><td><code>/v1/findings</code></td><td>List, assign, status, retest</td></tr>
+      <tr><td><code>/v1/reports</code></td><td>Create and export with custody manifests</td></tr>
+      <tr><td><code>/v1/high-scale-requests</code></td><td>Customer intake and status tracking</td></tr>
+      <tr><td><code>/internal/soc/*</code></td><td>SOC approval, execution, kill switch, post-test report</td></tr>
+      <tr><td><code>/v1/notifications</code></td><td>Rules, events, delivery retries</td></tr>
+      <tr><td><code>/v1/secrets</code></td><td>Encrypted secret vault</td></tr>
+      <tr><td><code>/v1/audit-log</code></td><td>Tamper-evident audit entries</td></tr>
+      <tr><td><code>/v1/signup-requests</code></td><td>Public sign-up intake</td></tr>
+      <tr><td><code>/internal/admin/*</code></td><td>Staff tenant management</td></tr>
+      <tr><td><code>/v1/waf/*</code></td><td>WAF posture add-on (feature-flagged)</td></tr>
+      <tr><td><code>/v1/discovery/*</code></td><td>Discovery inbox (feature-flagged)</td></tr>
+      <tr><td><code>/v1/custody/verify</code></td><td>Verify export custody manifests</td></tr>
+      <tr><td><code>/ready</code> · <code>/metrics</code></td><td>Health and observability</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Report Export Kinds</h3>
+  <p>Executive, technical, SOC, audit, compliance (SOC2, ISO27001, DORA, NIS2, internal audit), board roadmap brief. Formats: JSON, Markdown, HTML. PDF and immutable signing remain external gates.</p>
+</section>
+
+</main>
+
+<footer>
+  <p>
+    AstraNull Product Guide —
+    <a href="product/01-platform-overview.md">Platform Overview</a> ·
+    <a href="product/07-end-to-end-platform-spec.md">E2E Spec</a> ·
+    <a href="waf-posture-integration-guide.html">WAF Posture Guide</a> ·
+    <a href="index.md">Full Doc Index</a>
+  </p>
+  <p style="margin-top:0.5rem;opacity:0.6;">No-access-first DDoS readiness validation platform</p>
+</footer>
+
+</body>
+</html>

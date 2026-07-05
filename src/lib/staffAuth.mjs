@@ -24,7 +24,7 @@ export function isInternalAdminPageRoute(pathname, method, runtimeConfig) {
   if (method !== 'GET') return false;
   const { internalAdmin, staffLogin } = staffSurfacePaths(runtimeConfig);
   if (pathname === staffLogin) return true;
-  return pathname === internalAdmin || pathname === `${internalAdmin}/`;
+  return pathname === internalAdmin || pathname === `${internalAdmin}/` || pathname === `${internalAdmin}/index.html`;
 }
 
 export function isPublicApiRoute(pathname, method) {

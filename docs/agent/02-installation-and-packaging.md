@@ -4,6 +4,11 @@
 
 AstraNull must be easy to install across enterprise environments.
 
+> **Deployment modes, image-vs-standalone (one agent), ownership verification, external-only
+> fallback, hardening, and onboarding UX:** see
+> [`09-deployment-modes-and-onboarding.md`](09-deployment-modes-and-onboarding.md). The
+> container image below is the same agent, not a separate product.
+
 Supported install methods:
 
 | Method | Use case |

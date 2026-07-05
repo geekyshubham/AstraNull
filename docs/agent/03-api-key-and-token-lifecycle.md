@@ -56,3 +56,10 @@ Rotation triggers:
 ## Completion criteria
 
 Token lifecycle is complete when bootstrap tokens cannot be reused indefinitely, credentials are least-privilege, rotation works, and all actions are audited.
+
+## Related: token validation on probe-endpoint reporting
+
+For how the runtime `agc_…` credential is validated on **every** `probe_endpoint` heartbeat
+before the platform accepts the reported endpoint or schedules a probe against it (the
+9-check validation gate), and how bootstrap `prebind_fqdn` is cross-checked, see
+[`09-deployment-modes-and-onboarding.md`](09-deployment-modes-and-onboarding.md) §6.

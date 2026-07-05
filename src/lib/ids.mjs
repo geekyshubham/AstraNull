@@ -6,6 +6,7 @@ const PREFIX = {
   user: 'usr',
   tg: 'tg',
   target: 'tgt',
+  policy: 'pol',
   token: 'btok',
   agent: 'agt',
   run: 'run',

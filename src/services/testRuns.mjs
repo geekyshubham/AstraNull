@@ -12,6 +12,7 @@ import { upsertFindingFromVerdict } from './findings.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { computeReadiness } from './readiness.mjs';
+import { isArchivedTargetGroup } from './targetGroups.mjs';
 import {
   countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
@@ -286,7 +287,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
 
   const targetGroupId = body.target_group_id;
   const group = getStore().targetGroups.find(
-    (g) => g.id === targetGroupId && g.tenant_id === ctx.tenantId,
+    (g) => g.id === targetGroupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return { error: 'target_group_not_found', status: 404 };
 

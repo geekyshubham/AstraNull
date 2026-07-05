@@ -78,6 +78,26 @@ describe('target groups API CRUD', () => {
     const list = await request(baseUrl, 'GET', '/v1/target-groups', { headers: engineer });
     assert.equal(list.status, 200);
     assert.equal(list.json.items.some((g) => g.id === groupId), false);
+
+    const state = await request(baseUrl, 'GET', '/v1/state', { headers: engineer });
+    assert.equal(state.status, 200);
+    assert.equal(state.json.target_groups, 1);
+    assert.match(state.json.readiness.factors[0].detail, /1 target group/);
+    assert.equal(
+      state.json.readiness.factors.find((factor) => factor.key === 'agent_placement')
+        .placement_diagnostics.total_groups,
+      1,
+    );
+
+    const run = await request(baseUrl, 'POST', '/v1/test-runs', {
+      headers: engineer,
+      body: {
+        target_group_id: groupId,
+        check_id: 'dns.authoritative_response.safe',
+      },
+    });
+    assert.equal(run.status, 404);
+    assert.equal(run.json.error, 'target_group_not_found');
   });
 
   it('returns 409 when archiving a group with an active run', async () => {

@@ -261,6 +261,9 @@ describe('dev store migration', () => {
       entitlementGrants: [],
       internalApprovalRequests: [],
       internalAuditLog: [],
+      testPolicies: [],
+      wafOffensiveRequests: [],
+      wafOffensiveReports: [],
     };
     resetStoreForTests(data);
     assert.equal(migrateDevStore(getStore()), false);

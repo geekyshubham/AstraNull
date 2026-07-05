@@ -55,6 +55,14 @@ export const WAF_SCENARIO_FAMILIES = Object.freeze([
   'content_type_confusion_marker',
   'http2_parser_marker',
   'bot_challenge_marker',
+  'sqli_offensive',
+  'xss_offensive',
+  'rce_offensive',
+  'path_traversal_offensive',
+  'command_injection_offensive',
+  'ldap_injection_offensive',
+  'ssti_offensive',
+  'combined_offensive',
 ]);
 
 export const WAF_SCENARIO_INTAKE_STAGES = Object.freeze([
@@ -607,6 +615,76 @@ export function normalizeWafValidationRequest(input) {
     marker_profile: {
       marker_type: markerType,
       expected_action: expectedAction,
+    },
+  };
+}
+
+const OFFENSIVE_SCENARIO_SUFFIX = '_offensive';
+
+export function normalizeSocOffensiveWafValidationRequest(input) {
+  if (input === null || input === undefined || typeof input !== 'object' || Array.isArray(input)) {
+    const err = new Error('SOC offensive WAF validation request must be a plain object.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+  assertNoRawWafEvidence(input);
+
+  const offensiveRequestId =
+    typeof input.offensive_request_id === 'string' ? input.offensive_request_id.trim() : '';
+  if (!offensiveRequestId) {
+    const err = new Error('offensive_request_id is required for SOC offensive validations.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+
+  const wafAssetId = typeof input.waf_asset_id === 'string' ? input.waf_asset_id.trim() : '';
+  if (!wafAssetId) {
+    const err = new Error('WAF validation requires waf_asset_id.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+
+  const modesRaw = input.modes ?? input.scenario_families ?? [];
+  if (!Array.isArray(modesRaw) || modesRaw.length === 0) {
+    const err = new Error('SOC offensive validation requires at least one offensive scenario family.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+  const modes = [...new Set(modesRaw.map((m) => String(m).trim()).filter(Boolean))];
+  for (const mode of modes) {
+    if (!mode.endsWith(OFFENSIVE_SCENARIO_SUFFIX) || !WAF_SCENARIO_FAMILIES.includes(mode)) {
+      const err = new Error(`Unsupported SOC offensive scenario family: ${mode}`);
+      err.code = 'unsafe_waf_profile';
+      throw err;
+    }
+  }
+
+  const maxN = Number(input.max_requests ?? input.probe_profile?.max_requests ?? 24);
+  const timeoutN = Number(input.timeout_ms ?? input.probe_profile?.timeout_ms ?? 5000);
+  if (!Number.isInteger(maxN) || maxN < 1 || maxN > 30) {
+    const err = new Error('max_requests must be an integer between 1 and 30 for SOC offensive runs.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+  if (!Number.isInteger(timeoutN) || timeoutN < 1000 || timeoutN > 30_000) {
+    const err = new Error('timeout_ms must be an integer between 1000 and 30000 for SOC offensive runs.');
+    err.code = 'unsafe_waf_profile';
+    throw err;
+  }
+
+  return {
+    waf_asset_id: wafAssetId,
+    offensive_request_id: offensiveRequestId,
+    modes,
+    probe_profile: {
+      max_requests: maxN,
+      timeout_ms: timeoutN,
+      risk_class: 'soc_gated',
+      execution_class: 'offensive_suite',
+    },
+    marker_profile: {
+      marker_type: 'path',
+      expected_action: 'block',
     },
   };
 }

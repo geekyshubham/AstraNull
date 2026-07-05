@@ -8,7 +8,13 @@
     "node": ">=20"
   },
   "dependencies": {
-    "pg": "^8.16.0"
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.23.0",
+    "pg": "^8.16.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
   },
   "scripts": {
     "start": "node src/index.mjs",
@@ -56,6 +62,10 @@
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:e2e": "node --test tests/e2e/*.test.mjs",
+    "web:dev": "vite --host 127.0.0.1",
+    "web:build": "tsc -p tsconfig.json && vite build && node scripts/normalize-web-build.mjs",
+    "web:preview": "vite preview --host 127.0.0.1",
+    "web:typecheck": "tsc -p tsconfig.json",
     "lint": "node scripts/lint.mjs",
     "safety": "node scripts/safety-check.mjs",
     "agent:package": "node scripts/package-agent.mjs",
@@ -116,5 +126,12 @@
     "dr:restore:dev": "node scripts/restore-dev-store.mjs",
     "dr:restore:evidence": "node scripts/dr-restore-evidence.mjs",
     "rollback:evidence": "node scripts/rollback-fixforward-evidence.mjs"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.3"
   }
 }

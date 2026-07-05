@@ -26,6 +26,7 @@ export function freshStore() {
         expected_behavior: 'must_block_before_origin',
       },
     ],
+    testPolicies: [],
     bootstrapTokens: [],
     serviceAccounts: [],
     agents: [],

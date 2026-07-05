@@ -33,6 +33,66 @@ export function getTenantSubscription(tenantId) {
   };
 }
 
+export function getCurrentSubscriptionSummary(ctx) {
+  const tenantId = ctx?.tenantId;
+  const store = getStore();
+  const subscription = tenantId ? getTenantSubscription(tenantId) : null;
+  const plan = getSubscriptionPlan(subscription?.plan_id) ?? null;
+  const account = tenantId ? getTenantAccount(tenantId) : null;
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const tenantRuns = store.testRuns.filter((run) => run.tenant_id === tenantId);
+  const safeRunsStartedLastHour = tenantRuns.filter((run) => {
+    const startedAt = Date.parse(run.started_at ?? run.created_at ?? '');
+    return Number.isFinite(startedAt) && startedAt >= oneHourAgo;
+  }).length;
+  const openFindings = store.findings.filter(
+    (finding) => finding.tenant_id === tenantId && !['closed', 'resolved', 'accepted'].includes(String(finding.status ?? '').toLowerCase()),
+  ).length;
+  const pendingHighScale = store.highScaleRequests.filter(
+    (request) => request.tenant_id === tenantId && ['submitted', 'under_review', 'approved', 'scheduled', 'running'].includes(request.state),
+  ).length;
+  const recentAudit = store.auditLog
+    .filter((entry) => entry.tenant_id === tenantId)
+    .slice(-10)
+    .reverse();
+
+  return {
+    tenant_id: tenantId ?? null,
+    account,
+    subscription,
+    plan,
+    usage: {
+      users: store.users.filter((user) => user.tenant_id === tenantId).length,
+      target_groups: store.targetGroups.filter((group) => group.tenant_id === tenantId && group.archived_at == null).length,
+      agents: store.agents.filter((agent) => agent.tenant_id === tenantId).length,
+      safe_runs_started_last_hour: safeRunsStartedLastHour,
+      open_findings: openFindings,
+      pending_high_scale_requests: pendingHighScale,
+      audit_events: recentAudit.length,
+    },
+    support: {
+      owner: account?.support_owner ?? null,
+      lifecycle_state: account?.lifecycle_state ?? 'unrecorded',
+      region: account?.region ?? null,
+      escalation_state:
+        pendingHighScale > 0
+          ? 'soc_review_pending'
+          : openFindings > 0
+            ? 'customer_review'
+            : 'nominal',
+      recent_audit: recentAudit.map((entry) => ({
+        id: entry.id,
+        action: entry.action,
+        actor_role: entry.actor_role,
+        resource_type: entry.resource_type,
+        resource_id: entry.resource_id,
+        created_at: entry.created_at,
+      })),
+    },
+  };
+}
+
 export function assertTenantEntitlement(tenantId, feature) {
   const subscription = getTenantSubscription(tenantId);
   if (!subscription) return { ok: true };

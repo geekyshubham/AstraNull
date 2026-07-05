@@ -2037,6 +2037,7 @@ describe('postgres report service adapters', () => {
     assert.deepEqual(REPORT_REPOSITORY_METHODS, [
       'createReport',
       'getReport',
+      'listReports',
       'listRunsForReport',
       'listVerdictsForRunIds',
     ]);
@@ -2049,6 +2050,7 @@ describe('postgres report service adapters', () => {
     assert.deepEqual(POSTGRES_REPORT_SERVICE_METHODS, [
       'createReport',
       'getReport',
+      'listReports',
       'exportReport',
       'exportFinding',
     ]);
@@ -2074,6 +2076,24 @@ describe('postgres report service adapters', () => {
       () => createPostgresReportServices(repositories),
       /requires audit\.getLastAuditEntry\(\)/,
     );
+  });
+
+  it('listReports forwards query options to the report repository', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+    const expected = [{ id: 'report_1', tenant_id: 'ten_demo', title: 'Tenant report' }];
+    const { repositories, reportCalls } = createRecordingReportRepositories({
+      listReports: (repoCtx, options) => {
+        assert.equal(repoCtx, ctx);
+        assert.deepEqual(options, { limit: 25 });
+        return expected;
+      },
+    });
+
+    const { reports } = createPostgresReportServices(repositories);
+    const listed = await reports.listReports(ctx, { limit: 25 });
+
+    assert.deepEqual(listed, expected);
+    assert.ok(reportCalls.some((call) => call.method === 'listReports'));
   });
 
   it('createReport uses Postgres repository methods, audits report.generated, and omits secrets from audit', async () => {

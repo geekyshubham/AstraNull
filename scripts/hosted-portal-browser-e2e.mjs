@@ -104,22 +104,23 @@ export async function runCustomerBrowserE2e(baseUrl) {
     }
 
     await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle', timeout: 60000 });
-    await page.click('#loginSubmit');
+    await page.getByRole('button', { name: 'Continue to portal' }).click({ timeout: 30000 });
     try {
       await page.waitForURL((url) => url.pathname === '/app' || url.pathname.startsWith('/app'), { timeout: 30000 });
     } catch {
-      const errText = await page.locator('#loginError').textContent().catch(() => '');
+      const errText = await page.locator('[role="alert"], .form-error').first().textContent().catch(() => '');
       fail('login redirect', `still on ${page.url()}${errText ? ` error=${errText}` : ''}`);
     }
 
     try {
       await page.waitForFunction(() => {
-        const nav = document.querySelectorAll('#nav a');
-        const view = document.getElementById('view');
-        return nav.length > 3 && view && !view.textContent.includes('Sign-in required');
+        const text = document.body.innerText ?? '';
+        const hasShell = text.includes('Customer readiness console') || text.includes('Live workspace');
+        const hasNav = document.querySelectorAll('.nav-item').length > 3;
+        return hasShell && hasNav && !text.includes('Sign-in required');
       }, { timeout: 30000 });
     } catch {
-      fail('dashboard load', await page.locator('#view').innerText().catch(() => ''));
+      fail('dashboard load', await page.locator('body').innerText().catch(() => ''));
     }
 
     const portalHtml = await page.content();
@@ -129,7 +130,7 @@ export async function runCustomerBrowserE2e(baseUrl) {
     for (const route of CUSTOMER_ROUTES) {
       await page.goto(`${baseUrl}/app#${route}`, { waitUntil: 'networkidle' });
       await page.waitForTimeout(600);
-      const viewText = await page.locator('#view').innerText();
+      const viewText = await page.locator('main.main, body').first().innerText();
       if (/Sign-in required|Unable to load this page: unauthorized/i.test(viewText)) {
         fail(`route ${route}`, viewText.slice(0, 180));
         continue;

@@ -5,8 +5,14 @@ import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
 
-function isArchived(group) {
+export function isArchivedTargetGroup(group) {
   return Boolean(group?.archived_at);
+}
+
+export function activeTargetGroupsForTenant(tenantId) {
+  return getStore().targetGroups.filter(
+    (g) => g.tenant_id === tenantId && !isArchivedTargetGroup(g),
+  );
 }
 
 function activeRunForGroup(tenantId, targetGroupId) {
@@ -29,14 +35,12 @@ function activeRunForTarget(tenantId, targetGroupId, targetId) {
 }
 
 export function listTargetGroups(ctx) {
-  return getStore().targetGroups.filter(
-    (g) => g.tenant_id === ctx.tenantId && !isArchived(g),
-  );
+  return activeTargetGroupsForTenant(ctx.tenantId);
 }
 
 export function getTargetGroup(ctx, id) {
   const g = getStore().targetGroups.find(
-    (x) => x.id === id && x.tenant_id === ctx.tenantId && !isArchived(x),
+    (x) => x.id === id && x.tenant_id === ctx.tenantId && !isArchivedTargetGroup(x),
   );
   if (!g) return null;
   const targets = getStore().targets.filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId);
@@ -72,7 +76,7 @@ export function createTargetGroup(ctx, body) {
 
 export function addTarget(ctx, groupId, body) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchived(g),
+    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return null;
   const id = newId('target');
@@ -101,7 +105,7 @@ export function addTarget(ctx, groupId, body) {
 
 export function patchTargetGroup(ctx, id, body = {}) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchived(g),
+    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return null;
 
@@ -129,7 +133,7 @@ export function patchTargetGroup(ctx, id, body = {}) {
 
 export function archiveTargetGroup(ctx, id) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchived(g),
+    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return null;
   if (activeRunForGroup(ctx.tenantId, id)) {
@@ -151,7 +155,7 @@ export function archiveTargetGroup(ctx, id) {
 
 export function patchTarget(ctx, groupId, targetId, body = {}) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchived(g),
+    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return null;
 
@@ -184,7 +188,7 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
 
 export function deleteTarget(ctx, groupId, targetId) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchived(g),
+    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
   );
   if (!group) return null;
 

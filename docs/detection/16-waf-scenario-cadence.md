@@ -61,7 +61,9 @@ Unknown vendors still classify as `waf_present` or `cdn_detected` with lower con
 
 ## Emerging scenario cadence
 
-AstraNull does not ship live exploit payloads. New threat patterns enter the catalog through a governed cadence:
+AstraNull does not ship live exploit payloads in customer self-service paths. **SOC-gated offensive suites** (`sqli_offensive`, `xss_offensive`, `rce_offensive`, etc.) are available for approved staging validation — see [WAF Offensive SOC Validation](18-waf-offensive-soc-validation.md).
+
+New threat patterns enter the safe-marker catalog through a governed cadence:
 
 ```text
 Threat intel signal -> Safety review -> Marker/scenario family proposal -> Catalog version bump -> Scheduled validation plan

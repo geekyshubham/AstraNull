@@ -59,6 +59,15 @@ export function getReport(ctx, id) {
   return getStore().reports.find((r) => r.id === id && r.tenant_id === ctx.tenantId) ?? null;
 }
 
+export function listReports(ctx, options = {}) {
+  const limitValue = Number(options.limit ?? 100);
+  const limit = Number.isFinite(limitValue) && limitValue > 0 ? Math.min(Math.floor(limitValue), 500) : 100;
+  return getStore().reports
+    .filter((r) => r.tenant_id === ctx.tenantId)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, limit);
+}
+
 function buildExportPayload(ctx, report) {
   const store = getStore();
   const runs = (report.run_ids ?? [])

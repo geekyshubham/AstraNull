@@ -1,0 +1,125 @@
+import { Badge } from '../ui/badge';
+import { EmptyState } from '../ui/empty-state';
+import { Target } from 'lucide-react';
+
+const families = [
+  { label: 'Origin', keys: ['origin'] },
+  { label: 'L3/L4', keys: ['l3_l4', 'l3/l4', 'layer_3_4'] },
+  { label: 'DNS', keys: ['dns'] },
+  { label: 'L7/API', keys: ['l7_api', 'l7/api', 'application', 'api'] },
+  { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] }
+];
+
+type VectorHeatmapProps = {
+  checks: Record<string, unknown>[];
+  targetGroups: Record<string, unknown>[];
+  testPolicies: Record<string, unknown>[];
+  runs: Record<string, unknown>[];
+  evidence: Record<string, unknown>[];
+};
+
+function stringValue(item: Record<string, unknown>, key: string) {
+  const value = item[key];
+  return value === undefined || value === null ? '' : String(value).toLowerCase();
+}
+
+function nestedString(item: Record<string, unknown>, key: string, nestedKey: string) {
+  const value = item[key];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const nested = (value as Record<string, unknown>)[nestedKey];
+  return nested === undefined || nested === null ? '' : String(nested);
+}
+
+function itemCheckId(item: Record<string, unknown>) {
+  return String(item.check_id ?? item.checkId ?? nestedString(item, 'check', 'check_id') ?? '');
+}
+
+function itemTargetGroupId(item: Record<string, unknown>) {
+  return String(item.target_group_id ?? item.targetGroupId ?? nestedString(item, 'target_group', 'id') ?? '');
+}
+
+function checkMatchesFamily(check: Record<string, unknown>, family: { keys: string[] }) {
+  const haystack = [
+    stringValue(check, 'vector_family'),
+    stringValue(check, 'category'),
+    stringValue(check, 'name'),
+    stringValue(check, 'check_id')
+  ].join(' ');
+  return family.keys.some((key) => haystack.includes(key));
+}
+
+function familyScore({
+  checkIds,
+  groupId,
+  testPolicies,
+  runs,
+  evidence
+}: {
+  checkIds: Set<string>;
+  groupId: string;
+  testPolicies: Record<string, unknown>[];
+  runs: Record<string, unknown>[];
+  evidence: Record<string, unknown>[];
+}) {
+  if (!groupId || checkIds.size === 0) return null;
+  const policyCount = testPolicies.filter((policy) => itemTargetGroupId(policy) === groupId && checkIds.has(itemCheckId(policy))).length;
+  const runCount = runs.filter((run) => itemTargetGroupId(run) === groupId && checkIds.has(itemCheckId(run))).length;
+  const evidenceCount = evidence.filter((record) => itemTargetGroupId(record) === groupId && checkIds.has(itemCheckId(record))).length;
+  if (evidenceCount > 0) return 100;
+  if (runCount > 0) return 75;
+  if (policyCount > 0) return 50;
+  return 0;
+}
+
+export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, evidence }: VectorHeatmapProps) {
+  const groups = targetGroups.slice(0, 5);
+
+  if (groups.length === 0) {
+    return (
+      <EmptyState
+        icon={Target}
+        title="No declared target groups yet."
+        body="Declare target groups before coverage can be calculated from policies, runs, or evidence."
+      />
+    );
+  }
+
+  return (
+    <div className="heatmap">
+      <div className="heatmap-grid" style={{ gridTemplateColumns: `minmax(132px, 1.1fr) repeat(${families.length}, minmax(78px, 1fr))` }}>
+        <span className="heatmap-head">Target group</span>
+        {families.map((family) => (
+          <span className="heatmap-head" key={family.label}>{family.label}</span>
+        ))}
+        {groups.map((group, groupIndex) => (
+          <>
+            <strong key={`${groupIndex}-name`} className="heatmap-name">
+              {String(group.name ?? group.id ?? 'Declared group')}
+            </strong>
+            {families.map((family) => {
+              const groupId = String(group.id ?? '');
+              const familyCheckIds = new Set(
+                checks
+                  .filter((check) => checkMatchesFamily(check, family))
+                  .map((check) => String(check.check_id ?? check.id ?? ''))
+                  .filter(Boolean)
+              );
+              const score = familyScore({ checkIds: familyCheckIds, groupId, testPolicies, runs, evidence });
+              const tone = score === null ? 'muted' : score >= 100 ? 'success' : score >= 50 ? 'warn' : 'danger';
+              return (
+                <span key={`${groupIndex}-${family.label}`} className={`heatmap-cell heatmap-${tone}`}>
+                  {score === null ? 'n/a' : `${score}%`}
+                </span>
+              );
+            })}
+          </>
+        ))}
+      </div>
+      <div className="heatmap-legend">
+        <Badge tone="success">Evidence</Badge>
+        <Badge tone="warn">Policy/run</Badge>
+        <Badge tone="danger">No record</Badge>
+      </div>
+    </div>
+  );
+}

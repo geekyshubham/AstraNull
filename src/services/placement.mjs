@@ -4,6 +4,7 @@ import {
   resolveObservationMode,
 } from '../lib/placementConfidence.mjs';
 import { computePlacementDiagnosticsFromData } from '../lib/placementDiagnosticsCompute.mjs';
+import { activeTargetGroupsForTenant } from './targetGroups.mjs';
 import {
   placementScoreFromDiagnostics,
   publicPlacementDiagnosticsPayload,
@@ -40,7 +41,7 @@ export function computePlacementDiagnostics(tenantId, nowMs = Date.now()) {
   const store = getStore();
   return computePlacementDiagnosticsFromData({
     tenantId,
-    groups: store.targetGroups,
+    groups: activeTargetGroupsForTenant(tenantId),
     agents: store.agents,
     runs: store.testRuns,
     events: store.events,

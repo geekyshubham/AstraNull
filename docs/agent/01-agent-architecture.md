@@ -49,6 +49,12 @@ AstraNull does not need to connect inbound to the agent. The agent detects traff
 
 The management/control channel remains outbound-only. Only the validation traffic itself may enter the customer environment, exactly like real external traffic would.
 
+> **Deployment modes, image packaging, ownership verification, and onboarding:** see
+> [`09-deployment-modes-and-onboarding.md`](09-deployment-modes-and-onboarding.md). It
+> specifies the container-image packaging of this same agent, the token-validated
+> `probe_endpoint` reporting flow, ownership proof without an inbound port (Mode A1), and the
+> external-only fallback.
+
 ## Agent states
 
 | State | Meaning |

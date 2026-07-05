@@ -6,6 +6,7 @@ import {
   publicPlacementDiagnosticsPayload,
   summarizePlacementDiagnostics,
 } from './placement.mjs';
+import { activeTargetGroupsForTenant } from './targetGroups.mjs';
 
 /** Evidence older than this window earns no freshness credit. */
 export const RECENT_EVIDENCE_WINDOW_DAYS = 30;
@@ -233,7 +234,7 @@ function scoreSocGovernance(store, tenantId) {
 export function computeReadiness(tenantId) {
   const store = getStore();
   const nowMs = Date.now();
-  const groups = store.targetGroups.filter((g) => g.tenant_id === tenantId);
+  const groups = activeTargetGroupsForTenant(tenantId);
   const agents = store.agents.filter((a) => a.tenant_id === tenantId && a.status !== 'revoked');
   const onlineAgents = agents.filter((a) => a.status === 'online');
   const runs = store.testRuns.filter((r) => r.tenant_id === tenantId);

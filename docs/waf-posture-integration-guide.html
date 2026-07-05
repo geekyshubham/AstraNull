@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstraNull — WAF Posture Integration Guide</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #121820;
+      --surface-2: #1a2230;
+      --border: #2a3548;
+      --text: #e8edf4;
+      --muted: #8b9bb4;
+      --accent: #3d8bfd;
+      --accent-dim: #2563c4;
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #f87171;
+      --purple: #a78bfa;
+      --cyan: #22d3ee;
+      --radius: 10px;
+      --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #0d1520 0%, #121a2e 50%, #0b1220 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 3.5rem 2rem 3rem;
+    }
+
+    .hero-inner, .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      background: rgba(34, 211, 238, 0.1);
+      border: 1px solid rgba(34, 211, 238, 0.25);
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      margin-bottom: 1rem;
+    }
+
+    h1 {
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      margin-bottom: 0.75rem;
+    }
+
+    .hero p {
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 720px;
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .hero-meta span {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .hero-meta code {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--green);
+      background: rgba(52, 211, 153, 0.08);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+    }
+
+    nav.toc {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(11, 15, 20, 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 2rem;
+      overflow-x: auto;
+    }
+
+    nav.toc ul {
+      list-style: none;
+      display: flex;
+      gap: 0.25rem;
+      max-width: 1080px;
+      margin: 0 auto;
+      white-space: nowrap;
+    }
+
+    nav.toc a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.82rem;
+      font-weight: 500;
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    nav.toc a:hover {
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
+    main { padding: 2.5rem 2rem 4rem; }
+
+    section {
+      margin-bottom: 3.5rem;
+      scroll-margin-top: 4rem;
+    }
+
+    h2 {
+      font-size: 1.55rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin: 1.75rem 0 0.75rem;
+      color: var(--text);
+    }
+
+    h4 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.25rem 0 0.5rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.78rem;
+    }
+
+    p { margin-bottom: 1rem; color: var(--muted); }
+    p.lead { font-size: 1.02rem; color: var(--text); }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      margin: 1.25rem 0;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+
+    .card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+    }
+
+    .card p { margin: 0; font-size: 0.9rem; }
+
+    .card .icon {
+      font-size: 1.4rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .status-pill {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      margin-bottom: 0.5rem;
+    }
+
+    .pill-protected { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+    .pill-under { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
+    .pill-unprotected { background: rgba(248, 113, 113, 0.15); color: var(--red); }
+    .pill-unknown { background: rgba(139, 155, 180, 0.15); color: var(--muted); }
+    .pill-excluded { background: rgba(167, 139, 250, 0.15); color: var(--purple); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0 1.5rem;
+      font-size: 0.88rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-2);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+    code, pre {
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+
+    code {
+      background: var(--surface-2);
+      color: var(--cyan);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.25rem;
+      overflow-x: auto;
+      margin: 1rem 0 1.5rem;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin: 1.25rem 0;
+      overflow-x: auto;
+    }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .flow-box {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.85rem;
+      white-space: nowrap;
+    }
+
+    .flow-box.accent {
+      border-color: var(--accent);
+      background: rgba(61, 139, 253, 0.1);
+      color: var(--accent);
+    }
+
+    .flow-arrow { color: var(--muted); font-size: 1.1rem; }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      margin: 1.25rem 0;
+    }
+
+    @media (max-width: 768px) {
+      .two-col { grid-template-columns: 1fr; }
+      .hero, main, nav.toc { padding-left: 1.25rem; padding-right: 1.25rem; }
+    }
+
+    .callout {
+      border-left: 3px solid var(--accent);
+      background: rgba(61, 139, 253, 0.06);
+      padding: 1rem 1.25rem;
+      border-radius: 0 var(--radius) var(--radius) 0;
+      margin: 1.25rem 0;
+    }
+
+    .callout.warn {
+      border-color: var(--amber);
+      background: rgba(251, 191, 36, 0.06);
+    }
+
+    .callout.danger {
+      border-color: var(--red);
+      background: rgba(248, 113, 113, 0.06);
+    }
+
+    .callout strong { color: var(--text); display: block; margin-bottom: 0.35rem; }
+    .callout p { margin: 0; font-size: 0.9rem; }
+
+    .step-list {
+      list-style: none;
+      counter-reset: steps;
+      margin: 1rem 0;
+    }
+
+    .step-list li {
+      counter-increment: steps;
+      position: relative;
+      padding: 0.85rem 0 0.85rem 2.75rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .step-list li:last-child { border-bottom: none; }
+
+    .step-list li::before {
+      content: counter(steps);
+      position: absolute;
+      left: 0;
+      top: 0.85rem;
+      width: 1.75rem;
+      height: 1.75rem;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .step-list li strong { color: var(--text); }
+
+    .compare-header {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr;
+      gap: 0;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius) var(--radius) 0 0;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .compare-header > div { padding: 0.75rem 1rem; }
+    .compare-header > div:not(:first-child) { border-left: 1px solid var(--border); }
+
+    .compare-row {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr;
+      border: 1px solid var(--border);
+      border-top: none;
+      font-size: 0.88rem;
+    }
+
+    .compare-row:last-child {
+      border-radius: 0 0 var(--radius) var(--radius);
+    }
+
+    .compare-row > div {
+      padding: 0.75rem 1rem;
+      color: var(--muted);
+      border-left: 1px solid var(--border);
+    }
+
+    .compare-row > div:first-child {
+      border-left: none;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <span class="badge">Optional Add-on</span>
+    <h1>WAF Posture Integration Guide</h1>
+    <p>
+      How AstraNull's WAF Posture module extends DDoS readiness validation into
+      web control proof — coverage, effectiveness, drift, and remediation — while
+      preserving the no-access-first promise.
+    </p>
+    <div class="hero-meta">
+      <span>Enable with <code>ASTRANULL_WAF_POSTURE_ENABLED=1</code></span>
+      <span>UI route: <code>/waf-posture</code></span>
+      <span>API prefix: <code>/v1/waf/*</code></span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#statuses">Statuses</a></li>
+    <li><a href="#limitations">Limitations</a></li>
+    <li><a href="#ddos">DDoS Readiness</a></li>
+    <li><a href="#drift">Drift Posture</a></li>
+    <li><a href="#modes">Deployment Modes</a></li>
+    <li><a href="#compare">Comparison</a></li>
+    <li><a href="#api">API Reference</a></li>
+  </ul>
+</nav>
+
+<main class="container">
+
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <h2>What Is WAF Posture?</h2>
+    <p class="lead">
+      WAF Posture is an optional AstraNull add-on that answers one enterprise question:
+    </p>
+    <div class="callout">
+      <strong>Core question</strong>
+      <p>Across every approved web-facing asset, which apps are protected by a WAF/CDN, which are underprotected, which are unprotected — and can we <em>prove</em> the protection actually works?</p>
+    </div>
+    <p>
+      It extends DDoS readiness into external web control validation. The core platform
+      validates declared target groups with outside probes and inside agents. WAF Posture
+      adds a parallel domain for WAF/CDN coverage, effectiveness, drift detection, and
+      remediation — without requiring cloud or WAF credentials by default.
+    </p>
+
+    <h3>Architecture</h3>
+    <div class="diagram">
+      <div class="flow">
+        <span class="flow-box accent">Target Groups</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">WAF Assets</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Safe Probe Jobs</span>
+        <span class="flow-arrow">+</span>
+        <span class="flow-box">Agent Observations</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Posture Snapshots</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Findings</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Drift Events</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Tickets / Reports</span>
+      </div>
+    </div>
+
+    <div class="callout warn">
+      <strong>Not a separate product</strong>
+      <p>WAF Posture plugs into the existing validation loop — target groups, probes, agents, test runs, and findings. It is feature-gated and disabled by default. When off, <code>/v1/waf/*</code> returns <code>404 waf_feature_disabled</code>.</p>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <h2>Features</h2>
+
+    <h3>Core Posture Capabilities</h3>
+    <div class="card-grid">
+      <div class="card">
+        <div class="icon">🛡️</div>
+        <h3>Coverage Inventory</h3>
+        <p>Classifies each approved web asset as Protected, Underprotected, Unprotected, Unknown, or Excluded.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🔍</div>
+        <h3>Vendor Fingerprinting</h3>
+        <p>Detects Cloudflare, Akamai, AWS WAF, Azure, GCP Cloud Armor, Imperva, F5, and more from DNS/TLS/HTTP metadata.</p>
+      </div>
+      <div class="card">
+        <div class="icon">✅</div>
+        <h3>Safe Effectiveness Testing</h3>
+        <p>Proves blocks/challenges via customer-created harmless marker rules. Max 1–5 requests per run.</p>
+      </div>
+      <div class="card">
+        <div class="icon">👁️</div>
+        <h3>Monitor-Only Detection</h3>
+        <p>Flags when a WAF is present but not blocking — marker requests reach the origin or agent.</p>
+      </div>
+      <div class="card">
+        <div class="icon">🚪</div>
+        <h3>Origin-Bypass Validation</h3>
+        <p>Detects direct-to-origin paths that skip WAF/CDN protection entirely.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📸</div>
+        <h3>Posture Snapshots</h3>
+        <p>Point-in-time status, reason codes, risk score, and vendor/product stored as <code>waf_posture_snapshots</code>.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📋</div>
+        <h3>Findings</h3>
+        <p>Deduplicated open findings for underprotected/unprotected assets, linked to safe scenario evidence.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📊</div>
+        <h3>Risk Scoring &amp; Roadmap</h3>
+        <p>0–100 score with explainable factors. Tier 1–4 deployment roadmap for prioritized remediation.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📈</div>
+        <h3>Coverage Analytics</h3>
+        <p>Rollups by vendor, entity, geography, criticality, and trend series over time.</p>
+      </div>
+      <div class="card">
+        <div class="icon">📄</div>
+        <h3>Compliance Exports</h3>
+        <p><code>compliance_audit</code>, <code>board_roadmap_brief</code>, and drift audit reports — metadata only.</p>
+      </div>
+    </div>
+
+    <h3>Drift-Specific Capabilities</h3>
+    <table>
+      <thead>
+        <tr><th>Feature</th><th>What It Does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Baselines</strong></td><td>Propose and approve expected posture per asset (vendor, marker behavior, origin-bypass expectation, connector config hash).</td></tr>
+        <tr><td><strong>Drift Detection</strong></td><td>Compares current vs. previous/baseline: fingerprint loss, marker regression, mode downgrade, origin bypass, rule count drop.</td></tr>
+        <tr><td><strong>Drift Queue</strong></td><td>Open drift events with before/after summaries, severity, and status workflow.</td></tr>
+        <tr><td><strong>Retest Loop</strong></td><td>Drift → retest request → safe test-run delegation → evidence-backed closure.</td></tr>
+        <tr><td><strong>Scheduled Scans</strong></td><td><code>waf:drift:runner</code> CLI and <code>POST /v1/waf/drift-scans/run</code> API.</td></tr>
+        <tr><td><strong>Notifications</strong></td><td>Critical/high drift emits notification metadata (live ticket/SIEM delivery still open).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Safe Check Catalog</h3>
+    <p>WAF validation delegates into the existing test-run / probe-worker path via these check IDs:</p>
+    <table>
+      <thead>
+        <tr><th>Check ID</th><th>Purpose</th><th>Limits</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>waf.fingerprint.safe</code></td><td>Detect WAF/CDN vendor and product</td><td>Single/few normal HTTP requests; no high rate</td></tr>
+        <tr><td><code>waf.marker_rule.safe</code></td><td>Validate customer marker rule blocks before origin</td><td>Max 1–5 requests per run</td></tr>
+        <tr><td><code>waf.origin_bypass.safe</code></td><td>Confirm direct-origin exposure</td><td>Only approved direct target/origin</td></tr>
+        <tr><td><code>waf.low_rate_limit.safe</code></td><td>Low-rate threshold on declared test endpoint</td><td>Stop on first limit; catalog max requests</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- STATUSES -->
+  <section id="statuses">
+    <h2>Protection Status Model</h2>
+    <div class="card-grid">
+      <div class="card">
+        <span class="status-pill pill-protected">Protected</span>
+        <p>WAF/CDN present and intended safe validation is blocked/challenged before origin. Requires product fingerprint + pass on required safe checks + no confirmed bypass.</p>
+      </div>
+      <div class="card">
+        <span class="status-pill pill-under">Underprotected</span>
+        <p>WAF/CDN present but at least one gap exists: monitor-only signal, stale rules, failed marker, bypass, drift, or missing policy.</p>
+      </div>
+      <div class="card">
+        <span class="status-pill pill-unprotected">Unprotected</span>
+        <p>No WAF/CDN protection detected where policy requires it. No fingerprint and direct app exposure confirmed.</p>
+      </div>
+      <div class="card">
+        <span class="status-pill pill-unknown">Unknown</span>
+        <p>Not enough evidence. Probe blocked, missing agent placement, unsupported vendor, or no customer approval.</p>
+      </div>
+      <div class="card">
+        <span class="status-pill pill-excluded">Excluded</span>
+        <p>Customer intentionally excludes from WAF policy. Approved exception with owner, expiry, and scope hash.</p>
+      </div>
+    </div>
+
+    <h3>Underprotected Reason Codes</h3>
+    <table>
+      <thead>
+        <tr><th>Code</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>monitor_only_behavior</code></td><td>WAF appears present but safe block marker passes through</td></tr>
+        <tr><td><code>marker_rule_not_blocking</code></td><td>Customer-created marker rule failed</td></tr>
+        <tr><td><code>scenario_category_failed</code></td><td>Safe scenario category did not produce expected block/challenge</td></tr>
+        <tr><td><code>origin_bypass_confirmed</code></td><td>Direct origin path reached app/canary/agent</td></tr>
+        <tr><td><code>waf_fingerprint_lost</code></td><td>Asset previously had WAF fingerprint; current scan does not</td></tr>
+        <tr><td><code>vendor_changed_unapproved</code></td><td>WAF/CDN product changed without approved baseline update</td></tr>
+        <tr><td><code>rule_count_decreased</code></td><td>Connector saw active rule count drop</td></tr>
+        <tr><td><code>rule_mode_changed</code></td><td>Connector saw blocking/prevention change to monitor/detect/log-only</td></tr>
+        <tr><td><code>rule_update_stale</code></td><td>Connector saw signatures/rules older than policy threshold</td></tr>
+        <tr><td><code>rate_threshold_weakened</code></td><td>Connector saw rate/scoring threshold relaxed</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- LIMITATIONS -->
+  <section id="limitations">
+    <h2>Limitations &amp; Risks</h2>
+
+    <h3>Detection Blind Spots (Inherent)</h3>
+    <table>
+      <thead>
+        <tr><th>Limitation</th><th>Impact</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>CDN ≠ WAF</strong></td><td>A CDN fingerprint does not prove WAF is active. Classification separates <code>cdn_detected</code> from <code>waf_validated</code>.</td></tr>
+        <tr><td><strong>No agent = weaker proof</strong></td><td>Without agent/canary placement, "protected" claims are rejected or downgraded to Unknown.</td></tr>
+        <tr><td><strong>Allowlisted probe paths</strong></td><td>If your WAF allowlists AstraNull's probe source, validation is invalidated — looks like monitor-only.</td></tr>
+        <tr><td><strong>App-native 403s</strong></td><td>Application-level blocks can be mistaken for WAF blocks without block-page fingerprint + agent non-observation.</td></tr>
+        <tr><td><strong>Bot challenges</strong></td><td>Challenge pages may mark results inconclusive unless policy treats challenge as pass.</td></tr>
+        <tr><td><strong>Vendor header spoofing</strong></td><td>Single-signal fingerprinting can be fooled; mitigated by multi-signal or connector confirmation.</td></tr>
+        <tr><td><strong>Outside-in only (M0)</strong></td><td>Cannot see rule internals, mode changes, or rule count without connectors (M1).</td></tr>
+        <tr><td><strong>Declared scope only</strong></td><td>Assets you don't declare are invisible. No mandatory internet-wide scanning.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Implementation Gaps (Current State)</h3>
+    <div class="callout danger">
+      <strong>Developer-validation complete — not production-signed-off</strong>
+      <p>Much of WAF Posture is implemented for local/dev validation. Several production gates remain open before release signoff.</p>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Gap</th><th>Risk</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Live provider connectors</strong></td><td>Cloudflare/AWS/etc. workers not wired. Connector APIs accept metadata-only records today.</td></tr>
+        <tr><td><strong>Outbound ticketing</strong></td><td>Jira/ServiceNow/Splunk/XSOAR payload builders exist; live delivery is open.</td></tr>
+        <tr><td><strong>Orchestrator crash recovery</strong></td><td>Hard crash between <code>startTestRun</code> and <code>delegated_jobs</code> persistence lacks staging evidence.</td></tr>
+        <tr><td><strong>Plan "completed" ≠ posture fixed</strong></td><td>Validation plan completion means jobs were <em>delegated</em>, not that posture closed or drift resolved.</td></tr>
+        <tr><td><strong>Scheduled workers are external</strong></td><td>Orchestrator, drift, and connector poll runners are CLI/cron — not in-process daemons.</td></tr>
+        <tr><td><strong>Postgres adapter gaps</strong></td><td>Some routes return <code>503 postgres_waf_orchestrator_unavailable</code> without service injection.</td></tr>
+        <tr><td><strong>Immutable report signing</strong></td><td>Exports are metadata-only but lack immutable storage/signing custody.</td></tr>
+        <tr><td><strong>CVE feed ingestion</strong></td><td>Pipeline APIs exist; live feed-driven triage is open.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Security Controls (By Design)</h3>
+    <table>
+      <thead>
+        <tr><th>Control</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>No raw payloads/bodies stored</td><td>Enforced by policy + <code>assertNoRawWafEvidence</code></td></tr>
+        <tr><td>No auto WAF rule deployment</td><td>Human approval only</td></tr>
+        <tr><td>Unapproved discovery candidates blocked</td><td>API-gated</td></tr>
+        <tr><td>High-scale L7 attack simulation</td><td><strong>SOC-gated</strong> — outside WAF Posture customer-runnable surface</td></tr>
+        <tr><td>Connector secrets</td><td>Vault-only; never returned plaintext</td></tr>
+        <tr><td>Feature disabled by default</td><td><code>/v1/waf/*</code> → <code>404</code> when flag off</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- DDOS READINESS -->
+  <section id="ddos">
+    <h2>Integration: DDoS Readiness Perspective</h2>
+    <p class="lead">
+      WAF Posture extends the existing validation loop. It does not replace DDoS readiness —
+      it adds an L7 control-validation dimension on the same infrastructure.
+    </p>
+
+    <h3>Shared Foundation</h3>
+    <div class="diagram">
+      <div class="flow">
+        <span class="flow-box accent">Target Group</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Targets / URLs</span>
+        <span class="flow-arrow">+</span>
+        <span class="flow-box">Agents / Canaries</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Test Runs</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Probe Events</span>
+        <span class="flow-arrow">+</span>
+        <span class="flow-box">Agent Observations</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Verdict / Correlation</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Findings</span>
+      </div>
+      <br>
+      <div class="flow">
+        <span class="flow-box accent">WAF Asset</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">WAF Validation Run</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">(same Test Runs)</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Posture Snapshot</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">WAF Findings</span>
+      </div>
+    </div>
+
+    <h3>Correlation Truth Table</h3>
+    <p>The same inside/outside proof model used for DDoS readiness applies to WAF marker validation:</p>
+    <table>
+      <thead>
+        <tr><th>Probe Result</th><th>Agent Result</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Block / challenge</td><td>Not observed</td><td><strong style="color:var(--green)">Pass</strong> — WAF blocked before origin</td></tr>
+        <tr><td>Normal app response</td><td>Observed</td><td><strong style="color:var(--red)">Fail</strong> — monitor-only or missing rule</td></tr>
+        <tr><td>Timeout</td><td>Observed</td><td><strong style="color:var(--red)">Fail</strong> — traffic penetrated but did not return</td></tr>
+        <tr><td>Block / challenge</td><td>Observed</td><td><strong style="color:var(--amber)">Ambiguous</strong> — investigate placement</td></tr>
+        <tr><td>Normal app response</td><td>Not observed</td><td><strong style="color:var(--muted)">Inconclusive</strong> — wrong target/agent placement or cache</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Step-by-Step Integration</h3>
+    <ol class="step-list">
+      <li><strong>Enable the feature</strong> — Set <code>ASTRANULL_WAF_POSTURE_ENABLED=1</code> in your environment.</li>
+      <li><strong>Use existing target groups</strong> — WAF assets are created on top of target groups; they don't replace them.</li>
+      <li><strong>Position agents</strong> — Same agent/canary placement as DDoS readiness. Origin-bypass and marker validation require inside/outside proof.</li>
+      <li><strong>Create WAF assets</strong> — <code>POST /v1/waf/assets</code> with <code>target_group_id</code>, <code>canonical_url</code>, and metadata (criticality, vendor hint, compliance tags).</li>
+      <li><strong>Customer creates marker rule</strong> — Harmless WAF rule matching AstraNull's generated nonce (header, path, query, or user-agent marker).</li>
+      <li><strong>Run safe checks</strong> — Via <code>POST /v1/waf/validations</code> (ad hoc) or <code>POST /v1/waf/validation-plans</code> (batch). Both delegate to <code>testRuns.startTestRun</code>.</li>
+      <li><strong>Finalize posture</strong> — <code>POST /v1/waf/validations/:id/finalize</code> correlates probe + agent events, classifies posture, creates snapshots and findings.</li>
+      <li><strong>Review in shared surfaces</strong> — WAF gaps appear as findings with reason codes alongside existing test-run evidence.</li>
+    </ol>
+
+    <h4>Example: Create a WAF Asset</h4>
+    <pre>POST /v1/waf/assets
+{
+  "target_group_id": "&lt;existing-group&gt;",
+  "canonical_url": "https://app.example.com",
+  "expected_waf_required": true,
+  "expected_vendor_hint": "cloudflare",
+  "business_criticality": "high",
+  "traffic_tier": "high"
+}</pre>
+
+    <h4>Example: Run Combined Validation</h4>
+    <pre>POST /v1/waf/validations
+{
+  "waf_asset_id": "&lt;asset-id&gt;",
+  "modes": ["fingerprint", "marker", "origin_bypass", "combined"]
+}</pre>
+
+    <h3>What Stays in Core DDoS Readiness</h3>
+    <table>
+      <thead>
+        <tr><th>Concern</th><th>Path</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>High-volume L7 simulation</td><td>SOC high-scale request workflow</td></tr>
+        <tr><td>L3/L4/DNS vectors</td><td>Core test policies and check catalog</td></tr>
+        <tr><td>Readiness score (core)</td><td><code>readiness.mjs</code> — WAF is a parallel add-on</td></tr>
+        <tr><td>Probe rate/concurrency caps</td><td>Shared safe-window and test-policy enforcement</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- DRIFT POSTURE -->
+  <section id="drift">
+    <h2>Integration: Drift Posture Perspective</h2>
+    <p class="lead">
+      Drift is a longitudinal layer on top of point-in-time posture. It answers:
+      "Did protection weaken since we last proved it?"
+    </p>
+
+    <h3>Drift Architecture</h3>
+    <div class="diagram">
+      <div class="flow">
+        <span class="flow-box accent">Approved Baseline</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Scheduled Validation</span>
+        <span class="flow-arrow">/</span>
+        <span class="flow-box">Connector Poll</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">New Snapshot</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Compare</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box accent">Drift Event</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Retest</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">Evidence Closure</span>
+      </div>
+    </div>
+
+    <h3>Drift Types</h3>
+    <table>
+      <thead>
+        <tr><th>Drift Type</th><th>Detection</th><th>Severity</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>fingerprint_lost</code></td><td>Previously detected WAF no longer detected</td><td>High</td></tr>
+        <tr><td><code>marker_failed</code></td><td>Marker previously blocked, now passes through</td><td>High</td></tr>
+        <tr><td><code>origin_bypass_new</code></td><td>Direct origin path now reachable</td><td><strong style="color:var(--red)">Critical</strong></td></tr>
+        <tr><td><code>mode_change</code></td><td>Blocking became monitor/detect/log-only</td><td>High</td></tr>
+        <tr><td><code>vendor_changed</code></td><td>Product fingerprint changed without approval</td><td>Medium</td></tr>
+        <tr><td><code>rule_count_change</code></td><td>Active rule count dropped (connector-only)</td><td>Medium</td></tr>
+        <tr><td><code>threshold_change</code></td><td>Rate/scoring threshold relaxed (connector-only)</td><td>Medium</td></tr>
+        <tr><td><code>scenario_regression</code></td><td>Scenario family pass rate drops</td><td>High</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Drift Event Lifecycle</h3>
+    <div class="diagram">
+      <div class="flow">
+        <span class="flow-box">open</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">acknowledged</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">remediation_started</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">retest_pending</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box accent">resolved</span>
+      </div>
+      <br>
+      <div class="flow">
+        <span class="flow-box">remediation_started</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-box">accepted_risk</span>
+        <span class="flow-arrow">or</span>
+        <span class="flow-box">false_positive</span>
+      </div>
+    </div>
+
+    <h3>Step-by-Step Drift Integration</h3>
+    <ol class="step-list">
+      <li><strong>Establish a baseline</strong> — <code>POST /v1/waf/assets/:id/baselines</code> then <code>POST /v1/waf/baselines/:id/approve</code> after first successful validation.</li>
+      <li><strong>Schedule recurring checks</strong> — Validation plans via cron (<code>npm run waf:orchestrator:runner</code>), drift scans (<code>npm run waf:drift:runner</code>), or connector polls (<code>npm run connector:poll:runner</code>).</li>
+      <li><strong>Monitor drift events</strong> — <code>GET /v1/waf/drift-events</code> or the drift queue on <code>#waf-posture</code> in the UI.</li>
+      <li><strong>Triage in UI</strong> — Patch status (acknowledged → remediation_started → retest_pending). Request retest via <code>POST /v1/waf/drift-events/:id/retest</code>.</li>
+      <li><strong>Execute retest</strong> — <code>POST /v1/waf/retests/:id/execute</code> delegates safe test runs (one per tick in signed-worker mode).</li>
+      <li><strong>Close with evidence</strong> — <code>POST /v1/waf/retests/:id/complete</code> closes only when verdict evidence is finalized. UI clicks alone do not close drift.</li>
+      <li><strong>Wire into ops toolchain</strong> — SIEM events, Jira/ServiceNow tickets, Slack alerts, and audit exports.</li>
+    </ol>
+
+    <div class="callout warn">
+      <strong>Closure requires evidence</strong>
+      <p>Drift resolves only on: retest passes with finalized verdict evidence, approved new baseline, or approved risk exception with expiry. Plan <code>completed</code> status means jobs were delegated — not that posture is fixed.</p>
+    </div>
+
+    <h3>Scheduled Workers (External — Not In-Process)</h3>
+    <table>
+      <thead>
+        <tr><th>Worker</th><th>Command</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Validation plan runner</td><td><code>npm run waf:orchestrator:runner</code></td><td>Execute scheduled safe validation plans across target groups</td></tr>
+        <tr><td>Drift scan runner</td><td><code>npm run waf:drift:runner</code></td><td>Compare stored posture/connector snapshots (no outbound calls)</td></tr>
+        <tr><td>Connector poll runner</td><td><code>npm run connector:poll:runner</code></td><td>Pull read-only WAF/CDN config summaries from providers</td></tr>
+        <tr><td>Notification retry</td><td><code>npm run notification:retry:scheduler</code></td><td>Process due notification delivery retries</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- DEPLOYMENT MODES -->
+  <section id="modes">
+    <h2>Deployment Modes</h2>
+    <table>
+      <thead>
+        <tr><th>Mode</th><th>Name</th><th>Credentials</th><th>Best For</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>M0</strong></td>
+          <td>No-access WAF posture</td>
+          <td>None</td>
+          <td>Prove coverage + marker + origin bypass with probes and agents only</td>
+        </tr>
+        <tr>
+          <td><strong>M1</strong></td>
+          <td>Connector-enriched</td>
+          <td>Read-only WAF/cloud API</td>
+          <td>Rule count, mode, config hash, and config drift detection</td>
+        </tr>
+        <tr>
+          <td><strong>M2</strong></td>
+          <td>Opt-in discovery</td>
+          <td>Optional DNS/CT/connector</td>
+          <td>Find shadow assets from subsidiaries/brands; approval-gated import</td>
+        </tr>
+        <tr>
+          <td><strong>M3</strong></td>
+          <td>CVE-to-mitigation</td>
+          <td>CVE feed + tech fingerprints</td>
+          <td>Mitigation recommendations per asset; coordinated multi-vendor retest</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Release Tiers</h3>
+    <table>
+      <thead>
+        <tr><th>Tier</th><th>Scope</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>R1 — No-access MVP</td><td>Fingerprinting, coverage, marker validation, origin bypass, dashboard, findings</td><td>Developer validation</td></tr>
+        <tr><td>R2 — Drift MVP</td><td>Baselines, historical comparison, drift events, scheduled retest, notifications</td><td>In progress</td></tr>
+        <tr><td>R3 — Connector enrichment</td><td>Cloudflare, AWS, Azure, GCP, Akamai, generic connector framework</td><td>Not started (live workers)</td></tr>
+        <tr><td>R4 — CVE pipeline</td><td>CVE ingest, asset matching, rule recommendation templates</td><td>APIs wired; live feed open</td></tr>
+        <tr><td>R5 — Enterprise workflows</td><td>Jira, ServiceNow, Splunk, Sentinel, XSOAR, Slack, reports</td><td>Payload builders only</td></tr>
+        <tr><td>R6 — Opt-in discovery</td><td>Candidate assets, approval inbox, import into target groups</td><td>APIs wired; live sources open</td></tr>
+        <tr><td>R7 — Risk &amp; coverage analytics</td><td>Risk scoring, rollups, deployment roadmap, trend series</td><td>Developer validation complete</td></tr>
+        <tr><td>R8 — Compliance audit exports</td><td><code>compliance_audit</code> report, exception register, framework mapping</td><td>Developer validation complete</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- COMPARISON -->
+  <section id="compare">
+    <h2>DDoS Readiness vs. Drift Posture</h2>
+    <p>When to use which integration path:</p>
+
+    <div class="compare-header">
+      <div>Question</div>
+      <div>DDoS Readiness Path</div>
+      <div>Drift Posture Path</div>
+    </div>
+    <div class="compare-row">
+      <div>Is the asset protected right now?</div>
+      <div>Run WAF validation → finalize snapshot</div>
+      <div>Check current snapshot or latest validation</div>
+    </div>
+    <div class="compare-row">
+      <div>Did protection weaken over time?</div>
+      <div>Compare snapshots manually</div>
+      <div>Baseline + drift scan + drift events</div>
+    </div>
+    <div class="compare-row">
+      <div>Batch validation across a group?</div>
+      <div>Validation plan + orchestrator runner</div>
+      <div>Same plan, scheduled on cron</div>
+    </div>
+    <div class="compare-row">
+      <div>Config/rule changes inside WAF?</div>
+      <div>Needs connectors (M1)</div>
+      <div>Connector poll + config drift worker</div>
+    </div>
+    <div class="compare-row">
+      <div>CVE just dropped — is WAF mitigating?</div>
+      <div>CVE pipeline validate/retest</div>
+      <div>Playbook + coordinated retest</div>
+    </div>
+    <div class="compare-row">
+      <div>High-scale L7 stress test?</div>
+      <div>SOC high-scale workflow</div>
+      <div><strong style="color:var(--red)">Not WAF drift</strong> — different gate</div>
+    </div>
+  </section>
+
+  <!-- API REFERENCE -->
+  <section id="api">
+    <h2>Key API Endpoints</h2>
+
+    <h3>Assets &amp; Posture</h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>Permission</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/waf/assets</code></td><td><code>waf:read</code></td><td>List WAF assets with filters</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/assets</code></td><td><code>waf:write</code></td><td>Create WAF asset on a target group</td></tr>
+        <tr><td>GET</td><td><code>/v1/waf/assets/:id</code></td><td><code>waf:read</code></td><td>Asset detail with posture, validation, baseline, drift</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/assets/:id/exception</code></td><td><code>waf:write</code></td><td>Approve scope exception with expiry</td></tr>
+        <tr><td>GET</td><td><code>/v1/waf/coverage</code></td><td><code>waf:read</code></td><td>Coverage ratio and trend series</td></tr>
+        <tr><td>GET</td><td><code>/v1/waf/coverage/risk-roadmap</code></td><td><code>waf:read</code></td><td>Tier 1–4 deployment roadmap</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Validation</h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>Permission</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/v1/waf/validations</code></td><td><code>waf:run</code></td><td>Start safe WAF validation run</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/validations/:id/finalize</code></td><td><code>waf:run</code></td><td>Finalize run → posture snapshot + findings</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/validation-plans</code></td><td><code>waf:run</code></td><td>Create batch validation plan for target group</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/validation-plans/:id/execute</code></td><td><code>waf:run</code></td><td>Execute plan (safe signed-worker delegation)</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Drift &amp; Retest</h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>Permission</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/v1/waf/assets/:id/baselines</code></td><td><code>waf:write</code></td><td>Propose posture baseline</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/baselines/:id/approve</code></td><td><code>waf:write</code></td><td>Activate baseline</td></tr>
+        <tr><td>GET</td><td><code>/v1/waf/drift-events</code></td><td><code>waf:read</code></td><td>List drift events</td></tr>
+        <tr><td>PATCH</td><td><code>/v1/waf/drift-events/:id</code></td><td><code>waf:write</code></td><td>Update drift status</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/drift-events/:id/retest</code></td><td><code>waf:run</code></td><td>Request retest from drift event</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/drift-scans/run</code></td><td><code>waf:run</code></td><td>Run drift scan for tenant</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/retests/:id/execute</code></td><td><code>waf:run</code></td><td>Delegate safe retest jobs</td></tr>
+        <tr><td>POST</td><td><code>/v1/waf/retests/:id/complete</code></td><td><code>waf:run</code></td><td>Close retest with verdict evidence</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Reports &amp; Connectors</h3>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Path</th><th>Permission</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/waf/reports/:kind/export</code></td><td><code>waf:read</code></td><td>Export metadata-only report (executive_coverage, drift_audit, compliance_audit, board_roadmap_brief)</td></tr>
+        <tr><td>GET</td><td><code>/v1/connectors</code></td><td><code>waf:connector_read</code></td><td>List connector health</td></tr>
+        <tr><td>POST</td><td><code>/v1/connectors/:id/poll</code></td><td><code>waf:connector_write</code></td><td>Trigger read-only connector poll</td></tr>
+      </tbody>
+    </table>
+
+    <h3>RBAC Permissions</h3>
+    <table>
+      <thead>
+        <tr><th>Permission</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>waf:read</code></td><td>Read assets, posture, coverage, drift, recommendations</td></tr>
+        <tr><td><code>waf:write</code></td><td>Update asset metadata, approve baselines, manage exceptions, patch drift status</td></tr>
+        <tr><td><code>waf:run</code></td><td>Start validations, execute plans, request/execute/complete retests, run drift scans</td></tr>
+        <tr><td><code>waf:connector_read</code></td><td>View connector metadata and health</td></tr>
+        <tr><td><code>waf:connector_write</code></td><td>Create, rotate, delete connector configs; trigger polls</td></tr>
+        <tr><td><code>discovery:read</code> / <code>discovery:write</code></td><td>View/approve/reject discovered candidate assets</td></tr>
+        <tr><td><code>cve_pipeline:read</code> / <code>cve_pipeline:write</code></td><td>View/override CVE pipeline triage and matches</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- SUMMARY -->
+  <section id="summary">
+    <h2>Summary</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>From DDoS Readiness</h3>
+        <p>WAF Posture is an L7 control-validation extension of your existing target-group → probe → agent → finding loop. Add WAF assets, run safe catalog checks through the same test-run infrastructure, and get posture snapshots alongside readiness evidence.</p>
+      </div>
+      <div class="card">
+        <h3>From Drift Posture</h3>
+        <p>Add baselines, scheduled re-validation, snapshot comparison, and a retest closure loop. Drift events are the operational signal; retest completion with verdict evidence is the only trustworthy close.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Key caveats</strong>
+      <p>Many connector, ticketing, and production-orchestration paths are still open. Outside-in validation has known blind spots (agent placement, allowlisting, CDN vs WAF). Validation plan completion does not mean posture is fixed — always follow through to snapshot, finding, and drift closure.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    AstraNull WAF Posture Integration Guide —
+    <a href="product/09-waf-posture-management.md">Product Spec</a> ·
+    <a href="backend/13-waf-posture-api-contract.md">API Contract</a> ·
+    <a href="flows/07-waf-posture-workflows.md">Workflows</a> ·
+    <a href="security/05-waf-safe-validation-policy.md">Safe Validation Policy</a>
+  </p>
+  <p style="margin-top:0.5rem; opacity:0.6;">Generated for AstraNull — no-access-first DDoS readiness validation platform</p>
+</footer>
+
+</body>
+</html>

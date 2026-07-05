@@ -13,6 +13,7 @@ import { requireStaffPermission } from './lib/staffRbac.mjs';
 import * as signupIntake from './services/signupIntake.mjs';
 import * as internalManagement from './services/internalManagement.mjs';
 import * as breakGlass from './services/breakGlass.mjs';
+import * as subscriptions from './services/subscriptions.mjs';
 import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
@@ -28,6 +29,7 @@ import * as agentUpdates from './services/agentUpdates.mjs';
 import * as highScale from './services/highScale.mjs';
 import * as reports from './services/reports.mjs';
 import * as targetGroups from './services/targetGroups.mjs';
+import * as testPolicies from './services/testPolicies.mjs';
 import * as testRuns from './services/testRuns.mjs';
 import * as tokens from './services/tokens.mjs';
 import * as serviceAccounts from './services/serviceAccounts.mjs';
@@ -42,6 +44,7 @@ import * as productionReleaseEvidence from './services/productionReleaseEvidence
 import * as custodyVerification from './services/custodyVerification.mjs';
 import * as evidenceSnapshotSigning from './services/evidenceSnapshotSigning.mjs';
 import * as wafPosture from './services/wafPosture.mjs';
+import * as wafOffensive from './services/wafOffensive.mjs';
 import * as wafOrchestrator from './services/wafOrchestrator.mjs';
 import {
   blockPostgresWafDriftScanRoute,
@@ -78,6 +81,8 @@ function defaultServiceDeps() {
   return {
     tenants,
     targetGroups,
+    testPolicies,
+    subscriptions,
     tokens,
     serviceAccounts,
     agents,
@@ -313,6 +318,7 @@ function blockPostgresSecretVaultRoute(runtimeConfig, serviceDeps, path, method,
 }
 
 function isReportRoute(path, method) {
+  if (path === '/v1/reports' && method === 'GET') return true;
   if (path === '/v1/reports' && method === 'POST') return true;
   if (method === 'GET' && /^\/v1\/reports\/[^/]+$/.test(path)) return true;
   if (method === 'GET' && /^\/v1\/reports\/[^/]+\/export$/.test(path)) return true;
@@ -442,6 +448,19 @@ function blockPostgresProductionReleaseEvidenceRoute(runtimeConfig, serviceDeps,
   return true;
 }
 
+function blockTestPolicyRoute(serviceDeps, method, res) {
+  const methodNameByHttpMethod = {
+    GET: 'listTestPolicies',
+    POST: 'createTestPolicy',
+    PATCH: 'patchTestPolicy',
+    DELETE: 'archiveTestPolicy',
+  };
+  const methodName = methodNameByHttpMethod[method];
+  if (typeof serviceDeps.testPolicies?.[methodName] === 'function') return false;
+  respondPostgresRouteNotWired(res);
+  return true;
+}
+
 function resolveProbeJobsService(runtimeConfig, serviceDeps) {
   if (runtimeConfig.persistenceMode === 'postgres') {
     return serviceDeps.probeJobs;
@@ -563,6 +582,11 @@ export function createServer(options = {}) {
         if (served) return;
       }
 
+      if (req.method === 'GET' && (url.pathname === '/internal/soc' || url.pathname === '/internal-soc.html')) {
+        const served = await serveStatic(req, res, url, runtimeConfig);
+        if (served) return;
+      }
+
       if (url.pathname.startsWith('/v1') || url.pathname.startsWith('/internal')) {
         const clientKey = deriveClientKey(req, {
           trustProxyHeaders: runtimeConfig.rateLimit.trustProxyHeaders,
@@ -671,6 +695,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'tenant:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
     return json(res, 200, getTenantDeploymentFeatures(ctx, runtimeConfig));
+  }
+  if (method === 'GET' && path === '/v1/subscription/current') {
+    const gate = requirePermission(ctx, 'tenant:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof serviceDeps.subscriptions?.getCurrentSubscriptionSummary !== 'function') {
+      return respondPostgresRouteNotWired(res);
+    }
+    return json(res, 200, await serviceDeps.subscriptions.getCurrentSubscriptionSummary(ctx));
   }
   if (method === 'PATCH' && path === '/v1/tenants/current') {
     const gate = requirePermission(ctx, 'tenant:write');
@@ -1057,6 +1089,55 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const result = await wafSvc.submitScenarioIntake(ctx, body);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 202, result);
+  }
+  if (method === 'GET' && path === '/v1/waf/offensive-suites') {
+    const gate = requirePermission(ctx, 'waf:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const result = wafOffensive.listOffensiveSuites();
+    if (result.error) return json(res, result.status ?? 404, result);
+    return json(res, 200, result);
+  }
+  if (method === 'POST' && path === '/v1/waf/offensive-requests') {
+    const gate = requirePermission(ctx, 'waf_offensive:request');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = wafOffensive.createOffensiveRequest(ctx, body);
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, result);
+  }
+  if (method === 'GET' && path === '/v1/waf/offensive-requests') {
+    const gate = requirePermission(ctx, 'waf_offensive:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const result = wafOffensive.listOffensiveRequests(ctx);
+    if (result.error) return json(res, result.status ?? 404, result);
+    return json(res, 200, result);
+  }
+  const wafOffensiveGetMatch = path.match(/^\/v1\/waf\/offensive-requests\/([^/]+)$/);
+  if (wafOffensiveGetMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'waf_offensive:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const result = wafOffensive.getOffensiveRequest(ctx, wafOffensiveGetMatch[1]);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 404, result);
+    return json(res, 200, result);
+  }
+  const wafOffensiveArtPost = path.match(/^\/v1\/waf\/offensive-requests\/([^/]+)\/artifacts$/);
+  if (wafOffensiveArtPost && method === 'POST') {
+    const gate = requirePermission(ctx, 'waf_offensive:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    let upload;
+    try {
+      upload = await readArtifactUploadBody(req, runtimeConfig.maxJsonBodyBytes);
+    } catch (err) {
+      if (err instanceof HttpBodyError) return json(res, err.status, { error: err.code });
+      throw err;
+    }
+    const art = wafOffensive.addArtifact(ctx, wafOffensiveArtPost[1], upload.body, {
+      uploadEnvelope: upload.envelope,
+    });
+    if (!art) return json(res, 404, { error: 'not_found' });
+    if (art.error) return json(res, art.status ?? 400, art);
+    return json(res, 201, art);
   }
   if (method === 'POST' && path === '/v1/waf/validations') {
     const gate = requirePermission(ctx, 'waf:run');
@@ -1843,6 +1924,39 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (path === '/v1/checks' && method === 'GET') {
     return json(res, 200, { items: await serviceDeps.testRuns.listChecks() });
   }
+  if (path === '/v1/test-policies' && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_policy:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockTestPolicyRoute(serviceDeps, method, res)) return;
+    return json(res, 200, { items: await serviceDeps.testPolicies.listTestPolicies(ctx) });
+  }
+  if (path === '/v1/test-policies' && method === 'POST') {
+    const gate = requirePermission(ctx, 'test_policy:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockTestPolicyRoute(serviceDeps, method, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await serviceDeps.testPolicies.createTestPolicy(ctx, body);
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, result);
+  }
+  const policyMatch = path.match(/^\/v1\/test-policies\/([^/]+)$/);
+  if (policyMatch && method === 'PATCH') {
+    const gate = requirePermission(ctx, 'test_policy:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockTestPolicyRoute(serviceDeps, method, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await serviceDeps.testPolicies.patchTestPolicy(ctx, policyMatch[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
+  if (policyMatch && method === 'DELETE') {
+    const gate = requirePermission(ctx, 'test_policy:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockTestPolicyRoute(serviceDeps, method, res)) return;
+    const result = await serviceDeps.testPolicies.archiveTestPolicy(ctx, policyMatch[1]);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
   if (path === '/v1/test-runs' && method === 'POST') {
     const gate = requirePermission(ctx, 'test_run:start');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -1920,6 +2034,16 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     return json(res, 201, await serviceDeps.reports.createReport(ctx, body));
   }
+  if (path === '/v1/reports' && method === 'GET') {
+    const gate = requirePermission(ctx, 'report:create');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)) return;
+    return json(res, 200, {
+      items: await serviceDeps.reports.listReports(ctx, {
+        limit: Number(url.searchParams.get('limit') ?? 100),
+      }),
+    });
+  }
   const rptMatch = path.match(/^\/v1\/reports\/([^/]+)$/);
   if (rptMatch && method === 'GET') {
     const gate = requirePermission(ctx, 'report:create');
@@ -1935,6 +2059,12 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const format = url.searchParams.get('format') || 'json';
+    if (!['json', 'markdown', 'html'].includes(format)) {
+      return json(res, 400, {
+        error: 'unsupported_format',
+        supported_formats: ['json', 'markdown', 'html'],
+      });
+    }
     const out = await serviceDeps.reports.exportReport(ctx, rptExport[1], format);
     if (!out) return json(res, 404, { error: 'not_found' });
     if (format === 'markdown') {
@@ -2149,6 +2279,74 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const ks = await Promise.resolve(hsSvc.setKillSwitch(ctx, Boolean(body.active), body.reason));
     return json(res, 200, ks);
+  }
+
+  const wofArtReview = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/artifacts\/([^/]+)\/review$/);
+  if (wofArtReview && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = wafOffensive.reviewArtifact(ctx, wofArtReview[1], wofArtReview[2], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, result);
+  }
+  const wofResults = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/results$/);
+  if (wofResults && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = wafOffensive.recordOffensiveSuiteResults(ctx, wofResults[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, result);
+  }
+  const wofPostTestReport = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/post-test-report$/);
+  if (wofPostTestReport && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = wafOffensive.upsertOffensivePostTestReport(ctx, wofPostTestReport[1], body);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 409, result);
+    return json(res, result.created ? 201 : 200, result.report);
+  }
+  if (wofPostTestReport && method === 'GET') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const result = wafOffensive.getOffensivePostTestReport(ctx, wofPostTestReport[1]);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 404, result);
+    return json(res, 200, result);
+  }
+  const wofSocStart = path.match(/^\/internal\/soc\/waf-offensive\/([^/]+)\/start$/);
+  if (wofSocStart && method === 'POST') {
+    const gate = requirePermission(ctx, 'soc:waf_offensive');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+    const result = wafOffensive.transitionOffensiveRequest(ctx, wofSocStart[1], 'start');
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 409, result);
+    return json(res, 200, result);
+  }
+  for (const action of ['approve', 'schedule', 'stop', 'close', 'reject']) {
+    const m = path.match(new RegExp(`^/internal/soc/waf-offensive/([^/]+)/${action}$`));
+    if (m && method === 'POST') {
+      const gate = requirePermission(ctx, 'soc:waf_offensive');
+      if (!gate.ok) return json(res, gate.status, gate.body);
+      if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+      const body = action === 'schedule' || action === 'reject'
+        ? await readJsonBody(req, runtimeConfig.maxJsonBodyBytes)
+        : {};
+      const result = wafOffensive.transitionOffensiveRequest(ctx, m[1], action, body);
+      if (!result) return json(res, 404, { error: 'not_found' });
+      if (result.error) return json(res, result.status ?? 409, result);
+      return json(res, 200, result);
+    }
   }
 
   const probeJobsSvc = resolveProbeJobsService(runtimeConfig, serviceDeps);

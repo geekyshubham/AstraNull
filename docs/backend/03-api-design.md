@@ -53,6 +53,10 @@
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/checks` | List check catalog. |
+| GET | `/v1/test-policies` | List active safe validation policies enriched with target-group/check metadata. |
+| POST | `/v1/test-policies` | Create a customer-runnable safe validation policy. SOC-gated checks are rejected. |
+| PATCH | `/v1/test-policies/{id}` | Update cadence, expected verdict, safe windows, or pause/resume state. |
+| DELETE | `/v1/test-policies/{id}` | Archive a safe validation policy. |
 | POST | `/v1/test-runs` | Start safe/controlled run. |
 | GET | `/v1/test-runs` | List runs. |
 | GET | `/v1/test-runs/{id}` | Run detail. |
@@ -67,8 +71,10 @@
 | GET | `/v1/findings/{id}` | Finding detail. |
 | PATCH | `/v1/findings/{id}` | Assign/status/notes. |
 | POST | `/v1/findings/{id}/accept-risk` | Risk acceptance. |
+| GET | `/v1/reports` | List generated report metadata for the tenant. |
 | POST | `/v1/reports` | Generate report. |
-| GET | `/v1/reports/{id}` | Report status/download. |
+| GET | `/v1/reports/{id}` | Report metadata. |
+| GET | `/v1/reports/{id}/export` | Export report as JSON, Markdown, or HTML with custody metadata. |
 
 ### High-scale/SOC
 
@@ -82,6 +88,10 @@
 | POST | `/internal/soc/high-scale/{id}/start` | SOC-only start after gates. |
 | POST | `/internal/soc/high-scale/{id}/stop` | SOC-only kill switch. |
 | POST | `/internal/soc/high-scale/{id}/close` | SOC-only closure. |
+
+### Tenant subscription summary
+
+Customer principals with `tenant:read` can call `GET /v1/subscription/current` to render the React subscription/support pages from real data. The response contains the current tenant id, optional account/subscription/plan records, derived usage counts, and support posture metadata. It is read-only and must return `null` records when provisioning has not created a subscription; the UI must not substitute prototype plan names or limits.
 
 ### Internal management
 

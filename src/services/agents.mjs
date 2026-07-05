@@ -4,6 +4,7 @@ import { createAddressedSecret } from '../lib/addressedSecrets.mjs';
 import { generateSalt, hashSecretWithSalt } from '../lib/crypto.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
+import { validateProbeEndpoint } from '../lib/probeEndpoint.mjs';
 import { consumeBootstrapToken } from './tokens.mjs';
 
 export function registerAgent(body, tenantId) {
@@ -77,6 +78,25 @@ export function heartbeatAgent(agent, body) {
   agent.last_heartbeat_at = new Date().toISOString();
   agent.status = 'online';
   if (body.version) agent.version = body.version;
+
+  agent.last_token_validation_at = new Date().toISOString();
+  agent.last_token_validation_status = 'valid';
+
+  let probeEndpointAccepted = false;
+  if (body.probe_endpoint !== undefined) {
+    const result = validateProbeEndpoint(body.probe_endpoint);
+    if (result.ok) {
+      agent.probe_endpoint = result.normalized;
+      agent.probe_endpoint_status = 'reported';
+      delete agent.probe_endpoint_error;
+      probeEndpointAccepted = true;
+    } else {
+      agent.probe_endpoint_status = 'rejected';
+      agent.probe_endpoint_error = result.error;
+      probeEndpointAccepted = false;
+    }
+  }
+
   audit({
     tenant_id: agent.tenant_id,
     actor_user_id: 'agent',
@@ -84,10 +104,14 @@ export function heartbeatAgent(agent, body) {
     action: 'agent.heartbeat',
     resource_type: 'agent',
     resource_id: agent.id,
-    metadata: { version: body.version },
+    metadata: {
+      version: body.version,
+      token_valid: true,
+      probe_endpoint_accepted: probeEndpointAccepted,
+    },
   });
   persistStore();
-  return { agent: redactAgent(agent) };
+  return { agent: redactAgent(agent), probe_endpoint_accepted: probeEndpointAccepted };
 }
 
 export function pollJobs(agent, timeoutMs = 25_000) {

@@ -92,6 +92,14 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | PATCH | `/v1/target-groups/:id/targets/:targetId` | `target_group:write` | partial target fields | Updated target or `404`. |
 | DELETE | `/v1/target-groups/:id/targets/:targetId` | `target_group:write` | — | Deletes/archives the declared target or returns the service-layer conflict. |
 
+## Tenant subscription and support summary
+
+`GET /v1/subscription/current` is customer-accessible with `tenant:read` and returns only tenant-scoped subscription/account metadata plus derived usage counts. It does not create a default plan when no subscription exists; `subscription`, `plan`, and `account` can be `null`, and the React UI must show an empty/not-configured state instead of invented plan data.
+
+| Method | Path | Permission | Request | Response |
+|---|---|---|---|---|
+| GET | `/v1/subscription/current` | `tenant:read` | — | `{ tenant_id, account, subscription, plan, usage, support }` with usage derived from users, declared target groups, agents, safe runs started in the last hour, findings, high-scale requests, and recent tenant audit metadata. |
+
 ## Public signup and staff internal management
 
 Public signup routes are intentionally narrow and expose only sanitized request state. Staff routes require service-account or staff principal access with `staff:*` permissions; customer principals are denied with `403 staff_forbidden`. In Postgres mode these routes fail closed with `503 postgres_internal_admin_not_wired` unless the internal management service is injected.
@@ -131,7 +139,12 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 | POST | `/v1/waf/assets/:id/exception` | `waf:write` | `{ owner, reason, expires_at, scope_hash? }` | `201 { exception, posture }`; approved metadata-only exception is tenant-scoped, future-expiring, audited, and available to compliance exports. |
 | GET | `/v1/waf/exceptions` | `waf:read` | — | `{ items }` active, non-expired tenant-scoped WAF exceptions. |
 | GET | `/v1/waf/coverage` | `waf:read` | `window_days?` | Status counts, `percentages`, aggregate `coverage_ratio`, and `trend[]` rollups when available. |
-| POST | `/v1/waf/validations` | `waf:run` | `{ waf_asset_id, modes?, probe_profile?, marker_profile? }` | `201 { validation_run }`. Safe marker profiles enforce `max_requests` 1-5 and `timeout_ms` 100-5000. |
+| GET | `/v1/waf/offensive-suites` | `waf:read` | — | `{ suites[] }` SOC-gated offensive suite catalog (SQLi, XSS, RCE, etc.). |
+| POST | `/v1/waf/offensive-requests` | `waf_offensive:request` | `{ waf_asset_id, objective, requested_suites[], emergency_contacts[], scope_confirmation: true, ... }` | `201 { offensive_request }`. Customer request only — SOC must approve and execute. |
+| GET | `/v1/waf/offensive-requests` | `waf_offensive:read` | — | `{ items }` offensive validation requests. |
+| GET | `/v1/waf/offensive-requests/:id` | `waf_offensive:read` | — | `{ offensive_request }` or `404`. |
+| POST | `/v1/waf/offensive-requests/:id/artifacts` | `waf_offensive:write` | metadata-only authorization artifact | `201 { artifact }`. |
+| POST | `/v1/waf/validations` | `waf:run` | `{ waf_asset_id, modes?, probe_profile?, marker_profile? }` | `201 { validation_run }`. Safe marker profiles enforce `max_requests` 1-5 and `timeout_ms` 100-5000. SOC offensive runs are created via `/internal/soc/waf-offensive/:id/start`, not this route. |
 | GET | `/v1/waf/validations` | `waf:read` | — | `{ items }` validation runs. |
 | GET | `/v1/waf/validations/:id` | `waf:read` | — | `{ validation_run, scenario_results }` or `404`. |
 | POST | `/v1/waf/validations/:id/finalize` | `waf:run` | metadata-only summary and `scenario_results[]` | `{ validation_run, posture }`; writes a current posture snapshot, refreshes WAF posture findings for underprotected/unprotected outcomes, and creates/refreshes behavior-drift events when previously protected posture weakens. `protected` is returned only when WAF is detected and validation passes with corroborating metadata evidence. |
@@ -232,6 +245,17 @@ Tenant-scoped ledger: `agentUpdateTrustKeys` in developer validation; `agent_upd
 | GET | `/v1/agent-update-trust-keys` | `agent_update:read` | — | `{ items: TrustKey[] }` metadata for caller tenant (`id`, `name`, `fingerprint_sha256`, `status`, `created_at`, `revoked_at?`). |
 | POST | `/v1/agent-update-trust-keys/:id/revoke` | `agent_update:write` | — | `200` `{ trust_key }` with `status: revoked`; `404` `not_found`; `400` `already_revoked`. Audits `agent_update.trust_key_revoked`. |
 
+## Test policies
+
+| Method | Path | Permission | Request | Response |
+|---|---|---|---|---|
+| GET | `/v1/test-policies` | `test_policy:read` | — | `{ items }` active, non-archived safe validation policies enriched with active target group and check catalog metadata. Policies for archived target groups are omitted. |
+| POST | `/v1/test-policies` | `test_policy:write` | `{ target_group_id, check_id, cadence?, expected_verdict?, safe_windows? }` | `201` policy. Only customer-runnable safe checks can be bound. SOC-gated/high-scale checks return `403 { error: "soc_gated_check" }` and must use the SOC request workflow. |
+| PATCH | `/v1/test-policies/:id` | `test_policy:write` | `{ cadence?, expected_verdict?, safe_windows?, state? }` | Updated policy or `404`; `state` accepts `active` or `paused`. |
+| DELETE | `/v1/test-policies/:id` | `test_policy:write` | — | Archives the policy and returns the archived record or `404`. |
+
+In memory/developer mode the routes use the tenant store and audit `test_policy.created`, `test_policy.updated`, and `test_policy.archived`. In Postgres mode the routes fail closed with `503 postgres_route_not_wired` unless a production-grade `testPolicies` service is injected.
+
 ## Test runs
 
 | Method | Path | Permission | Request | Response |
@@ -258,6 +282,7 @@ In `postgres` mode, `runtime.services.testRuns` backs the safe validation loop: 
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
+| GET | `/v1/reports` | `report:create` | `limit?` | `{ items }` generated report metadata for the tenant, newest first. |
 | POST | `/v1/reports` | `report:create` | `{ kind?, title? }` | `201` report with summary. |
 | GET | `/v1/reports/:id` | `report:create` | — | Report metadata. |
 | GET | `/v1/reports/:id/export?format=json\|markdown\|html` | `report:create` | — | `format=json`: `{ payload, custody }`. `format=markdown` or `html`: redacted report text with an embedded **Custody** section (artifact id, `content_sha256`, canonicalization, `created_at`, optional `previous_audit_hash`). Self-contained HTML has no external scripts. |

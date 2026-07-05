@@ -40,6 +40,7 @@ debug.log
 .agents/
 grokorches-skill.md
 .grok-prompts/
+.grok/
 
 # Railway / deployment CLI state (local operator only)
 .railway/
