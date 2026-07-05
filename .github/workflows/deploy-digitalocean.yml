@@ -59,7 +59,7 @@ jobs:
           context: .
           file: ops/digitalocean/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ghcr.io/geekyshubham/astranull:latest
 
       - name: Deploy to App Platform
         uses: digitalocean/app_action/deploy@v2
