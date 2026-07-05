@@ -175,6 +175,8 @@ CREATE TABLE bootstrap_tokens (
   token_salt TEXT NOT NULL,
   environment_id TEXT,
   target_group_id TEXT,
+  prebind_fqdn TEXT,
+  deployment_packaging TEXT,
   allowed_modes TEXT[],
   max_registrations INT NOT NULL DEFAULT 1,
   registrations_used INT NOT NULL DEFAULT 0,
@@ -202,6 +204,11 @@ CREATE TABLE agents (
   credential_salt TEXT,
   last_heartbeat_at TIMESTAMPTZ,
   metadata_json JSONB DEFAULT '{}',
+  probe_endpoint JSONB,
+  probe_endpoint_status TEXT,
+  probe_endpoint_error TEXT,
+  last_token_validation_at TIMESTAMPTZ,
+  last_token_validation_status TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

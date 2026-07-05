@@ -29,6 +29,16 @@ export function createBootstrapToken(ctx, body) {
     revoked_at: null,
     created_at: new Date().toISOString(),
     created_by: ctx.userId,
+    prebind_fqdn:
+      typeof body.prebind_fqdn === 'string' && body.prebind_fqdn.trim() !== ''
+        ? body.prebind_fqdn.trim().toLowerCase()
+        : null,
+    deployment_packaging:
+      body.deployment_packaging === 'image'
+      || body.deployment_packaging === 'standalone'
+      || body.deployment_packaging === 'helm'
+        ? body.deployment_packaging
+        : null,
   };
   getStore().bootstrapTokens.push(record);
   audit({

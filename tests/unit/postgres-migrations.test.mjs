@@ -599,7 +599,7 @@ describe('postgres migrations', () => {
   it('getLatestMigrationVersion returns last sorted file', () => {
     const files = listMigrationFiles(MIGRATIONS_DIR);
     const latest = getLatestMigrationVersion(files);
-    assert.equal(latest, '0022_waf_exceptions');
+    assert.equal(latest, '0023_agent_probe_endpoint');
     assert.equal(latest, files[files.length - 1].version);
   });
 

@@ -4,7 +4,7 @@ import { createAddressedSecret } from '../lib/addressedSecrets.mjs';
 import { generateSalt, hashSecretWithSalt } from '../lib/crypto.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { validateProbeEndpoint } from '../lib/probeEndpoint.mjs';
+import { checkProbeEndpointBinding, validateProbeEndpoint } from '../lib/probeEndpoint.mjs';
 import { consumeBootstrapToken } from './tokens.mjs';
 
 export function registerAgent(body, tenantId) {
@@ -62,6 +62,7 @@ export function revokeAgent(ctx, id) {
   if (!agent) return null;
   agent.status = 'revoked';
   agent.revoked_at = new Date().toISOString();
+  agent.last_token_validation_status = 'invalid';
   audit({
     tenant_id: agent.tenant_id,
     actor_user_id: ctx.userId,
@@ -86,10 +87,26 @@ export function heartbeatAgent(agent, body) {
   if (body.probe_endpoint !== undefined) {
     const result = validateProbeEndpoint(body.probe_endpoint);
     if (result.ok) {
-      agent.probe_endpoint = result.normalized;
-      agent.probe_endpoint_status = 'reported';
-      delete agent.probe_endpoint_error;
-      probeEndpointAccepted = true;
+      const token = getStore().bootstrapTokens.find((t) => t.id === agent.bootstrap_token_id);
+      const prebindFqdn = token?.prebind_fqdn ?? null;
+      const targetGroupFqdns = getStore().targets
+        .filter(
+          (t) => t.tenant_id === agent.tenant_id
+            && t.target_group_id === agent.target_group_id
+            && t.kind === 'fqdn',
+        )
+        .map((t) => String(t.value).trim().toLowerCase());
+      const binding = checkProbeEndpointBinding(result.normalized, { prebindFqdn, targetGroupFqdns });
+      if (!binding.ok) {
+        agent.probe_endpoint_status = 'rejected';
+        agent.probe_endpoint_error = binding.error;
+        probeEndpointAccepted = false;
+      } else {
+        agent.probe_endpoint = result.normalized;
+        agent.probe_endpoint_status = 'reported';
+        delete agent.probe_endpoint_error;
+        probeEndpointAccepted = true;
+      }
     } else {
       agent.probe_endpoint_status = 'rejected';
       agent.probe_endpoint_error = result.error;

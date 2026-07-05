@@ -124,6 +124,23 @@ describe('postgres auth token repository', () => {
     assert.deepEqual(token.allowed_cidrs, ['10.0.0.0/8']);
     assert.equal(token.secret, undefined);
 
+    const tokenWithPrebind = mapBootstrapTokenRow({
+      id: TOKEN_ID,
+      tenant_id: CTX.tenantId,
+      token_hash: 'h',
+      token_salt: 's',
+      target_group_id: 'tg_1',
+      prebind_fqdn: 'edge.example.com',
+      deployment_packaging: 'helm',
+      max_registrations: 1,
+      registrations_used: 0,
+      expires_at: FIXED_NOW,
+      revoked_at: null,
+      created_at: FIXED_NOW,
+    });
+    assert.equal(tokenWithPrebind.prebind_fqdn, 'edge.example.com');
+    assert.equal(tokenWithPrebind.deployment_packaging, 'helm');
+
     const account = mapServiceAccountRow({
       id: SACC_ID,
       tenant_id: CTX.tenantId,
@@ -167,6 +184,38 @@ describe('postgres auth token repository', () => {
     const row = await repo.createBootstrapToken(CTX, bootstrapRecord);
     assert.equal(row.id, TOKEN_ID);
     assert.equal(row.token_hash, 'hash_a');
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('createBootstrapToken inserts prebind_fqdn and deployment_packaging', async () => {
+    const pool = createRecordingPool((text, params) => {
+      if (text.startsWith('INSERT INTO bootstrap_tokens')) {
+        assert.match(text, /prebind_fqdn/);
+        assert.match(text, /deployment_packaging/);
+        assert.equal(params[7], 'probe.edge.example.com');
+        assert.equal(params[8], 'docker');
+        return {
+          rows: [
+            {
+              ...bootstrapRecord,
+              prebind_fqdn: 'probe.edge.example.com',
+              deployment_packaging: 'docker',
+              allowed_modes: [],
+              allowed_cidrs: [],
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createAuthTokenRepository(pool);
+    const row = await repo.createBootstrapToken(CTX, {
+      ...bootstrapRecord,
+      prebind_fqdn: 'probe.edge.example.com',
+      deployment_packaging: 'docker',
+    });
+    assert.equal(row.prebind_fqdn, 'probe.edge.example.com');
+    assert.equal(row.deployment_packaging, 'docker');
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 

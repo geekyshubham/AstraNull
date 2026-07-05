@@ -120,6 +120,32 @@ describe('postgres agent control repository', () => {
     assert.equal(agent.credential, undefined);
     assert.equal(agent.agent_credential, undefined);
 
+    const probeEndpoint = {
+      declared_ip: '203.0.113.10',
+      listen_port: 443,
+      discovered_via: 'operator_env',
+    };
+    const agentWithProbe = mapAgentRow({
+      id: AGENT_ID,
+      tenant_id: CTX.tenantId,
+      status: 'online',
+      capabilities: [],
+      fingerprint: null,
+      last_heartbeat_at: FIXED_NOW,
+      metadata_json: {},
+      created_at: FIXED_NOW,
+      probe_endpoint: probeEndpoint,
+      probe_endpoint_status: 'reported',
+      probe_endpoint_error: null,
+      last_token_validation_at: new Date(FIXED_NOW),
+      last_token_validation_status: 'valid',
+    });
+    assert.deepEqual(agentWithProbe.probe_endpoint, probeEndpoint);
+    assert.equal(agentWithProbe.probe_endpoint_status, 'reported');
+    assert.equal(agentWithProbe.probe_endpoint_error, undefined);
+    assert.equal(agentWithProbe.last_token_validation_at, FIXED_NOW);
+    assert.equal(agentWithProbe.last_token_validation_status, 'valid');
+
     const job = mapAgentJobRow({
       id: JOB_ID,
       tenant_id: CTX.tenantId,
@@ -239,10 +265,77 @@ describe('postgres agent control repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('updateAgentHeartbeat persists probe endpoint and token validation fields when provided', async () => {
+    const heartbeatAt = '2026-06-02T08:00:00.000Z';
+    const probeEndpoint = {
+      declared_ip: '203.0.113.10',
+      listen_port: 443,
+      discovered_via: 'operator_env',
+    };
+    const pool = createRecordingPool((text, params) => {
+      if (text.startsWith('UPDATE agents')) {
+        assert.match(text, /probe_endpoint = \$2::jsonb/);
+        assert.match(text, /probe_endpoint_status = \$3/);
+        assert.match(text, /probe_endpoint_error = \$4/);
+        assert.match(text, /last_token_validation_at = \$5::timestamptz/);
+        assert.match(text, /last_token_validation_status = \$6/);
+        assert.equal(params[1], JSON.stringify(probeEndpoint));
+        assert.equal(params[2], 'reported');
+        assert.equal(params[3], null);
+        assert.equal(params[4], heartbeatAt);
+        assert.equal(params[5], 'valid');
+        return {
+          rows: [
+            {
+              ...agentRecord,
+              probe_endpoint: probeEndpoint,
+              probe_endpoint_status: 'reported',
+              last_token_validation_at: heartbeatAt,
+              last_token_validation_status: 'valid',
+              metadata_json: {},
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createAgentControlRepository(pool);
+    const row = await repo.updateAgentHeartbeat(
+      { tenantId: CTX.tenantId, id: AGENT_ID },
+      {
+        last_heartbeat_at: heartbeatAt,
+        probe_endpoint: probeEndpoint,
+        probe_endpoint_status: 'reported',
+        probe_endpoint_error: null,
+        last_token_validation_at: heartbeatAt,
+        last_token_validation_status: 'valid',
+      },
+    );
+    assert.deepEqual(row.probe_endpoint, probeEndpoint);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('listAgents SELECT includes probe_endpoint columns via AGENT_COLUMNS', async () => {
+    const pool = createRecordingPool((text) => {
+      if (text.includes('FROM agents')) {
+        return { rows: [{ ...agentRecord, metadata_json: {} }] };
+      }
+      return { rows: [] };
+    });
+    const repo = createAgentControlRepository(pool);
+    await repo.listAgents(CTX);
+    const [q] = dataQueries(pool.client);
+    assert.match(q.text, /probe_endpoint/);
+    assert.match(q.text, /probe_endpoint_status/);
+    assert.match(q.text, /last_token_validation_at/);
+    assert.match(q.text, /last_token_validation_status/);
+  });
+
   it('revokeAgent marks agent revoked with tenant predicate and metadata timestamp', async () => {
     const pool = createRecordingPool((text, params) => {
       if (text.startsWith('UPDATE agents')) {
         assert.match(text, /status = 'revoked'/);
+        assert.match(text, /last_token_validation_status = 'invalid'/);
         assert.match(text, /metadata_json = COALESCE\(metadata_json, '\{\}'::jsonb\) \|\| \$1::jsonb/);
         assertUsesTenantPredicate(text, params, CTX.tenantId);
         assert.equal(params[0], JSON.stringify({ revoked_at: FIXED_NOW }));

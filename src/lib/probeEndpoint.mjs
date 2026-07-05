@@ -280,3 +280,33 @@ export function validateProbeEndpoint(endpoint, options = {}) {
 
   return { ok: true, normalized };
 }
+
+export function checkProbeEndpointBinding(normalized, { prebindFqdn = null, targetGroupFqdns = [] } = {}) {
+  if (!normalized.declared_fqdn) {
+    return { ok: true };
+  }
+
+  if (typeof prebindFqdn === 'string' && prebindFqdn.trim() !== '') {
+    const expected = prebindFqdn.trim().toLowerCase();
+    if (normalized.declared_fqdn !== expected) {
+      return {
+        ok: false,
+        error: 'fqdn_prebind_mismatch',
+        message: 'declared_fqdn does not match bootstrap token prebind_fqdn',
+      };
+    }
+  }
+
+  if (Array.isArray(targetGroupFqdns) && targetGroupFqdns.length > 0) {
+    const allowed = targetGroupFqdns.map((fqdn) => String(fqdn).trim().toLowerCase());
+    if (!allowed.includes(normalized.declared_fqdn)) {
+      return {
+        ok: false,
+        error: 'target_group_mismatch',
+        message: 'declared_fqdn is not listed in the agent target group',
+      };
+    }
+  }
+
+  return { ok: true };
+}

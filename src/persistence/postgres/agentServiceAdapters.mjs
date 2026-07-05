@@ -7,6 +7,7 @@ import {
 } from '../../lib/agentPolicy.mjs';
 import { generateSalt, hashSecretWithSalt } from '../../lib/crypto.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { validateProbeEndpoint } from '../../lib/probeEndpoint.mjs';
 
 /** @type {readonly string[]} */
 export const AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze([
@@ -152,13 +153,35 @@ export function createPostgresAgentServices(repositories, options = {}) {
 
     async heartbeatAgent(agent, body) {
       const lastHeartbeatAt = nowFn().toISOString();
+      const lastTokenValidationAt = lastHeartbeatAt;
+      const lastTokenValidationStatus = 'valid';
+
+      let probeEndpointAccepted = false;
+      const heartbeatFields = {
+        version: body?.version,
+        capabilities: body?.capabilities,
+        last_heartbeat_at: lastHeartbeatAt,
+        last_token_validation_at: lastTokenValidationAt,
+        last_token_validation_status: lastTokenValidationStatus,
+      };
+
+      if (body?.probe_endpoint !== undefined) {
+        const result = validateProbeEndpoint(body.probe_endpoint);
+        if (result.ok) {
+          heartbeatFields.probe_endpoint = result.normalized;
+          heartbeatFields.probe_endpoint_status = 'reported';
+          heartbeatFields.probe_endpoint_error = null;
+          probeEndpointAccepted = true;
+        } else {
+          heartbeatFields.probe_endpoint_status = 'rejected';
+          heartbeatFields.probe_endpoint_error = result.error;
+          probeEndpointAccepted = false;
+        }
+      }
+
       const updated = await agentControl.updateAgentHeartbeat(
         { tenantId: agent.tenant_id, id: agent.id },
-        {
-          version: body?.version,
-          capabilities: body?.capabilities,
-          last_heartbeat_at: lastHeartbeatAt,
-        },
+        heartbeatFields,
       );
       await appendAudit({
         tenant_id: agent.tenant_id,
@@ -167,9 +190,13 @@ export function createPostgresAgentServices(repositories, options = {}) {
         action: 'agent.heartbeat',
         resource_type: 'agent',
         resource_id: agent.id,
-        metadata: { version: body?.version },
+        metadata: {
+          version: body?.version,
+          token_valid: true,
+          probe_endpoint_accepted: probeEndpointAccepted,
+        },
       });
-      return { agent: redactAgent(updated) };
+      return { agent: redactAgent(updated), probe_endpoint_accepted: probeEndpointAccepted };
     },
 
     async pollJobs(agent, _timeoutMs = 25_000) {

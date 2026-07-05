@@ -339,7 +339,10 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   if (!target) return { error: 'target_not_found', status: 404 };
 
   const onlineAgents = getStore().agents.filter(
-    (a) => a.tenant_id === ctx.tenantId && a.status === 'online',
+    (a) =>
+      a.tenant_id === ctx.tenantId &&
+      a.status === 'online' &&
+      a.last_token_validation_status !== 'invalid',
   );
   const missingPrereqs = evaluateCheckPrerequisites(check, { onlineAgents });
   if (missingPrereqs.length) {
@@ -487,6 +490,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     (a) =>
       a.tenant_id === ctx.tenantId &&
       a.status === 'online' &&
+      a.last_token_validation_status !== 'invalid' &&
       (a.target_group_id === targetGroupId || !a.target_group_id),
   );
 

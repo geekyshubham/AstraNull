@@ -2,7 +2,8 @@ import { withTenantContext } from './tenantContext.mjs';
 
 const AGENT_COLUMNS = `id, tenant_id, environment_id, target_group_id, bootstrap_token_id, name, hostname,
   status, version, placement_type, capabilities, fingerprint, credential_hash, credential_salt,
-  last_heartbeat_at, metadata_json, created_at`;
+  last_heartbeat_at, metadata_json, probe_endpoint, probe_endpoint_status, probe_endpoint_error,
+  last_token_validation_at, last_token_validation_status, created_at`;
 
 const AGENT_JOB_COLUMNS = `id, tenant_id, agent_id, test_run_id, check_id, target_id, type, status,
   nonce_hash, nonce_for_agent, payload_json, created_at, acked_at, observed_at`;
@@ -39,8 +40,19 @@ function mapAgentRow(row) {
     fingerprint: row.fingerprint ?? null,
     last_heartbeat_at:
       row.last_heartbeat_at == null ? null : toIso(row.last_heartbeat_at),
+    last_token_validation_at:
+      row.last_token_validation_at == null ? null : toIso(row.last_token_validation_at),
     created_at: toIso(row.created_at),
   };
+  if (row.probe_endpoint != null) {
+    const probeEndpoint = asObject(row.probe_endpoint);
+    if (Object.keys(probeEndpoint).length > 0) mapped.probe_endpoint = probeEndpoint;
+  }
+  if (row.probe_endpoint_status != null) mapped.probe_endpoint_status = row.probe_endpoint_status;
+  if (row.probe_endpoint_error != null) mapped.probe_endpoint_error = row.probe_endpoint_error;
+  if (row.last_token_validation_status != null) {
+    mapped.last_token_validation_status = row.last_token_validation_status;
+  }
   if (row.credential_hash != null) mapped.credential_hash = row.credential_hash;
   if (row.credential_salt != null) mapped.credential_salt = row.credential_salt;
   const metadata = asObject(row.metadata_json);
@@ -153,7 +165,19 @@ export function createAgentControlRepository(pool) {
       });
     },
 
-    async updateAgentHeartbeat({ tenantId, id }, { version, capabilities, last_heartbeat_at }) {
+    async updateAgentHeartbeat(
+      { tenantId, id },
+      {
+        version,
+        capabilities,
+        last_heartbeat_at,
+        probe_endpoint,
+        probe_endpoint_status,
+        probe_endpoint_error,
+        last_token_validation_at,
+        last_token_validation_status,
+      },
+    ) {
       return withTenantContext(pool, tenantId, async (client) => {
         const sets = [`status = 'online'`, `last_heartbeat_at = $1::timestamptz`];
         const params = [last_heartbeat_at];
@@ -167,6 +191,31 @@ export function createAgentControlRepository(pool) {
         if (capabilities !== undefined) {
           sets.push(`capabilities = $${paramIndex}`);
           params.push(asStringArray(capabilities));
+          paramIndex += 1;
+        }
+        if (probe_endpoint !== undefined) {
+          sets.push(`probe_endpoint = $${paramIndex}::jsonb`);
+          params.push(probe_endpoint === null ? null : JSON.stringify(probe_endpoint));
+          paramIndex += 1;
+        }
+        if (probe_endpoint_status !== undefined) {
+          sets.push(`probe_endpoint_status = $${paramIndex}`);
+          params.push(probe_endpoint_status);
+          paramIndex += 1;
+        }
+        if (probe_endpoint_error !== undefined) {
+          sets.push(`probe_endpoint_error = $${paramIndex}`);
+          params.push(probe_endpoint_error);
+          paramIndex += 1;
+        }
+        if (last_token_validation_at !== undefined) {
+          sets.push(`last_token_validation_at = $${paramIndex}::timestamptz`);
+          params.push(last_token_validation_at);
+          paramIndex += 1;
+        }
+        if (last_token_validation_status !== undefined) {
+          sets.push(`last_token_validation_status = $${paramIndex}`);
+          params.push(last_token_validation_status);
           paramIndex += 1;
         }
 
@@ -189,7 +238,8 @@ export function createAgentControlRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `UPDATE agents
-           SET status = 'revoked', metadata_json = COALESCE(metadata_json, '{}'::jsonb) || $1::jsonb
+           SET status = 'revoked', last_token_validation_status = 'invalid',
+               metadata_json = COALESCE(metadata_json, '{}'::jsonb) || $1::jsonb
            WHERE tenant_id = $2 AND id = $3
            RETURNING ${AGENT_COLUMNS}`,
           [JSON.stringify({ revoked_at: revokedAt }), ctx.tenantId, id],

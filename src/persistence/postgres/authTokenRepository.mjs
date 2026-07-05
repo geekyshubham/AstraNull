@@ -1,7 +1,7 @@
 import { withTenantContext } from './tenantContext.mjs';
 
 const BOOTSTRAP_TOKEN_COLUMNS = `id, tenant_id, name, token_hash, token_salt, environment_id, target_group_id,
-  allowed_modes, max_registrations, registrations_used, allowed_cidrs,
+  prebind_fqdn, deployment_packaging, allowed_modes, max_registrations, registrations_used, allowed_cidrs,
   expires_at, revoked_at, created_by, created_at`;
 
 const SERVICE_ACCOUNT_COLUMNS = `id, tenant_id, name, role, scopes, secret_hash, secret_salt,
@@ -27,6 +27,8 @@ function mapBootstrapTokenRow(row) {
     token_salt: row.token_salt,
     environment_id: row.environment_id ?? undefined,
     target_group_id: row.target_group_id ?? null,
+    prebind_fqdn: row.prebind_fqdn ?? null,
+    deployment_packaging: row.deployment_packaging ?? null,
     allowed_modes: asStringArray(row.allowed_modes),
     max_registrations: Number(row.max_registrations),
     registrations_used: Number(row.registrations_used),
@@ -71,10 +73,10 @@ export function createAuthTokenRepository(pool) {
         const { rows } = await client.query(
           `INSERT INTO bootstrap_tokens (
              id, tenant_id, name, token_hash, token_salt, environment_id, target_group_id,
-             allowed_modes, max_registrations, registrations_used, allowed_cidrs,
-             expires_at, revoked_at, created_by, created_at
+             prebind_fqdn, deployment_packaging, allowed_modes, max_registrations, registrations_used,
+             allowed_cidrs, expires_at, revoked_at, created_by, created_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::timestamptz, $14, $15::timestamptz)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::timestamptz, $15::timestamptz, $16, $17::timestamptz)
            RETURNING ${BOOTSTRAP_TOKEN_COLUMNS}`,
           [
             record.id,
@@ -84,6 +86,8 @@ export function createAuthTokenRepository(pool) {
             record.token_salt,
             record.environment_id ?? null,
             record.target_group_id ?? null,
+            record.prebind_fqdn ?? null,
+            record.deployment_packaging ?? null,
             allowedModes,
             record.max_registrations ?? 1,
             record.registrations_used ?? 0,
