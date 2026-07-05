@@ -47,7 +47,7 @@ describe('postgres pool', () => {
     process.env.ASTRANULL_DATABASE_URL = 'postgresql://localhost/testdb?sslmode=require';
     process.env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED = '0';
     const config = resolvePgPoolConfig();
-    assert.deepEqual(config.ssl, { rejectUnauthorized: false });
+    assert.match(config.connectionString, /sslmode=no-verify/);
   });
 
   it('pingPostgres uses SELECT 1 and releases client', async () => {
