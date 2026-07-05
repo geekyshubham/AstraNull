@@ -584,6 +584,31 @@ describe('probe worker poll integration', () => {
 });
 
 describe('executeProbeForJob routing', () => {
+  it('routes udp_probe profile kind to bounded UDP datagram probe', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    const job = baseJob({
+      check_id: 'l3.forbidden_udp_port.safe',
+      probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'fqdn', value: 'origin.test', port: 9999 },
+    });
+    const outcome = await executeProbeForJob(job);
+    assert.ok(['connected', 'blocked', 'timeout', 'error'].includes(outcome.external_result));
+    assert.equal(outcome.metadata.probe_kind, 'udp_probe');
+  });
+
+  it('routes alert_webhook_ping when webhook URL is missing', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    const job = baseJob({
+      check_id: 'ops.alert_workflow_marker.safe',
+      vector_family: 'operations',
+      probe_profile: { kind: 'alert_webhook_ping', max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'canary', value: 'canary' },
+    });
+    const outcome = await executeProbeForJob(job);
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'missing_webhook_url');
+  });
+
   it('uses worker version constant in processJob attestation', async () => {
     const server = createHttpServer((req, res) => {
       res.statusCode = 200;

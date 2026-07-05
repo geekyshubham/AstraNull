@@ -9,6 +9,11 @@ import { hostname } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  probeAlertWebhookPing,
+  probeQuicReachability,
+  probeUdpDatagram,
+} from '../src/lib/safeNetworkProbes.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../src/lib/wafProductCatalog.mjs';
 import {
   probeWorkerAuthHeaders,
@@ -648,8 +653,18 @@ export function probeMetadataMarker(job) {
 }
 
 export async function executeProbeForJob(job) {
-  if (job.probe_profile?.kind === 'metadata_marker') {
+  const profileKind = job.probe_profile?.kind;
+  if (profileKind === 'metadata_marker') {
     return probeMetadataMarker(job);
+  }
+  if (profileKind === 'udp_probe') {
+    return probeUdpDatagram(job);
+  }
+  if (profileKind === 'quic_reachability') {
+    return probeQuicReachability(job);
+  }
+  if (profileKind === 'alert_webhook_ping') {
+    return probeAlertWebhookPing(job);
   }
   const vectorFamily = job.vector_family;
   if (DNS_VECTOR_FAMILIES.has(vectorFamily)) return probeDns(job);

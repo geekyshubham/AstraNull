@@ -9,6 +9,7 @@ import { getStore, persistStore } from '../store.mjs';
 import { enqueueAgentJob } from './agents.mjs';
 import { correlateVerdict, withinCorrelationWindow } from './correlation.mjs';
 import { upsertFindingFromVerdict } from './findings.mjs';
+import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { computeReadiness } from './readiness.mjs';
@@ -436,7 +437,9 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   let probeEvent = null;
   let probeJob = null;
 
-  if (probeMode === 'signed-worker') {
+  const inlineProbe = isOpsReadinessProbeKind(check) || probeMode !== 'signed-worker';
+
+  if (!inlineProbe) {
     if (wouldExceedEventCap(run, 1)) {
       getStore().testRuns.pop();
       return denyEventCap(ctx, run, { phase: 'probe_job' });
@@ -446,13 +449,19 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     run.awaiting_external_probe = true;
     probe = { nonce: probeJob.nonce, nonce_hash: probeJob.nonce_hash, external_result: null };
   } else {
-    probe = simulateProbeResult(check, target, body.probe_profile);
+    probe = isOpsReadinessProbeKind(check)
+      ? executeOpsReadinessProbe(ctx, check, target)
+      : simulateProbeResult(check, target, body.probe_profile);
     run.correlation.nonce_hash = probe.nonce_hash;
 
     if (wouldExceedEventCap(run, 1)) {
       getStore().testRuns.pop();
       return denyEventCap(ctx, run, { phase: 'probe' });
     }
+
+    const evidenceLabel = isOpsReadinessProbeKind(check)
+      ? 'ops_readiness_probe_evidence'
+      : 'probe_simulation_evidence';
 
     probeEvent = {
       id: probe.event_id,
@@ -470,13 +479,15 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
 
     recordEvidence(ctx, {
       test_run_id: runId,
-      label: 'probe_simulation_evidence',
+      label: evidenceLabel,
       metadata: enrichProbeMetadataWithWafCatalog(
         {
           vector_family: check.vector_family,
           safety_class: check.safety_class,
           probe_event_id: probeEvent.id,
-          simulation: 'SAFE_PROBE_SIMULATION',
+          ...(isOpsReadinessProbeKind(check)
+            ? { ops_readiness: true }
+            : { simulation: 'SAFE_PROBE_SIMULATION' }),
         },
         check.check_id,
       ),

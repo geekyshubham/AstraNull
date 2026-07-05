@@ -71,6 +71,21 @@ export function normalizeJobConstraints(safetyConstraints, probeProfile) {
   return out;
 }
 
+const SAFE_TARGET_METADATA_KEYS = new Set(['alert_webhook_url', 'webhook_url']);
+
+function safeTargetMetadata(target) {
+  const raw = target.metadata_json ?? target.metadata;
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const metadata = {};
+  for (const key of SAFE_TARGET_METADATA_KEYS) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) {
+      metadata[key] = value.trim().slice(0, 512);
+    }
+  }
+  return Object.keys(metadata).length > 0 ? metadata : null;
+}
+
 export function targetDescriptor(target) {
   const out = {
     id: target.id,
@@ -80,6 +95,8 @@ export function targetDescriptor(target) {
   };
   if (target.port != null) out.port = target.port;
   if (target.protocol != null) out.protocol = target.protocol;
+  const metadata = safeTargetMetadata(target);
+  if (metadata) out.metadata = metadata;
   return out;
 }
 

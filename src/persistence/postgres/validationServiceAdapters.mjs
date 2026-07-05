@@ -18,6 +18,7 @@ import {
 import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { correlateVerdict, withinCorrelationWindow } from '../../services/correlation.mjs';
+import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 
 /** @type {readonly string[]} */
@@ -686,7 +687,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
       let probeEvent = null;
       let probeJob = null;
 
-      if (probeMode === 'signed-worker') {
+      const inlineProbe = isOpsReadinessProbeKind(check) || probeMode !== 'signed-worker';
+
+      if (!inlineProbe) {
         if (wouldExceedEventCap(run, 0, 1)) {
           await validationEvidence.updateTestRun(ctx, runId, {
             status: 'cancelled',
@@ -721,7 +724,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
           check_id: check.check_id,
         });
       } else {
-        probe = simulateProbeResult(check, target, body.probe_profile);
+        probe = isOpsReadinessProbeKind(check)
+          ? executeOpsReadinessProbe(ctx, check, target)
+          : simulateProbeResult(check, target, body.probe_profile);
         if (wouldExceedEventCap(run, 0, 1)) {
           await validationEvidence.updateTestRun(ctx, runId, {
             status: 'cancelled',
@@ -751,13 +756,17 @@ export function createPostgresValidationServices(repositories, options = {}) {
         await validationEvidence.appendEvidence(ctx, {
           id: newId('evidence'),
           test_run_id: runId,
-          label: 'probe_simulation_evidence',
+          label: isOpsReadinessProbeKind(check)
+            ? 'ops_readiness_probe_evidence'
+            : 'probe_simulation_evidence',
           metadata: enrichProbeMetadataWithWafCatalog(
             {
               vector_family: check.vector_family,
               safety_class: check.safety_class,
               probe_event_id: probeEvent.id,
-              simulation: 'SAFE_PROBE_SIMULATION',
+              ...(isOpsReadinessProbeKind(check)
+                ? { ops_readiness: true }
+                : { simulation: 'SAFE_PROBE_SIMULATION' }),
             },
             check.check_id,
           ),

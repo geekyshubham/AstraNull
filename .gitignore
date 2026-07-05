@@ -12,6 +12,7 @@ coverage/
 !.env.example
 ops/digitalocean/.app.generated.yaml
 
+
 # Certificates and key material
 *.pem
 *.key
@@ -50,3 +51,17 @@ grokorches-skill.md
 output/release-evidence/
 output/production-readiness-gap-audit.json
 output/staging-readiness-attestation*.json
+
+# Local UX/UI audit scratch (not product source)
+docs/UI-AUDIT.md
+docs/UX-AUDIT.md
+
+# GCP WAF lab operator state and provisioning (local only)
+ops/gcp/waf-lab/
+
+# Local product notes
+PRODUCT.md
+
+# DigitalOcean operator lab helpers (local staging only)
+scripts/do-lab-bootstrap.mjs
+scripts/do-tenant-cleanup.mjs
