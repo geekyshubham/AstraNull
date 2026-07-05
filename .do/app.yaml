@@ -81,6 +81,9 @@ services:
       - key: ASTRANULL_DATABASE_URL
         scope: RUN_TIME
         value: ${astranull-db.DATABASE_URL}
+      - key: ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED
+        scope: RUN_TIME
+        value: "0"
       - key: ASTRANULL_SECRET_ENCRYPTION_KEY
         scope: RUN_TIME
         type: SECRET

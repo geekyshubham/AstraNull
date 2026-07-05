@@ -82,6 +82,9 @@ services:
       - key: ASTRANULL_DATABASE_URL
         scope: RUN_TIME
         value: ${astranull-db.DATABASE_URL}
+      - key: ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED
+        scope: RUN_TIME
+        value: "0"
       # Set these in the DO dashboard (or as encrypted app envs) before first deploy:
       # - ASTRANULL_SECRET_ENCRYPTION_KEY  (64 hex chars)
       # - ASTRANULL_PROBE_WORKER_SECRET    (32+ chars)

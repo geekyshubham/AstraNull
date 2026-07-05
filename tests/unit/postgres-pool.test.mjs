@@ -43,6 +43,13 @@ describe('postgres pool', () => {
     assert.throws(() => resolvePgPoolConfig(), /ASTRANULL_DATABASE_URL must be set/);
   });
 
+  it('allows managed Postgres TLS when ssl rejection is disabled', () => {
+    process.env.ASTRANULL_DATABASE_URL = 'postgresql://localhost/testdb?sslmode=require';
+    process.env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED = '0';
+    const config = resolvePgPoolConfig();
+    assert.deepEqual(config.ssl, { rejectUnauthorized: false });
+  });
+
   it('pingPostgres uses SELECT 1 and releases client', async () => {
     const released = [];
     const pool = {

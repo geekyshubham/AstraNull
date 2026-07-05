@@ -32,8 +32,15 @@ export function resolvePgPoolConfig(env = process.env) {
     throw new Error('ASTRANULL_DATABASE_URL must be set for PostgreSQL.');
   }
 
+  const rejectUnauthorized = String(env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED ?? '1').trim();
+  const ssl =
+    rejectUnauthorized === '0' || rejectUnauthorized.toLowerCase() === 'false'
+      ? { rejectUnauthorized: false }
+      : undefined;
+
   return {
     connectionString,
+    ...(ssl ? { ssl } : {}),
     max: parseBoundedInt(env.ASTRANULL_PG_POOL_MAX, 'ASTRANULL_PG_POOL_MAX', {
       min: MIN_POOL_MAX,
       max: MAX_POOL_MAX,
