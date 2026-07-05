@@ -91,17 +91,29 @@ describe('high-scale react helpers', () => {
     assert.equal(body.reference_uri, 'metadata://high-scale/provider_approval/hs_1');
   });
 
-  it('keeps customer HighScalePage free of SOC execution endpoints', () => {
-    const source = readFileSync(new URL('../../apps/web/react/src/pages/page-components.tsx', import.meta.url), 'utf8');
-    const component = source.match(/export function HighScalePage[\s\S]*?(?=\nexport function )/)?.[0] ?? '';
-    assert.equal(component.includes('/internal/soc/high-scale/'), false);
-    assert.ok(component.includes('buildLifecycleTimeline'));
-    assert.ok(component.includes('explainArtifactReviewStatus'));
-    assert.ok(component.includes('authorizationArtifactTypesForRequest'));
-    assert.ok(component.includes('Authorization pack uploads'));
-    assert.ok(component.includes('href="#soc"'));
-    assert.ok(component.includes('custody_id'));
-    assert.ok(component.includes('content_sha256'));
-    assert.ok(component.includes('filename'));
+  it('keeps customer high-scale surfaces free of SOC execution endpoints', () => {
+    // Security invariant: neither the customer high-scale list page nor its
+    // dedicated detail view may call SOC-only execution endpoints. SOC execution
+    // lives exclusively in SocRequestDetailView (staff surface).
+    const listSource = readFileSync(new URL('../../apps/web/react/src/pages/page-components.tsx', import.meta.url), 'utf8');
+    const listPage = listSource.match(/export function HighScalePage[\s\S]*?(?=\nexport function )/)?.[0] ?? '';
+    assert.equal(listPage.includes('/internal/soc/high-scale/'), false);
+    // List page routes to the dedicated request detail page and keeps the SOC governance pointer.
+    assert.ok(listPage.includes("buildDetailHref('high-scale-detail'"));
+    assert.ok(listPage.includes('href="#soc"'));
+
+    const detailSource = readFileSync(new URL('../../apps/web/react/src/pages/detail-pages.tsx', import.meta.url), 'utf8');
+    const detailView = detailSource.match(/function HighScaleDetailView[\s\S]*?(?=\nfunction )/)?.[0] ?? '';
+    // The customer detail view must also stay free of SOC execution endpoints...
+    assert.equal(detailView.includes('/internal/soc/high-scale/'), false);
+    // ...while carrying the customer authorization-pack + lifecycle capability that moved here.
+    assert.ok(detailView.includes('buildLifecycleTimeline'));
+    assert.ok(detailView.includes('explainArtifactReviewStatus'));
+    assert.ok(detailView.includes('authorizationArtifactTypesForRequest'));
+    assert.ok(detailView.includes('buildMetadataArtifactUploadBody'));
+    assert.ok(detailView.includes('/v1/high-scale-requests/'));
+    assert.ok(detailView.includes('custody_id'));
+    assert.ok(detailView.includes('content_sha256'));
+    assert.ok(detailView.includes('filename'));
   });
 });

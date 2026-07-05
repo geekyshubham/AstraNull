@@ -36,7 +36,20 @@ export function RouteView({
   if (route === 'environments') return <EnvironmentsPage data={data} />;
   if (route === 'target-groups') return <TargetGroupsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'agents') return <AgentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
-  if (['target-group-detail', 'agent-detail', 'run-detail', 'waf-asset-detail', 'discovery-entity', 'tenant-detail', 'cve-detail', 'supply-chain-detail'].includes(route)) {
+  if ([
+    'target-group-detail',
+    'agent-detail',
+    'run-detail',
+    'finding-detail',
+    'evidence-detail',
+    'waf-asset-detail',
+    'discovery-entity',
+    'tenant-detail',
+    'cve-detail',
+    'supply-chain-detail',
+    'high-scale-detail',
+    'soc-request-detail'
+  ].includes(route)) {
     return <DetailRoutePage route={route} data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (route === 'test-policies') return <PolicyPage data={data} config={config} session={session} onRefresh={onRefresh} />;

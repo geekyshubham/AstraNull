@@ -59,10 +59,15 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
       : 'Customer readiness console';
   const visibleNavItems = useMemo(() => {
     const role = session.role ?? 'admin';
-    return NAV_ITEMS.filter((item) => canAccessRoute(role, item.id, {
-      principal: session.principal,
-      staffRole: session.staff_role,
-    }));
+    return NAV_ITEMS.filter((item) => {
+      if (item.id.endsWith('-detail') || item.id === 'discovery-entity') {
+        return false;
+      }
+      return canAccessRoute(role, item.id, {
+        principal: session.principal,
+        staffRole: session.staff_role,
+      });
+    });
   }, [session.principal, session.role, session.staff_role]);
 
   const grouped = useMemo(() => {
@@ -104,11 +109,12 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
           variant="secondary"
           size="icon"
           className="sidebar-collapse"
+          style={{ width: 40, height: 40, minWidth: 40, minHeight: 40 }}
           onClick={toggleSidebarCollapsed}
           aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          <CollapseIcon size={14} />
+          <CollapseIcon size={16} />
         </Button>
         <div className="sidebar-head">
           <Brand />
@@ -139,7 +145,9 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
         </nav>
         <div className="sidebar-foot">
           <a href="/">Public site</a>
-          <button type="button" onClick={logout}>Sign out</button>
+          <Button type="button" variant="ghost" size="sm" onClick={logout}>
+            Sign out
+          </Button>
         </div>
       </aside>
       <div className={cn('scrim', sidebarOpen && 'open')} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
@@ -149,7 +157,7 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
             <Menu size={18} />
           </Button>
           <div className="title-stack">
-            <div className="eyebrow">No-access-first · Evidence-backed · SOC-gated</div>
+            <p className="muted small topbar-caption">No-access-first · Evidence-backed · SOC-gated</p>
             <h1>{current.label}</h1>
           </div>
           <div className="topbar-actions">

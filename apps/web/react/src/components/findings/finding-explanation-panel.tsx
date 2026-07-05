@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button } from '../ui/button';
 import { VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
+import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
@@ -12,10 +14,34 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+const SKELETON_FIELD_COUNT = 4;
+
+function DetailLoadingPlaceholder({ label = 'Loading linked run evidence…' }: { label?: string }) {
+  return (
+    <section
+      className="verdict-explanation finding-explanation-loading"
+      aria-busy="true"
+      aria-label={label}
+    >
+      <span className="skeleton skeleton-text finding-explanation-loading-title" />
+      <div className="verdict-explanation-grid">
+        {Array.from({ length: SKELETON_FIELD_COUNT }, (_, index) => (
+          <div key={index} className="verdict-explanation-item">
+            <span className="skeleton skeleton-text" />
+            <span className="skeleton skeleton-text skeleton-text-wide" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function buildFindingRunDetail(finding: DataItem | null, runDetail: DataItem | null) {
   if (!finding || !runDetail) return null;
   const detail = { ...runDetail };
-  const remediation = getString(finding, ['remediation_template'], '');
+  const findingTemplate = getString(finding, ['remediation_template'], '');
+  const runTemplate = getString(runDetail, ['remediation_template'], '');
+  const remediation = findingTemplate || runTemplate;
   if (remediation) {
     detail.remediation_template = remediation;
   }
@@ -34,19 +60,28 @@ export function FindingExplanationPanel({
   const [runDetail, setRunDetail] = useState<DataItem | null>(null);
   const [runEvents, setRunEvents] = useState<DataItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState('');
+  const [fetchGeneration, setFetchGeneration] = useState(0);
 
   const testRunId = getString(finding, ['test_run_id'], '');
+
+  const loadRunEvidence = useCallback(() => {
+    if (!testRunId) return;
+    setFetchGeneration((value) => value + 1);
+  }, [testRunId]);
 
   useEffect(() => {
     if (!testRunId) {
       setRunDetail(null);
       setRunEvents([]);
       setLoading(false);
+      setFetchError('');
       return;
     }
 
     let cancelled = false;
     setLoading(true);
+    setFetchError('');
     Promise.all([
       requestJson(config, session, `/v1/test-runs/${testRunId}`),
       requestJson(config, session, `/v1/test-runs/${testRunId}/events`),
@@ -59,10 +94,11 @@ export function FindingExplanationPanel({
           : [];
         setRunEvents(items);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
           setRunDetail(null);
           setRunEvents([]);
+          setFetchError(err instanceof Error ? err.message : 'Could not load linked run evidence.');
         }
       })
       .finally(() => {
@@ -72,7 +108,7 @@ export function FindingExplanationPanel({
     return () => {
       cancelled = true;
     };
-  }, [testRunId, config, session]);
+  }, [testRunId, config, session, fetchGeneration]);
 
   const explanationDetail = useMemo(
     () => buildFindingRunDetail(finding, runDetail),
@@ -100,7 +136,9 @@ export function FindingExplanationPanel({
           <div className="verdict-explanation-grid">
             <div className="verdict-explanation-item">
               <span className="verdict-explanation-label">Remediation</span>
-              <span className="verdict-explanation-value">{getString(finding, ['remediation_template'])}</span>
+              <span className="verdict-explanation-value">
+                {resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
+              </span>
             </div>
           </div>
         ) : null}
@@ -108,17 +146,40 @@ export function FindingExplanationPanel({
     );
   }
 
-  if (loading && !explanationDetail) {
-    return <p className="muted">Loading linked run evidence for this finding...</p>;
+  if (fetchError) {
+    return (
+      <div className="finding-explanation-panel">
+        <div className="form-banner error stack-tight">
+          <p>{fetchError}</p>
+          <div className="row-actions">
+            <Button size="sm" variant="secondary" onClick={() => loadRunEvidence()}>Retry</Button>
+          </div>
+        </div>
+        {getString(finding, ['notes'], '') ? (
+          <p className="muted">Finding notes: {getString(finding, ['notes'])}</p>
+        ) : null}
+      </div>
+    );
   }
+
+  if (loading && !explanationDetail) {
+    return <DetailLoadingPlaceholder label="Loading linked run evidence for this finding…" />;
+  }
+
+  const runCheckLabel = getString(runDetail ?? {}, ['check_id'], '—');
 
   return (
     <div className="finding-explanation-panel">
       <p className="muted">
-        Run <code>{testRunId}</code>
-        {runDetail ? ` · Check ${getString(runDetail, ['check_id'], '—')}` : ''}
+        Linked run {runDetail ? getString(runDetail, ['check_id'], testRunId) : testRunId}
+        {runDetail ? ` · Check ${runCheckLabel}` : ''}
       </p>
-      <VerdictExplanationPanel detail={explanationDetail} events={runEvents} heading="Why this finding?" />
+      <VerdictExplanationPanel
+        detail={explanationDetail}
+        events={runEvents}
+        finding={finding}
+        heading="Why this finding?"
+      />
     </div>
   );
 }

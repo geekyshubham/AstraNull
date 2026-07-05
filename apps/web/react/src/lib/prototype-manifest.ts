@@ -671,9 +671,38 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
 };
 
 export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
-  'target-group-detail': PAGE_TAB_SETS['target-groups'],
-  'agent-detail': PAGE_TAB_SETS.agents,
+  'target-group-detail': [
+    { id: 'overview', label: 'Overview', summary: 'Readiness, runs, and declaration metadata for this service.', evidence: 'Target group detail API.' },
+    { id: 'scope', label: 'Scope & behavior', summary: 'Declared targets and expected protection behavior.', evidence: 'Customer-provided scope declaration.' },
+    { id: 'validation', label: 'Validation', summary: 'Policies, runs, and findings for this group.', evidence: 'Run and finding records.' },
+    { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to this group.', evidence: 'Agent heartbeat records.' },
+    { id: 'settings', label: 'Settings', summary: 'Archive, owners, and safety policy.', evidence: 'Audited tenant action.' }
+  ],
+  'agent-detail': [
+    { id: 'overview', label: 'Overview', summary: 'Status, binding, and capabilities for one agent.', evidence: 'Agent record and heartbeat.' },
+    { id: 'health', label: 'Health', summary: 'Heartbeat freshness and diagnostic state.', evidence: 'Agent health metadata.' },
+    { id: 'placement', label: 'Placement', summary: 'Target-group placement confidence.', evidence: 'Placement review records.' },
+    { id: 'audit', label: 'Audit', summary: 'Metadata-only lifecycle events for this agent.', evidence: 'Tenant audit trail.' }
+  ],
   'run-detail': PAGE_TAB_SETS.runs,
+  'supply-chain-detail': [
+    { id: 'overview', label: 'Overview', summary: 'Exposure state, confidence, and hostname context.', evidence: 'Supply-chain risk record.' },
+    { id: 'remediation', label: 'Remediation', summary: 'Documented remediation steps and owner workflow.', evidence: 'Remediation metadata.' },
+    { id: 'authorization', label: 'Authorization', summary: 'Phase authorizations and customer custody.', evidence: 'Phase authorization ledger.' },
+    { id: 'audit', label: 'Audit', summary: 'Custody references and linked evidence.', evidence: 'Audit and evidence exports.' }
+  ],
+  'discovery-entity': [
+    { id: 'overview', label: 'Overview', summary: 'Candidate metadata, confidence, and source.', evidence: 'Discovery source metadata.' },
+    { id: 'decision', label: 'Decision', summary: 'Approve, reject, import, and decision trail.', evidence: 'Decision audit trail.' },
+    { id: 'scope-impact', label: 'Scope impact', summary: 'Target groups and posture impact if imported.', evidence: 'Declared target-group reference.' }
+  ],
+  'tenant-detail': [
+    { id: 'overview', label: 'Overview', summary: 'Lifecycle, plan, and subscription summary.', evidence: 'Staff tenant detail API.' },
+    { id: 'users', label: 'Users', summary: 'Tenant users and support owner.', evidence: 'Tenant user records.' },
+    { id: 'entitlements', label: 'Entitlements', summary: 'Plan features and grant controls.', evidence: 'Subscription entitlements.' },
+    { id: 'provisioning', label: 'Provisioning', summary: 'Signup request that created this tenant.', evidence: 'Signup request record.' },
+    { id: 'audit', label: 'Audit', summary: 'Recent tenant-scoped audit entries.', evidence: 'Internal audit log.' }
+  ],
   'waf-asset-detail': [
     { id: 'score', label: 'Score', summary: 'Asset effectiveness score and risk tier.', evidence: 'WAF snapshot and validation evidence.' },
     { id: 'ruleset', label: 'Ruleset', summary: 'Connector rule health and managed-rule posture.', evidence: 'Connector metadata.' },
@@ -682,9 +711,7 @@ export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'exceptions', label: 'Exceptions', summary: 'Accepted exceptions and expiry.', evidence: 'Exception register.' },
     { id: 'validation-runs', label: 'Validation Runs', summary: 'Safe validation history for the asset.', evidence: 'Validation plans and run evidence.' },
     { id: 'actions', label: 'Actions', summary: 'Remediation links and owner next steps.', evidence: 'Action item records.' }
-  ],
-  'discovery-entity': PAGE_TAB_SETS.discovery,
-  'tenant-detail': PAGE_TAB_SETS.admin
+  ]
 };
 
 export const FEATURE_GROUPS: FeatureGroup[] = [

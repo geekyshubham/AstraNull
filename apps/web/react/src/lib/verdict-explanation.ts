@@ -23,11 +23,112 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
 
 function verdictExplanationMetaMode(event: DataItem) {
   const meta = (event.metadata as DataItem | undefined) ?? {};
+  const signalType = getString(event, ['signal_type'], '');
+  if (signalType === 'agent_no_observation') {
+    if (meta.reason) return `no observation (${String(meta.reason)})`;
+    if (meta.phase) return String(meta.phase);
+  }
   for (const key of ['observation_mode', 'mode', 'source', 'interface', 'log_source']) {
     const value = meta[key];
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
-  return getString(event, ['signal_type'], 'event');
+  return signalType || 'event';
+}
+
+const KNOWN_REMEDIATION_TEMPLATE_KEYS = new Set(['waf_posture_remediation']);
+
+function parseFindingReasonCodes(finding: DataItem | null | undefined) {
+  const notes = getString(finding, ['notes'], '');
+  const match = notes.match(/(?:Reason codes|reason_codes):\s*([^.;]+)/i);
+  if (!match) return [];
+  return match[1]
+    .split(',')
+    .map((code) => code.trim())
+    .filter((code) => code && code !== 'none');
+}
+
+function parseFindingPostureStatus(finding: DataItem | null | undefined) {
+  const title = getString(finding, ['title'], '');
+  const titleMatch = title.match(/WAF posture\s+(\w+)/i);
+  if (titleMatch) return titleMatch[1].toLowerCase();
+  const notes = getString(finding, ['notes'], '');
+  const notesMatch = notes.match(/Posture status:\s*(\w+)/i);
+  if (notesMatch) return notesMatch[1].toLowerCase();
+  return '';
+}
+
+function probeEventsHaveError(probeEvents: DataItem[]) {
+  return probeEvents.some((event) => {
+    const meta = (event.metadata as DataItem | undefined) ?? {};
+    const externalResult = String(event.external_result ?? meta.external_result ?? '').toLowerCase();
+    return externalResult === 'error' || externalResult === 'failed' || externalResult === 'timeout';
+  });
+}
+
+function agentPlacementUnbound(detail: DataItem | null | undefined) {
+  const placement = detail?.verdict && typeof detail.verdict === 'object'
+    ? (detail.verdict as DataItem).placement_confidence as DataItem | undefined
+    : undefined;
+  if (!placement || typeof placement !== 'object') return false;
+  const level = String(placement.level ?? '').toLowerCase();
+  const mode = String(placement.observation_mode ?? '').toLowerCase();
+  const reason = String(placement.reason ?? '').toLowerCase();
+  return level === 'invalid' || mode === 'unbound' || reason.includes('no agent is bound');
+}
+
+function resolveWafPostureRemediation(context: {
+  finding?: DataItem | null;
+  detail?: DataItem | null;
+  events?: DataItem[];
+}) {
+  const reasonCodes = parseFindingReasonCodes(context.finding);
+  const postureStatus = parseFindingPostureStatus(context.finding);
+  const probeEvents = (context.events ?? []).filter(
+    (event) => getString(event, ['signal_type']) === 'probe_result',
+  );
+  const noObsEvents = (context.events ?? []).filter(
+    (event) => getString(event, ['signal_type']) === 'agent_no_observation',
+  );
+  const steps: string[] = [];
+
+  if (reasonCodes.includes('origin_bypass_confirmed')) {
+    steps.push('Restrict origin access to WAF/CDN egress only and enable authenticated origin pull where supported.');
+  }
+  if (reasonCodes.includes('marker_rule_not_blocking')) {
+    steps.push('Review WAF rule mode and ensure marker or managed rules are in blocking mode.');
+  }
+  if (reasonCodes.includes('monitor_only_behavior')) {
+    steps.push('Move affected WAF rules from monitor or log-only to blocking mode after staging validation.');
+  }
+  if (postureStatus === 'unprotected') {
+    steps.push('Enable WAF coverage for the declared asset and validate with a safe marker retest.');
+  }
+  if (probeEventsHaveError(probeEvents)) {
+    steps.push('Verify the declared URL is reachable from external probes and accepts bounded HEAD requests.');
+  }
+  if (noObsEvents.length || agentPlacementUnbound(context.detail ?? null)) {
+    steps.push('Bind an outbound agent to the target group and confirm canary observation is enabled.');
+  }
+
+  if (steps.length) {
+    return `${[...new Set(steps)].join(' ')} Retest with a safe WAF validation after changes.`;
+  }
+  return 'Review WAF posture findings, apply vendor-aware remediation, and retest with a safe marker validation.';
+}
+
+export function resolveRemediationTemplate(
+  template: string,
+  context: {
+    finding?: DataItem | null;
+    detail?: DataItem | null;
+    events?: DataItem[];
+  } = {},
+) {
+  const trimmed = template.trim();
+  if (!trimmed) return '';
+  if (!KNOWN_REMEDIATION_TEMPLATE_KEYS.has(trimmed)) return trimmed;
+  if (trimmed === 'waf_posture_remediation') return resolveWafPostureRemediation(context);
+  return trimmed;
 }
 
 export function summarizeExternalProbeEvidence(probeEvents: DataItem[]) {
@@ -107,7 +208,7 @@ export function summarizePlacementConfidence(
 export function buildVerdictExplanationFields(
   detail: DataItem | null,
   events: DataItem[],
-  options: { remediationTemplate?: string } = {}
+  options: { remediationTemplate?: string; finding?: DataItem | null } = {}
 ): VerdictExplanationField[] {
   if (!detail?.verdict || typeof detail.verdict !== 'object') return [];
 
@@ -120,7 +221,12 @@ export function buildVerdictExplanationFields(
     : obsEvents;
 
   const verdict = detail.verdict as DataItem;
-  const remediationRef = options.remediationTemplate ?? getString(detail, ['remediation_template'], '');
+  const rawRemediation = options.remediationTemplate ?? getString(detail, ['remediation_template'], '');
+  const remediationRef = resolveRemediationTemplate(rawRemediation, {
+    finding: options.finding,
+    detail,
+    events,
+  });
   const conclusion = `${getString(verdict, ['verdict'], '—')} · confidence ${getString(verdict, ['confidence'], '—')}. ${getString(verdict, ['explanation'], '')}`.trim();
 
   return [

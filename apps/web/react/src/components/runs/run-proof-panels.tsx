@@ -48,13 +48,13 @@ export function TrafficPathPanel({ detail }: { detail: DataItem | null }) {
           <span key={hop.key} className="traffic-path-hop">
             {index > 0 ? <span className="traffic-path-arrow" aria-hidden="true">→</span> : null}
             <div className={`traffic-path-node traffic-path-node--${trafficHopState(hop.key, verdict)}`}>
-              <span className="traffic-path-label">{hop.label}</span>
-              <span className="traffic-path-sub muted">{hop.sub}</span>
+              <span className="traffic-path-label text-sm">{hop.label}</span>
+              <span className="traffic-path-sub muted text-xs">{hop.sub}</span>
             </div>
           </span>
         ))}
       </div>
-      <p className="muted traffic-path-caption">{statusLine}</p>
+      <p className="muted text-sm traffic-path-caption">{statusLine}</p>
     </section>
   );
 }
@@ -62,10 +62,12 @@ export function TrafficPathPanel({ detail }: { detail: DataItem | null }) {
 export function VerdictExplanationPanel({
   detail,
   events,
+  finding = null,
   heading = 'Why this verdict?',
 }: {
   detail: DataItem | null;
   events: DataItem[];
+  finding?: DataItem | null;
   heading?: string;
 }) {
   if (!detail?.verdict) {
@@ -77,7 +79,7 @@ export function VerdictExplanationPanel({
     );
   }
 
-  const fields = buildVerdictExplanationFields(detail, events);
+  const fields = buildVerdictExplanationFields(detail, events, { finding });
 
   return (
     <section className="verdict-explanation">
@@ -85,8 +87,8 @@ export function VerdictExplanationPanel({
       <div className="verdict-explanation-grid">
         {fields.map((field) => (
           <div key={field.label} className="verdict-explanation-item">
-            <span className="verdict-explanation-label">{field.label}</span>
-            <span className="verdict-explanation-value">{field.value}</span>
+            <span className="verdict-explanation-label text-xs">{field.label}</span>
+            <span className="verdict-explanation-value text-sm">{field.value}</span>
           </div>
         ))}
       </div>
@@ -100,7 +102,7 @@ export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
   return (
     <section className="truth-table-viz">
       <h4>Verdict truth table</h4>
-      <table className="truth-table data-table">
+      <table className="truth-table data-table text-sm">
         <thead>
           <tr>
             <th>Outcome</th>
@@ -136,7 +138,7 @@ export function RunTimelineViz({ events }: { events: DataItem[] }) {
           return (
             <div key={getString(event, ['id'], String(index))} className="run-timeline-marker" style={{ left: `${pct}%` }}>
               <span className="run-timeline-dot" />
-              <span className="run-timeline-tip">{label}</span>
+              <span className="run-timeline-tip text-xs">{label}</span>
             </div>
           );
         })}

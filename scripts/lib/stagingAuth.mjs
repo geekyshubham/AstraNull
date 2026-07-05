@@ -7,12 +7,30 @@ import {
 import { buildDevHeaders, stagingFetch } from '../local-staging-smoke.mjs';
 
 /**
+ * OIDC issuer is tied to ASTRANULL_PUBLIC_BASE_URL on the server (primary domain),
+ * which may differ from the ingress URL used for API calls.
+ *
+ * @param {string} apiBaseUrl
+ */
+export function resolveOidcMintBaseUrl(apiBaseUrl) {
+  const explicit = String(process.env.ASTRANULL_STAGING_OIDC_BASE_URL ?? '').trim().replace(/\/$/, '');
+  if (explicit) return explicit;
+  const normalizedApi = String(apiBaseUrl ?? '').trim().replace(/\/$/, '');
+  if (normalizedApi.includes('ondigitalocean.app')) {
+    return 'https://astranull.site';
+  }
+  return normalizedApi;
+}
+
+/**
  * @param {string} baseUrl
  */
 function buildOidcMintEnv(baseUrl) {
+  const mintBaseUrl = resolveOidcMintBaseUrl(baseUrl);
   return {
     ...process.env,
-    ASTRANULL_HOSTED_STAGING_BASE_URL: String(baseUrl).trim().replace(/\/$/, ''),
+    ASTRANULL_HOSTED_STAGING_BASE_URL: mintBaseUrl,
+    ASTRANULL_PUBLIC_BASE_URL: mintBaseUrl,
   };
 }
 

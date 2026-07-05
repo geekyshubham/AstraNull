@@ -1,6 +1,8 @@
 import { agentHasRecentHeartbeat } from './onboarding';
 import type { DataItem } from './types';
 
+export { formatPlacementOverview, formatPlacementStatus, placementStatusHint } from './placement-labels';
+
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
   for (const key of keys) {
@@ -20,18 +22,52 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
   return fallback;
 }
 
+const AGENT_STATUS_LABELS: Record<string, string> = {
+  online: 'Online',
+  offline: 'Offline',
+  revoked: 'Revoked',
+};
+
+const HEARTBEAT_FRESHNESS_LABELS: Record<string, string> = {
+  fresh: 'Responding',
+  stale: 'Not responding',
+  never: 'Never checked in',
+  revoked: 'Revoked',
+  unknown: 'Unknown',
+};
+
+const PLACEMENT_TYPE_LABELS: Record<string, string> = {
+  host: 'On the server',
+  sidecar: 'Beside the app',
+  canary: 'Canary path',
+  packet_mirror: 'Mirrored traffic',
+  log_tail: 'From logs',
+  unbound: 'Not assigned',
+};
+
 export function formatAgentCapabilities(agent: DataItem | null | undefined) {
   const capabilities = Array.isArray(agent?.capabilities) ? agent.capabilities as string[] : [];
-  return capabilities.length ? capabilities.join(', ') : '—';
+  if (!capabilities.length) return '—';
+  return capabilities
+    .map((cap) => PLACEMENT_TYPE_LABELS[cap] ?? cap.replace(/_/g, ' '))
+    .join(', ');
 }
 
 export function formatAgentPlacement(agent: DataItem | null | undefined) {
+  const groupId = getString(agent, ['target_group_id'], '');
   const placement = getString(agent, ['placement_type', 'placement'], '');
-  return placement || 'undeclared';
+  const placementLabel = PLACEMENT_TYPE_LABELS[placement] ?? (placement || 'Not set');
+  if (!groupId) return `Not assigned · ${placementLabel}`;
+  return `Assigned to group · ${placementLabel}`;
 }
 
 export function formatAgentHealth(agent: DataItem | null | undefined) {
-  return getString(agent, ['status', 'state'], 'unknown');
+  const status = getString(agent, ['status', 'state'], 'unknown');
+  return AGENT_STATUS_LABELS[status] ?? status;
+}
+
+export function formatHeartbeatFreshness(freshness: string) {
+  return HEARTBEAT_FRESHNESS_LABELS[freshness] ?? freshness;
 }
 
 export function agentHeartbeatFreshness(agent: DataItem | null | undefined, nowMs = Date.now()) {

@@ -10,22 +10,25 @@ export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugePro
   const normalized = clamp(score);
   const dash = 2 * Math.PI * 52;
   const offset = dash - (dash * normalized) / 100;
+  const rounded = Math.round(normalized);
+  const gaugeLabel = `${label} score ${rounded} out of 100`;
+
   return (
-    <div className="readiness-gauge" aria-label={`${label} ${normalized}`}>
-      <svg viewBox="0 0 140 140" role="img">
+    <div className="readiness-gauge">
+      <svg viewBox="0 0 140 140" role="img" aria-label={gaugeLabel}>
         <circle className="gauge-track" cx="70" cy="70" r="52" />
         <circle
-          className={`gauge-fill gauge-fill-${scoreTone(normalized)}`}
+          className={`gauge-fill gauge-fill-animate gauge-fill-${scoreTone(normalized)}`}
           cx="70"
           cy="70"
           r="52"
           strokeDasharray={dash}
           strokeDashoffset={offset}
         />
-        <text className="gauge-score" x="70" y="68" textAnchor="middle">
-          {Math.round(normalized)}
+        <text className="gauge-score" x="70" y="68" textAnchor="middle" aria-hidden="true">
+          {rounded}
         </text>
-        <text className="gauge-label" x="70" y="90" textAnchor="middle">
+        <text className="gauge-label" x="70" y="90" textAnchor="middle" aria-hidden="true">
           {label}
         </text>
       </svg>

@@ -1,28 +1,45 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, Bot, ClipboardList, FileCheck2, FileText, Network, ShieldCheck, ShieldHalf, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
-import { Badge } from '../components/ui/badge';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Activity, Bot, ClipboardList, FileCheck2, FileText, Network, ShieldCheck, ShieldHalf, Siren, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
+import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
+import { Badge, type BadgeProps } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { Progress } from '../components/ui/progress';
 import { DataTable, type TableColumn } from '../components/ui/table';
+import { Select } from '../components/ui/select';
 import { Tabs } from '../components/ui/tabs';
-import { buildApiHeaders, requestJson } from '../lib/api';
+import { buildApiHeaders, isStaffSocRole, requestJson, requestSocJson } from '../lib/api';
 import { ROUTE_BY_ID } from '../lib/navigation';
 import { buildDetailHref, getRouteEntityId } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { formatDate, formatExpectedBehavior, scoreTone } from '../lib/utils';
-import { RunProofPanels, RunTimelineViz, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
+import { RunTimelineViz, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
 import {
   agentHeartbeatFreshness,
-  agentInstallApiBase,
   filterAgentAuditEntries,
   formatAgentCapabilities,
   formatAgentHealth,
-  formatAgentPlacement
+  formatAgentPlacement,
+  formatPlacementStatus,
+  placementStatusHint,
 } from '../lib/agent-helpers';
+import { findingSlaDueAt, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
+import {
+  authorizationArtifactPurpose,
+  authorizationArtifactTitle,
+  authorizationArtifactTypesForRequest,
+  bestArtifactForType,
+  buildLifecycleTimeline,
+  buildMetadataArtifactUploadBody,
+  explainArtifactReviewStatus,
+  packRequirementForType,
+  socDevScheduleWindow
+} from '../lib/high-scale';
 import { routeTabs } from '../lib/prototype-manifest';
-import { MetricCard, PageHeader } from './page-components';
+import { ReadinessGauge } from '../components/charts/readiness-gauge';
+import { MetricCard, PageContextSummary } from './page-components';
+
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -87,6 +104,95 @@ function formatFactorLabel(value: string) {
   return value.replace(/_/g, ' ');
 }
 
+const SIGNAL_TYPE_LABELS: Record<string, string> = {
+  probe_result: 'Probe result',
+  agent_observation: 'Agent observation',
+  agent_no_observation: 'Agent no observation',
+  verdict_published: 'Verdict published',
+  run_started: 'Run started',
+  run_cancelled: 'Run cancelled'
+};
+
+function humanizeSignalType(value: string) {
+  const key = value.trim();
+  if (!key) return 'Event';
+  return SIGNAL_TYPE_LABELS[key] ?? formatFactorLabel(key);
+}
+
+function checkDisplayName(checks: DataItem[], checkId: string) {
+  const check = checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
+  return getString(check ?? {}, ['name', 'title'], checkId);
+}
+
+function runDisplayLabel(runs: DataItem[], runId: string) {
+  const run = runs.find((entry) => getString(entry, ['id'], '') === runId);
+  if (!run) return runId;
+  const checkId = getString(run, ['check_id'], '');
+  const when = formatDate(run.started_at ?? run.created_at);
+  return checkId ? `${checkId} · ${when}` : when || runId;
+}
+
+function targetDisplayLabel(targets: DataItem[], targetId: string) {
+  const target = targets.find((entry) => getString(entry, ['id'], '') === targetId);
+  return getString(target ?? {}, ['value', 'hostname', 'label'], targetId);
+}
+
+const STAFF_ENTITLEMENT_LABELS: Record<string, string> = {
+  waf_posture: 'WAF posture',
+  external_discovery: 'External discovery',
+  connectors: 'Connectors',
+  high_scale_program: 'High-scale program'
+};
+
+const TARGET_GROUP_EXPECTED_BEHAVIOR_OPTIONS = [
+  { value: 'must_block_before_origin', label: 'Must be blocked before origin' },
+  { value: 'must_allow_baseline_health', label: 'Must allow baseline health' },
+  { value: 'must_challenge_or_rate_limit', label: 'Must challenge or rate-limit' },
+  { value: 'must_not_expose_direct_ip', label: 'Must not expose direct IP' }
+] as const;
+
+const SUPPLY_CHAIN_EXPOSURE_TYPES = [
+  { id: 'dangling_cname', label: 'Dangling CNAME' },
+  { id: 'subdomain_takeover', label: 'Subdomain takeover risk' },
+  { id: 'orphan_record', label: 'Orphan DNS record' },
+  { id: 'customer_declared', label: 'Customer-declared exposure' }
+] as const;
+
+const SUPPLY_CHAIN_PHASE_LABELS: Record<string, { label: string; description: string }> = {
+  AP2_manual_custody: { label: 'Manual custody (AP2)', description: 'Customer retains manual custody before governed activation.' },
+  AP3_governed_active: { label: 'Governed active (AP3)', description: 'Governed active protection with signed authorization.' }
+};
+
+function discoveryEyebrow(state: string) {
+  const normalized = state.toLowerCase();
+  if (['approved', 'approved_target', 'imported', 'entity'].includes(normalized)) return 'Discovery entity';
+  if (normalized === 'rejected') return 'Rejected candidate';
+  return 'Discovery candidate';
+}
+
+function formatConfidencePercent(entity: DataItem) {
+  const raw = entity.confidence ?? entity.confidence_score;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const pct = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+    return `${pct}%`;
+  }
+  const text = getString(entity, ['confidence', 'confidence_score'], '');
+  return text || '—';
+}
+
+async function sha256HexBrowser(input: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+type AuthorizationArtifactDraft = {
+  filename: string;
+  content_sha256: string;
+  custody_id: string;
+};
+
 function buildEvidenceBackedFactors(
   route: RouteId,
   entity: DataItem,
@@ -106,7 +212,7 @@ function buildEvidenceBackedFactors(
     if (verdict !== 'pending') {
       factors.push({
         label: 'Verdict outcome',
-        body: getNestedString(entity, ['verdict', 'explanation'], getNestedString(entity, ['verdict', 'conclusion'], 'Final verdict from `/v1/test-runs/:id`.')),
+        body: getNestedString(entity, ['verdict', 'explanation'], getNestedString(entity, ['verdict', 'conclusion'], 'Final verdict recorded for this test run.')),
         value: verdict === 'pass' ? 100 : verdict === 'fail' ? 65 : 50
       });
     }
@@ -126,7 +232,7 @@ function buildEvidenceBackedFactors(
     if (Number.isFinite(passRate) && passRate > 0) {
       return [{
         label: 'Scenario pass rate',
-        body: 'Latest effectiveness summary from `/v1/waf/assets/:id`.',
+        body: 'Latest effectiveness summary for this WAF asset.',
         value: Math.round(passRate)
       }];
     }
@@ -139,7 +245,7 @@ function buildEvidenceBackedFactors(
     if (triage && typeof triage.score === 'number' && Number.isFinite(triage.score)) {
       factors.push({
         label: 'Triage score',
-        body: getString(triage, ['summary'], 'Exposure triage from `/v1/waf/cve-pipeline/:id/triage`.'),
+        body: getString(triage, ['summary'], 'Exposure triage from the CVE pipeline.'),
         value: Math.min(100, Math.max(0, Math.round(triage.score)))
       });
     }
@@ -149,7 +255,7 @@ function buildEvidenceBackedFactors(
         if (active === true) {
           factors.push({
             label: formatFactorLabel(key),
-            body: 'Boolean triage factor returned by the CVE pipeline API.',
+            body: 'Active triage factor from the CVE pipeline.',
             value: 100
           });
         }
@@ -158,7 +264,7 @@ function buildEvidenceBackedFactors(
     if (extras.cveMatches.length > 0) {
       factors.push({
         label: 'Declared asset matches',
-        body: `${extras.cveMatches.length} metadata-only matches from /v1/waf/cve-pipeline/:id/match.`,
+        body: `${extras.cveMatches.length} metadata-only declared asset matches.`,
         value: Math.min(100, extras.cveMatches.length * 20)
       });
     }
@@ -206,7 +312,7 @@ function FactorPanel({
             <span>{factor.body}</span>
           </div>
           <Badge tone={scoreTone(factor.value)}>{factor.value}%</Badge>
-          <Progress value={factor.value} />
+          <Progress value={factor.value} tone={scoreTone(factor.value)} />
         </div>
       ))}
     </div>
@@ -229,6 +335,383 @@ function TimelinePanel({ items }: { items: Array<{ label: string; at?: unknown }
         </div>
       ))}
     </div>
+  );
+}
+
+const DETAIL_GROUP_LABELS: Record<string, string> = {
+  scope: 'Scope',
+  validation: 'Validation',
+  posture: 'Posture',
+  governance: 'Governance',
+  staff: 'Staff'
+};
+
+type StatusBadgeTone = NonNullable<BadgeProps['tone']>;
+
+const DETAIL_SKELETON_KV_ROWS = 6;
+const DETAIL_SKELETON_TAB_COUNT = 4;
+
+function normalizeStatusKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function formatStatusLabel(value: string, fallback = '—') {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  const label = trimmed.replace(/_/g, ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function runStatusBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (['completed', 'finalized', 'succeeded', 'pass'].includes(key)) return 'success';
+  if (['running', 'collecting', 'planned', 'pending', 'queued'].includes(key)) return 'info';
+  if (['failed', 'cancelled', 'canceled', 'error'].includes(key)) return 'danger';
+  if (['stopped', 'stopping'].includes(key)) return 'warn';
+  return 'muted';
+}
+
+function verdictBadgeTone(verdict: string): StatusBadgeTone {
+  const key = normalizeStatusKey(verdict);
+  if (key === 'pass') return 'success';
+  if (key === 'fail') return 'danger';
+  if (key === 'inconclusive') return 'warn';
+  return 'info';
+}
+
+function findingSeverityBadgeTone(severity: string): StatusBadgeTone {
+  const key = normalizeStatusKey(severity);
+  if (['critical', 'high'].includes(key)) return 'danger';
+  if (['medium', 'moderate'].includes(key)) return 'warn';
+  if (['low', 'info'].includes(key)) return 'info';
+  return 'muted';
+}
+
+function findingStatusBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (key === 'closed') return 'success';
+  if (key === 'accepted_risk') return 'muted';
+  if (key === 'open') return 'warn';
+  return 'info';
+}
+
+function agentStatusBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (key === 'active' || key === 'online') return 'success';
+  if (key === 'revoked' || key === 'disabled') return 'danger';
+  if (key === 'degraded' || key === 'stale') return 'warn';
+  return 'muted';
+}
+
+function placementStatusBadgeTone(status: string): StatusBadgeTone {
+  if (status === 'proven') return 'success';
+  if (status === 'needs_baseline') return 'warn';
+  if (status === 'missing_agent' || status === 'misplaced_risk') return 'danger';
+  return 'muted';
+}
+
+function discoveryEntityStateBadgeTone(state: string): StatusBadgeTone {
+  const key = normalizeStatusKey(state);
+  if (['approved', 'active', 'entity', 'imported'].includes(key)) return 'success';
+  if (key === 'rejected') return 'danger';
+  return 'warn';
+}
+
+function signupRequestStateTone(state: string): StatusBadgeTone {
+  const key = normalizeStatusKey(state);
+  if (['approved', 'provisioned', 'active'].includes(key)) return 'success';
+  if (['rejected', 'denied', 'cancelled', 'canceled'].includes(key)) return 'danger';
+  if (['under_review', 'reviewing', 'in_review'].includes(key)) return 'warn';
+  if (['submitted', 'pending', 'recorded'].includes(key)) return 'info';
+  return 'muted';
+}
+
+function supplyChainExposureLabel(type: string) {
+  const match = SUPPLY_CHAIN_EXPOSURE_TYPES.find((entry) => entry.id === type);
+  return match?.label ?? formatStatusLabel(type);
+}
+
+function highScaleStateBadgeTone(state: string): StatusBadgeTone {
+  const key = normalizeStatusKey(state);
+  if (['closed', 'completed'].includes(key)) return 'success';
+  if (['running', 'scheduled', 'approved'].includes(key)) return 'info';
+  if (['stopped', 'under_review', 'submitted'].includes(key)) return 'warn';
+  if (['rejected', 'failed'].includes(key)) return 'danger';
+  return 'muted';
+}
+
+function artifactReviewBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (key === 'accepted') return 'success';
+  if (key === 'rejected') return 'danger';
+  if (key === 'pending_review' || key === 'pending') return 'warn';
+  return 'info';
+}
+
+function reportStatusBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (['ready', 'published', 'complete', 'completed'].includes(key)) return 'success';
+  if (['generating', 'pending', 'draft'].includes(key)) return 'info';
+  if (['failed', 'error'].includes(key)) return 'danger';
+  return 'muted';
+}
+
+function cveStageBadgeTone(stage: string): StatusBadgeTone {
+  const key = normalizeStatusKey(stage);
+  if (['validated', 'mitigated', 'closed'].includes(key)) return 'success';
+  if (['triage', 'ingest'].includes(key)) return 'info';
+  if (['exposed', 'active'].includes(key)) return 'danger';
+  return 'warn';
+}
+
+function supplyChainStateBadgeTone(state: string): StatusBadgeTone {
+  const key = normalizeStatusKey(state);
+  if (key === 'confirmed') return 'danger';
+  if (key === 'suspected') return 'warn';
+  if (key === 'mitigated' || key === 'resolved') return 'success';
+  return 'muted';
+}
+
+function subscriptionStatusBadgeTone(status: string): StatusBadgeTone {
+  const key = normalizeStatusKey(status);
+  if (['active', 'trialing'].includes(key)) return 'success';
+  if (['past_due', 'paused'].includes(key)) return 'warn';
+  if (['canceled', 'cancelled', 'suspended'].includes(key)) return 'danger';
+  return 'info';
+}
+
+function lifecycleBadgeTone(state: string): StatusBadgeTone {
+  const key = normalizeStatusKey(state);
+  if (key === 'active') return 'success';
+  if (key === 'suspended') return 'danger';
+  if (key === 'pending') return 'warn';
+  return 'muted';
+}
+
+function StatusBadge({ value, tone, fallback = '—' }: { value: string; tone: StatusBadgeTone; fallback?: string }) {
+  const label = formatStatusLabel(value, fallback);
+  return <Badge tone={tone}>{label}</Badge>;
+}
+
+function DetailPageIntro({ route, eyebrow }: { route: RouteId; eyebrow?: string }) {
+  const item = ROUTE_BY_ID.get(route);
+  const description = item?.description?.trim();
+  return (
+    <>
+      <p className="eyebrow">{eyebrow ?? item?.group}</p>
+      {description ? <p className="muted small">{description}</p> : null}
+    </>
+  );
+}
+
+function DetailKvSkeletonRows({ rows = DETAIL_SKELETON_KV_ROWS }: { rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index}>
+          <span className="skeleton skeleton-text" />
+          <strong className="skeleton skeleton-text" />
+        </div>
+      ))}
+    </>
+  );
+}
+
+const DETAIL_LIST_LINKS: Partial<Record<RouteId, { label: string; href: string }>> = {
+  'run-detail': { label: 'Test runs', href: '#runs' },
+  'agent-detail': { label: 'Agents', href: '#agents' },
+  'target-group-detail': { label: 'Target groups', href: '#target-groups' },
+  'waf-asset-detail': { label: 'WAF posture', href: '#waf-posture' },
+  'cve-detail': { label: 'CVE pipeline', href: '#cve-pipeline' },
+  'supply-chain-detail': { label: 'Supply chain', href: '#supply-chain' },
+  'discovery-entity': { label: 'Discovery', href: '#discovery' },
+  'report-detail': { label: 'Reports', href: '#reports' },
+  'tenant-detail': { label: 'Admin console', href: '#admin' },
+  'finding-detail': { label: 'Findings', href: '#findings' },
+  'evidence-detail': { label: 'Evidence vault', href: '#evidence' },
+  'high-scale-detail': { label: 'High-scale requests', href: '#high-scale' },
+  'soc-request-detail': { label: 'SOC console', href: '#soc' }
+};
+
+const DETAIL_LINK_ROUTES: RouteId[] = [
+  'run-detail',
+  'agent-detail',
+  'target-group-detail',
+  'waf-asset-detail',
+  'cve-detail',
+  'supply-chain-detail',
+  'discovery-entity',
+  'tenant-detail',
+  'report-detail',
+  'finding-detail',
+  'evidence-detail',
+  'high-scale-detail',
+  'soc-request-detail'
+];
+
+function detailEntityTitle(route: RouteId, entity: DataItem, entityId: string, context?: { checks?: DataItem[] }) {
+  if (route === 'run-detail') {
+    const checkId = getString(entity, ['check_id'], '');
+    return checkId && context?.checks ? checkDisplayName(context.checks, checkId) : getString(entity, ['check_id'], entityId);
+  }
+  if (route === 'finding-detail') return getString(entity, ['title', 'id'], entityId);
+  if (route === 'evidence-detail') return getString(entity, ['label', 'kind', 'id'], entityId);
+  if (route === 'high-scale-detail' || route === 'soc-request-detail') {
+    return getString(entity, ['objective', 'reason', 'id'], entityId);
+  }
+  if (route === 'agent-detail') return getString(entity, ['hostname', 'name'], entityId);
+  if (route === 'target-group-detail') return getString(entity, ['name'], entityId);
+  if (route === 'waf-asset-detail') return getString(entity, ['hostname', 'canonical_url', 'name'], entityId);
+  if (route === 'cve-detail') return getString(entity, ['cve_id'], entityId);
+  if (route === 'supply-chain-detail') return getString(entity, ['hostname', 'organization_name'], entityId);
+  if (route === 'discovery-entity') return getString(entity, ['canonical_url', 'hostname', 'label', 'name'], entityId);
+  if (route === 'report-detail') return getString(entity, ['title'], entityId);
+  if (route === 'tenant-detail') {
+    const tenant = getNestedItem(entity, ['tenant']) ?? entity;
+    return getString(tenant, ['name'], entityId);
+  }
+  return getString(entity, ['name', 'hostname', 'canonical_url', 'cve_id', 'organization_name', 'id'], entityId);
+}
+
+function DetailBreadcrumb({ route, title, entityId }: { route: RouteId; title: string; entityId?: string }) {
+  const routeMeta = ROUTE_BY_ID.get(route);
+  const listLink = DETAIL_LIST_LINKS[route];
+  const listHref = route === 'discovery-entity' && entityId
+    ? `#discovery?id=${encodeURIComponent(entityId)}`
+    : listLink?.href;
+  const groupLabel = routeMeta?.group ? (DETAIL_GROUP_LABELS[routeMeta.group] ?? routeMeta.group) : 'Detail';
+  const listLabel = listLink?.label ?? routeMeta?.label ?? 'List';
+  return (
+    <p className="muted stack-tight">
+      {listLink && listHref ? (
+        <>
+          <AnchorButton size="sm" variant="ghost" href={listHref}>← Back to {listLink.label}</AnchorButton>
+          {' · '}
+        </>
+      ) : null}
+      {groupLabel} › {listLabel} › {title}
+    </p>
+  );
+}
+
+function DetailEntityHeading({
+  route,
+  entityId,
+  title,
+  eyebrow
+}: {
+  route: RouteId;
+  entityId: string;
+  title: string;
+  eyebrow?: string;
+}) {
+  return (
+    <>
+      {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
+      <DetailBreadcrumb route={route} title={title} entityId={entityId} />
+      <h2>{title}</h2>
+      {title !== entityId ? <p className="muted"><code>{entityId}</code></p> : null}
+    </>
+  );
+}
+
+function DetailPageHeader({
+  route,
+  eyebrow,
+  entityId,
+  title,
+  actions
+}: {
+  route: RouteId;
+  eyebrow?: string;
+  entityId: string;
+  title: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="page-head">
+      <div>
+        <DetailEntityHeading route={route} entityId={entityId} title={title} eyebrow={eyebrow} />
+      </div>
+      {actions ? <div className="row-actions">{actions}</div> : null}
+    </div>
+  );
+}
+
+function DetailLoadingPlaceholder({
+  label = 'Loading…',
+  variant = 'page'
+}: {
+  label?: string;
+  variant?: 'page' | 'compact' | 'layout';
+}) {
+  if (variant === 'compact') {
+    return (
+      <div className="kv-list" aria-busy="true" aria-label={label}>
+        <DetailKvSkeletonRows rows={3} />
+      </div>
+    );
+  }
+  if (variant === 'layout') {
+    return (
+      <div className="detail-layout" aria-busy="true" aria-label={label}>
+        <Card density="compact">
+          <CardHeader>
+            <span className="skeleton skeleton-text" aria-hidden="true" />
+            <span className="skeleton skeleton-text" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="kv-list">
+            <DetailKvSkeletonRows rows={4} />
+          </CardContent>
+        </Card>
+        <Card density="compact" className="detail-primary">
+          <CardHeader>
+            <span className="skeleton skeleton-text" aria-hidden="true" />
+            <span className="skeleton skeleton-text" aria-hidden="true" />
+          </CardHeader>
+          <CardContent className="kv-list">
+            <DetailKvSkeletonRows rows={4} />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  return (
+    <div className="stack-tight" aria-busy="true" aria-label={label}>
+      <div className="row-actions" aria-hidden="true">
+        {Array.from({ length: DETAIL_SKELETON_TAB_COUNT }, (_, index) => (
+          <span key={index} className="skeleton skeleton-row" />
+        ))}
+      </div>
+      <Card density="compact">
+        <CardHeader>
+          <span className="skeleton skeleton-text" aria-hidden="true" />
+          <span className="skeleton skeleton-text" aria-hidden="true" />
+        </CardHeader>
+        <CardContent className="kv-list">
+          <DetailKvSkeletonRows />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DetailEntityLink({
+  route,
+  id,
+  label
+}: {
+  route: RouteId;
+  id: string;
+  label?: string;
+}) {
+  const resolved = (label ?? id).trim();
+  if (!id || id === '—') return <strong>—</strong>;
+  if (!DETAIL_LINK_ROUTES.includes(route)) return <strong>{resolved}</strong>;
+  return (
+    <AnchorButton size="sm" variant="ghost" href={buildDetailHref(route, id)}>
+      {resolved}
+    </AnchorButton>
   );
 }
 
@@ -303,7 +786,7 @@ function useListBackedDetail<T extends DataItem>(
         const match = items.find((item) => getString(item, ['id'], '') === entityId) ?? null;
         setDetail(match ?? fallback);
         if (!match && !fallback) {
-          setError('Entity not found in tenant list APIs.');
+          setError('Entity not found in your workspace lists.');
         }
       })
       .catch((err) => {
@@ -372,6 +855,16 @@ function RunDetailView({
     }
   }
 
+  async function cancelRun() {
+    if (!window.confirm('Cancel this run in progress?')) return;
+    await runAction(`cancel-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/cancel`, { method: 'POST' }), 'Run cancelled.');
+  }
+
+  async function finalizeRun() {
+    if (!window.confirm('Force finalize this run now? This locks the verdict.')) return;
+    await runAction(`finalize-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/finalize`, { method: 'POST' }), 'Run finalized after observation window.');
+  }
+
   const milestoneTimeline = [
     { label: 'Run created', at: entity.created_at },
     { label: 'Run started', at: entity.started_at },
@@ -379,41 +872,65 @@ function RunDetailView({
     { label: 'Verdict recorded', at: getNestedString(entity, ['verdict', 'finalized_at'], '') || entity.completed_at }
   ].filter((item) => item.at);
 
+  const runTitle = detailEntityTitle('run-detail', entity, entityId, { checks: data.checks });
+  const targetLabel = targetDisplayLabel(getNestedArray(entity, ['targets']), getString(entity, ['target_id'], ''));
+  const groupTargets = data.targetGroups.find((group) => getString(group, ['id'], '') === getString(entity, ['target_group_id'], ''));
+  const resolvedTargetLabel = targetLabel !== getString(entity, ['target_id'], '')
+    ? targetLabel
+    : targetDisplayLabel(getNestedArray(groupTargets, ['targets']), getString(entity, ['target_id'], ''));
+
   return (
     <div className="content">
-      <PageHeader route="run-detail" eyebrow="Entity detail" />
-      {(message || error || loadError || loading) && (
-        <div className={error || loadError ? 'form-banner error' : 'form-banner'}>
-          {error || loadError || message || 'Loading run detail...'}
+      <div className="page-head">
+        <div>
+          <DetailPageIntro route="run-detail" eyebrow="Test run evidence" />
+          <DetailEntityHeading route="run-detail" entityId={entityId} title={runTitle} />
         </div>
-      )}
+      </div>
+      {loading ? <DetailLoadingPlaceholder label="Loading run detail…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner neutral'}>
+          {error || message}
+        </div>
+      ) : null}
+      {!loading ? (
+      <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'summary' ? (
         <Card>
           <CardHeader>
-            <CardTitle>{entityId}</CardTitle>
+            <CardTitle>Run summary</CardTitle>
             <CardDescription>
-              {getString(entity, ['check_id'])} · {getString(entity, ['status'])} · verdict {getNestedString(entity, ['verdict', 'verdict'], 'pending')}
+              <StatusBadge value={getNestedString(entity, ['verdict', 'verdict'], 'pending')} tone={verdictBadgeTone(getNestedString(entity, ['verdict', 'verdict'], 'pending'))} fallback="pending" />
+              {' · '}
+              placement {getNestedString(verdict ?? {}, ['placement_confidence', 'level'], 'unknown')}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="kv-list">
-              <div><span>Check</span><strong>{getString(entity, ['check_id'])}</strong></div>
-              <div><span>Target group</span><strong>{getString(entity, ['target_group_id'])}</strong></div>
-              <div><span>Target</span><strong>{getString(entity, ['target_id'])}</strong></div>
-              <div><span>Vector</span><strong>{getString(entity, ['vector_family'], '—')}</strong></div>
-              <div><span>Safety</span><strong>{getString(entity, ['safety_class'], '—')}</strong></div>
-              <div><span>Verdict</span><strong>{getString(verdict ?? {}, ['verdict'], 'pending')}</strong></div>
+              <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'pending')} tone={runStatusBadgeTone(getString(entity, ['status'], 'pending'))} fallback="pending" /></div>
+              <div><span>Verdict</span><StatusBadge value={getString(verdict ?? {}, ['verdict'], 'pending')} tone={verdictBadgeTone(getString(verdict ?? {}, ['verdict'], 'pending'))} fallback="pending" /></div>
               <div><span>Placement confidence</span><strong>{getNestedString(verdict ?? {}, ['placement_confidence', 'level'], 'unknown')}</strong></div>
               <div><span>Confidence</span><strong>{getString(verdict ?? {}, ['confidence'], '—')}</strong></div>
+              <div><span>Check</span><strong>{checkDisplayName(data.checks, getString(entity, ['check_id'], ''))}</strong></div>
+              <div><span>Check ID</span><strong><code>{getString(entity, ['check_id'])}</code></strong></div>
+              <div><span>Target group</span><DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} /></div>
+              <div><span>Target</span><strong>{resolvedTargetLabel}</strong></div>
+              <div><span>Vector</span><strong>{getString(entity, ['vector_family'], '—')}</strong></div>
+              <div><span>Safety</span><strong>{getString(entity, ['safety_class'], '—')}</strong></div>
             </div>
-            <RunProofPanels detail={entity} events={runEvents} />
-            <div className="row-actions" style={{ marginTop: '1rem' }}>
+            <p className="muted small">
+              Traffic path, truth table, and verdict explanation are on the{' '}
+              <Button type="button" variant="ghost" size="sm" onClick={() => setTab('correlation')}>Correlation</Button>
+              {' '}tab.
+            </p>
+            <div className="row-actions row-actions--spaced">
               <AnchorButton size="sm" variant="secondary" href="#runs">Open test runs</AnchorButton>
               {cancellable ? (
                 <>
-                  <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void runAction(`cancel-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/cancel`, { method: 'POST' }), 'Run cancelled.')}>Cancel</Button>
-                  <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void runAction(`finalize-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/finalize`, { method: 'POST' }), 'Run finalized after observation window.')}>Finalize</Button>
+                  <Button size="sm" variant="danger" loading={busy === `cancel-${entityId}`} disabled={busy !== ''} onClick={() => void cancelRun()}>Cancel</Button>
+                  <Button size="sm" variant="ghost" loading={busy === `finalize-${entityId}`} disabled={busy !== ''} onClick={() => void finalizeRun()}>Finalize</Button>
                 </>
               ) : null}
             </div>
@@ -429,19 +946,7 @@ function RunDetailView({
           <CardContent>
             <TimelinePanel items={milestoneTimeline} />
             <RunTimelineViz events={runEvents} />
-            {runEvents.length > 0 ? (
-              <div className="timeline-list">
-                {runEvents.map((event, index) => (
-                  <div key={getString(event, ['id'], String(index))}>
-                    <span>{index + 1}</span>
-                    <div>
-                      <strong>{getString(event, ['signal_type', 'type'])}</strong>
-                      <p>{formatDate(event.timestamp ?? event.created_at)} — {getString(event, ['source'], 'system')}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : <p className="muted">No run events recorded yet.</p>}
+            {runEvents.length === 0 ? <p className="muted">No run events recorded yet. Open Raw Events for envelope detail.</p> : null}
           </CardContent>
         </Card>
       ) : null}
@@ -452,7 +957,7 @@ function RunDetailView({
             <CardDescription>Outside observations from bounded probes.</CardDescription>
           </CardHeader>
           <CardContent>
-            {probeEvents.length === 0 ? <p className="muted">No probe_result events for this run.</p> : (
+            {probeEvents.length === 0 ? <EmptyState icon={Activity} title="No probe results yet." body="Outside probe observations appear after the probe window runs." /> : (
               <div className="kv-list">
                 {probeEvents.map((event, index) => (
                   <div key={getString(event, ['id'], String(index))}>
@@ -472,12 +977,15 @@ function RunDetailView({
             <CardDescription>Inside observations from outbound-only canaries.</CardDescription>
           </CardHeader>
           <CardContent>
-            {agentEvents.length === 0 ? <p className="muted">No agent observation events for this run.</p> : (
+            {agentEvents.length === 0 ? <EmptyState icon={Bot} title="No agent observations yet." body="Outbound canary observations appear when agents report on this run." /> : (
               <div className="kv-list">
                 {agentEvents.map((event, index) => (
                   <div key={getString(event, ['id'], String(index))}>
                     <span>{getString(event, ['signal_type'])}</span>
-                    <strong>{getString(event, ['agent_id'], getString(event, ['source'], 'agent'))} · {formatDate(event.timestamp ?? event.created_at)}</strong>
+                    <strong>
+                      <DetailEntityLink route="agent-detail" id={getString(event, ['agent_id'], '')} label={getString(event, ['agent_id'], getString(event, ['source'], 'agent'))} />
+                      {' · '}{formatDate(event.timestamp ?? event.created_at)}
+                    </strong>
                   </div>
                 ))}
               </div>
@@ -504,18 +1012,24 @@ function RunDetailView({
             <CardDescription>Custody-ready artifacts generated by this run.</CardDescription>
           </CardHeader>
           <CardContent>
-            {relatedEvidence.length === 0 ? <p className="muted">No evidence records linked to this run yet.</p> : (
+            {relatedEvidence.length === 0 ? <EmptyState icon={FileCheck2} title="No linked evidence yet." body="Custody records are generated when this run publishes verdict evidence." actionLabel="Open evidence vault" actionHref="#evidence" /> : (
               <div className="kv-list">
-                {relatedEvidence.map((item) => (
-                  <div key={getString(item, ['id'], '')}>
-                    <span>{getString(item, ['kind', 'signal_type'], 'evidence')}</span>
-                    <strong>{getString(item, ['id'])}</strong>
-                  </div>
-                ))}
+                {relatedEvidence.map((item) => {
+                  const evidenceId = getString(item, ['id'], '');
+                  const evidenceLabel = getString(item, ['label', 'kind', 'signal_type'], 'evidence');
+                  return (
+                    <div key={evidenceId}>
+                      <span>{evidenceLabel}</span>
+                      <strong>
+                        <DetailEntityLink route="evidence-detail" id={evidenceId} label={evidenceLabel} />
+                      </strong>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {relatedFindings.length > 0 ? (
-              <div className="row-actions" style={{ marginTop: '1rem' }}>
+              <div className="row-actions">
                 <AnchorButton size="sm" variant="ghost" href="#findings">Open findings</AnchorButton>
               </div>
             ) : null}
@@ -526,16 +1040,16 @@ function RunDetailView({
         <Card>
           <CardHeader>
             <CardTitle>Raw events</CardTitle>
-            <CardDescription>Sanitized event envelope review from `/v1/test-runs/:id/events`.</CardDescription>
+            <CardDescription>Sanitized event envelope review for this run.</CardDescription>
           </CardHeader>
           <CardContent>
-            {runEvents.length === 0 ? <p className="muted">No events recorded yet.</p> : (
+            {runEvents.length === 0 ? <EmptyState icon={ClipboardList} title="No raw events yet." body="Sanitized event envelopes appear as the run lifecycle progresses." /> : (
               <div className="timeline-list">
                 {runEvents.map((event, index) => (
                   <div key={getString(event, ['id'], String(index))}>
                     <span>{index + 1}</span>
                     <div>
-                      <strong>{getString(event, ['signal_type', 'type'])}</strong>
+                      <strong>{humanizeSignalType(getString(event, ['signal_type', 'type']))}</strong>
                       <p>{formatDate(event.timestamp ?? event.created_at)} · {getString(event, ['source'], 'system')} · {getString(event, ['agent_id'], '—')}</p>
                     </div>
                   </div>
@@ -544,6 +1058,8 @@ function RunDetailView({
             )}
           </CardContent>
         </Card>
+      ) : null}
+      </>
       ) : null}
     </div>
   );
@@ -575,6 +1091,7 @@ function TenantDetailView({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<DataItem | null>(null);
+  const [subscriptionError, setSubscriptionError] = useState('');
   const [localDetail, setLocalDetail] = useState<DataItem | null>(detail);
 
   useEffect(() => {
@@ -600,15 +1117,20 @@ function TenantDetailView({
   useEffect(() => {
     if (!entityId || session.principal !== 'staff') {
       setSubscriptionSnapshot(null);
+      setSubscriptionError('');
       return;
     }
     let cancelled = false;
+    setSubscriptionError('');
     requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}/subscription`)
       .then((payload) => {
         if (!cancelled) setSubscriptionSnapshot(payload as DataItem);
       })
-      .catch(() => {
-        if (!cancelled) setSubscriptionSnapshot(null);
+      .catch((err) => {
+        if (!cancelled) {
+          setSubscriptionSnapshot(null);
+          setSubscriptionError(err instanceof Error ? err.message : 'Could not load subscription entitlements.');
+        }
       });
     return () => { cancelled = true; };
   }, [config, session, entityId, resolvedDetail]);
@@ -642,6 +1164,10 @@ function TenantDetailView({
   }
 
   async function patchLifecycle(nextState: string) {
+    const impact = nextState === 'suspended'
+      ? 'Suspend this tenant? Users will lose access until it is reactivated.'
+      : 'Activate this tenant? Users will regain access to this tenant.';
+    if (!window.confirm(impact)) return;
     await runStaffAction(`lifecycle-${entityId}-${nextState}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}`, {
       method: 'PATCH',
       body: { lifecycle_state: nextState, reason: `Lifecycle set to ${nextState} from tenant detail.` }
@@ -665,6 +1191,7 @@ function TenantDetailView({
     const enabled = String(form.get('enabled') ?? 'true') === 'true';
     const reason = String(form.get('reason') ?? '').trim();
     if (!feature) return;
+    if (!window.confirm(`${enabled ? 'Grant' : 'Revoke'} entitlement "${feature}" for this tenant? This changes product access immediately.`)) return;
     await runStaffAction(`entitlement-${entityId}-${feature}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}/entitlements`, {
       method: 'POST',
       body: { feature, enabled, reason: reason || `Entitlement ${enabled ? 'granted' : 'revoked'} from tenant detail.` }
@@ -679,6 +1206,7 @@ function TenantDetailView({
   }
 
   async function disableUser(userId: string) {
+    if (!window.confirm('Disable this user? They will lose access to this tenant until re-enabled by staff.')) return;
     await runStaffAction(`disable-${entityId}-${userId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entityId)}/users/${encodeURIComponent(userId)}/disable`, {
       method: 'POST',
       body: { reason: 'Disabled from tenant detail.' }
@@ -718,48 +1246,61 @@ function TenantDetailView({
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
   ];
 
+  const tenantTitle = getString(tenant, ['name'], entityId);
+
   return (
     <div className="content">
-      <PageHeader route="tenant-detail" eyebrow="Staff tenant operations" />
-      <div className="page-head">
-        <div>
-          <h2>{getString(tenant, ['name'], entityId)}</h2>
-          <p>
-            <code>{entityId}</code> · {lifecycleState} · plan {getString(subscription, ['plan_id'], '—')} · {users.length} users
-          </p>
-        </div>
-        <div className="row-actions">
-          <AnchorButton size="sm" variant="secondary" href="#admin">Staff admin</AnchorButton>
-          {lifecycleState !== 'active' ? (
-            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchLifecycle('active')}>Activate</Button>
-          ) : (
-            <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void patchLifecycle('suspended')}>Suspend</Button>
-          )}
-        </div>
-      </div>
-      <div className="metric-grid four">
-        <MetricCard label="Lifecycle" value={lifecycleState} sub="Account state from internal management API" icon={ShieldCheck} tone={lifecycleState === 'active' ? 'success' : 'warn'} />
-        <MetricCard label="Users" value={users.length} sub="Tenant-scoped identities" icon={Users} tone="info" />
-        <MetricCard label="Approvals" value={relatedApprovals.length} sub="Internal requests for this tenant" icon={ClipboardList} tone={relatedApprovals.length > 0 ? 'warn' : 'muted'} />
-        <MetricCard label="Audit events" value={recentAudit.length} sub="Recent tenant-scoped audit entries" icon={FileCheck2} tone="muted" />
-      </div>
-      {(message || error || loadError || loading) && (
+      <DetailPageHeader
+        route="tenant-detail"
+        eyebrow="Staff tenant operations"
+        entityId={entityId}
+        title={tenantTitle}
+        actions={(
+          <>
+            <AnchorButton size="sm" variant="secondary" href="#admin">Staff admin</AnchorButton>
+            {lifecycleState !== 'active' ? (
+              <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchLifecycle('active')}>Activate</Button>
+            ) : (
+              <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void patchLifecycle('suspended')}>Suspend</Button>
+            )}
+          </>
+        )}
+      />
+      <PageContextSummary>
+        <StatusBadge value={lifecycleState} tone={lifecycleBadgeTone(lifecycleState)} /> · plan {getString(subscription, ['plan_id'], '—')} ·{' '}
+        <span className="tabular-nums">{users.length}</span> users ·{' '}
+        <span className="tabular-nums">{recentAudit.length}</span> recent audit events
+      </PageContextSummary>
+      {loading ? <DetailLoadingPlaceholder label="Loading tenant detail…" /> : null}
+      {(message || error || loadError) && (
         <div className={error || loadError ? 'form-banner error' : 'form-banner'}>
-          {error || loadError || message || 'Loading tenant detail...'}
+          {error || loadError || message}
         </div>
       )}
+      {!loading ? (
+      <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'overview' ? (
+        <>
+        <div className="metric-grid four">
+          <MetricCard label="Lifecycle" value={lifecycleState} sub="Account state from staff tenant administration" icon={ShieldCheck} tone={lifecycleState === 'active' ? 'success' : 'warn'} />
+          <MetricCard label="Users" value={users.length} sub="Tenant-scoped identities" icon={Users} tone="info" />
+          <MetricCard label="Approvals" value={relatedApprovals.length} sub="Internal requests for this tenant" icon={ClipboardList} tone={relatedApprovals.length > 0 ? 'warn' : 'muted'} />
+          <MetricCard label="Audit events" value={recentAudit.length} sub="Recent tenant-scoped audit entries" icon={FileCheck2} tone="muted" />
+        </div>
         <div className="split">
           <Card>
             <CardHeader>
-              <CardTitle>Tenant administration</CardTitle>
-              <CardDescription>From `GET /internal/admin/tenants/:id`.</CardDescription>
+              <CardTitle>Account status</CardTitle>
+              <CardDescription>Lifecycle and subscription posture for this tenant.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Tenant ID</span><strong><code>{entityId}</code></strong></div>
+              <div><span>Lifecycle</span><StatusBadge value={lifecycleState} tone={lifecycleBadgeTone(lifecycleState)} /></div>
+              <div><span>Plan</span><strong>{getString(subscription, ['plan_id'], '—')}</strong></div>
+              <div><span>Subscription status</span><StatusBadge value={getString(subscription, ['status'], '—')} tone={subscriptionStatusBadgeTone(getString(subscription, ['status'], ''))} /></div>
+              <div><span>Users</span><strong>{users.length}</strong></div>
               <div><span>Name</span><strong>{getString(tenant, ['name'])}</strong></div>
-              <div><span>Lifecycle</span><strong>{lifecycleState}</strong></div>
+              <div><span>Tenant ID</span><strong><code>{entityId}</code></strong></div>
               <div><span>Region</span><strong>{getString(account, ['region'], '—')}</strong></div>
               <div><span>Support owner</span><strong>{getString(account, ['support_owner'], 'unassigned')}</strong></div>
               <div><span>Created</span><strong>{formatDate(tenant?.created_at)}</strong></div>
@@ -772,19 +1313,20 @@ function TenantDetailView({
             </CardHeader>
             <CardContent className="kv-list">
               <div><span>Plan</span><strong>{getString(subscription, ['plan_id'], '—')}</strong></div>
-              <div><span>Status</span><strong>{getString(subscription, ['status'], '—')}</strong></div>
+              <div><span>Status</span><StatusBadge value={getString(subscription, ['status'], '—')} tone={subscriptionStatusBadgeTone(getString(subscription, ['status'], ''))} /></div>
               <div><span>Effective from</span><strong>{formatDate(subscription?.effective_from ?? subscription?.created_at)}</strong></div>
               {effectiveEntitlements ? STAFF_ENTITLEMENT_FEATURES.map((feature) => (
                 <div key={feature}>
-                  <span>{feature}</span>
+                  <span>{STAFF_ENTITLEMENT_LABELS[feature] ?? feature}</span>
                   <strong>{effectiveEntitlements[feature] === true ? 'enabled' : 'disabled'}</strong>
                 </div>
-              )) : <p className="muted">Subscription entitlements load from the tenant subscription API.</p>}
+              )) : <p className="muted">Subscription entitlements appear when the subscription record is available.</p>}
             </CardContent>
           </Card>
         </div>
+        </>
       ) : null}
-      {tab === 'signup-queue' ? (
+      {tab === 'provisioning' ? (
         <Card>
           <CardHeader>
             <CardTitle>Provisioning signup</CardTitle>
@@ -794,7 +1336,7 @@ function TenantDetailView({
             {signupRequest ? (
               <div className="kv-list">
                 <div><span>Request ID</span><strong><code>{getString(signupRequest, ['id'])}</code></strong></div>
-                <div><span>State</span><strong>{getString(signupRequest, ['state'])}</strong></div>
+                <div><span>State</span><StatusBadge value={getString(signupRequest, ['state'])} tone={signupRequestStateTone(getString(signupRequest, ['state']))} fallback="recorded" /></div>
               </div>
             ) : (
               <EmptyState icon={ClipboardList} title="No linked signup request." body="Tenants provisioned outside the signup queue may not have a signup_request reference." actionLabel="Open staff admin" actionHref="#admin" />
@@ -802,7 +1344,7 @@ function TenantDetailView({
           </CardContent>
         </Card>
       ) : null}
-      {tab === 'tenants' ? (
+      {tab === 'users' ? (
         <>
           <Card>
             <CardHeader>
@@ -813,46 +1355,49 @@ function TenantDetailView({
               <DataTable columns={userColumns} items={users} empty={<EmptyState icon={Users} title="No users on this tenant." body="Provisioned tenants include an initial owner invite." />} />
             </CardContent>
           </Card>
-          <div className="split">
-            <Card>
-              <CardHeader>
-                <CardTitle>Support owner</CardTitle>
-                <CardDescription>Patch through `PATCH /internal/admin/tenants/:id`.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="product-form" onSubmit={patchSupportOwner}>
-                  <label className="full"><span>Support owner</span><input name="support_owner" defaultValue={getString(account, ['support_owner'], '')} placeholder="owner@customer.example" required /></label>
-                  <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Save support owner</Button></div>
-                </form>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Entitlement grants</CardTitle>
-                <CardDescription>Grant or revoke features through `POST /internal/admin/tenants/:id/entitlements`.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="product-form" onSubmit={grantEntitlement}>
-                  <label>
-                    <span>Feature</span>
-                    <select name="feature" defaultValue="waf_posture">
-                      {STAFF_ENTITLEMENT_FEATURES.map((feature) => <option key={feature} value={feature}>{feature}</option>)}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Action</span>
-                    <select name="enabled" defaultValue="true">
-                      <option value="true">Grant / enable</option>
-                      <option value="false">Revoke / disable</option>
-                    </select>
-                  </label>
-                  <label className="full"><span>Reason</span><input name="reason" placeholder="Verified plan exception" required /></label>
-                  <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Apply entitlement</Button></div>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Support owner</CardTitle>
+              <CardDescription>Assign the customer support owner for this tenant.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="product-form" onSubmit={patchSupportOwner}>
+                <label className="full"><span>Support owner</span><input name="support_owner" defaultValue={getString(account, ['support_owner'], '')} placeholder="owner@customer.example" required /></label>
+                <div className="form-actions full"><Button type="submit" loading={busy === `support-owner-${entityId}`} disabled={busy !== ''}>Save support owner</Button></div>
+              </form>
+            </CardContent>
+          </Card>
         </>
+      ) : null}
+      {tab === 'entitlements' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Entitlement grants</CardTitle>
+            <CardDescription>Grant or revoke product features for this tenant.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {subscriptionError ? <div className="form-banner error">{subscriptionError}</div> : null}
+            <form className="product-form" onSubmit={grantEntitlement}>
+              <label>
+                <span>Feature</span>
+                <select name="feature" defaultValue="waf_posture">
+                  {STAFF_ENTITLEMENT_FEATURES.map((feature) => (
+                    <option key={feature} value={feature}>{STAFF_ENTITLEMENT_LABELS[feature] ?? feature}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Action</span>
+                <select name="enabled" defaultValue="true">
+                  <option value="true">Grant / enable</option>
+                  <option value="false">Revoke / disable</option>
+                </select>
+              </label>
+              <label className="full"><span>Reason</span><input name="reason" placeholder="Verified plan exception" required /></label>
+              <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Apply entitlement</Button></div>
+            </form>
+          </CardContent>
+        </Card>
       ) : null}
       {tab === 'approvals' ? (
         <Card>
@@ -875,6 +1420,8 @@ function TenantDetailView({
             <DataTable columns={auditColumns} items={recentAudit} empty={<EmptyState icon={FileCheck2} title="No audit events yet." body="Tenant security-relevant actions appear after staff or customer mutations are recorded." />} />
           </CardContent>
         </Card>
+      ) : null}
+      </>
       ) : null}
     </div>
   );
@@ -903,6 +1450,13 @@ function TargetGroupDetailView({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [expectedBehaviorDefault, setExpectedBehaviorDefault] = useState(
+    () => getString(entity, ['expected_behavior_default'], 'must_block_before_origin')
+  );
+
+  useEffect(() => {
+    setExpectedBehaviorDefault(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'));
+  }, [entityId, entity]);
 
   const targets = getNestedArray(entity, ['targets']);
   const relatedRuns = data.runs.filter((run) => getString(run, ['target_group_id'], '') === entityId);
@@ -926,9 +1480,19 @@ function TargetGroupDetailView({
   ];
 
   const runColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Run', render: (item) => <code>{getString(item, ['id'])}</code> },
+    {
+      key: 'id',
+      label: 'Run',
+      render: (item) => (
+        <DetailEntityLink
+          route="run-detail"
+          id={getString(item, ['id'], '')}
+          label={checkDisplayName(data.checks, getString(item, ['check_id'], ''))}
+        />
+      )
+    },
     { key: 'check', label: 'Check', render: (item) => getString(item, ['check_id']) },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone="info">{getString(item, ['status'], 'pending')}</Badge> },
+    { key: 'status', label: 'Status', render: (item) => <StatusBadge value={getString(item, ['status'], 'pending')} tone={runStatusBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" /> },
     { key: 'when', label: 'When', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
       key: 'actions',
@@ -940,15 +1504,31 @@ function TargetGroupDetailView({
   ];
 
   const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Finding', render: (item) => <code>{getString(item, ['id'])}</code> },
-    { key: 'severity', label: 'Severity', render: (item) => <Badge tone="danger">{getString(item, ['severity'], 'unknown')}</Badge> },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone="warn">{getString(item, ['status'], 'open')}</Badge> },
-    { key: 'summary', label: 'Summary', render: (item) => getString(item, ['summary', 'title'], '—') }
+    {
+      key: 'id',
+      label: 'Finding',
+      render: (item) => (
+        <DetailEntityLink
+          route="finding-detail"
+          id={getString(item, ['id'], '')}
+          label={getString(item, ['title', 'summary'], getString(item, ['id']))}
+        />
+      )
+    },
+    { key: 'severity', label: 'Severity', render: (item) => <StatusBadge value={getString(item, ['severity'], 'unknown')} tone={findingSeverityBadgeTone(getString(item, ['severity'], 'unknown'))} fallback="unknown" /> },
+    { key: 'status', label: 'Status', render: (item) => <StatusBadge value={getString(item, ['status'], 'open')} tone={findingStatusBadgeTone(getString(item, ['status'], 'open'))} fallback="open" /> },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => (
+        <AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', getString(item, ['id'], ''))}>Triage</AnchorButton>
+      )
+    }
   ];
 
   const agentColumns: TableColumn<DataItem>[] = [
     { key: 'hostname', label: 'Agent', render: (item) => getString(item, ['hostname', 'name', 'id']) },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone="success">{getString(item, ['status'], 'unknown')}</Badge> },
+    { key: 'status', label: 'Status', render: (item) => <StatusBadge value={getString(item, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(item, ['status'], 'unknown'))} fallback="unknown" /> },
     { key: 'heartbeat', label: 'Last heartbeat', render: (item) => formatDate(item.last_heartbeat_at ?? item.updated_at) },
     {
       key: 'actions',
@@ -963,7 +1543,7 @@ function TargetGroupDetailView({
     { key: 'id', label: 'Policy', render: (item) => <code>{getString(item, ['id'])}</code> },
     { key: 'check', label: 'Check', render: (item) => getString(item, ['check_id']) },
     { key: 'cadence', label: 'Cadence', render: (item) => getString(item, ['cadence', 'schedule'], 'manual') },
-    { key: 'enabled', label: 'Enabled', render: (item) => (item.enabled === false ? 'no' : 'yes') }
+    { key: 'enabled', label: 'Enabled', render: (item) => <Badge tone={item.enabled === false ? 'muted' : 'success'}>{item.enabled === false ? 'Disabled' : 'Enabled'}</Badge> }
   ];
 
   async function runGroupAction(label: string, action: () => Promise<unknown>, success: string) {
@@ -990,7 +1570,7 @@ function TargetGroupDetailView({
       body: {
         name: String(form.get('name') ?? getString(entity, ['name'])).trim(),
         description: String(form.get('description') ?? '').trim(),
-        expected_behavior_default: String(form.get('expected_behavior_default') ?? 'must_block_before_origin'),
+        expected_behavior_default: expectedBehaviorDefault,
         timezone: String(form.get('timezone') ?? 'UTC').trim() || 'UTC'
       }
     }), 'Target group settings saved.');
@@ -1006,11 +1586,15 @@ function TargetGroupDetailView({
 
   return (
     <div className="content">
-      <PageHeader route="target-group-detail" eyebrow="Declared business service" />
       <div className="page-head">
         <div>
-          <h2>{getString(entity, ['name', 'id'])}</h2>
-          <p>
+          <DetailEntityHeading
+            route="target-group-detail"
+            entityId={entityId}
+            title={detailEntityTitle('target-group-detail', entity, entityId)}
+            eyebrow="Declared business service"
+          />
+          <p className="muted">
             {targets.length} declared targets · {getString(entity, ['environment_id'], 'tenant scope')} · expected {formatExpectedBehavior(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))}
           </p>
         </div>
@@ -1023,87 +1607,94 @@ function TargetGroupDetailView({
         <MetricCard label="Targets" value={targets.length} sub="Declared · never auto-discovered" icon={Target} tone="info" />
         <MetricCard label="Bound agents" value={relatedAgents.length} sub="Outbound observers for this group" icon={Bot} tone="success" />
         <MetricCard label="Open findings" value={openFindings.length} sub="Unresolved gaps on this group" icon={TriangleAlert} tone={openFindings.length > 0 ? 'danger' : 'muted'} />
-        <MetricCard label="Last run" value={lastRun ? getString(lastRun, ['id']) : '—'} sub={lastRun ? formatDate(lastRun.updated_at ?? lastRun.created_at) : 'No runs yet'} icon={Activity} tone="muted" />
+        <MetricCard label="Last run" value={lastRun ? checkDisplayName(data.checks, getString(lastRun, ['check_id'], getString(lastRun, ['id']))) : '—'} sub={lastRun ? formatDate(lastRun.updated_at ?? lastRun.created_at) : 'No runs yet'} icon={Activity} tone="muted" />
       </div>
-      {(message || error || loadError || loading) && (
-        <div className={error || loadError ? 'form-banner error' : 'form-banner'}>
-          {error || loadError || message || 'Loading target group detail...'}
+      {loading ? <DetailLoadingPlaceholder label="Loading target group detail…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner'}>
+          {error || message}
         </div>
-      )}
+      ) : null}
+      {!loading ? (
+      <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'overview' ? (
         <div className="split">
           <Card>
             <CardHeader>
-              <CardTitle>Group summary</CardTitle>
-              <CardDescription>Fields from `/v1/target-groups/{'{id}'}`.</CardDescription>
+              <CardTitle>Validation posture</CardTitle>
+              <CardDescription>Readiness signals for this declared group.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Group ID</span><strong><code>{entityId}</code></strong></div>
-              <div><span>Environment</span><strong>{getString(entity, ['environment_id'])}</strong></div>
-              <div><span>Default expected behavior</span><strong>{formatExpectedBehavior(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))}</strong></div>
-              <div><span>Timezone</span><strong>{getString(entity, ['timezone'], 'UTC')}</strong></div>
-              <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
-              <div><span>Description</span><strong>{getString(entity, ['description'], 'No description recorded.')}</strong></div>
+              <div><span>Latest run status</span>{lastRun ? <StatusBadge value={getString(lastRun, ['status'], 'pending')} tone={runStatusBadgeTone(getString(lastRun, ['status'], 'pending'))} fallback="pending" /> : <strong>none</strong>}</div>
+              <div><span>Latest run</span>{lastRun ? <DetailEntityLink route="run-detail" id={getString(lastRun, ['id'], '')} label={checkDisplayName(data.checks, getString(lastRun, ['check_id'], getString(lastRun, ['id'])))} /> : <strong>none</strong>}</div>
+              <div><span>Open findings</span><strong>{openFindings.length}</strong></div>
+              <div><span>Recent runs</span><strong>{relatedRuns.length}</strong></div>
+              <div><span>Bound policies</span><strong>{relatedPolicies.length}</strong></div>
+              <div><span>Evidence records</span><strong>{data.evidence.filter((item) => getString(item, ['target_group_id'], '') === entityId).length}</strong></div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Validation posture</CardTitle>
-              <CardDescription>Counts derived from tenant list APIs for this group.</CardDescription>
+              <CardTitle>Group summary</CardTitle>
+              <CardDescription>Declaration metadata for this business service.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Recent runs</span><strong>{relatedRuns.length}</strong></div>
-              <div><span>Bound policies</span><strong>{relatedPolicies.length}</strong></div>
-              <div><span>Evidence records</span><strong>{data.evidence.filter((item) => getString(item, ['target_group_id'], '') === entityId).length}</strong></div>
-              <div><span>Latest run status</span><strong>{lastRun ? getString(lastRun, ['status'], 'pending') : 'none'}</strong></div>
+              <div><span>Name</span><strong>{getString(entity, ['name'])}</strong></div>
+              <div><span>Default expected behavior</span><strong>{formatExpectedBehavior(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))}</strong></div>
+              <div><span>Environment</span><strong>{getString(entity, ['environment_id'])}</strong></div>
+              <div><span>Timezone</span><strong>{getString(entity, ['timezone'], 'UTC')}</strong></div>
+              <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
+              <div><span>Description</span><strong>{getString(entity, ['description'], 'No description recorded.')}</strong></div>
+              <div><span>Group ID</span><strong><code>{entityId}</code></strong></div>
             </CardContent>
           </Card>
         </div>
       ) : null}
-      {tab === 'targets' ? (
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Declared targets</CardTitle>
-              <CardDescription>Manual declarations loaded from the target-group detail API.</CardDescription>
-            </div>
-            <Badge tone="success">{targets.length} targets</Badge>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={targetColumns}
-              items={targets}
-              empty={<EmptyState icon={Target} title="No targets declared." body="Add targets from the Target Groups page." actionLabel="Open Target Groups" actionHref="#target-groups" />}
-            />
-            <div className="form-actions">
-              <AnchorButton size="sm" variant="secondary" href="#target-groups">Manage targets</AnchorButton>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
-      {tab === 'expected-behavior' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Expected behavior</CardTitle>
-            <CardDescription>Customer-declared protection expectations for this group.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Group default</span><strong>{formatExpectedBehavior(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))}</strong></div>
-            <div><span>Safety policy</span><strong>{getNestedString(entity, ['safety_policy', 'max_concurrent_runs'], '1')} concurrent runs · {getNestedString(entity, ['safety_policy', 'min_seconds_between_runs'], '300')}s cooldown</strong></div>
-            <div><span>Per-target overrides</span><strong>{targets.filter((target) => getString(target, ['expected_behavior']) !== getString(entity, ['expected_behavior_default'], 'must_block_before_origin')).length}</strong></div>
-          </CardContent>
-          <CardContent>
-            <DataTable
-              columns={[
-                { key: 'value', label: 'Target', render: (item) => getString(item, ['value']) },
-                { key: 'expected', label: 'Expected behavior', render: (item) => formatExpectedBehavior(getString(item, ['expected_behavior'], getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))) }
-              ]}
-              items={targets}
-              empty={<EmptyState icon={ShieldHalf} title="No target-level behavior yet." body="Add declared targets to attach expected behavior." />}
-            />
-          </CardContent>
-        </Card>
+      {tab === 'scope' ? (
+        <div className="split">
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Declared targets</CardTitle>
+                <CardDescription>Manual declarations loaded from the target-group detail API.</CardDescription>
+              </div>
+              <Badge tone="success">{targets.length} targets</Badge>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={targetColumns}
+                items={targets}
+                empty={<EmptyState icon={Target} title="No targets declared." body="Add targets from the Target Groups page." actionLabel="Open Target Groups" actionHref="#target-groups" />}
+              />
+              <div className="form-actions">
+                <AnchorButton size="sm" variant="secondary" href="#target-groups">Manage targets</AnchorButton>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Expected behavior</CardTitle>
+              <CardDescription>Customer-declared protection expectations for this group.</CardDescription>
+            </CardHeader>
+            <CardContent className="stack-tight">
+              <div className="kv-list">
+                <div><span>Group default</span><strong>{formatExpectedBehavior(getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))}</strong></div>
+                <div><span>Safety policy</span><strong>{getNestedString(entity, ['safety_policy', 'max_concurrent_runs'], '1')} concurrent runs · {getNestedString(entity, ['safety_policy', 'min_seconds_between_runs'], '300')}s cooldown</strong></div>
+                <div><span>Per-target overrides</span><strong>{targets.filter((target) => getString(target, ['expected_behavior']) !== getString(entity, ['expected_behavior_default'], 'must_block_before_origin')).length}</strong></div>
+              </div>
+              <DataTable
+                columns={[
+                  { key: 'value', label: 'Target', render: (item) => getString(item, ['value']) },
+                  { key: 'expected', label: 'Expected behavior', render: (item) => formatExpectedBehavior(getString(item, ['expected_behavior'], getString(entity, ['expected_behavior_default'], 'must_block_before_origin'))) }
+                ]}
+                items={targets}
+                empty={<EmptyState icon={ShieldHalf} title="No target-level behavior yet." body="Add declared targets to attach expected behavior." />}
+              />
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
       {tab === 'agents' ? (
         <Card>
@@ -1120,50 +1711,48 @@ function TargetGroupDetailView({
           </CardContent>
         </Card>
       ) : null}
-      {tab === 'checks' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Checks on this group</CardTitle>
-            <CardDescription>Safe test policies bound to this declared group.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={policyColumns}
-              items={relatedPolicies}
-              empty={<EmptyState icon={FileCheck2} title="No policies bound." body="Bind safe checks through test policies before scheduling runs." actionLabel="Open test policies" actionHref="#test-policies" />}
-            />
-          </CardContent>
-        </Card>
-      ) : null}
-      {tab === 'runs' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent runs</CardTitle>
-            <CardDescription>Validation runs filtered by `target_group_id`.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={runColumns}
-              items={relatedRuns}
-              empty={<EmptyState icon={Activity} title="No runs yet." body="Start a safe run after declaring targets and binding checks." actionLabel="Open test runs" actionHref="#runs" />}
-            />
-          </CardContent>
-        </Card>
-      ) : null}
-      {tab === 'findings' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Findings on this group</CardTitle>
-            <CardDescription>Open and closed gaps tied to this declared scope.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DataTable
-              columns={findingColumns}
-              items={relatedFindings}
-              empty={<EmptyState icon={TriangleAlert} title="No findings recorded." body="Findings appear after validation runs surface gaps." actionLabel="Open findings" actionHref="#findings" />}
-            />
-          </CardContent>
-        </Card>
+      {tab === 'validation' ? (
+        <div className="metric-grid three">
+          <Card>
+            <CardHeader>
+              <CardTitle>Checks on this group</CardTitle>
+              <CardDescription>Safe test policies bound to this declared group.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={policyColumns}
+                items={relatedPolicies}
+                empty={<EmptyState icon={FileCheck2} title="No policies bound." body="Bind safe checks through test policies before scheduling runs." actionLabel="Open test policies" actionHref="#test-policies" />}
+              />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Recent runs</CardTitle>
+              <CardDescription>Validation runs filtered by target group.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={runColumns}
+                items={relatedRuns}
+                empty={<EmptyState icon={Activity} title="No runs yet." body="Start a safe run after declaring targets and binding checks." actionLabel="Open test runs" actionHref="#runs" />}
+              />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Findings on this group</CardTitle>
+              <CardDescription>Open and closed gaps tied to this declared scope.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={findingColumns}
+                items={relatedFindings}
+                empty={<EmptyState icon={TriangleAlert} title="No findings recorded." body="Findings appear after validation runs surface gaps." actionLabel="Open findings" actionHref="#findings" />}
+              />
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
       {tab === 'settings' ? (
         <Card>
@@ -1185,23 +1774,24 @@ function TargetGroupDetailView({
                 <span>Description</span>
                 <textarea name="description" rows={3} defaultValue={getString(entity, ['description'], '')} />
               </label>
-              <label className="full">
-                <span>Default expected behavior</span>
-                <select name="expected_behavior_default" defaultValue={getString(entity, ['expected_behavior_default'], 'must_block_before_origin')}>
-                  <option value="must_block_before_origin">Must be blocked before origin</option>
-                  <option value="must_allow_baseline_health">Must allow baseline health</option>
-                  <option value="must_challenge_or_rate_limit">Must challenge or rate-limit</option>
-                  <option value="must_not_expose_direct_ip">Must not expose direct IP</option>
-                </select>
-              </label>
+              <Select
+                className="full"
+                label="Default expected behavior"
+                value={expectedBehaviorDefault}
+                options={TARGET_GROUP_EXPECTED_BEHAVIOR_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                onChange={setExpectedBehaviorDefault}
+                disabled={busy !== ''}
+              />
               <div className="form-actions full">
-                <Button type="submit" disabled={busy !== ''}>Save settings</Button>
+                <Button type="submit" loading={busy === `patch-target-group-${entityId}`} disabled={busy !== ''}>Save settings</Button>
                 <AnchorButton size="sm" variant="secondary" href="#target-groups">Manage targets</AnchorButton>
                 <Button type="button" variant="danger" disabled={busy !== ''} onClick={() => void archiveGroup()}>Archive group</Button>
               </div>
             </form>
           </CardContent>
         </Card>
+      ) : null}
+      </>
       ) : null}
     </div>
   );
@@ -1213,7 +1803,9 @@ function AgentDetailView({
   data,
   config,
   session,
-  onRefresh
+  onRefresh,
+  loading,
+  loadError
 }: {
   entity: DataItem;
   entityId: string;
@@ -1221,14 +1813,14 @@ function AgentDetailView({
   config: PortalConfig;
   session: Session;
   onRefresh: () => Promise<void>;
+  loading: boolean;
+  loadError: string;
 }) {
-  const [tab, setTab] = useState('fleet');
+  const [tab, setTab] = useState('overview');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [placementReviews, setPlacementReviews] = useState<DataItem | null>(null);
-  const [updateReleases, setUpdateReleases] = useState<DataItem[]>([]);
-  const [trustKeys, setTrustKeys] = useState<DataItem[]>([]);
   const [auxLoading, setAuxLoading] = useState(false);
   const tabOptions = routeTabs('agent-detail').map((item) => ({ id: item.id, label: item.label }));
   const targetGroupId = getString(entity, ['target_group_id'], '');
@@ -1236,11 +1828,15 @@ function AgentDetailView({
     ? (placementReviews.reviews as DataItem[]).find((review) => getString(review, ['target_group_id'], '') === targetGroupId)
     : null;
   const agentLogs = filterAgentAuditEntries(data.audit, entityId);
-  const installToken = '<BOOTSTRAP_TOKEN>';
-  const apiBase = agentInstallApiBase();
+  const agentAuditColumns: TableColumn<DataItem>[] = [
+    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
+    { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'])}` },
+    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role'], 'system') },
+    { key: 'when', label: 'Recorded', render: (item) => formatDate(item.created_at ?? item.timestamp) }
+  ];
 
   useEffect(() => {
-    if (!['placement', 'install'].includes(tab)) return undefined;
+    if (tab !== 'placement') return undefined;
     let cancelled = false;
     setAuxLoading(true);
     const query = targetGroupId ? `/v1/placement/reviews?target_group_id=${encodeURIComponent(targetGroupId)}` : '/v1/placement/reviews';
@@ -1251,31 +1847,9 @@ function AgentDetailView({
     return () => { cancelled = true; };
   }, [tab, config, session, targetGroupId]);
 
-  useEffect(() => {
-    if (tab !== 'upgrades') return undefined;
-    let cancelled = false;
-    setAuxLoading(true);
-    Promise.all([
-      requestJson(config, session, '/v1/agent-updates'),
-      requestJson(config, session, '/v1/agent-update-trust-keys')
-    ])
-      .then(([releasesPayload, trustPayload]) => {
-        if (cancelled) return;
-        setUpdateReleases(Array.isArray((releasesPayload as { items?: unknown }).items) ? (releasesPayload as { items: DataItem[] }).items : []);
-        setTrustKeys(Array.isArray((trustPayload as { items?: unknown }).items) ? (trustPayload as { items: DataItem[] }).items : []);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setUpdateReleases([]);
-          setTrustKeys([]);
-        }
-      })
-      .finally(() => { if (!cancelled) setAuxLoading(false); });
-    return () => { cancelled = true; };
-  }, [tab, config, session]);
-
   async function revokeAgent() {
     if (!entityId || getString(entity, ['status']) === 'revoked') return;
+    if (!window.confirm("Revoke this agent's credentials? It stops reporting until re-registered.")) return;
     setBusy(`revoke-${entityId}`);
     setError('');
     setMessage('');
@@ -1292,67 +1866,69 @@ function AgentDetailView({
 
   return (
     <div className="content">
-      <PageHeader route="agent-detail" eyebrow="Outbound observer" />
       <div className="page-head">
         <div>
-          <h2>{getString(entity, ['hostname', 'name', 'id'])}</h2>
-          <p>
-            <code>{entityId}</code> · {getString(entity, ['status'], 'unknown')} · {formatAgentCapabilities(entity)}
+          <DetailEntityHeading
+            route="agent-detail"
+            entityId={entityId}
+            title={detailEntityTitle('agent-detail', entity, entityId)}
+            eyebrow="Outbound observer"
+          />
+          <p className="muted detail-status-line">
+            <StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" />
+            <span className="detail-status-sep" aria-hidden="true">·</span>
+            <span>{formatAgentCapabilities(entity)}</span>
           </p>
         </div>
         <div className="row-actions">
-          {getString(entity, ['status']) !== 'revoked' ? (
-            <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void revokeAgent()}>Revoke agent</Button>
-          ) : null}
-          <AnchorButton size="sm" variant="secondary" href="#agents">Back to fleet</AnchorButton>
+          <AnchorButton size="sm" variant="secondary" href="#agents">Tenant agent settings</AnchorButton>
         </div>
       </div>
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      {loading ? <DetailLoadingPlaceholder label="Loading agent detail…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      {!loading ? (
+      <>
+      <div className="metric-grid four">
+        <MetricCard label="Status" value={formatAgentHealth(entity)} sub="From last heartbeat" icon={Activity} tone={getString(entity, ['status']) === 'online' ? 'success' : getString(entity, ['status']) === 'revoked' ? 'danger' : 'muted'} />
+        <MetricCard label="Heartbeat" value={agentHeartbeatFreshness(entity)} sub={formatDate(entity.last_heartbeat_at)} icon={Bot} tone="info" />
+        <MetricCard label="Target group" value={targetGroupId ? 'Bound' : 'Unbound'} sub={targetGroupId || 'No group assignment'} icon={Target} tone={targetGroupId ? 'success' : 'warn'} />
+        <MetricCard label="Version" value={getString(entity, ['version'], 'unknown')} sub={getString(entity, ['environment_id'], 'tenant scope')} icon={ShieldCheck} tone="muted" />
+      </div>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
-      {tab === 'fleet' || tab === 'overview' ? (
+      {tab === 'overview' ? (
         <div className="split">
           <Card>
             <CardHeader>
-              <CardTitle>Agent identity</CardTitle>
-              <CardDescription>Outbound observer metadata from <code>GET /v1/agents</code>.</CardDescription>
+              <CardTitle>Agent status</CardTitle>
+              <CardDescription>Health, placement, and binding for this outbound observer.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
+              <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
+              <div><span>Capabilities</span><strong>{formatAgentCapabilities(entity)}</strong></div>
+              <div><span>Target group</span>{targetGroupId ? <DetailEntityLink route="target-group-detail" id={targetGroupId} /> : <strong>unbound</strong>}</div>
               <div><span>Hostname</span><strong>{getString(entity, ['hostname', 'name'])}</strong></div>
               <div><span>Environment</span><strong>{getString(entity, ['environment_id'], 'tenant scope')}</strong></div>
-              <div><span>Target group</span><strong>{targetGroupId || 'unbound'}</strong></div>
-              <div><span>Health</span><strong>{formatAgentHealth(entity)}</strong></div>
-              <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
               <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at ?? entity.updated_at)}</strong></div>
               <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
-              <div><span>Gateway fingerprint</span><strong>{getString(entity, ['fingerprint'], 'not registered')}</strong></div>
+              <div><span>Gateway fingerprint</span><strong><code>{getString(entity, ['fingerprint'], 'not registered')}</code></strong></div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>Actions</CardTitle>
-              <CardDescription>Lifecycle controls for this outbound observer.</CardDescription>
+              <CardTitle>Lifecycle</CardTitle>
+              <CardDescription>Revoke stops heartbeat until re-registered with a new bootstrap token from the fleet page.</CardDescription>
             </CardHeader>
             <CardContent className="row-actions">
               {getString(entity, ['status']) !== 'revoked' ? (
-                <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void revokeAgent()}>Revoke agent</Button>
-              ) : null}
-              <AnchorButton size="sm" variant="secondary" href="#agents">Back to fleet</AnchorButton>
+                <Button size="sm" variant="danger" loading={busy === `revoke-${entityId}`} disabled={busy !== ''} onClick={() => void revokeAgent()}>Revoke agent</Button>
+              ) : (
+                <p className="muted">This agent is revoked. Issue a new bootstrap token on <AnchorButton size="sm" variant="ghost" href="#agents">Agents</AnchorButton> to re-register.</p>
+              )}
+              <AnchorButton size="sm" variant="secondary" href="#agents">Open fleet install &amp; upgrades</AnchorButton>
             </CardContent>
           </Card>
         </div>
-      ) : null}
-      {tab === 'install' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Install reference</CardTitle>
-            <CardDescription>Install commands use a fresh bootstrap token from <code>#agents</code> or <code>#settings</code>.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <pre className="codeblock">{`curl -fsSL ${apiBase}/agents/install.sh \\
-  | sudo ASTRANULL_API_URL="${apiBase}" \\
-       ASTRANULL_BOOTSTRAP_TOKEN="${installToken}" bash`}</pre>
-          </CardContent>
-        </Card>
       ) : null}
       {tab === 'health' ? (
         <Card>
@@ -1363,7 +1939,7 @@ function AgentDetailView({
           <CardContent className="kv-list">
             <div><span>Heartbeat freshness</span><strong>{agentHeartbeatFreshness(entity)}</strong></div>
             <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at)}</strong></div>
-            <div><span>Status</span><strong>{getString(entity, ['status'], 'unknown')}</strong></div>
+            <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /></div>
             <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
           </CardContent>
         </Card>
@@ -1372,45 +1948,625 @@ function AgentDetailView({
         <Card>
           <CardHeader>
             <CardTitle>Placement review</CardTitle>
-            <CardDescription>Target-group placement confidence from <code>GET /v1/placement/reviews</code>.</CardDescription>
+            <CardDescription>Target-group placement confidence from placement reviews.</CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
-            {auxLoading ? <p className="muted">Loading placement review…</p> : null}
-            <div><span>Target group</span><strong>{targetGroupId || 'unbound'}</strong></div>
-            <div><span>Placement status</span><strong>{getString(placementReview, ['status'], 'unknown')}</strong></div>
+            {auxLoading ? <DetailLoadingPlaceholder label="Loading placement review…" variant="compact" /> : null}
+            <div><span>Target group</span>{targetGroupId ? <DetailEntityLink route="target-group-detail" id={targetGroupId} /> : <strong>unbound</strong>}</div>
+            <div>
+              <span>Placement status</span>
+              <span title={placementStatusHint(getString(placementReview, ['status'], '')) || undefined}>
+                <StatusBadge
+                  value={formatPlacementStatus(getString(placementReview, ['status'], 'unknown'))}
+                  tone={placementStatusBadgeTone(getString(placementReview, ['status'], 'unknown'))}
+                  fallback="unknown"
+                />
+              </span>
+            </div>
             <div><span>Observation mode</span><strong>{getString(placementReview, ['observation_mode'], '—')}</strong></div>
             <div><span>Summary</span><strong>{getString(placementReview, ['summary'], getNestedString(placementReviews, ['summary', 'summary'], 'Awaiting baseline traffic evidence.'))}</strong></div>
           </CardContent>
         </Card>
       ) : null}
-      {tab === 'capabilities' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Capabilities</CardTitle>
-            <CardDescription>Observation modes reported on registration and heartbeat.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Modes</span><strong>{formatAgentCapabilities(entity)}</strong></div>
-            <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
-            <div><span>Group placement status</span><strong>{getString(placementReview, ['status'], '—')}</strong></div>
-          </CardContent>
-        </Card>
-      ) : null}
-      {tab === 'logs' ? (
+      {tab === 'audit' ? (
         <Card>
           <CardHeader>
             <CardTitle>Audit trail</CardTitle>
-            <CardDescription>Metadata-only lifecycle events for this agent from <code>GET /v1/audit-log</code>.</CardDescription>
+            <CardDescription>Metadata-only lifecycle events for this agent.</CardDescription>
           </CardHeader>
           <CardContent>
-            {agentLogs.length === 0 ? (
-              <EmptyState icon={ClipboardList} title="No audit events for this agent yet." body="Registration, heartbeat, revoke, and update actions appear after lifecycle activity." />
-            ) : (
+            <DataTable
+              columns={agentAuditColumns}
+              items={agentLogs}
+              empty={<EmptyState icon={ClipboardList} title="No audit events for this agent yet." body="Registration, heartbeat, revoke, and update actions appear after lifecycle activity." />}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+      </>
+      ) : null}
+    </div>
+  );
+}
+
+function FindingDetailView({
+  entity,
+  entityId,
+  data,
+  config,
+  session,
+  onRefresh,
+  loading,
+  loadError
+}: {
+  entity: DataItem;
+  entityId: string;
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  onRefresh: () => Promise<void>;
+  loading: boolean;
+  loadError: string;
+}) {
+  const [tab, setTab] = useState('summary');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [exportOutput, setExportOutput] = useState('');
+  const [showTechnicalExport, setShowTechnicalExport] = useState(false);
+  const tabOptions = [
+    { id: 'summary', label: 'Summary' },
+    { id: 'explanation', label: 'Explanation' },
+    { id: 'triage', label: 'Triage' }
+  ];
+  const testRunId = getString(entity, ['test_run_id'], '');
+  const slaDueAt = findingSlaDueAt(entity);
+  const title = detailEntityTitle('finding-detail', entity, entityId);
+
+  async function runAction(label: string, action: () => Promise<unknown>, success: string) {
+    setBusy(label);
+    setError('');
+    setMessage('');
+    try {
+      await action();
+      setMessage(success);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function patchFinding(body: Record<string, unknown>, success: string, confirmMessage?: string) {
+    if (confirmMessage && !window.confirm(confirmMessage)) return;
+    await runAction(`finding-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }), success);
+  }
+
+  async function retestFinding() {
+    if (!window.confirm('Start a retest for this finding?')) return;
+    const retestAction = resolveFindingRetestAction(entity);
+    if (!retestAction) {
+      setError('Finding is missing retest context (check_id, WAF asset, or CVE pipeline item).');
+      return;
+    }
+    if (retestAction.kind === 'waf-validation') {
+      await runAction(`retest-waf-${entityId}`, () => requestJson(config, session, '/v1/waf/validations', {
+        method: 'POST',
+        body: { waf_asset_id: retestAction.wafAssetId, modes: ['marker'] }
+      }), 'WAF validation retest started.');
+      return;
+    }
+    if (retestAction.kind === 'cve-retest') {
+      await runAction(`retest-cve-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(retestAction.pipelineId)}/retest`, { method: 'POST' }), 'CVE pipeline retest started.');
+      return;
+    }
+    if (retestAction.kind === 'cve-retest-url') {
+      await runAction(`retest-cve-url-${entityId}`, () => requestJson(config, session, retestAction.retestUrl, { method: 'POST' }), 'CVE retest started.');
+      return;
+    }
+    const targetGroupId = getString(data.targetGroups[0] ?? {}, ['id'], '');
+    const checkId = retestAction.checkId;
+    const detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
+    const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
+    const targetId = getString(targets[0] ?? {}, ['id'], '');
+    if (!targetGroupId || !targetId || !checkId) {
+      setError('Declare target scope before starting a retest run.');
+      return;
+    }
+    await runAction(`retest-run-${entityId}`, () => requestJson(config, session, '/v1/test-runs', {
+      method: 'POST',
+      body: { target_group_id: targetGroupId, target_id: targetId, check_id: checkId }
+    }), 'Safe validation retest started.');
+  }
+
+  async function exportFinding() {
+    setBusy(`export-finding-${entityId}`);
+    setError('');
+    try {
+      const payload = await requestJson(config, session, `/v1/findings/${entityId}/export`, { method: 'POST' });
+      setExportOutput(JSON.stringify(payload, null, 2));
+      setMessage('Finding export generated with custody manifest.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <div>
+          <DetailPageIntro route="finding-detail" eyebrow="Evidence-backed finding" />
+          <DetailEntityHeading route="finding-detail" entityId={entityId} title={title} />
+        </div>
+      </div>
+      {loading ? <DetailLoadingPlaceholder label="Loading finding detail…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
+      ) : null}
+      {!loading ? (
+      <>
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
+      {tab === 'summary' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Finding summary</CardTitle>
+            <CardDescription>
+              <StatusBadge value={getString(entity, ['severity'])} tone={findingSeverityBadgeTone(getString(entity, ['severity']))} />
+              {' · '}
+              <StatusBadge value={getString(entity, ['status'])} tone={findingStatusBadgeTone(getString(entity, ['status']))} />
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="kv-list">
+            <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
+            <div className="kv-stack">
+              <span>SLA due</span>
+              <div className="stack-tight">
+                <strong>{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong>
+                <p className="muted small">SLA window is based on severity hours from creation.</p>
+              </div>
+            </div>
+            <div><span>Target group</span><DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} /></div>
+            <div><span>Related run</span>{testRunId ? <DetailEntityLink route="run-detail" id={testRunId} label={runDisplayLabel(data.runs, testRunId)} /> : <strong>—</strong>}</div>
+            <div className="row-actions">
+              <AnchorButton size="sm" variant="secondary" href="#findings">Open findings</AnchorButton>
+              <Button size="sm" variant="ghost" loading={busy.startsWith('retest-')} disabled={busy !== ''} onClick={() => void retestFinding()}>Retest</Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'explanation' ? (
+        <Card>
+          <CardHeader><CardTitle>Why this finding?</CardTitle><CardDescription>Verdict explanation correlated to the originating test run.</CardDescription></CardHeader>
+          <CardContent><FindingExplanationPanel finding={entity} config={config} session={session} /></CardContent>
+        </Card>
+      ) : null}
+      {tab === 'triage' ? (
+        <>
+          <Card>
+            <CardHeader><CardTitle>Owner &amp; status</CardTitle><CardDescription>Assign an owner and change finding status with confirmation.</CardDescription></CardHeader>
+            <CardContent>
+              <form className="product-form" onSubmit={(event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                void patchFinding({
+                  assignee: String(form.get('assignee') ?? '').trim(),
+                  notes: String(form.get('notes') ?? '').trim()
+                }, 'Triage notes updated.');
+              }}>
+                <label className="full"><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
+                <label className="full"><span>Triage notes</span><textarea name="notes" rows={4} defaultValue={getString(entity, ['notes'], '')} /></label>
+                <div className="form-actions full"><Button type="submit" loading={busy === `finding-${entityId}`} disabled={busy !== ''}>Save triage</Button></div>
+              </form>
+              <div className="row-actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={busy === `finding-${entityId}`}
+                  disabled={busy !== '' || getString(entity, ['status']) === 'accepted_risk'}
+                  onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding marked accepted risk.', 'Accept risk on this finding? Document the exception in triage notes before continuing.')}
+                >
+                  Accept risk
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={busy === `finding-${entityId}`}
+                  disabled={busy !== '' || getString(entity, ['status']) === 'closed'}
+                  onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.', 'Close this finding? Ensure retest or closure evidence is recorded.')}
+                >
+                  Close finding
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Custody export</CardTitle><CardDescription>Generate a custody-backed export for auditors.</CardDescription></CardHeader>
+            <CardContent>
+              <div className="row-actions">
+                <Button size="sm" variant="secondary" loading={busy === `export-finding-${entityId}`} disabled={busy !== ''} onClick={() => void exportFinding()}>Export with custody</Button>
+                <label className="auth-check-row">
+                  <input type="checkbox" checked={showTechnicalExport} onChange={(event) => setShowTechnicalExport(event.target.checked)} />
+                  <span>Show technical export preview</span>
+                </label>
+              </div>
+              {showTechnicalExport && exportOutput ? <pre className="codeblock">{exportOutput}</pre> : null}
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+      </>
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceDetailView({
+  entity,
+  entityId,
+  data,
+  config,
+  session,
+  loading,
+  loadError
+}: {
+  entity: DataItem;
+  entityId: string;
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  loading: boolean;
+  loadError: string;
+}) {
+  const [tab, setTab] = useState('summary');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const tabOptions = [
+    { id: 'summary', label: 'Summary' },
+    { id: 'custody', label: 'Custody' },
+    { id: 'links', label: 'Links' }
+  ];
+  const testRunId = getString(entity, ['test_run_id'], '');
+  const relatedFindings = data.findings.filter((finding) => getString(finding, ['test_run_id'], '') === testRunId);
+  const title = detailEntityTitle('evidence-detail', entity, entityId);
+  const digest = getString(entity, ['content_sha256', 'custody_digest'], '—');
+
+  async function exportThisRecord() {
+    setBusy(`export-evidence-${entityId}`);
+    setError('');
+    setMessage('');
+    try {
+      const manifest = {
+        evidence_id: entityId,
+        kind: getString(entity, ['kind', 'signal_type']),
+        content_sha256: digest,
+        custody_id: getString(entity, ['custody_id'], ''),
+        test_run_id: testRunId
+      };
+      await navigator.clipboard.writeText(JSON.stringify(manifest, null, 2));
+      setMessage('Custody manifest for this record copied to clipboard.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <DetailPageIntro route="evidence-detail" eyebrow="Evidence vault record" />
+        <DetailEntityHeading route="evidence-detail" entityId={entityId} title={title} />
+      </div>
+      {loading ? <DetailLoadingPlaceholder label="Loading evidence detail…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      {!loading ? (
+      <>
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
+      {tab === 'summary' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Evidence summary</CardTitle>
+            <CardDescription>Metadata-only vault record — no raw payloads are rendered in the UI.</CardDescription>
+          </CardHeader>
+          <CardContent className="kv-list">
+            <div>
+              <span>Kind</span>
+              <strong>{getString(entity, ['label', 'kind', 'signal_type'])}</strong>
+              <p className="muted small">Probe results come from outside checks; agent rows come from outbound observers.</p>
+            </div>
+            <div>
+              <span>Source</span>
+              <strong>{getString(entity, ['source'], getNestedString(entity, ['metadata', 'vector_family'], '—'))}</strong>
+              <p className="muted small">Source identifies whether evidence was observed by probe or agent channel.</p>
+            </div>
+            <div><span>Recorded</span><strong>{formatDate(entity.created_at ?? entity.timestamp)}</strong></div>
+            <div><span>Check</span>{getString(entity, ['check_id']) ? <AnchorButton size="sm" variant="ghost" href="#checks">{checkDisplayName(data.checks, getString(entity, ['check_id']))}</AnchorButton> : <strong>—</strong>}</div>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'custody' ? (
+        <Card>
+          <CardHeader><CardTitle>Custody digest</CardTitle><CardDescription>Metadata-only custody references — no raw payloads rendered.</CardDescription></CardHeader>
+          <CardContent className="kv-list">
+            <div><span>Content digest</span><strong><code className="small">{digest}</code></strong></div>
+            <div><span>Custody record id</span><strong>{getString(entity, ['custody_id'], '—')}</strong></div>
+            <div><span>Schema version</span><strong>{getString(entity, ['schema_version'], '—')}</strong></div>
+            <div className="row-actions">
+              <Button size="sm" variant="secondary" loading={busy === `export-evidence-${entityId}`} disabled={busy !== ''} onClick={() => void exportThisRecord()}>Export this record</Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'links' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Correlated links</CardTitle>
+            <CardDescription>Runs and findings tied to this custody record.</CardDescription>
+          </CardHeader>
+          <CardContent className="kv-list">
+            <div><span>Test run</span>{testRunId ? <DetailEntityLink route="run-detail" id={testRunId} label={runDisplayLabel(data.runs, testRunId)} /> : <strong>—</strong>}</div>
+            <div><span>Related findings</span><strong>{relatedFindings.length}</strong></div>
+            {relatedFindings.slice(0, 6).map((finding) => {
+              const findingId = getString(finding, ['id'], '');
+              const findingTitle = getString(finding, ['title', 'summary'], findingId);
+              const findingMeta = `${getString(finding, ['severity'], 'unknown')} · ${formatStatusLabel(getString(finding, ['status'], 'open'))}`;
+              return (
+                <div key={findingId}>
+                  <span>{findingTitle}</span>
+                  <strong>
+                    <DetailEntityLink route="finding-detail" id={findingId} label="Open finding" />
+                    <span className="muted small"> · {findingMeta}</span>
+                  </strong>
+                </div>
+              );
+            })}
+            <div className="row-actions">
+              {testRunId ? (
+                <AnchorButton size="sm" variant="ghost" href={`#findings?test_run_id=${encodeURIComponent(testRunId)}`}>View all findings for run</AnchorButton>
+              ) : null}
+              <AnchorButton size="sm" variant="secondary" href="#evidence">Open evidence vault</AnchorButton>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      </>
+      ) : null}
+    </div>
+  );
+}
+
+function HighScaleDetailView({
+  entity,
+  entityId,
+  data,
+  config,
+  session,
+  onRefresh,
+  loading,
+  loadError
+}: {
+  entity: DataItem;
+  entityId: string;
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  onRefresh: () => Promise<void>;
+  loading: boolean;
+  loadError: string;
+}) {
+  const [tab, setTab] = useState('overview');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [drafts, setDrafts] = useState<Record<string, AuthorizationArtifactDraft>>({});
+  const [lastFailedUploadType, setLastFailedUploadType] = useState('');
+  const tabOptions = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'authorization', label: 'Authorization pack' },
+    { id: 'lifecycle', label: 'Lifecycle' },
+    { id: 'provider', label: 'Provider checklist' }
+  ];
+  const packStatus = getNestedItem(entity, ['authorization_pack_status']);
+  const artifacts = Array.isArray(entity.artifacts) ? entity.artifacts as DataItem[] : [];
+  const providerChecklist = Array.isArray(entity.provider_approval_checklist) ? entity.provider_approval_checklist as DataItem[] : [];
+  const lifecycleTrail = buildLifecycleTimeline(entity);
+  const targetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === getString(entity, ['target_group_id'], ''));
+  const title = detailEntityTitle('high-scale-detail', entity, entityId);
+  const requiredArtifactTypes = authorizationArtifactTypesForRequest(entity);
+
+  function draftForType(type: string): AuthorizationArtifactDraft {
+    return drafts[type] ?? { filename: '', content_sha256: '', custody_id: '' };
+  }
+
+  function updateDraft(type: string, field: keyof AuthorizationArtifactDraft, value: string) {
+    setDrafts((current) => {
+      const existing = current[type];
+      return {
+        ...current,
+        [type]: {
+          filename: existing?.filename ?? '',
+          content_sha256: existing?.content_sha256 ?? '',
+          custody_id: existing?.custody_id ?? '',
+          [field]: value
+        }
+      };
+    });
+  }
+
+  async function uploadAuthorizationArtifact(type: string) {
+    const draft = draftForType(type);
+    const filename = draft.filename.trim();
+    if (!filename) {
+      setError('Filename is required before upload.');
+      setMessage('');
+      return;
+    }
+    setBusy(`upload-${type}`);
+    setError('');
+    setMessage('');
+    setLastFailedUploadType('');
+    try {
+      let contentSha256 = draft.content_sha256.trim();
+      if (!contentSha256) {
+        contentSha256 = await sha256HexBrowser(`authorization-artifact:${entityId}:${type}:${filename}`);
+      }
+      const body = buildMetadataArtifactUploadBody(entity, type, {
+        filename,
+        content_sha256: contentSha256,
+        custody_id: draft.custody_id.trim() || undefined
+      });
+      await requestJson(config, session, `/v1/high-scale-requests/${encodeURIComponent(entityId)}/artifacts`, {
+        method: 'POST',
+        body
+      });
+      setMessage(`${authorizationArtifactTitle(type)} metadata uploaded.`);
+      await onRefresh();
+    } catch (err) {
+      setLastFailedUploadType(type);
+      setError(err instanceof Error ? err.message : 'Authorization artifact upload failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  return (
+    <div className="content">
+      <DetailPageHeader route="high-scale-detail" eyebrow="SOC-gated validation" entityId={entityId} title={title} />
+      {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
+      {loadError ? <div className="form-banner error">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner'}>
+          {error || message}
+          {error && lastFailedUploadType ? (
+            <div className="row-actions">
+              <Button size="sm" variant="secondary" loading={busy === `upload-${lastFailedUploadType}`} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(lastFailedUploadType)}>Retry upload</Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {!loading ? (
+      <>
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
+      {tab === 'overview' ? (
+        <Card>
+          <CardHeader><CardTitle>Request overview</CardTitle></CardHeader>
+          <CardContent className="kv-list">
+            <div><span>State</span><StatusBadge value={getString(entity, ['state'])} tone={highScaleStateBadgeTone(getString(entity, ['state']))} /></div>
+            <div><span>Target group</span><strong>{getString(targetGroup ?? {}, ['name'], getString(entity, ['target_group_id']))}</strong></div>
+            <div><span>Pack status</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewBadgeTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
+            <div><span>Window start</span><strong>{formatDate(getNestedString(entity, ['requested_window', 'window_start'], ''))}</strong></div>
+            <AnchorButton size="sm" variant="secondary" href="#high-scale">Open high-scale requests</AnchorButton>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'authorization' ? (
+        <Card>
+          <CardHeader><CardTitle>Authorization artifacts</CardTitle><CardDescription>Metadata-only pack references uploaded for SOC review.</CardDescription></CardHeader>
+          <CardContent className="stack-tight">
+            <div className="artifact-upload-grid">
+              {requiredArtifactTypes.map((type) => {
+                const draft = draftForType(type);
+                const bestArtifact = bestArtifactForType(artifacts, type);
+                const requirement = packRequirementForType(packStatus, type);
+                const uploadBusy = busy === `upload-${type}`;
+                return (
+                  <div key={type} className="artifact-upload-card">
+                    <div className="artifact-upload-card__header">
+                      <div>
+                        <strong>{authorizationArtifactTitle(type)}</strong>
+                        <p className="muted small">{authorizationArtifactPurpose(type)}</p>
+                      </div>
+                    </div>
+                    <p className="muted small">{explainArtifactReviewStatus(type, requirement, bestArtifact)}</p>
+                    <div className="product-form compact">
+                      <label className="full">
+                        <span>File name</span>
+                        <input
+                          value={draft.filename}
+                          placeholder={`${type}.pdf`}
+                          onChange={(event) => updateDraft(type, 'filename', event.target.value)}
+                        />
+                      </label>
+                      <label className="full">
+                        <span>Content digest (SHA-256)</span>
+                        <input
+                          value={draft.content_sha256}
+                          placeholder="Optional — computed from metadata if blank"
+                          onChange={(event) => updateDraft(type, 'content_sha256', event.target.value)}
+                        />
+                      </label>
+                      <label className="full">
+                        <span>Custody record id</span>
+                        <input
+                          value={draft.custody_id}
+                          placeholder={`custody_${entityId}_${type}`}
+                          onChange={(event) => updateDraft(type, 'custody_id', event.target.value)}
+                        />
+                      </label>
+                      <div className="form-actions full">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          loading={uploadBusy}
+                          disabled={busy !== ''}
+                          onClick={() => void uploadAuthorizationArtifact(type)}
+                        >
+                          Upload
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="artifact-upload-card__meta">
+              <strong>Uploaded artifacts</strong>
+              {artifacts.length === 0 ? <p className="muted">No artifacts uploaded yet.</p> : (
+                <div className="kv-list">
+                  {artifacts.map((artifact) => {
+                    const type = getString(artifact, ['type']);
+                    const artifactStatus = getString(artifact, ['status'], 'pending_review');
+                    const digestPreview = getString(artifact, ['content_sha256'], '—').slice(0, 16);
+                    return (
+                      <div key={getString(artifact, ['id'], type)}>
+                        <span>{authorizationArtifactTitle(type)}</span>
+                        <strong>
+                          <StatusBadge value={artifactStatus} tone={artifactReviewBadgeTone(artifactStatus)} fallback="pending_review" />
+                          {' · '}
+                          <code className="small">{digestPreview}</code>
+                        </strong>
+                        <p className="muted small">{explainArtifactReviewStatus(type, packRequirementForType(packStatus, type), artifact)}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'lifecycle' ? (
+        <Card>
+          <CardHeader><CardTitle>Lifecycle trail</CardTitle></CardHeader>
+          <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
+        </Card>
+      ) : null}
+      {tab === 'provider' ? (
+        <Card>
+          <CardHeader><CardTitle>Provider checklist</CardTitle></CardHeader>
+          <CardContent>
+            {providerChecklist.length === 0 ? <p className="muted">No provider checklist items recorded.</p> : (
               <div className="kv-list">
-                {agentLogs.slice(0, 12).map((entry, index) => (
-                  <div key={getString(entry, ['id'], String(index))}>
-                    <span>{getString(entry, ['action'])}</span>
-                    <strong>{formatDate(entry.created_at ?? entry.timestamp)}</strong>
+                {providerChecklist.map((item, index) => (
+                  <div key={getString(item, ['id'], String(index))}>
+                    <span>{getString(item, ['label', 'provider_name', 'requirement'])}</span>
+                    <StatusBadge value={getString(item, ['status'], 'pending')} tone={artifactReviewBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" />
                   </div>
                 ))}
               </div>
@@ -1418,42 +2574,226 @@ function AgentDetailView({
           </CardContent>
         </Card>
       ) : null}
-      {tab === 'upgrades' ? (
-        <div className="split">
-          <Card>
-            <CardHeader>
-              <CardTitle>Eligible releases</CardTitle>
-              <CardDescription>Tenant releases from <code>GET /v1/agent-updates</code>; agent polls update channel with its credential.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {auxLoading ? <p className="muted">Loading releases…</p> : null}
-              {updateReleases.length === 0 ? <p className="muted">No published releases for this tenant.</p> : null}
+      </>
+      ) : null}
+    </div>
+  );
+}
+
+function SocRequestDetailView({
+  entity,
+  entityId,
+  config,
+  session,
+  onRefresh
+}: {
+  entity: DataItem;
+  entityId: string;
+  config: PortalConfig;
+  session: Session;
+  onRefresh: () => Promise<void>;
+}) {
+  const [tab, setTab] = useState('workspace');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [adapterStatus, setAdapterStatus] = useState<DataItem | null>(null);
+  const [socNotes, setSocNotes] = useState<DataItem[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const staffSocSurface = session.principal === 'staff' && isStaffSocRole(session);
+  const isSoc = staffSocSurface || (session.role === 'soc' && session.principal !== 'staff');
+
+  async function socFetch(path: string, options: { method?: string; body?: unknown } = {}) {
+    if (staffSocSurface) return requestSocJson(config, session, path, options);
+    return requestJson(config, session, path, options);
+  }
+  const artifacts = Array.isArray(entity.artifacts) ? entity.artifacts as DataItem[] : [];
+  const packStatus = getNestedItem(entity, ['authorization_pack_status']);
+  const title = detailEntityTitle('soc-request-detail', entity, entityId);
+  const tabOptions = [
+    { id: 'workspace', label: 'Workspace' },
+    { id: 'artifacts', label: 'Artifacts' },
+    { id: 'adapter', label: 'Adapter' },
+    { id: 'notes', label: 'Notes' }
+  ];
+
+  async function socAction(action: string, body: Record<string, unknown> = {}) {
+    const lifecycleConfirm: Record<string, string> = {
+      approve: `Approve high-scale request ${entityId} and move it to approved?`,
+      schedule: `Schedule high-scale request ${entityId} for execution?`,
+      start: `Start high-scale execution for ${entityId}? Governed adapter traffic will begin.`,
+      stop: `Stop high-scale execution for ${entityId} immediately?`,
+      close: `Close high-scale request ${entityId} and finalize the test lifecycle?`
+    };
+    const lifecycleMessage = lifecycleConfirm[action];
+    if (lifecycleMessage && !window.confirm(lifecycleMessage)) return;
+    setBusy(`${action}-${entityId}`);
+    setError('');
+    setMessage('');
+    try {
+      await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/${action}`, { method: 'POST', body });
+      setMessage(`SOC ${action} completed.`);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'SOC action failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function reviewArtifact(artifactId: string, status: 'accepted' | 'rejected') {
+    if (status === 'accepted') {
+      if (!window.confirm('Accept this authorization artifact? Acceptance authorizes high-scale execution to proceed.')) return;
+    } else if (!window.confirm('Reject this authorization artifact?')) return;
+    await socAction(`artifacts/${artifactId}/review`, { status, notes: `SOC ${status} via request detail` });
+  }
+
+  async function loadAdapterStatus() {
+    setBusy(`adapter-${entityId}`);
+    setError('');
+    try {
+      const payload = await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/adapter-status`);
+      setAdapterStatus(payload as DataItem);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Adapter status unavailable.');
+      setAdapterStatus(null);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function submitSocNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const body = String(new FormData(event.currentTarget).get('body') ?? '').trim();
+    if (!body) return;
+    await socAction('notes', { body });
+    event.currentTarget.reset();
+    void loadSocNotes();
+  }
+
+  async function loadSocNotes() {
+    setNotesLoading(true);
+    try {
+      const payload = await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/notes`);
+      const items = Array.isArray((payload as { items?: unknown }).items) ? (payload as { items: DataItem[] }).items : [];
+      setSocNotes(items);
+    } catch {
+      setSocNotes([]);
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isSoc || !entityId) return;
+    void loadSocNotes();
+  }, [entityId, isSoc]);
+
+  if (!isSoc) {
+    const isStaffPrincipal = session.principal === 'staff';
+    return (
+      <div className="content">
+        <DetailPageIntro route="soc-request-detail" eyebrow="SOC execution workspace" />
+        <EmptyState
+          icon={ShieldCheck}
+          title={isStaffPrincipal ? 'Staff SOC role required.' : 'SOC role required.'}
+          body={isStaffPrincipal
+            ? 'Sign in with a staff SOC analyst or lead role to operate governed high-scale requests.'
+            : 'Switch the workspace role to soc to operate governed high-scale requests.'}
+          actionLabel={isStaffPrincipal ? 'Open staff login' : 'Open SOC console'}
+          actionHref={isStaffPrincipal ? '/internal/admin/login' : '#soc'}
+        />
+      </div>
+    );
+  }
+
+  const state = getString(entity, ['state'], '');
+  const packReady = getNestedString(entity, ['authorization_pack_status', 'overall'], '') === 'accepted';
+
+  return (
+    <div className="content">
+      <DetailPageHeader route="soc-request-detail" eyebrow="SOC execution workspace" entityId={entityId} title={title} />
+      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
+      {tab === 'workspace' ? (
+        <Card>
+          <CardHeader><CardTitle>Queue context</CardTitle><CardDescription>Lifecycle actions for {entityId}</CardDescription></CardHeader>
+          <CardContent className="kv-list">
+            <div><span>State</span><StatusBadge value={state} tone={highScaleStateBadgeTone(state)} /></div>
+            <div><span>Pack</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewBadgeTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
+            <div className="row-actions">
+              {['submitted', 'under_review'].includes(state) && packReady ? <Button size="sm" variant="secondary" loading={busy === `approve-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('approve')}>Approve</Button> : null}
+              {state === 'approved' ? <Button size="sm" variant="secondary" loading={busy === `schedule-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('schedule', socDevScheduleWindow())}>Schedule</Button> : null}
+              {state === 'scheduled' ? <Button size="sm" variant="default" loading={busy === `start-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('start')}>Start</Button> : null}
+              {state === 'running' ? <Button size="sm" variant="danger" loading={busy === `stop-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('stop')}>Stop</Button> : null}
+              {state === 'stopped' ? <Button size="sm" variant="secondary" loading={busy === `close-${entityId}`} disabled={busy !== ''} onClick={() => void socAction('close')}>Close</Button> : null}
+              <AnchorButton size="sm" variant="ghost" href="#soc">Open SOC console</AnchorButton>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'artifacts' ? (
+        <Card>
+          <CardHeader><CardTitle>Authorization artifacts</CardTitle></CardHeader>
+          <CardContent>
+            {artifacts.length === 0 ? <p className="muted">No artifacts uploaded.</p> : (
               <div className="kv-list">
-                {updateReleases.slice(0, 8).map((release) => (
-                  <div key={getString(release, ['id'], '')}>
-                    <span>{getString(release, ['version'])} ({getString(release, ['channel'], 'stable')})</span>
-                    <strong>{getString(release, ['state'], 'active')}</strong>
+                {artifacts.map((artifact) => {
+                  const artifactId = getString(artifact, ['id'], '');
+                  const type = getString(artifact, ['type']);
+                  const reviewBusy = busy === `artifacts/${artifactId}/review-${entityId}`;
+                  return (
+                    <div key={artifactId || type}>
+                      <span>{authorizationArtifactTitle(type)}</span>
+                      <div className="row-actions">
+                        <StatusBadge value={getString(artifact, ['status'])} tone={artifactReviewBadgeTone(getString(artifact, ['status']))} />
+                        <Button size="sm" variant="secondary" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'accepted')}>Accept</Button>
+                        <Button size="sm" variant="ghost" loading={reviewBusy} disabled={busy !== ''} onClick={() => void reviewArtifact(artifactId, 'rejected')}>Reject</Button>
+                      </div>
+                      <p className="muted small">{explainArtifactReviewStatus(type, packRequirementForType(packStatus, type), artifact)}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'adapter' ? (
+        <Card>
+          <CardHeader><CardTitle>Adapter status</CardTitle></CardHeader>
+          <CardContent>
+            <Button size="sm" variant="secondary" loading={busy === `adapter-${entityId}`} disabled={busy !== ''} onClick={() => void loadAdapterStatus()}>Refresh adapter status</Button>
+            {adapterStatus ? (
+              <div className="kv-list">
+                <div><span>State</span><strong>{getNestedString(adapterStatus, ['adapter', 'state'], getString(adapterStatus, ['state']))}</strong></div>
+                <div><span>Traffic generated</span><Badge tone={getNestedString(adapterStatus, ['adapter', 'traffic_generated'], 'false') === 'true' ? 'warn' : 'muted'}>{getNestedString(adapterStatus, ['adapter', 'traffic_generated'], 'false') === 'true' ? 'Yes' : 'No'}</Badge></div>
+              </div>
+            ) : <p className="muted">Adapter status not loaded yet.</p>}
+          </CardContent>
+        </Card>
+      ) : null}
+      {tab === 'notes' ? (
+        <Card>
+          <CardHeader><CardTitle>SOC notes</CardTitle><CardDescription>Thread before adding execution context.</CardDescription></CardHeader>
+          <CardContent>
+            {notesLoading ? <DetailLoadingPlaceholder label="Loading SOC notes…" variant="compact" /> : null}
+            {socNotes.length > 0 ? (
+              <div className="kv-list stack-tight">
+                {socNotes.map((note, index) => (
+                  <div key={getString(note, ['id'], String(index))}>
+                    <span>{formatDate(note.created_at)}</span>
+                    <strong>{getString(note, ['body'])}</strong>
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Trust keys</CardTitle>
-              <CardDescription>Active signing keys from <code>GET /v1/agent-update-trust-keys</code>.</CardDescription>
-            </CardHeader>
-            <CardContent className="kv-list">
-              {trustKeys.length === 0 ? <p className="muted">No trust keys registered.</p> : null}
-              {trustKeys.map((key) => (
-                <div key={getString(key, ['id'], '')}>
-                  <span>{getString(key, ['name'])}</span>
-                  <strong>{getString(key, ['status'])}</strong>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
+            ) : !notesLoading ? <p className="muted">No SOC notes recorded yet.</p> : null}
+            <form className="product-form" aria-busy={notesLoading || undefined} onSubmit={(event) => void submitSocNote(event)}>
+              <label className="full"><span>Note</span><textarea name="body" rows={4} disabled={notesLoading} placeholder="Execution context, customer coordination, or stop rationale." /></label>
+              <div className="form-actions full"><Button type="submit" loading={busy === `notes-${entityId}`} disabled={busy !== '' || notesLoading}>Add note</Button></div>
+            </form>
+          </CardContent>
+        </Card>
       ) : null}
     </div>
   );
@@ -1481,19 +2821,14 @@ export function DetailRoutePage({
   const [cvePlaybook, setCvePlaybook] = useState<DataItem | null>(null);
   const [cveAuxError, setCveAuxError] = useState('');
   const [cveAuxLoading, setCveAuxLoading] = useState(false);
-  const entityId = useMemo(() => {
-    const fallbackByRoute: Partial<Record<RouteId, string>> = {
-      'target-group-detail': getString(data.targetGroups[0] ?? null, ['id'], ''),
-      'agent-detail': getString(data.agents[0] ?? null, ['id'], ''),
-      'run-detail': getString(data.runs[0] ?? null, ['id'], ''),
-      'waf-asset-detail': getString(data.wafAssets[0] ?? null, ['id'], ''),
-      'cve-detail': getString(data.cvePipeline[0] ?? null, ['id'], ''),
-      'supply-chain-detail': getString(data.supplyChainRisks[0] ?? null, ['id'], ''),
-      'discovery-entity': getString(data.discoveryEntities[0] ?? data.discoveryCandidates[0] ?? null, ['id', 'entity_id'], ''),
-      'tenant-detail': getString(data.internalTenants[0] ?? null, ['tenant_id', 'id'], '')
-    };
-    return getRouteEntityId(fallbackByRoute[route] ?? '');
-  }, [route, data]);
+  const [cvePlaybookExpanded, setCvePlaybookExpanded] = useState(false);
+  const [wafExceptionOwner, setWafExceptionOwner] = useState('');
+  const [wafExceptionReason, setWafExceptionReason] = useState('');
+  const [supplyPhaseAttest, setSupplyPhaseAttest] = useState(false);
+  const [supplyTargetPhase, setSupplyTargetPhase] = useState('AP2_manual_custody');
+  const [discoveryApproveTg, setDiscoveryApproveTg] = useState('');
+  const [discoveryImportTg, setDiscoveryImportTg] = useState('');
+  const entityId = useMemo(() => getRouteEntityId(''), [route]);
 
   const targetGroupFallback = data.targetGroups.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const agentFallback = data.agents.find((item) => getString(item, ['id'], '') === entityId) ?? null;
@@ -1506,6 +2841,9 @@ export function DetailRoutePage({
   const tenantFallback = data.internalTenants.find((item) => getString(item, ['tenant_id', 'id'], '') === entityId) ?? null;
   const cveFallback = data.cvePipeline.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const supplyChainFallback = data.supplyChainRisks.find((item) => getString(item, ['id'], '') === entityId) ?? null;
+  const findingFallback = data.findings.find((item) => getString(item, ['id'], '') === entityId) ?? null;
+  const evidenceFallback = data.evidence.find((item) => getString(item, ['id'], '') === entityId) ?? null;
+  const highScaleFallback = data.highScale.find((item) => getString(item, ['id'], '') === entityId) ?? null;
 
   const targetGroupDetail = useEntityDetail(
     route === 'target-group-detail' && Boolean(entityId),
@@ -1550,6 +2888,44 @@ export function DetailRoutePage({
     `/internal/admin/tenants/${encodeURIComponent(entityId)}`,
     null
   );
+  const findingDetailState = useEntityDetail(
+    route === 'finding-detail' && Boolean(entityId),
+    config,
+    session,
+    `/v1/findings/${encodeURIComponent(entityId)}`,
+    findingFallback
+  );
+  const evidenceDetailState = useEntityDetail(
+    route === 'evidence-detail' && Boolean(entityId),
+    config,
+    session,
+    `/v1/evidence/${encodeURIComponent(entityId)}`,
+    evidenceFallback
+  );
+  const agentDetail = useListBackedDetail(
+    route === 'agent-detail' && Boolean(entityId),
+    config,
+    session,
+    '/v1/agents',
+    entityId,
+    agentFallback
+  );
+  const highScaleDetail = useListBackedDetail(
+    route === 'high-scale-detail' && Boolean(entityId),
+    config,
+    session,
+    '/v1/high-scale-requests',
+    entityId,
+    highScaleFallback
+  );
+  const discoveryDetail = useListBackedDetail(
+    route === 'discovery-entity' && Boolean(entityId),
+    config,
+    session,
+    '/v1/discovery/candidates',
+    entityId,
+    discoveryFallback
+  );
 
   const detailState =
     route === 'target-group-detail' ? targetGroupDetail
@@ -1557,13 +2933,14 @@ export function DetailRoutePage({
         : route === 'waf-asset-detail' ? wafDetail
           : route === 'supply-chain-detail' ? supplyChainDetail
             : route === 'cve-detail' ? cveDetail
-              : { detail: null as DataItem | null, error: '', loading: false };
+              : route === 'agent-detail' ? agentDetail
+                : route === 'discovery-entity' ? discoveryDetail
+                  : { detail: null as DataItem | null, error: '', loading: false };
 
   const entity =
-    route === 'agent-detail' ? agentFallback
-      : route === 'discovery-entity' ? discoveryFallback
-        : route === 'tenant-detail' ? tenantFallback
-          : detailState.detail;
+    route === 'tenant-detail' ? tenantFallback
+      : route === 'high-scale-detail' ? (highScaleDetail.detail ?? highScaleFallback)
+        : detailState.detail;
 
   const groupId = route === 'target-group-detail'
     ? getString(entity, ['id'], '')
@@ -1585,37 +2962,44 @@ export function DetailRoutePage({
     let cancelled = false;
     setCveAuxLoading(true);
     setCveAuxError('');
-    Promise.allSettled([
-      requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/playbook`),
-      requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/match`, { method: 'POST', body: {} })
-    ])
-      .then(([playbookResult, matchResult]) => {
+    setCveMatches([]);
+    requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/playbook`)
+      .then((playbookPayload) => {
         if (cancelled) return;
-        const errors: string[] = [];
-        if (playbookResult.status === 'fulfilled') {
-          const playbookPayload = playbookResult.value as { playbook?: DataItem } | DataItem;
-          setCvePlaybook(getNestedItem(playbookPayload as DataItem, ['playbook']) ?? (playbookPayload as DataItem));
-        } else {
+        setCvePlaybook(getNestedItem(playbookPayload as DataItem, ['playbook']) ?? (playbookPayload as DataItem));
+      })
+      .catch((err) => {
+        if (!cancelled) {
           setCvePlaybook(null);
-          const reason = playbookResult.reason;
-          errors.push(reason instanceof Error ? reason.message : 'CVE playbook fetch failed.');
+          setCveAuxError(err instanceof Error ? err.message : 'CVE playbook fetch failed.');
         }
-        if (matchResult.status === 'fulfilled') {
-          const matchPayload = matchResult.value as { matches?: unknown };
-          const matches = Array.isArray(matchPayload?.matches) ? matchPayload.matches as DataItem[] : [];
-          setCveMatches(matches);
-        } else {
-          setCveMatches([]);
-          const reason = matchResult.reason;
-          errors.push(reason instanceof Error ? reason.message : 'CVE asset match fetch failed.');
-        }
-        setCveAuxError(errors.join(' '));
       })
       .finally(() => {
         if (!cancelled) setCveAuxLoading(false);
       });
     return () => { cancelled = true; };
   }, [route, entityId, config, session]);
+
+  async function runCveAssetMatch() {
+    if (!entityId) return;
+    setBusy(`cve-match-${entityId}`);
+    setCveAuxLoading(true);
+    setCveAuxError('');
+    try {
+      const matchPayload = await requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/match`, { method: 'POST', body: {} });
+      const matches = Array.isArray((matchPayload as { matches?: unknown }).matches)
+        ? (matchPayload as { matches: DataItem[] }).matches
+        : [];
+      setCveMatches(matches);
+      setMessage('Asset match completed.');
+    } catch (err) {
+      setCveMatches([]);
+      setCveAuxError(err instanceof Error ? err.message : 'CVE asset match failed.');
+    } finally {
+      setCveAuxLoading(false);
+      setBusy('');
+    }
+  }
 
   useEffect(() => {
     if (route !== 'run-detail' || !entityId) {
@@ -1673,12 +3057,12 @@ export function DetailRoutePage({
 
   const factorsTitle = factors.length > 0 ? 'Evidence-backed factors' : 'Derived summary';
   const factorsDescription = factors.length > 0
-    ? 'Scores and signals returned by tenant entity APIs.'
-    : 'No backend factor payload is available for this entity yet.';
-  const factorsEmptyTitle = factors.length > 0 ? 'No evidence factors yet.' : 'No backend factors yet.';
+    ? 'Scores and signals from observed readiness and posture evidence.'
+    : 'No factor payload is available for this entity yet.';
+  const factorsEmptyTitle = factors.length > 0 ? 'No evidence factors yet.' : 'No factors yet.';
   const factorsEmptyBody = factors.length > 0
-    ? 'Factors appear after the backend returns entity-specific readiness or posture signals.'
-    : 'Run the route-specific API actions (triage, validation, posture finalize) to populate factor data.';
+    ? 'Factors appear after the platform returns entity-specific readiness or posture signals.'
+    : 'Run triage, validation, or posture actions on this record to populate factor data.';
 
   const timeline = useMemo(() => {
     if (!entity) return [];
@@ -1690,13 +3074,43 @@ export function DetailRoutePage({
         { label: 'Verdict recorded', at: getNestedString(entity, ['verdict', 'finalized_at'], '') || entity.completed_at }
       ].filter((item) => item.at);
     }
+    if (route === 'waf-asset-detail') {
+      const validations = data.wafValidations.filter((item) => getString(item, ['waf_asset_id'], '') === entityId);
+      const driftEvents = data.wafDriftEvents.filter((item) => getString(item, ['waf_asset_id'], '') === entityId);
+      const items = [
+        { label: 'Asset declared', at: entity.created_at },
+        ...validations.map((validation) => ({
+          label: `Validation ${getString(validation, ['status'], 'recorded')}`,
+          at: validation.created_at ?? validation.updated_at
+        })),
+        ...driftEvents.map((drift) => ({
+          label: `Drift ${getString(drift, ['status'], 'detected')}`,
+          at: drift.detected_at ?? drift.updated_at
+        }))
+      ];
+      return items.filter((item) => item.at);
+    }
+    if (route === 'cve-detail') {
+      return [
+        { label: 'CVE ingested', at: entity.created_at },
+        { label: `Stage: ${getString(entity, ['stage'], 'ingest')}`, at: entity.updated_at },
+        getNestedString(entity, ['triage_result', 'triaged_at'], '') ? { label: 'Triage completed', at: getNestedString(entity, ['triage_result', 'triaged_at'], '') } : null,
+        getNestedString(entity, ['validation_result', 'validated_at'], '') ? { label: 'Exposure validated', at: getNestedString(entity, ['validation_result', 'validated_at'], '') } : null
+      ].filter((item): item is { label: string; at: unknown } => Boolean(item && item.at));
+    }
+    if (route === 'discovery-entity') {
+      return [
+        { label: `State: ${getString(entity, ['state'])}`, at: entity.updated_at ?? entity.created_at },
+        { label: 'First seen', at: entity.created_at },
+        getString(entity, ['approved_at'], '') ? { label: 'Approved', at: entity.approved_at } : null,
+        getString(entity, ['imported_at'], '') ? { label: 'Imported to scope', at: entity.imported_at } : null
+      ].filter((item): item is { label: string; at: unknown } => Boolean(item && item.at));
+    }
     return [
       { label: 'Record created', at: entity.created_at },
-      { label: 'Last updated', at: entity.updated_at },
-      { label: 'Latest evidence', at: relatedRuns[0]?.updated_at ?? relatedRuns[0]?.created_at },
-      { label: 'Latest finding', at: relatedFindings[0]?.updated_at ?? relatedFindings[0]?.created_at }
+      { label: 'Last updated', at: entity.updated_at }
     ].filter((item) => item.at);
-  }, [entity, route, relatedFindings, relatedRuns]);
+  }, [entity, route, entityId, data.wafValidations, data.wafDriftEvents]);
 
   const targetColumns: TableColumn<DataItem>[] = [
     { key: 'kind', label: 'Type', render: (item) => <Badge tone="info">{getString(item, ['kind'])}</Badge> },
@@ -1708,7 +3122,7 @@ export function DetailRoutePage({
     if (!entityId) {
       return (
         <div className="content">
-          <PageHeader route={route} eyebrow="Staff tenant operations" />
+          <DetailPageIntro route={route} eyebrow="Staff tenant operations" />
           <EmptyState icon={Target} title="No tenant selected." body="Open a tenant from the staff directory with ?id= or use the Detail link on #admin." actionLabel="Open staff admin" actionHref="#admin" />
         </div>
       );
@@ -1716,8 +3130,8 @@ export function DetailRoutePage({
     if (session.principal !== 'staff') {
       return (
         <div className="content">
-          <PageHeader route={route} eyebrow="Staff tenant operations" />
-          <EmptyState icon={UserCog} title="Staff session required." body="Tenant detail loads internal management APIs after staff authentication." actionLabel="Open staff login" actionHref="/internal/admin/login" />
+          <DetailPageIntro route={route} eyebrow="Staff tenant operations" />
+          <EmptyState icon={UserCog} title="Staff session required." body="Tenant detail is available after staff sign-in." actionLabel="Open staff login" actionHref="/internal/admin/login" />
         </div>
       );
     }
@@ -1735,11 +3149,158 @@ export function DetailRoutePage({
     );
   }
 
+  if (route === 'finding-detail') {
+    if (!entityId) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <EmptyState icon={TriangleAlert} title="No finding selected." body="Open a finding from the list with ?id= or use the View link on #findings." actionLabel="Open findings" actionHref="#findings" />
+        </div>
+      );
+    }
+    const findingEntity = findingDetailState.detail ?? findingFallback;
+    if (!findingEntity && findingDetailState.loading) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <DetailLoadingPlaceholder label="Loading finding detail…" />
+        </div>
+      );
+    }
+    if (!findingEntity) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence-backed finding" />
+          <EmptyState icon={TriangleAlert} title="Finding not found." body={findingDetailState.error || 'The requested finding is missing or outside this tenant scope.'} actionLabel="Open findings" actionHref="#findings" />
+        </div>
+      );
+    }
+    return (
+      <FindingDetailView
+        entity={findingEntity}
+        entityId={entityId}
+        data={data}
+        config={config}
+        session={session}
+        onRefresh={onRefresh}
+        loading={findingDetailState.loading}
+        loadError={findingDetailState.error}
+      />
+    );
+  }
+
+  if (route === 'evidence-detail') {
+    if (!entityId) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence vault record" />
+          <EmptyState icon={FileCheck2} title="No evidence selected." body="Open a vault record from the list with ?id= or use the View link on #evidence." actionLabel="Open evidence vault" actionHref="#evidence" />
+        </div>
+      );
+    }
+    const evidenceEntity = evidenceDetailState.detail ?? evidenceFallback;
+    if (!evidenceEntity && evidenceDetailState.loading) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence vault record" />
+          <DetailLoadingPlaceholder label="Loading evidence detail…" />
+        </div>
+      );
+    }
+    if (!evidenceEntity) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Evidence vault record" />
+          <EmptyState icon={FileCheck2} title="Evidence not found." body={evidenceDetailState.error || 'The requested evidence record is missing or outside this tenant scope.'} actionLabel="Open evidence vault" actionHref="#evidence" />
+        </div>
+      );
+    }
+    return (
+      <EvidenceDetailView
+        entity={evidenceEntity}
+        entityId={entityId}
+        data={data}
+        config={config}
+        session={session}
+        loading={evidenceDetailState.loading}
+        loadError={evidenceDetailState.error}
+      />
+    );
+  }
+
+  if (route === 'high-scale-detail') {
+    if (!entityId) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="SOC-gated validation" />
+          <EmptyState icon={Siren} title="No high-scale request selected." body="Open a request from the list with ?id= or use the View link on #high-scale." actionLabel="Open high-scale requests" actionHref="#high-scale" />
+        </div>
+      );
+    }
+    const hsEntity = highScaleDetail.detail ?? highScaleFallback;
+    if (!hsEntity && highScaleDetail.loading) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="SOC-gated validation" />
+          <DetailLoadingPlaceholder label="Loading high-scale request…" />
+        </div>
+      );
+    }
+    if (!hsEntity) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="SOC-gated validation" />
+          <EmptyState icon={Siren} title="High-scale request not found." body={highScaleDetail.error || 'The requested governed request is missing or outside this tenant scope.'} actionLabel="Open high-scale requests" actionHref="#high-scale" />
+        </div>
+      );
+    }
+    return (
+      <HighScaleDetailView
+        entity={hsEntity}
+        entityId={entityId}
+        data={data}
+        config={config}
+        session={session}
+        onRefresh={onRefresh}
+        loading={highScaleDetail.loading}
+        loadError={highScaleDetail.error}
+      />
+    );
+  }
+
+  if (route === 'soc-request-detail') {
+    if (!entityId) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="SOC execution workspace" />
+          <EmptyState icon={ShieldCheck} title="No SOC request selected." body="Open a queue item from the SOC console with ?id= or use the View link on #soc." actionLabel="Open SOC console" actionHref="#soc" />
+        </div>
+      );
+    }
+    if (!highScaleFallback) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="SOC execution workspace" />
+          <EmptyState icon={ShieldCheck} title="SOC request not found." body="The requested high-scale item is missing or outside this tenant scope." actionLabel="Open SOC console" actionHref="#soc" />
+        </div>
+      );
+    }
+    return (
+      <SocRequestDetailView
+        entity={highScaleFallback}
+        entityId={entityId}
+        config={config}
+        session={session}
+        onRefresh={onRefresh}
+      />
+    );
+  }
+
   if (route === 'target-group-detail') {
     if (!entityId) {
       return (
         <div className="content">
-          <PageHeader route={route} eyebrow="Declared business service" />
+          <DetailPageIntro route={route} eyebrow="Declared business service" />
           <EmptyState
             icon={Target}
             title="No target group selected."
@@ -1753,15 +3314,15 @@ export function DetailRoutePage({
     if (!entity && detailState.loading) {
       return (
         <div className="content">
-          <PageHeader route={route} eyebrow="Declared business service" />
-          <div className="form-banner">Loading target group detail...</div>
+          <DetailPageIntro route={route} eyebrow="Declared business service" />
+          <DetailLoadingPlaceholder label="Loading target group detail…" />
         </div>
       );
     }
     if (!entity) {
       return (
         <div className="content">
-          <PageHeader route={route} eyebrow="Declared business service" />
+          <DetailPageIntro route={route} eyebrow="Declared business service" />
           <EmptyState
             icon={Target}
             title="Target group not found."
@@ -1786,14 +3347,132 @@ export function DetailRoutePage({
     );
   }
 
-  if (!entityId || !entity) {
+  if (!entityId) {
+    const noSelectionByRoute: Partial<Record<RouteId, { eyebrow: string; title: string; body: string; actionLabel: string; actionHref: string; icon: typeof Target }>> = {
+      'run-detail': {
+        eyebrow: 'Test run evidence',
+        title: 'No test run selected.',
+        body: 'Open a run from the list with ?id= or use the Detail link on #runs.',
+        actionLabel: 'Open test runs',
+        actionHref: '#runs',
+        icon: Activity
+      },
+      'agent-detail': {
+        eyebrow: 'Outbound agent',
+        title: 'No agent selected.',
+        body: 'Open an agent from the list with ?id= or use the Detail link on #agents.',
+        actionLabel: 'Open agents',
+        actionHref: '#agents',
+        icon: Bot
+      },
+      'waf-asset-detail': {
+        eyebrow: 'WAF asset posture',
+        title: 'No WAF asset selected.',
+        body: 'Open an asset from the list with ?id= or use the Detail link on #waf-posture.',
+        actionLabel: 'Open WAF posture',
+        actionHref: '#waf-posture',
+        icon: ShieldHalf
+      },
+      'cve-detail': {
+        eyebrow: 'CVE pipeline item',
+        title: 'No CVE item selected.',
+        body: 'Open a CVE from the pipeline with ?id= or use the Detail link on #cve-pipeline.',
+        actionLabel: 'Open CVE pipeline',
+        actionHref: '#cve-pipeline',
+        icon: TriangleAlert
+      },
+      'supply-chain-detail': {
+        eyebrow: 'Supply chain risk',
+        title: 'No supply-chain risk selected.',
+        body: 'Open a risk from the list with ?id= or use the Detail link on #supply-chain.',
+        actionLabel: 'Open supply chain',
+        actionHref: '#supply-chain',
+        icon: Network
+      },
+      'discovery-entity': {
+        eyebrow: 'Discovery candidate',
+        title: 'No discovery entity selected.',
+        body: 'Open a candidate from the inbox with ?id= or use the Detail link on #discovery.',
+        actionLabel: 'Open discovery',
+        actionHref: '#discovery',
+        icon: Network
+      },
+      'finding-detail': {
+        eyebrow: 'Evidence-backed finding',
+        title: 'No finding selected.',
+        body: 'Open a finding from the list with ?id= or use the View link on #findings.',
+        actionLabel: 'Open findings',
+        actionHref: '#findings',
+        icon: TriangleAlert
+      },
+      'evidence-detail': {
+        eyebrow: 'Evidence vault record',
+        title: 'No evidence selected.',
+        body: 'Open a vault record from the list with ?id= or use the View link on #evidence.',
+        actionLabel: 'Open evidence vault',
+        actionHref: '#evidence',
+        icon: FileCheck2
+      },
+      'high-scale-detail': {
+        eyebrow: 'SOC-gated validation',
+        title: 'No high-scale request selected.',
+        body: 'Open a request from the list with ?id= or use the View link on #high-scale.',
+        actionLabel: 'Open high-scale requests',
+        actionHref: '#high-scale',
+        icon: Siren
+      },
+      'soc-request-detail': {
+        eyebrow: 'SOC execution workspace',
+        title: 'No SOC request selected.',
+        body: 'Open a queue item from the SOC console with ?id= or use the View link on #soc.',
+        actionLabel: 'Open SOC console',
+        actionHref: '#soc',
+        icon: ShieldCheck
+      }
+    };
+    const noSelection = noSelectionByRoute[route];
     return (
       <div className="content">
-        <PageHeader route={route} eyebrow="Detail surface" />
+        <DetailPageIntro route={route} eyebrow={noSelection?.eyebrow ?? 'Detail surface'} />
+        <EmptyState
+          icon={noSelection?.icon ?? Target}
+          title={noSelection?.title ?? 'No entity selected.'}
+          body={noSelection?.body ?? 'Open a list row with ?id= or use the Detail link on the parent list page.'}
+          actionLabel={noSelection?.actionLabel}
+          actionHref={noSelection?.actionHref}
+        />
+      </div>
+    );
+  }
+
+  if (!entity && detailState.loading) {
+    return (
+      <div className="content">
+        <DetailPageIntro route={route} eyebrow="Entity detail" />
+        <DetailLoadingPlaceholder label="Loading entity detail…" />
+      </div>
+    );
+  }
+
+  if (!entity) {
+    const listHrefByRoute: Partial<Record<RouteId, { actionLabel: string; actionHref: string }>> = {
+      'run-detail': { actionLabel: 'Open test runs', actionHref: '#runs' },
+      'agent-detail': { actionLabel: 'Open agents', actionHref: '#agents' },
+      'waf-asset-detail': { actionLabel: 'Open WAF posture', actionHref: '#waf-posture' },
+      'cve-detail': { actionLabel: 'Open CVE pipeline', actionHref: '#cve-pipeline' },
+      'supply-chain-detail': { actionLabel: 'Open supply chain', actionHref: '#supply-chain' },
+      'discovery-entity': { actionLabel: 'Open discovery', actionHref: '#discovery' }
+    };
+    const listLink = listHrefByRoute[route];
+    return (
+      <div className="content">
+        <DetailPageIntro route={route} eyebrow="Entity detail" />
         <EmptyState
           icon={Target}
-          title="No entity selected."
-          body="Open a list row with ?id= or seed workspace data so this detail route can resolve a record."
+          title="Entity not found."
+          body={detailState.error || 'The requested record is missing or outside this tenant scope.'}
+          actionLabel={listLink?.actionLabel}
+          actionHref={listLink?.actionHref}
         />
       </div>
     );
@@ -1816,6 +3495,22 @@ export function DetailRoutePage({
   }
 
   if (route === 'agent-detail') {
+    if (!entity && agentDetail.loading) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Outbound observer" />
+          <DetailLoadingPlaceholder label="Loading agent detail…" />
+        </div>
+      );
+    }
+    if (!entity) {
+      return (
+        <div className="content">
+          <DetailPageIntro route={route} eyebrow="Outbound observer" />
+          <EmptyState icon={Bot} title="Agent not found." body={agentDetail.error || 'The requested agent is missing or outside this tenant scope.'} actionLabel="Open agents" actionHref="#agents" />
+        </div>
+      );
+    }
     return (
       <AgentDetailView
         entity={entity}
@@ -1824,50 +3519,530 @@ export function DetailRoutePage({
         config={config}
         session={session}
         onRefresh={onRefresh}
+        loading={agentDetail.loading}
+        loadError={agentDetail.error}
       />
     );
   }
 
-  const tabOptions = [
+  const routeSpecificPostureTabs: RouteId[] = ['supply-chain-detail', 'discovery-entity'];
+  const genericPostureTabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'timeline', label: 'Timeline' },
     { id: 'related', label: 'Related evidence' },
     { id: 'actions', label: 'Actions' }
   ];
+  const tabOptions = routeSpecificPostureTabs.includes(route)
+    ? routeTabs(route).map((item) => ({ id: item.id, label: item.label }))
+    : genericPostureTabs;
+  const postureEntityLoading = detailState.loading;
+  const cveAuxBusy = route === 'cve-detail' && cveAuxLoading;
+  const wafUsingStaleFallback = route === 'waf-asset-detail' && Boolean(detailState.error) && entity === wafFallback;
+  const entityTitle = detailEntityTitle(route, entity, entityId);
+
+  const assetWafValidations = route === 'waf-asset-detail'
+    ? data.wafValidations.filter((item) => getString(item, ['waf_asset_id'], '') === entityId)
+    : [];
+  const assetDriftEvents = route === 'waf-asset-detail'
+    ? data.wafDriftEvents.filter((item) => getString(item, ['waf_asset_id'], '') === entityId)
+    : [];
+  const playbookSlices = getNestedArray(cvePlaybook, ['vendor_slices']);
+  const visiblePlaybookSlices = cvePlaybookExpanded ? playbookSlices : playbookSlices.slice(0, 4);
+  const playbookSliceColumns: TableColumn<DataItem>[] = [
+    { key: 'vendor', label: 'Vendor', render: (slice) => getString(slice, ['vendor'], '—') },
+    { key: 'status', label: 'Status', render: (slice) => <StatusBadge value={getString(slice, ['status'], 'draft')} tone={cveStageBadgeTone(getString(slice, ['status'], 'draft'))} fallback="draft" /> },
+    { key: 'action', label: 'Action', render: (slice) => <span className="muted">{getString(slice, ['recommended_action', 'action'], 'Review vendor guidance.')}</span> }
+  ];
+  const phaseAuthorizations = getNestedArray(entity ?? {}, ['phase_authorizations']);
+  const remediationSteps = getNestedArray(entity ?? {}, ['remediation_steps']).map((step) => (
+    typeof step === 'string' ? step : getString(step, ['step', 'description'])
+  )).filter(Boolean);
 
   return (
     <div className="content">
-      <PageHeader route={route} eyebrow="Entity detail" />
-      {(message || error || detailState.error || cveAuxError || detailState.loading || cveAuxLoading) && (
-        <div className={error || detailState.error || cveAuxError ? 'form-banner error' : 'form-banner'}>
-          {error || detailState.error || cveAuxError || message || (cveAuxLoading ? 'Loading CVE playbook and matches...' : 'Loading entity detail...')}
+      <div className="page-head">
+        <div>
+          <DetailEntityHeading route={route} entityId={entityId} title={entityTitle} />
         </div>
-      )}
+      </div>
+      {postureEntityLoading ? (
+        <DetailLoadingPlaceholder label={route === 'cve-detail' ? 'Loading CVE detail…' : 'Refreshing entity detail…'} />
+      ) : null}
+      {wafUsingStaleFallback ? (
+        <div className="form-banner error">
+          <strong>Showing cached asset snapshot.</strong> Live asset fetch failed — refresh the portal or retry to load the latest record.
+          <div className="row-actions">
+            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void onRefresh()}>Retry refresh</Button>
+          </div>
+        </div>
+      ) : null}
+      {(message || error || detailState.error || cveAuxError) && !postureEntityLoading ? (
+        <div className={error || detailState.error || cveAuxError ? 'form-banner error' : 'form-banner'}>
+          {error || detailState.error || cveAuxError || message}
+        </div>
+      ) : null}
+      {!postureEntityLoading && detailState.error && !entity ? (
+        <EmptyState icon={Target} title="Could not load record." body={detailState.error} />
+      ) : null}
+      {!postureEntityLoading && entity ? (
+      <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
-      {tab === 'overview' ? <div className="detail-layout">
+      {tab === 'overview' ? (
+        <>
+          {route === 'waf-asset-detail' ? (
+            <div className="detail-layout">
+              <Card>
+                <CardHeader>
+                  <CardTitle>WAF effectiveness</CardTitle>
+                  <CardDescription>Edge control posture for this declared asset.</CardDescription>
+                </CardHeader>
+                <CardContent className="kv-list">
+                  <div><span>Control bypass</span><StatusBadge value={getNestedString(entity, ['effectiveness', 'control_bypass_status'], getString(entity, ['control_bypass_status'], 'unknown'))} tone={findingStatusBadgeTone(getNestedString(entity, ['effectiveness', 'control_bypass_status'], getString(entity, ['control_bypass_status'], 'unknown')))} fallback="unknown" /></div>
+                  <div>
+                    <span>Pass rate</span>
+                    <div className="stack-tight">
+                      <strong>{Math.round(getNestedNumber(entity, ['effectiveness', 'scenario_pass_rate'], getNestedNumber(entity, ['scenario_pass_rate'], 0)))}%</strong>
+                      <Progress value={Math.round(getNestedNumber(entity, ['effectiveness', 'scenario_pass_rate'], getNestedNumber(entity, ['scenario_pass_rate'], 0)))} tone={scoreTone(Math.round(getNestedNumber(entity, ['effectiveness', 'scenario_pass_rate'], getNestedNumber(entity, ['scenario_pass_rate'], 0))))} size="sm" />
+                    </div>
+                  </div>
+                  <div><span>Vendor</span><strong>{getString(entity, ['detected_vendor', 'expected_vendor_hint'])}</strong></div>
+                  <div><span>Criticality</span><strong>{getString(entity, ['business_criticality', 'criticality'])}</strong></div>
+                </CardContent>
+              </Card>
+              <Card className="detail-primary">
+                <CardHeader>
+                  <CardTitle>{factorsTitle}</CardTitle>
+                  <CardDescription>{factorsDescription}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FactorPanel factors={factors} emptyTitle={factorsEmptyTitle} emptyBody={factorsEmptyBody} />
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+          {route === 'cve-detail' ? (
+            <>
+              <div className="split">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Pipeline status</CardTitle>
+                    <CardDescription>Triage stage and exposure signals for this CVE item.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="kv-list">
+                    <div><span>Stage</span><StatusBadge value={getString(entity, ['stage'], 'ingest')} tone={cveStageBadgeTone(getString(entity, ['stage'], 'ingest'))} fallback="ingest" /></div>
+                    <div><span>Severity</span><StatusBadge value={getString(entity, ['severity'])} tone={findingSeverityBadgeTone(getString(entity, ['severity']))} /></div>
+                    <div><span>Known exploited</span><strong>{entity?.known_exploited === true ? 'yes' : 'no'}</strong></div>
+                    <div><span>CVE ID</span><strong>{getString(entity, ['cve_id', 'id'])}</strong></div>
+                    <div><span>Triage summary</span><strong>{getNestedString(entity, ['triage_result', 'summary'], 'Run triage to populate factors.')}</strong></div>
+                    <div className="row-actions">
+                      <Button size="sm" variant="secondary" loading={busy === `cve-triage-${entityId}`} disabled={busy !== ''} onClick={() => {
+                        if (!window.confirm('Run CVE triage for this pipeline item?')) return;
+                        void runDetailAction(`cve-triage-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/triage`, { method: 'POST', body: {} }), 'CVE item triaged.');
+                      }}>Run triage</Button>
+                      <Button size="sm" variant="ghost" loading={busy === `cve-match-${entityId}` || cveAuxLoading} disabled={busy !== '' || cveAuxLoading} onClick={() => void runCveAssetMatch()}>Match assets</Button>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card aria-busy={cveAuxBusy || undefined}>
+                  <CardHeader>
+                    <CardTitle>Asset matches</CardTitle>
+                    <CardDescription>Declared asset correlation for this CVE item.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {cveAuxBusy ? (
+                      <div className="kv-list" aria-label="Loading asset matches">
+                        <DetailKvSkeletonRows rows={3} />
+                      </div>
+                    ) : null}
+                    {!cveAuxBusy && cveMatches.length === 0 ? (
+                      <div className="row-actions">
+                        <p className="muted">No asset matches yet.</p>
+                        <Button size="sm" variant="secondary" loading={busy === `cve-match-${entityId}` || cveAuxLoading} disabled={busy !== '' || cveAuxLoading} onClick={() => void runCveAssetMatch()}>Run match</Button>
+                      </div>
+                    ) : null}
+                    {!cveAuxBusy && cveMatches.length > 0 ? (
+                      <div className="kv-list">
+                        {cveMatches.slice(0, 6).map((match, index) => {
+                          const assetId = getString(match, ['asset_id', 'waf_asset_id'], '');
+                          return (
+                            <div key={assetId || String(index)}>
+                              <span>{getString(match, ['asset_display', 'asset_id'], `match-${index + 1}`)}</span>
+                              <strong>
+                                {assetId ? <DetailEntityLink route="waf-asset-detail" id={assetId} label={getString(match, ['match_source'], 'declared')} /> : getString(match, ['match_source'], 'declared')}
+                              </strong>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              </div>
+              {cvePlaybook ? (
+                <Card aria-busy={cveAuxBusy || undefined}>
+                  <CardHeader>
+                    <CardTitle>Mitigation playbook</CardTitle>
+                    <CardDescription>Grouped vendor mitigation slices for this CVE.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="stack-tight">
+                    <div className="kv-list">
+                      <div><span>Status</span><StatusBadge value={getString(cvePlaybook, ['status'], 'draft')} tone={cveStageBadgeTone(getString(cvePlaybook, ['status'], 'draft'))} fallback="draft" /></div>
+                      <div><span>CVE</span><strong>{getString(cvePlaybook, ['cve_id'], getString(entity, ['cve_id']))}</strong></div>
+                      <div><span>Vendor slices</span><strong>{playbookSlices.length}</strong></div>
+                    </div>
+                    {cveAuxBusy ? <DetailKvSkeletonRows rows={2} /> : null}
+                    {!cveAuxBusy && visiblePlaybookSlices.length > 0 ? (
+                      <DataTable columns={playbookSliceColumns} items={visiblePlaybookSlices} empty={<p className="muted">No vendor slices.</p>} />
+                    ) : null}
+                    {!cveAuxBusy && playbookSlices.length > 4 ? (
+                      <Button size="sm" variant="ghost" onClick={() => setCvePlaybookExpanded((value) => !value)}>
+                        {cvePlaybookExpanded ? 'Show fewer slices' : `Show all ${playbookSlices.length} slices`}
+                      </Button>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              ) : null}
+            </>
+          ) : null}
+          {route === 'supply-chain-detail' ? (
+            <div className="detail-layout">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Risk status</CardTitle>
+                  <CardDescription>Exposure state and confidence for this supply-chain record.</CardDescription>
+                </CardHeader>
+                <CardContent className="kv-list">
+                  <div><span>State</span><StatusBadge value={getString(entity, ['state'], 'suspected')} tone={supplyChainStateBadgeTone(getString(entity, ['state'], 'suspected'))} fallback="suspected" /></div>
+                  <div><span>Severity</span><StatusBadge value={getString(entity, ['severity'])} tone={findingSeverityBadgeTone(getString(entity, ['severity']))} /></div>
+                  <div><span>Confidence</span><strong>{Math.round(getNestedNumber(entity, ['confidence'], 0) * 100)}%</strong></div>
+                  <div><span>Hostname</span><strong>{getString(entity, ['hostname', 'id'])}</strong></div>
+                  <div><span>Exposure type</span><strong>{supplyChainExposureLabel(getString(entity, ['exposure_type']))}</strong></div>
+                  <div><span>Remediation steps</span>
+                    {remediationSteps.length > 0 ? (
+                      <div className="queue-list">
+                        {remediationSteps.map((step, index) => (
+                          <div key={step}>
+                            <span>{index + 1}</span>
+                            <div><strong>{step}</strong></div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <strong>No steps recorded.</strong>}
+                  </div>
+                  {phaseAuthorizations.length > 0 ? (
+                    <div><span>Authorizations</span><strong>{phaseAuthorizations.length} phase records</strong></div>
+                  ) : null}
+                </CardContent>
+              </Card>
+              <Card className="detail-primary">
+                <CardHeader>
+                  <CardTitle>{factorsTitle}</CardTitle>
+                  <CardDescription>{factorsDescription}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FactorPanel factors={factors} emptyTitle={factorsEmptyTitle} emptyBody={factorsEmptyBody} />
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+          {route === 'discovery-entity' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Discovery decision trail</CardTitle>
+                <CardDescription>Approval-gated candidate metadata only.</CardDescription>
+              </CardHeader>
+              <CardContent className="kv-list">
+                <div><span>State</span><StatusBadge value={getString(entity, ['state'])} tone={discoveryEntityStateBadgeTone(getString(entity, ['state']))} /></div>
+                <div>
+                  <span>Confidence</span>
+                  <div className="stack-tight">
+                    <strong title="Discovery source confidence score">{formatConfidencePercent(entity)}</strong>
+                    <Progress
+                      value={Math.round(getNestedNumber(entity, ['confidence'], 0) * 100)}
+                      tone={scoreTone(Math.round(getNestedNumber(entity, ['confidence'], 0) * 100))}
+                      size="sm"
+                    />
+                  </div>
+                </div>
+                <div><span>Entity type</span><strong>{getString(entity, ['entity_type', 'candidate_type', 'type'])}</strong></div>
+                <div><span>Source</span><strong>{getString(entity, ['source_type', 'source_summary'], 'declared')}</strong></div>
+              </CardContent>
+            </Card>
+          ) : null}
+          {route !== 'waf-asset-detail' && route !== 'supply-chain-detail' && route !== 'cve-detail' && route !== 'discovery-entity' && factors.length > 0 ? (
+            <div className="detail-layout">
+              <Card className="detail-primary">
+                <CardHeader>
+                  <CardTitle>{factorsTitle}</CardTitle>
+                  <CardDescription>{factorsDescription}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <FactorPanel factors={factors} emptyTitle={factorsEmptyTitle} emptyBody={factorsEmptyBody} />
+                </CardContent>
+              </Card>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {tab === 'remediation' && route === 'supply-chain-detail' ? (
         <Card>
           <CardHeader>
-            <CardTitle>{getString(entity, ['name', 'hostname', 'canonical_url', 'cve_id', 'organization_name', 'id'], ROUTE_BY_ID.get(route)?.label)}</CardTitle>
-            <CardDescription>
-              <code>{entityId}</code> · {factors.length > 0 ? 'evidence-backed detail from tenant APIs' : 'entity detail with list fallback until API factors are available'}
-            </CardDescription>
+            <CardTitle>Remediation plan</CardTitle>
+            <CardDescription>Track execution context — step text lives on the Overview tab.</CardDescription>
           </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Route</span><strong>{ROUTE_BY_ID.get(route)?.label}</strong></div>
-            <div><span>Status</span><strong>{getString(entity, ['status', 'state', 'lifecycle_state', 'stage'], 'recorded')}</strong></div>
-            <div><span>Updated</span><strong>{formatDate(entity.updated_at ?? entity.created_at)}</strong></div>
+          <CardContent className="stack-tight">
+            {remediationSteps.length > 0 ? (
+              <>
+                <p className="muted">{remediationSteps.length} remediation step{remediationSteps.length === 1 ? '' : 's'} summarized on Overview.</p>
+                <Button size="sm" variant="ghost" type="button" onClick={() => setTab('overview')}>View steps on Overview</Button>
+              </>
+            ) : <p className="muted">No remediation steps recorded.</p>}
           </CardContent>
         </Card>
-        <Card className="detail-primary">
+      ) : null}
+      {tab === 'authorization' && route === 'supply-chain-detail' ? (
+        <>
+          <Card>
+            <CardHeader><CardTitle>Phase authorizations</CardTitle></CardHeader>
+            <CardContent>
+              {phaseAuthorizations.length === 0 ? <p className="muted">No phase authorizations recorded.</p> : (
+                <div className="kv-list">
+                  {phaseAuthorizations.map((auth, index) => (
+                    <div key={getString(auth, ['id'], String(index))}>
+                      <span>{SUPPLY_CHAIN_PHASE_LABELS[getString(auth, ['target_phase'], '')]?.label ?? getString(auth, ['target_phase'])}</span>
+                      <strong>{formatDate(auth.customer_signed_at ?? auth.created_at)}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Authorize phase</CardTitle><CardDescription>Review fields and attest before recording phase authorization.</CardDescription></CardHeader>
+            <CardContent className="stack-tight">
+              <div className="form-actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={busy === `supply-state-${entityId}`}
+                  disabled={busy !== '' || supplyPhaseAttest}
+                  title={supplyPhaseAttest ? 'Complete phase attestation below before confirming risk separately.' : undefined}
+                  onClick={() => {
+                    if (!window.confirm('Confirm this supply-chain risk? State will move to confirmed and may trigger remediation workflows.')) return;
+                    void runDetailAction(`supply-state-${entityId}`, () => requestJson(config, session, `/v1/waf/supply-chain/risks/${encodeURIComponent(entityId)}/state`, { method: 'PATCH', body: { state: 'confirmed' } }), 'Risk state updated.');
+                  }}
+                >
+                  Confirm risk
+                </Button>
+              </div>
+              <form
+                className="product-form compact"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!supplyPhaseAttest) {
+                    setError('Check the attestation box before authorizing a phase.');
+                    return;
+                  }
+                  const form = new FormData(event.currentTarget);
+                  const targetPhase = supplyTargetPhase;
+                  const approvalRef = String(form.get('customer_approval_reference') ?? '').trim();
+                  const custodyId = String(form.get('custody_id') ?? '').trim();
+                  const workflowOwner = String(form.get('manual_workflow_owner') ?? '').trim();
+                  if (!approvalRef || !custodyId || !workflowOwner) {
+                    setError('Approval reference, custody id, and workflow owner are required.');
+                    return;
+                  }
+                  const phaseLabel = SUPPLY_CHAIN_PHASE_LABELS[targetPhase]?.label ?? targetPhase;
+                  if (!window.confirm(`Authorize ${phaseLabel} for this risk?`)) return;
+                  void runDetailAction(`supply-phase-${entityId}`, () => requestJson(config, session, `/v1/waf/supply-chain/risks/${encodeURIComponent(entityId)}/phase-authorization`, {
+                    method: 'POST',
+                    body: {
+                      target_phase: targetPhase,
+                      customer_approval_reference: approvalRef,
+                      customer_signed_at: new Date().toISOString(),
+                      custody_ids: [custodyId],
+                      manual_workflow_owner: workflowOwner
+                    }
+                  }), 'Phase authorization recorded.');
+                }}
+              >
+                <Select
+                  className="inline-select-control"
+                  label="Target phase"
+                  value={supplyTargetPhase}
+                  onChange={setSupplyTargetPhase}
+                  options={Object.entries(SUPPLY_CHAIN_PHASE_LABELS).map(([value, meta]) => ({
+                    value,
+                    label: meta.label,
+                    description: meta.description
+                  }))}
+                />
+                <label><span>Approval reference</span><input name="customer_approval_reference" placeholder="ticket-123" required /></label>
+                <label><span>Custody ID</span><input name="custody_id" placeholder={`custody_${entityId}`} required /></label>
+                <label><span>Workflow owner</span><input name="manual_workflow_owner" placeholder="owner@customer.example" required /></label>
+                <label className="auth-check-row">
+                  <input type="checkbox" checked={supplyPhaseAttest} onChange={(event) => setSupplyPhaseAttest(event.target.checked)} />
+                  <span>I attest this phase authorization is approved by the customer.</span>
+                </label>
+                <div className="form-actions"><Button size="sm" type="submit" loading={busy === `supply-phase-${entityId}`} disabled={busy !== '' || !supplyPhaseAttest}>Authorize phase</Button></div>
+              </form>
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+      {tab === 'audit' && route === 'supply-chain-detail' ? (
+        <Card>
           <CardHeader>
-            <CardTitle>{factorsTitle}</CardTitle>
-            <CardDescription>{factorsDescription}</CardDescription>
+            <CardTitle>Authorization audit trail</CardTitle>
+            <CardDescription>Customer-signed phase authorizations and custody references.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <FactorPanel factors={factors} emptyTitle={factorsEmptyTitle} emptyBody={factorsEmptyBody} />
+          <CardContent className="stack-tight">
+            {phaseAuthorizations.length === 0 ? <p className="muted">No phase authorizations recorded yet.</p> : (
+              <div className="queue-list">
+                {phaseAuthorizations.map((auth, index) => (
+                  <div key={getString(auth, ['id'], String(index))}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{SUPPLY_CHAIN_PHASE_LABELS[getString(auth, ['target_phase'], '')]?.label ?? getString(auth, ['target_phase'])}</strong>
+                      <p className="muted small">Signed {formatDate(auth.customer_signed_at ?? auth.created_at)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {getNestedArray(entity, ['custody_ids']).length > 0 ? (
+              <div className="kv-list kv-list--compact">
+                {getNestedArray(entity, ['custody_ids']).map((custodyId, index) => (
+                  <div key={String(custodyId) || String(index)}>
+                    <span>Custody id</span><strong>{String(custodyId)}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
-      </div> : null}
+      ) : null}
+      {tab === 'decision' && route === 'discovery-entity' ? (
+        <>
+          <Card>
+            <CardHeader><CardTitle>Decision trail</CardTitle></CardHeader>
+            <CardContent className="kv-list">
+              <div><span>State</span><StatusBadge value={getString(entity, ['state'])} tone={discoveryEntityStateBadgeTone(getString(entity, ['state']))} /></div>
+              <div><span>Approver</span><strong>{getString(entity, ['approved_by', 'decision_by'], '—')}</strong></div>
+              <div><span>Target group</span><strong>{getString(entity, ['target_group_id', 'approved_target_group_id'], '—')}</strong></div>
+              <div><span>Import outcome</span><strong>{getString(entity, ['import_status', 'approved_target_id'], '—')}</strong></div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Timeline</CardTitle></CardHeader>
+            <CardContent>
+              <TimelinePanel items={timeline} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Review actions</CardTitle><CardDescription>Approve, reject, or import without returning to the list queue.</CardDescription></CardHeader>
+            <CardContent>
+              <form
+                className="product-form compact"
+                onSubmit={(event) => event.preventDefault()}
+              >
+                <Select
+                  className="inline-select-control"
+                  label="Approve into target group"
+                  value={discoveryApproveTg}
+                  onChange={setDiscoveryApproveTg}
+                  options={[
+                    { value: '', label: 'Select target group' },
+                    ...data.targetGroups.map((group) => ({
+                      value: getString(group, ['id']),
+                      label: getString(group, ['name', 'id'])
+                    }))
+                  ]}
+                />
+                <div className="form-actions">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    type="button"
+                    loading={busy === `approve-${entityId}`}
+                    disabled={busy !== '' || !discoveryApproveTg}
+                    onClick={() => {
+                      if (!window.confirm('Approve this discovery candidate into the selected target group?')) return;
+                      void runDetailAction(`approve-${entityId}`, () => requestJson(config, session, `/v1/discovery/candidates/${entityId}/approve`, {
+                        method: 'POST',
+                        body: { target_group_id: discoveryApproveTg }
+                      }), 'Candidate approved.');
+                    }}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    type="button"
+                    loading={busy === `reject-${entityId}`}
+                    disabled={busy !== ''}
+                    onClick={() => {
+                      if (!window.confirm('Reject this discovery candidate? It will not be added to scope.')) return;
+                      void runDetailAction(`reject-${entityId}`, () => requestJson(config, session, `/v1/discovery/candidates/${entityId}/reject`, {
+                        method: 'POST',
+                        body: { reason: 'not_in_scope' }
+                      }), 'Candidate rejected.');
+                    }}
+                  >
+                    Reject
+                  </Button>
+                </div>
+                <Select
+                  className="inline-select-control"
+                  label="Import into target group"
+                  value={discoveryImportTg}
+                  onChange={setDiscoveryImportTg}
+                  options={[
+                    { value: '', label: 'Select target group for import' },
+                    ...data.targetGroups.map((group) => ({
+                      value: getString(group, ['id']),
+                      label: getString(group, ['name', 'id'])
+                    }))
+                  ]}
+                />
+                <div className="form-actions">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    type="button"
+                    loading={busy === `import-${entityId}`}
+                    disabled={busy !== '' || !discoveryImportTg}
+                    onClick={() => {
+                      if (!window.confirm('Import this candidate into the declared target group? This may create targets and WAF assets.')) return;
+                      void runDetailAction(`import-${entityId}`, () => requestJson(config, session, `/v1/discovery/candidates/${entityId}/import`, {
+                        method: 'POST',
+                        body: { target_group_id: discoveryImportTg, create_waf_asset: true }
+                      }), 'Candidate imported into declared target group.');
+                    }}
+                  >
+                    Import to target group
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+      {tab === 'scope-impact' && route === 'discovery-entity' ? (
+        <Card>
+          <CardHeader><CardTitle>Scope impact</CardTitle></CardHeader>
+            <CardContent className="kv-list">
+            <div><span>Canonical URL</span><strong>{getString(entity, ['canonical_url', 'hostname', 'value']) || '—'}</strong></div>
+            <div><span>Entity type</span><strong>{getString(entity, ['entity_type', 'candidate_type', 'type'])}</strong></div>
+            {getString(entity, ['canonical_url', 'hostname', 'value']) ? (
+              <AnchorButton size="sm" variant="secondary" href="#target-groups">Review declared target groups</AnchorButton>
+            ) : (
+              <p className="muted small">No canonical URL on record yet. Approve or import to attach scope.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
       {tab === 'timeline' ? (
         <Card>
           <CardHeader>
@@ -1883,15 +4058,61 @@ export function DetailRoutePage({
         <div className="split">
           <Card>
             <CardHeader>
-              <CardTitle>Related evidence</CardTitle>
-              <CardDescription>Live counts and links from the current workspace payload.</CardDescription>
+              <CardTitle>{route === 'supply-chain-detail' ? 'Linked custody' : 'Related evidence'}</CardTitle>
+              <CardDescription>
+                {route === 'waf-asset-detail'
+                  ? 'Validations and drift tied to this asset.'
+                  : route === 'supply-chain-detail'
+                    ? 'DNS/host metadata and custody references on this risk.'
+                    : 'Live counts and links from the current workspace payload.'}
+              </CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Runs</span><strong>{relatedRuns.length}</strong></div>
-              <div><span>Findings</span><strong>{relatedFindings.length}</strong></div>
-              <div><span>Agents</span><strong>{relatedAgents.length}</strong></div>
-              <div><span>Evidence</span><strong>{relatedEvidence.length}</strong></div>
-              <div><span>Targets</span><strong>{targets.length}</strong></div>
+              {route === 'waf-asset-detail' ? (
+                <>
+                  <div><span>Validations</span><strong>{assetWafValidations.length}</strong></div>
+                  {assetWafValidations.slice(0, 5).map((validation, index) => (
+                    <div key={getString(validation, ['id'], String(index))}>
+                      <span>{getString(validation, ['status'], 'validation')}</span>
+                      <strong>{formatDate(validation.created_at ?? validation.updated_at)}</strong>
+                    </div>
+                  ))}
+                  <div><span>Drift events</span><strong>{assetDriftEvents.length}</strong></div>
+                  {assetDriftEvents.slice(0, 5).map((drift, index) => (
+                    <div key={getString(drift, ['id'], String(index))}>
+                      <span>{getString(drift, ['status'], 'drift')}</span>
+                      <strong>{formatDate(drift.detected_at ?? drift.updated_at)}</strong>
+                    </div>
+                  ))}
+                </>
+              ) : route === 'supply-chain-detail' ? (
+                <>
+                  <div><span>Hostname</span><strong>{getString(entity, ['hostname'])}</strong></div>
+                  <div><span>Exposure</span><strong>{getString(entity, ['exposure_type'])}</strong></div>
+                  <div><span>State</span><StatusBadge value={getString(entity, ['state'], 'suspected')} tone={supplyChainStateBadgeTone(getString(entity, ['state'], 'suspected'))} fallback="suspected" /></div>
+                  <div><span>Phase authorizations</span><strong>{phaseAuthorizations.length}</strong></div>
+                  <AnchorButton size="sm" variant="secondary" href="#supply-chain">Open supply-chain list</AnchorButton>
+                </>
+              ) : (
+                <>
+                  <div><span>Runs</span><strong>{relatedRuns.length}</strong></div>
+                  <div><span>Findings</span><strong>{relatedFindings.length}</strong></div>
+                  <div><span>Agents</span><strong>{relatedAgents.length}</strong></div>
+                  <div><span>Evidence</span><strong>{relatedEvidence.length}</strong></div>
+                  <div><span>Targets</span><strong>{targets.length}</strong></div>
+                  {relatedEvidence.slice(0, 5).map((item, index) => {
+                    const evidenceId = getString(item, ['id'], '');
+                    return (
+                      <div key={evidenceId || String(index)}>
+                        <span>{getString(item, ['kind', 'signal_type'], 'evidence')}</span>
+                        <strong>
+                          {evidenceId ? <DetailEntityLink route="evidence-detail" id={evidenceId} label={evidenceId} /> : '—'}
+                        </strong>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -1902,7 +4123,7 @@ export function DetailRoutePage({
             <CardContent className="row-actions">
               {relatedRuns.slice(0, 4).map((run) => (
                 <AnchorButton key={getString(run, ['id'], '')} size="sm" variant="secondary" href={buildDetailHref('run-detail', getString(run, ['id'], ''))}>
-                  Run {getString(run, ['id'], '')}
+                  Run {getString(run, ['check_id'], getString(run, ['id'], ''))}
                 </AnchorButton>
               ))}
               {relatedAgents.slice(0, 3).map((agent) => (
@@ -1920,189 +4141,98 @@ export function DetailRoutePage({
         <Card>
           <CardHeader>
             <CardTitle>Entity actions</CardTitle>
-            <CardDescription>Route-specific mutations backed by tenant APIs.</CardDescription>
+            <CardDescription>Route-specific actions for this record.</CardDescription>
           </CardHeader>
-          <CardContent className="row-actions">
+          <CardContent>
             {route === 'waf-asset-detail' ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy !== ''}
-                  onClick={() => void runDetailAction(`waf-validate-${entityId}`, () => requestJson(config, session, '/v1/waf/validations', {
-                    method: 'POST',
-                    body: { waf_asset_id: entityId, modes: ['marker'] }
-                  }), 'Safe WAF validation started.')}
-                >
-                  Run validation
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy !== ''}
-                  onClick={() => void runDetailAction(`waf-exception-${entityId}`, () => requestJson(config, session, `/v1/waf/assets/${encodeURIComponent(entityId)}/exception`, {
+              <form
+                className="product-form compact"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!window.confirm('Create a WAF exception? Findings may be suppressed until the exception expires.')) return;
+                  const owner = wafExceptionOwner.trim() || 'edge-team';
+                  const reason = wafExceptionReason.trim() || 'approved_scope_exception';
+                  void runDetailAction(`waf-exception-${entityId}`, () => requestJson(config, session, `/v1/waf/assets/${encodeURIComponent(entityId)}/exception`, {
                     method: 'POST',
                     body: {
-                      owner: 'edge-team',
-                      reason: 'approved_scope_exception',
+                      owner,
+                      reason,
                       expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
                     }
-                  }), 'WAF exception recorded.')}
-                >
-                  Create exception
-                </Button>
-                <AnchorButton size="sm" variant="ghost" href="#waf-posture">Open WAF posture</AnchorButton>
-              </>
+                  }), 'WAF exception recorded.');
+                }}
+              >
+                <div className="form-actions">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    type="button"
+                    loading={busy === `waf-validate-${entityId}`}
+                    disabled={busy !== ''}
+                    onClick={() => {
+                      if (!window.confirm('Start a safe WAF validation for this asset? This records marker observations only.')) return;
+                      void runDetailAction(`waf-validate-${entityId}`, () => requestJson(config, session, '/v1/waf/validations', {
+                        method: 'POST',
+                        body: { waf_asset_id: entityId, modes: ['marker'] }
+                      }), 'Safe WAF validation started.');
+                    }}
+                  >
+                    Run validation
+                  </Button>
+                  <AnchorButton size="sm" variant="ghost" href="#waf-posture">Open WAF posture</AnchorButton>
+                </div>
+                <label><span>Exception owner</span><input value={wafExceptionOwner} onChange={(event) => setWafExceptionOwner(event.target.value)} placeholder="edge-team" /></label>
+                <label><span>Reason</span><input value={wafExceptionReason} onChange={(event) => setWafExceptionReason(event.target.value)} placeholder="approved_scope_exception" /></label>
+                <div className="form-actions">
+                  <Button size="sm" type="submit" variant="ghost" loading={busy === `waf-exception-${entityId}`} disabled={busy !== ''}>Create exception</Button>
+                </div>
+              </form>
             ) : null}
-            {route === 'cve-detail' ? (
-              <>
-                <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void runDetailAction(`cve-triage-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/triage`, { method: 'POST', body: {} }), 'CVE item triaged.')}>Run triage</Button>
-                <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void runDetailAction(`cve-validate-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/validate`, { method: 'POST' }), 'Safe validation delegated.')}>Validate exposure</Button>
-                <AnchorButton size="sm" variant="ghost" href="#cve-pipeline">Open CVE pipeline</AnchorButton>
-              </>
+            {route !== 'waf-asset-detail' ? (
+              <div className="row-actions">
+                {route === 'cve-detail' ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={busy === `cve-triage-${entityId}`}
+                      disabled={busy !== ''}
+                      onClick={() => {
+                        if (!window.confirm('Run CVE triage for this pipeline item?')) return;
+                        void runDetailAction(`cve-triage-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/triage`, { method: 'POST', body: {} }), 'CVE item triaged.');
+                      }}
+                    >
+                      Run triage
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busy === `cve-validate-${entityId}`}
+                      disabled={busy !== ''}
+                      onClick={() => {
+                        if (!window.confirm('Validate exposure for this CVE item with safe checks?')) return;
+                        void runDetailAction(`cve-validate-${entityId}`, () => requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(entityId)}/validate`, { method: 'POST' }), 'Safe validation delegated.');
+                      }}
+                    >
+                      Validate exposure
+                    </Button>
+                    <Button size="sm" variant="ghost" loading={busy === `cve-match-${entityId}` || cveAuxLoading} disabled={busy !== '' || cveAuxLoading} onClick={() => void runCveAssetMatch()}>Run asset match</Button>
+                    <AnchorButton size="sm" variant="ghost" href="#cve-pipeline">Open CVE pipeline</AnchorButton>
+                  </>
+                ) : null}
+                {route === 'supply-chain-detail' ? (
+                  <AnchorButton size="sm" variant="ghost" href="#supply-chain">Open supply chain</AnchorButton>
+                ) : null}
+                {route === 'discovery-entity' ? (
+                  <AnchorButton size="sm" variant="secondary" href={`#discovery?id=${encodeURIComponent(entityId)}`}>Open discovery queue</AnchorButton>
+                ) : null}
+              </div>
             ) : null}
-            {route === 'supply-chain-detail' ? (
-              <>
-                <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void runDetailAction(`supply-state-${entityId}`, () => requestJson(config, session, `/v1/waf/supply-chain/risks/${encodeURIComponent(entityId)}/state`, { method: 'PATCH', body: { state: 'confirmed' } }), 'Risk state updated.')}>Confirm risk</Button>
-                <form
-                  className="product-form compact"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    const targetPhase = String(form.get('target_phase') ?? 'AP2_manual_custody').trim();
-                    void runDetailAction(`supply-phase-${entityId}`, () => requestJson(config, session, `/v1/waf/supply-chain/risks/${encodeURIComponent(entityId)}/phase-authorization`, {
-                      method: 'POST',
-                      body: {
-                        target_phase: targetPhase,
-                        customer_approval_reference: String(form.get('customer_approval_reference') ?? '').trim(),
-                        customer_signed_at: new Date().toISOString(),
-                        custody_ids: [String(form.get('custody_id') ?? `custody_${entityId}`).trim()],
-                        manual_workflow_owner: String(form.get('manual_workflow_owner') ?? 'supply-chain-owner').trim()
-                      }
-                    }), 'Phase authorization recorded.');
-                  }}
-                >
-                  <label><span>Target phase</span>
-                    <select name="target_phase" defaultValue="AP2_manual_custody">
-                      <option value="AP2_manual_custody">AP2 manual custody</option>
-                      <option value="AP3_governed_active">AP3 governed active</option>
-                    </select>
-                  </label>
-                  <label><span>Approval reference</span><input name="customer_approval_reference" placeholder="ticket-123" required /></label>
-                  <label><span>Custody ID</span><input name="custody_id" placeholder={`custody_${entityId}`} required /></label>
-                  <label><span>Workflow owner</span><input name="manual_workflow_owner" defaultValue="supply-chain-owner" required /></label>
-                  <div className="form-actions"><Button size="sm" type="submit" disabled={busy !== ''}>Authorize phase</Button></div>
-                </form>
-                <AnchorButton size="sm" variant="ghost" href="#supply-chain">Open supply chain</AnchorButton>
-              </>
-            ) : null}
-            {route === 'discovery-entity' ? <AnchorButton size="sm" variant="secondary" href="#discovery">Open discovery</AnchorButton> : null}
-
           </CardContent>
         </Card>
       ) : null}
-      {tab === 'overview' && route === 'waf-asset-detail' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>WAF effectiveness</CardTitle>
-            <CardDescription>Asset posture from `/v1/waf/assets/:id`.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Vendor</span><strong>{getString(entity, ['detected_vendor', 'expected_vendor_hint'])}</strong></div>
-            <div><span>Criticality</span><strong>{getString(entity, ['business_criticality', 'criticality'])}</strong></div>
-            <div><span>Control bypass</span><strong>{getNestedString(entity, ['effectiveness', 'control_bypass_status'], getString(entity, ['control_bypass_status'], 'unknown'))}</strong></div>
-            <div><span>Pass rate</span><strong>{Math.round(getNestedNumber(entity, ['effectiveness', 'scenario_pass_rate'], getNestedNumber(entity, ['scenario_pass_rate'], 0)))}%</strong></div>
-          </CardContent>
-        </Card>
-      )}
-      {tab === 'overview' && route === 'cve-detail' && (
-        <>
-          <div className="split">
-            <Card>
-              <CardHeader>
-                <CardTitle>CVE detail</CardTitle>
-                <CardDescription>Metadata-only triage and mitigation workflow for one pipeline item.</CardDescription>
-              </CardHeader>
-              <CardContent className="kv-list">
-                <div><span>CVE ID</span><strong>{getString(entity, ['cve_id', 'id'])}</strong></div>
-                <div><span>Severity</span><strong>{getString(entity, ['severity'])}</strong></div>
-                <div><span>Stage</span><strong>{getString(entity, ['stage'], 'ingest')}</strong></div>
-                <div><span>Known exploited</span><strong>{entity?.known_exploited === true ? 'yes' : 'no'}</strong></div>
-                <div><span>Triage summary</span><strong>{getNestedString(entity, ['triage_result', 'summary'], 'Run triage to populate factors.')}</strong></div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Asset matches</CardTitle>
-                <CardDescription>Declared asset correlation from `/v1/waf/cve-pipeline/:id/match`.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {cveAuxLoading ? <p className="muted">Loading asset matches…</p> : null}
-                {!cveAuxLoading && cveMatches.length === 0 ? <p className="muted">No asset matches yet. Run triage and match from the actions tab.</p> : null}
-                {cveMatches.length > 0 ? (
-                  <div className="kv-list">
-                    {cveMatches.slice(0, 6).map((match, index) => (
-                      <div key={getString(match, ['asset_id', 'waf_asset_id'], String(index))}>
-                        <span>{getString(match, ['asset_display', 'asset_id'], `match-${index + 1}`)}</span>
-                        <strong>{getString(match, ['match_source'], 'declared')}</strong>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          </div>
-          {cvePlaybook ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Mitigation playbook</CardTitle>
-                <CardDescription>Grouped vendor slices from `/v1/waf/cve-pipeline/:id/playbook`.</CardDescription>
-              </CardHeader>
-              <CardContent className="kv-list">
-                <div><span>Status</span><strong>{getString(cvePlaybook, ['status'], 'draft')}</strong></div>
-                <div><span>CVE</span><strong>{getString(cvePlaybook, ['cve_id'], getString(entity, ['cve_id']))}</strong></div>
-                <div><span>Vendor slices</span><strong>{getNestedArray(cvePlaybook, ['vendor_slices']).length}</strong></div>
-                {getNestedArray(cvePlaybook, ['vendor_slices']).slice(0, 4).map((slice, index) => (
-                  <div key={getString(slice, ['vendor'], String(index))}>
-                    <span>{getString(slice, ['vendor'], `vendor-${index + 1}`)}</span>
-                    <strong>{getString(slice, ['status'], 'draft')}</strong>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          ) : null}
-        </>
-      )}
-      {tab === 'overview' && route === 'supply-chain-detail' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Supply chain risk detail</CardTitle>
-            <CardDescription>Evidence summary and remediation steps from `/v1/waf/supply-chain/risks/:id`.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Hostname</span><strong>{getString(entity, ['hostname', 'id'])}</strong></div>
-            <div><span>Exposure type</span><strong>{getString(entity, ['exposure_type'])}</strong></div>
-            <div><span>Severity</span><strong>{getString(entity, ['severity'])}</strong></div>
-            <div><span>State</span><strong>{getString(entity, ['state'], 'suspected')}</strong></div>
-            <div><span>Confidence</span><strong>{Math.round(getNestedNumber(entity, ['confidence'], 0) * 100)}%</strong></div>
-            <div><span>Remediation steps</span><strong>{getNestedArray(entity, ['remediation_steps']).map((step) => (typeof step === 'string' ? step : getString(step, ['step', 'description']))).join(' · ') || 'No steps recorded.'}</strong></div>
-          </CardContent>
-        </Card>
-      )}
-      {tab === 'overview' && route === 'discovery-entity' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Discovery decision trail</CardTitle>
-            <CardDescription>Approval-gated candidate metadata only.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Entity type</span><strong>{getString(entity, ['entity_type', 'candidate_type', 'type'])}</strong></div>
-            <div><span>Confidence</span><strong>{getString(entity, ['confidence', 'confidence_score'])}</strong></div>
-            <div><span>State</span><strong>{getString(entity, ['state'])}</strong></div>
-            <div><span>Source</span><strong>{getString(entity, ['source_type', 'source_summary'], 'declared')}</strong></div>
-          </CardContent>
-        </Card>
-      )}
+      </>
+      ) : null}
 
     </div>
   );
@@ -2125,10 +4255,7 @@ export function ReportDetailPage({
   const [preview, setPreview] = useState<ReportExportPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewLockedRef = useRef(false);
-  const entityId = useMemo(() => {
-    const fallback = getString(data.reports[0] ?? null, ['id'], '');
-    return getRouteEntityId(fallback);
-  }, [data.reports]);
+  const entityId = useMemo(() => getRouteEntityId(''), []);
   const reportFallback = data.reports.find((item) => getString(item, ['id'], '') === entityId) ?? null;
   const reportDetail = useEntityDetail(
     Boolean(entityId),
@@ -2263,14 +4390,38 @@ export function ReportDetailPage({
     }, `Report exported as ${format}.`);
   }
 
-  if (!entityId || !report) {
+  if (!entityId) {
     return (
       <div className="content">
-        <PageHeader route="report-detail" eyebrow="Report detail" />
+        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
         <EmptyState
           icon={FileText}
           title="No report selected."
-          body="Open a report from the Reports list with ?id= or generate a report first."
+          body="Open a report from the Reports list with ?id= or use the Detail link on #reports."
+          actionLabel="Open Reports"
+          actionHref="#reports"
+        />
+      </div>
+    );
+  }
+
+  if (!report && reportDetail.loading) {
+    return (
+      <div className="content">
+        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
+        <DetailLoadingPlaceholder label="Loading report detail…" variant="layout" />
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="content">
+        <DetailPageIntro route="report-detail" eyebrow="Report detail" />
+        <EmptyState
+          icon={FileText}
+          title="Report not found."
+          body={reportDetail.error || 'The requested report is missing or outside this tenant scope.'}
           actionLabel="Open Reports"
           actionHref="#reports"
         />
@@ -2282,63 +4433,69 @@ export function ReportDetailPage({
   const readinessScore = getNestedNumber(report, ['summary', 'readiness_score'], 0);
   const openFindings = getNestedNumber(report, ['summary', 'open_findings'], 0);
 
+  const reportTitle = detailEntityTitle('report-detail', report, entityId);
+
   return (
     <div className="content">
-      <PageHeader route="report-detail" eyebrow="Report detail" />
-      {(message || error || reportDetail.error || reportDetail.loading || previewLoading) && (
+      <DetailPageHeader route="report-detail" eyebrow="Report detail" entityId={entityId} title={reportTitle} />
+      {(message || error || reportDetail.error) && (
         <div className={error || reportDetail.error ? 'form-banner error' : 'form-banner'}>
-          {error || reportDetail.error || message || (reportDetail.loading ? 'Loading report detail...' : 'Loading custody preview...')}
+          {error || reportDetail.error || message}
         </div>
       )}
+      {reportDetail.loading || previewLoading ? (
+        <DetailLoadingPlaceholder label={reportDetail.loading ? 'Loading report detail…' : 'Loading custody preview…'} variant="layout" />
+      ) : (
+      <>
       <div className="detail-layout">
         <Card>
           <CardHeader>
-            <CardTitle>{getString(report, ['title', 'id'], 'Report')}</CardTitle>
-            <CardDescription>
-              <code>{entityId}</code> · resolved from `/v1/reports` and `/v1/reports/:id`
-            </CardDescription>
+            <CardTitle>Report summary</CardTitle>
+            <CardDescription>Readiness and delivery status for this generated report.</CardDescription>
           </CardHeader>
-          <CardContent className="kv-list">
+          <CardContent className="kv-list report-summary-layout">
+            <ReadinessGauge score={readinessScore} />
+            <div><span>Status</span><StatusBadge value={getString(report, ['status'], 'ready')} tone={reportStatusBadgeTone(getString(report, ['status'], 'ready'))} fallback="ready" /></div>
+            <div><span>Open findings</span><strong>{openFindings}</strong></div>
             <div><span>Kind</span><strong>{getString(report, ['kind'])}</strong></div>
             <div><span>Created</span><strong>{formatDate(report.created_at)}</strong></div>
-            <div><span>Status</span><strong>{getString(report, ['status'], 'ready')}</strong></div>
-            <div><span>Readiness</span><strong>{readinessScore}%</strong></div>
-            <div><span>Open findings</span><strong>{openFindings}</strong></div>
+            <div><span>Report ID</span><strong><code>{entityId}</code></strong></div>
           </CardContent>
         </Card>
         <Card className="detail-primary">
           <CardHeader>
             <CardTitle>Custody preview</CardTitle>
-            <CardDescription>JSON export digest metadata verified through `/v1/custody/verify`.</CardDescription>
+            <CardDescription>JSON export digest metadata verified against custody manifests.</CardDescription>
           </CardHeader>
           <CardContent className={preview?.contentSha256 || preview?.textPreview ? 'kv-list' : ''}>
             {!preview && !previewLoading ? (
               <EmptyState icon={FileCheck2} title="Custody preview unavailable." body="Export JSON to inspect custody metadata for this report." />
             ) : preview?.contentSha256 ? (
               <>
-                <div><span>Artifact</span><strong>{preview.artifactId}</strong></div>
-                <div><span>content_sha256</span><strong>{preview.contentSha256}</strong></div>
+                <div><span>Artifact</span><strong><code className="small">{preview.artifactId}</code></strong></div>
+                <div><span>Content digest (SHA-256)</span><strong><code className="small">{preview.contentSha256}</code></strong></div>
                 <div><span>Schema</span><strong>{preview.schemaVersion}</strong></div>
-                <div><span>Verification</span><strong>{verificationOk || 'verified'}</strong></div>
+                <div><span>Verification</span><StatusBadge value={verificationOk || 'verified'} tone={verificationOk === 'false' ? 'danger' : 'success'} fallback="verified" /></div>
               </>
             ) : preview?.textPreview ? (
-              <pre className="codeblock">{preview.textPreview}</pre>
-            ) : (
-              <p className="muted">Loading custody preview...</p>
-            )}
+              <>
+                <p className="muted">JSON custody export unavailable — showing truncated {preview.format} preview (first 900 characters).</p>
+                <pre className="codeblock">{preview.textPreview}</pre>
+              </>
+            ) : null}
           </CardContent>
         </Card>
       </div>
       <Card>
         <CardHeader>
           <CardTitle>Export formats</CardTitle>
-          <CardDescription>Exports call `/v1/reports/:id/export`; JSON exports include custody manifests for verification.</CardDescription>
+          <CardDescription>Export this report as JSON, Markdown, or HTML. JSON exports include custody manifests for verification.</CardDescription>
         </CardHeader>
         <CardContent className="stack-tight">
           <div className="row-actions">
-            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void exportReport(entityId, 'json')}>Export JSON</Button>
-            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void exportReport(entityId, 'markdown')}>Export Markdown</Button>
-            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void exportReport(entityId, 'html')}>Export HTML</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-json`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'json')}>Export JSON</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-markdown`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'markdown')}>Export Markdown</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}-html`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'html')}>Export HTML</Button>
             <AnchorButton size="sm" variant="ghost" href="#reports">Back to reports</AnchorButton>
           </div>
           {/*
@@ -2348,6 +4505,8 @@ export function ReportDetailPage({
           <p className="muted">PDF export is not available in this slice; backend report exports support JSON, Markdown, and HTML only.</p>
         </CardContent>
       </Card>
+      </>
+      )}
     </div>
   );
 }

@@ -3,7 +3,9 @@ import { describe, it } from 'node:test';
 import {
   buildVerdictExplanationFields,
   normalizeVerdictKey,
+  resolveRemediationTemplate,
   summarizeExternalProbeEvidence,
+  summarizeObservationMode,
   summarizePlacementConfidence,
   trafficHopState,
 } from '../../apps/web/react/src/lib/verdict-explanation.ts';
@@ -81,5 +83,83 @@ describe('verdict-explanation (React portal)', () => {
     assert.equal(normalizeVerdictKey('misplaced_agent'), 'misplaced');
     assert.equal(trafficHopState('origin', 'bypassable'), 'danger');
     assert.equal(trafficHopState('edge', 'protected'), 'ok');
+  });
+
+  it('summarizeObservationMode uses agent_no_observation metadata reason', () => {
+    const summary = summarizeObservationMode([
+      {
+        signal_type: 'agent_no_observation',
+        metadata: { reason: 'bounded_observation_window_elapsed' },
+      },
+    ]);
+    assert.match(summary, /bounded_observation_window_elapsed/);
+    assert.doesNotMatch(summary, /^agent_no_observation$/);
+  });
+
+  it('resolveRemediationTemplate expands waf_posture_remediation from finding and run evidence', () => {
+    const guidance = resolveRemediationTemplate('waf_posture_remediation', {
+      finding: {
+        title: 'WAF posture unprotected: http://34.28.182.129/',
+        notes: 'Posture status: unprotected. Reason codes: insufficient_validation_evidence.',
+      },
+      detail: {
+        verdict: {
+          placement_confidence: {
+            level: 'invalid',
+            observation_mode: 'unbound',
+            reason: 'No agent is bound to this target group; internal path proof is unavailable.',
+          },
+        },
+      },
+      events: [
+        {
+          signal_type: 'probe_result',
+          metadata: { external_result: 'error' },
+        },
+        {
+          signal_type: 'agent_no_observation',
+          metadata: { reason: 'bounded_observation_window_elapsed' },
+        },
+      ],
+    });
+    assert.match(guidance, /Enable WAF coverage/);
+    assert.match(guidance, /reachable from external probes/);
+    assert.match(guidance, /Bind an outbound agent/);
+    assert.doesNotMatch(guidance, /waf_posture_remediation/);
+  });
+
+  it('buildVerdictExplanationFields resolves known remediation template keys for findings', () => {
+    const fields = buildVerdictExplanationFields(
+      {
+        remediation_template: 'waf_posture_remediation',
+        verdict: {
+          verdict: 'inconclusive',
+          confidence: 'low',
+          explanation: 'Agent is offline or not bound to the target group; internal observation evidence is unavailable.',
+          placement_confidence: {
+            level: 'invalid',
+            observation_mode: 'unbound',
+            reason: 'No agent is bound to this target group; internal path proof is unavailable.',
+          },
+        },
+      },
+      [
+        { signal_type: 'probe_result', metadata: { external_result: 'error' } },
+        { signal_type: 'agent_no_observation', metadata: { reason: 'bounded_observation_window_elapsed' } },
+      ],
+      {
+        finding: {
+          title: 'WAF posture unprotected: http://34.28.182.129/',
+          remediation_template: 'waf_posture_remediation',
+        },
+      },
+    );
+
+    const remediation = fields.find((field) => field.label === 'Remediation');
+    assert.match(remediation?.value ?? '', /Bind an outbound agent/);
+    assert.doesNotMatch(remediation?.value ?? '', /waf_posture_remediation/);
+
+    const observationMode = fields.find((field) => field.label === 'Observation mode');
+    assert.match(observationMode?.value ?? '', /bounded_observation_window_elapsed/);
   });
 });

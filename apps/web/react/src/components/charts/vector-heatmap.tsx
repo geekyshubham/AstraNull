@@ -1,6 +1,8 @@
+import { Target } from 'lucide-react';
+import type { CSSProperties } from 'react';
+import { Fragment } from 'react';
 import { Badge } from '../ui/badge';
 import { EmptyState } from '../ui/empty-state';
-import { Target } from 'lucide-react';
 
 const families = [
   { label: 'Origin', keys: ['origin'] },
@@ -84,16 +86,18 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
     );
   }
 
+  const gridStyle = { '--heatmap-cols': families.length } as CSSProperties;
+
   return (
     <div className="heatmap">
-      <div className="heatmap-grid" style={{ gridTemplateColumns: `minmax(132px, 1.1fr) repeat(${families.length}, minmax(78px, 1fr))` }}>
+      <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
         <span className="heatmap-head">Target group</span>
         {families.map((family) => (
           <span className="heatmap-head" key={family.label}>{family.label}</span>
         ))}
         {groups.map((group, groupIndex) => (
-          <>
-            <strong key={`${groupIndex}-name`} className="heatmap-name">
+          <Fragment key={String(group.id ?? groupIndex)}>
+            <strong className="heatmap-name">
               {String(group.name ?? group.id ?? 'Declared group')}
             </strong>
             {families.map((family) => {
@@ -112,7 +116,7 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
                 </span>
               );
             })}
-          </>
+          </Fragment>
         ))}
       </div>
       <div className="heatmap-legend">

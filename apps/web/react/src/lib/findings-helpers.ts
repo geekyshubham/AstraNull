@@ -101,6 +101,19 @@ export function computeFindingKpis(findings: DataItem[], now = Date.now()) {
   };
 }
 
+/** Grouped target-group and vector tabs intentionally list open findings only. */
+export const GROUPED_FINDINGS_OPEN_ONLY_NOTE = 'Grouped views show open findings only.';
+
+export function findingsListSubtitle(tab: FindingTabId): string | null {
+  if (tab === 'target-group' || tab === 'vector') return GROUPED_FINDINGS_OPEN_ONLY_NOTE;
+  return null;
+}
+
+export function groupedFindingsBadgeLabel(tab: FindingTabId, count: number): string {
+  if (tab === 'target-group' || tab === 'vector') return `${count} findings`;
+  return `${count} open`;
+}
+
 export function filterFindingsByTab(
   findings: DataItem[],
   tab: FindingTabId,

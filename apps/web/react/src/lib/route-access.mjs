@@ -30,7 +30,7 @@ export function canAccessRoute(role, routeId, context = {}) {
     return principal === 'staff' && STAFF_SOC_ROLES.has(staffRole);
   }
 
-  if (routeId === 'soc' && principal === 'staff') {
+  if ((routeId === 'soc' || routeId === 'soc-request-detail') && principal === 'staff') {
     return false;
   }
 

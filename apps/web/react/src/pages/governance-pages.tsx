@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Bell, ClipboardList, FileCheck2, FileText, ShieldCheck, Siren } from 'lucide-react';
+import { Bell, CheckCircle2, ClipboardList, Copy, FileCheck2, FileText, Info, Lock, ShieldCheck, Siren } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
-import { Button } from '../components/ui/button';
+import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
+import { Select } from '../components/ui/select';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { isStaffSocRole, requestJson, requestSocJson } from '../lib/api';
-import { socDevScheduleWindow } from '../lib/high-scale';
 import {
   computeReleaseEvidenceCoverage,
   pickReleaseEvidenceCustodyUri,
   summarizeReleaseEvidenceValidation
 } from '../lib/release-evidence';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
+import { buildDetailHref } from '../lib/route-params';
 import { formatDate } from '../lib/utils';
-import { MetricCard, PageHeader } from './page-components';
+import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -54,6 +55,106 @@ const NOTIFICATION_TRIGGERS = [
   'bootstrap_token.revoked'
 ] as const;
 
+const NOTIFICATION_TRIGGER_LABELS: Record<(typeof NOTIFICATION_TRIGGERS)[number], string> = {
+  'finding.high_severity': 'High-severity finding',
+  'agent.offline': 'Agent offline',
+  'safe_test.completed': 'Safe test completed',
+  'high_scale.state_change': 'High-scale state change',
+  'report.ready': 'Report ready',
+  'bootstrap_token.created': 'Bootstrap token created',
+  'bootstrap_token.revoked': 'Bootstrap token revoked'
+};
+
+function humanizeNotificationTrigger(trigger: string) {
+  const known = NOTIFICATION_TRIGGER_LABELS[trigger as (typeof NOTIFICATION_TRIGGERS)[number]];
+  if (known) return known;
+  return trigger
+    .split('.')
+    .map((segment) => segment.split('_').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' '))
+    .join(' · ');
+}
+
+function isFlatMetadataObject(value: unknown): value is Record<string, string | number | boolean | null> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (entry) => entry === null || ['string', 'number', 'boolean'].includes(typeof entry)
+  );
+}
+
+function targetGroupDisplayName(data: PortalData, groupId: string) {
+  const group = data.targetGroups.find((item) => getString(item, ['id'], '') === groupId);
+  return getString(group ?? {}, ['name', 'title'], groupId || '—');
+}
+
+function auditEntrySelectionKey(item: DataItem) {
+  const id = getString(item, ['id', 'audit_id'], '');
+  if (id) return id;
+  return [
+    getString(item, ['created_at'], ''),
+    getString(item, ['action'], ''),
+    getString(item, ['resource_type'], ''),
+    getString(item, ['resource_id'], '')
+  ].join('::');
+}
+
+function downloadJsonFile(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function validateNotificationDestination(channel: string, rawDestination: string): { destination: string } | { error: string } {
+  const destination = rawDestination.trim();
+  if (channel === 'webhook') {
+    if (!/^https?:\/\/.+/i.test(destination)) {
+      return { error: 'Enter a valid http(s) webhook URL before adding the rule.' };
+    }
+    try {
+      const parsed = new URL(destination);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return { error: 'Webhook destination must use http or https.' };
+      }
+    } catch {
+      return { error: 'Enter a valid webhook URL before adding the rule.' };
+    }
+    return { destination };
+  }
+  if (channel === 'email') {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destination)) {
+      return { error: 'Enter a valid email address before adding the rule.' };
+    }
+    return { destination };
+  }
+  if (!destination) {
+    return { error: 'Enter a destination before adding the rule.' };
+  }
+  return { destination };
+}
+
+function summarizeSocActionPayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return 'Action completed successfully.';
+  const item = payload as DataItem;
+  if ('active' in item) {
+    return item.active ? 'Kill switch is now active for this tenant.' : 'Kill switch cleared; governed runs may resume when approved.';
+  }
+  const adapterState = getNestedString(item, ['adapter', 'state'], '');
+  if (adapterState && adapterState !== '—') {
+    const traffic = getNestedString(item, ['adapter', 'traffic_generated'], 'false');
+    return `Adapter status: ${adapterState}${traffic === 'true' ? ', traffic generation reported' : ', no traffic generation reported'}.`;
+  }
+  const requestState = getString(item, ['state'], '');
+  if (requestState && requestState !== '—') return `High-scale request updated — current state is ${requestState}.`;
+  const reportId = getString(item, ['id'], '');
+  if (reportId && reportId !== '—' && getString(item, ['high_scale_request_id'], '') !== '—') {
+    return `Post-test report saved (${reportId}).`;
+  }
+  return 'SOC action completed successfully.';
+}
+
 function canWriteNotifications(role: string | undefined) {
   return role === 'admin' || role === 'owner';
 }
@@ -65,6 +166,65 @@ function canReadAudit(role: string | undefined) {
 function canReadReleaseEvidence(role: string | undefined) {
   return ['admin', 'owner', 'soc', 'auditor'].includes(String(role ?? ''));
 }
+
+type GovernanceBadgeTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
+
+function highScaleStateBadgeTone(state: string): GovernanceBadgeTone {
+  const normalized = state.trim().toLowerCase();
+  if (['closed', 'completed', 'cancelled', 'canceled'].includes(normalized)) return 'success';
+  if (['running', 'executing', 'active', 'started'].includes(normalized)) return 'danger';
+  if (['scheduled', 'approved'].includes(normalized)) return 'info';
+  if (['submitted', 'under_review', 'pending', 'draft'].includes(normalized)) return 'warn';
+  return 'muted';
+}
+
+function authorizationPackBadgeTone(overall: string): GovernanceBadgeTone {
+  const normalized = overall.trim().toLowerCase();
+  if (normalized === 'accepted') return 'success';
+  if (normalized === 'missing' || normalized === '—' || !normalized) return 'muted';
+  return 'warn';
+}
+
+function releaseEvidenceStatusBadgeTone(status: string): GovernanceBadgeTone {
+  const normalized = status.trim().toLowerCase();
+  if (['accepted', 'valid', 'passed', 'recorded'].includes(normalized)) return 'success';
+  if (['failed', 'rejected', 'invalid'].includes(normalized)) return 'danger';
+  if (['pending', 'review', 'unknown'].includes(normalized)) return 'warn';
+  return 'info';
+}
+
+function productionReadyBadgeTone(value: unknown): GovernanceBadgeTone {
+  if (value === true) return 'success';
+  if (value === false) return 'warn';
+  return 'muted';
+}
+
+function productionReadyLabel(value: unknown) {
+  if (value === true) return 'Ready';
+  if (value === false) return 'Not ready';
+  return 'Unknown';
+}
+
+function formatGovernanceStatusLabel(value: string, fallback = '—') {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '—') return fallback;
+  return trimmed.replace(/_/g, ' ');
+}
+
+function authorizationPackLabel(overall: string) {
+  const normalized = overall.trim().toLowerCase();
+  if (normalized === 'accepted') return 'Accepted';
+  if (normalized === 'missing' || !normalized) return 'Missing';
+  return formatGovernanceStatusLabel(overall);
+}
+
+const NOTIFICATION_CHANNEL_OPTIONS = [
+  { value: 'webhook', label: 'Webhook' },
+  { value: 'email', label: 'Email' },
+  { value: 'slack', label: 'Slack' },
+  { value: 'teams', label: 'Teams' },
+  { value: 'in_app', label: 'In-app' }
+] as const;
 
 function deliveryAttempts(events: DataItem[]) {
   return events.flatMap((event) => {
@@ -91,19 +251,39 @@ export function NotificationsPage({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [destinationError, setDestinationError] = useState('');
+  const [ruleDryRunPreview, setRuleDryRunPreview] = useState('');
+  const [ruleChannel, setRuleChannel] = useState('webhook');
+  const [ruleTrigger, setRuleTrigger] = useState<(typeof NOTIFICATION_TRIGGERS)[number]>('finding.high_severity');
   const canWrite = canWriteNotifications(session.role);
   const attempts = useMemo(() => deliveryAttempts(data.notificationEvents), [data.notificationEvents]);
   const retryItems = attempts.filter((item) => getString(item, ['status']) === 'provider_retry_scheduled');
   const dlqItems = attempts.filter((item) => getString(item, ['status']) === 'provider_failed_dlq');
 
   const ruleColumns: TableColumn<DataItem>[] = [
-    { key: 'channel', label: 'Channel', render: (item) => <Badge tone="info">{getString(item, ['channel'])}</Badge> },
-    { key: 'enabled', label: 'Enabled', render: (item) => item.enabled === false ? 'disabled' : 'enabled' },
+    {
+      key: 'channel',
+      label: 'Channel',
+      render: (item) => {
+        const channel = getString(item, ['channel']);
+        const label = NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? formatGovernanceStatusLabel(channel);
+        return <Badge tone="info">{label}</Badge>;
+      }
+    },
+    {
+      key: 'enabled',
+      label: 'Enabled',
+      render: (item) => (
+        <Badge tone={item.enabled === false ? 'muted' : 'success'}>
+          {item.enabled === false ? 'Disabled' : 'Enabled'}
+        </Badge>
+      )
+    },
     { key: 'triggers', label: 'Triggers', render: (item) => (Array.isArray(item.triggers) ? item.triggers.length : 0) },
     { key: 'destination', label: 'Destination', render: (item) => getString(item, ['destination_preview'], 'metadata-only') }
   ];
   const eventColumns: TableColumn<DataItem>[] = [
-    { key: 'trigger', label: 'Trigger', render: (item) => getString(item, ['trigger']) },
+    { key: 'trigger', label: 'Trigger', render: (item) => humanizeNotificationTrigger(getString(item, ['trigger'])) },
     { key: 'subject', label: 'Subject', render: (item) => getString(item, ['subject']) },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
   ];
@@ -126,28 +306,21 @@ export function NotificationsPage({
     }
   }
 
-  function resolveNotificationDestination(channel: string, rawDestination: string) {
-    const preview = rawDestination.trim();
-    if (channel === 'webhook') {
-      if (/^https?:\/\//i.test(preview)) return preview;
-      return 'https://hooks.example.invalid/notifications';
-    }
-    if (channel === 'email') {
-      return preview.includes('@') ? preview : 'alerts@example.invalid';
-    }
-    return preview || `${channel}-destination.example.invalid`;
-  }
-
   async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formEl = event.currentTarget;
     const form = new FormData(formEl);
-    const channel = String(form.get('channel') ?? 'webhook').trim();
-    const trigger = String(form.get('trigger') ?? 'finding.high_severity').trim();
-    const destination = resolveNotificationDestination(
-      channel,
-      String(form.get('destination_preview') ?? '').trim()
-    );
+    const channel = ruleChannel.trim();
+    const trigger = ruleTrigger.trim();
+    const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
+    if ('error' in validation) {
+      setDestinationError(validation.error);
+      setRuleDryRunPreview('');
+      return;
+    }
+    setDestinationError('');
+    setRuleDryRunPreview('');
+    const destination = validation.destination;
     await runAction('create-notification-rule', () => requestJson(config, session, '/v1/notifications', {
       method: 'POST',
       body: {
@@ -160,7 +333,24 @@ export function NotificationsPage({
     formEl.reset();
   }
 
+  function previewRuleFromForm(formEl: HTMLFormElement) {
+    const form = new FormData(formEl);
+    const channel = ruleChannel.trim();
+    const trigger = ruleTrigger.trim();
+    const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
+    if ('error' in validation) {
+      setDestinationError(validation.error);
+      setRuleDryRunPreview('');
+      return;
+    }
+    setDestinationError('');
+    setRuleDryRunPreview(
+      `Dry-run: would create a ${channel} rule for “${humanizeNotificationTrigger(trigger)}” → ${validation.destination} (no ledger write).`
+    );
+  }
+
   async function processRetries(dryRun: boolean) {
+    if (!dryRun && !window.confirm('Process notification retries now?')) return;
     await runAction(`process-retries-${dryRun ? 'preview' : 'run'}`, () => requestJson(config, session, '/v1/notifications/retries/process', {
       method: 'POST',
       body: { dry_run: dryRun }
@@ -168,6 +358,7 @@ export function NotificationsPage({
   }
 
   async function redriveDlq(dryRun: boolean) {
+    if (!dryRun && !window.confirm('Redrive the DLQ now?')) return;
     const attemptIds = dlqItems
       .map((item) => getString(item, ['id', 'attempt_id'], ''))
       .filter(Boolean);
@@ -183,39 +374,65 @@ export function NotificationsPage({
   return (
     <div className="content">
       <PageHeader route="notifications" />
-      <div className="metric-grid three">
-        <MetricCard label="Rules" value={data.notificationRules.length} sub="Tenant notification rules" icon={Bell} tone="info" />
-        <MetricCard label="Events" value={data.notificationEvents.length} sub="Recent emitted events" icon={ClipboardList} tone="success" />
-        <MetricCard label="DLQ" value={dlqItems.length} sub={`${retryItems.length} retry scheduled`} icon={Siren} tone={dlqItems.length > 0 ? 'warn' : 'success'} />
-      </div>
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       {canWrite ? (
-        <Card>
+        <Card id="notifications-create-rule">
           <CardHeader>
             <CardTitle>Create notification rule</CardTitle>
             <CardDescription>Metadata-only rule creation. External delivery remains opt-in through server delivery mode.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="product-form" onSubmit={handleCreateRule}>
-              <label><span>Channel</span><select name="channel" defaultValue="webhook"><option value="webhook">webhook</option><option value="email">email</option><option value="slack">slack</option><option value="teams">teams</option><option value="in_app">in_app</option></select></label>
-              <label><span>Trigger</span>
-                <select name="trigger" defaultValue="finding.high_severity">
-                  {NOTIFICATION_TRIGGERS.map((trigger) => <option key={trigger} value={trigger}>{trigger}</option>)}
-                </select>
-              </label>
-              <label className="full"><span>Destination</span><input name="destination_preview" placeholder="https://hooks.example.invalid/notifications" /></label>
-              <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Add rule</Button></div>
+            <form className="product-form" onSubmit={handleCreateRule} aria-busy={busy === 'create-notification-rule'}>
+              <Select
+                label="Channel"
+                value={ruleChannel}
+                options={NOTIFICATION_CHANNEL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                onChange={setRuleChannel}
+                disabled={busy !== ''}
+              />
+              <Select
+                label="Trigger"
+                value={ruleTrigger}
+                options={NOTIFICATION_TRIGGERS.map((trigger) => ({ value: trigger, label: humanizeNotificationTrigger(trigger) }))}
+                onChange={(value) => setRuleTrigger(value as (typeof NOTIFICATION_TRIGGERS)[number])}
+                disabled={busy !== ''}
+              />
+              <label className="full"><span>Destination</span><input name="destination_preview" placeholder="https://hooks.example.invalid/notifications" aria-invalid={destinationError ? true : undefined} disabled={busy !== ''} /></label>
+              {destinationError ? <p className="form-banner error full">{destinationError}</p> : null}
+              {ruleDryRunPreview ? (
+                <div className="callout info full"><Info size={18} aria-hidden="true" /><span>{ruleDryRunPreview}</span></div>
+              ) : null}
+              <div className="form-actions full">
+                <Button type="submit" loading={busy === 'create-notification-rule'} disabled={busy !== '' && busy !== 'create-notification-rule'}>Add rule</Button>
+                <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={(clickEvent) => {
+                  const form = clickEvent.currentTarget.closest('form');
+                  if (form instanceof HTMLFormElement) previewRuleFromForm(form);
+                }}>Send test event (dry-run)</Button>
+              </div>
             </form>
           </CardContent>
         </Card>
       ) : (
-        <Card><CardContent><p className="muted">Notification write access requires owner or admin role.</p></CardContent></Card>
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={Lock}
+              title="Notification write access required."
+              body="Switch to owner or admin role to create metadata-only notification rules."
+            />
+          </CardContent>
+        </Card>
       )}
-      <div className="split">
+      <PageContextSummary>
+        <span className="tabular-nums">{data.notificationRules.length}</span> rules ·{' '}
+        <span className="tabular-nums">{data.notificationEvents.length}</span> events ·{' '}
+        <span className="tabular-nums">{dlqItems.length}</span> DLQ ({retryItems.length} retries scheduled)
+      </PageContextSummary>
+      <div className="split" aria-busy={busy !== ''}>
         <Card>
           <CardHeader><CardTitle>Rules</CardTitle></CardHeader>
           <CardContent>
-            <DataTable columns={ruleColumns} items={data.notificationRules} empty={<EmptyState icon={Bell} title="No notification rules." body="Create a metadata-only rule to start recording delivery intent." />} />
+            <DataTable columns={ruleColumns} items={data.notificationRules} empty={<EmptyState icon={Bell} title="No notification rules." body="Create a metadata-only rule to start recording delivery intent." actionLabel={canWrite ? 'Add rule above' : undefined} onAction={canWrite ? () => document.getElementById('notifications-create-rule')?.scrollIntoView({ behavior: 'smooth' }) : undefined} />} />
           </CardContent>
         </Card>
         <Card>
@@ -228,13 +445,29 @@ export function NotificationsPage({
       <Card>
         <CardHeader>
           <CardTitle>Delivery operations</CardTitle>
-          <CardDescription>Retry and DLQ controls are metadata-only in developer validation.</CardDescription>
+          <CardDescription>Retry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state.</CardDescription>
         </CardHeader>
-        <CardContent className="row-actions">
-          <Button size="sm" variant="secondary" disabled={!canWrite || busy !== ''} onClick={() => void processRetries(true)}>Preview due retries</Button>
-          <Button size="sm" disabled={!canWrite || busy !== ''} onClick={() => void processRetries(false)}>Process due retries</Button>
-          <Button size="sm" variant="ghost" disabled={!canWrite || busy !== '' || dlqItems.length === 0} onClick={() => void redriveDlq(true)}>Preview DLQ redrive</Button>
-          <Button size="sm" variant="secondary" disabled={!canWrite || busy !== '' || dlqItems.length === 0} onClick={() => void redriveDlq(false)}>Redrive DLQ</Button>
+        <CardContent className="stack-tight">
+          <section className="operation-panel" aria-labelledby="notification-preview-title">
+            <div>
+              <h3 id="notification-preview-title">Preview</h3>
+              <p>Dry-run — no ledger changes</p>
+            </div>
+            <div className="row-actions">
+              <Button size="sm" variant="ghost" loading={busy === 'process-retries-preview'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-preview')} onClick={() => void processRetries(true)}>Preview due retries</Button>
+              <Button size="sm" variant="ghost" loading={busy === 'redrive-dlq-preview'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-preview')} onClick={() => void redriveDlq(true)}>Preview DLQ redrive</Button>
+            </div>
+          </section>
+          <section className="operation-panel" aria-labelledby="notification-live-title">
+            <div>
+              <h3 id="notification-live-title">Live</h3>
+              <p>Applies changes — confirmation required</p>
+            </div>
+            <div className="row-actions">
+              <Button size="sm" variant="secondary" loading={busy === 'process-retries-run'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-run')} onClick={() => void processRetries(false)}>Process due retries</Button>
+              <Button size="sm" variant="secondary" loading={busy === 'redrive-dlq-run'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-run')} onClick={() => void redriveDlq(false)}>Redrive DLQ</Button>
+            </div>
+          </section>
         </CardContent>
       </Card>
     </div>
@@ -245,6 +478,7 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
   const [filter, setFilter] = useState('');
   const [custodyOnly, setCustodyOnly] = useState(false);
   const [selectedId, setSelectedId] = useState('');
+  const [showRawAuditMetadata, setShowRawAuditMetadata] = useState(false);
   const allowed = canReadAudit(session.role);
   const items = data.audit.filter((entry) => {
     const action = getString(entry, ['action'], '').toLowerCase();
@@ -255,20 +489,17 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
     const haystack = `${getString(entry, ['action'])} ${getString(entry, ['resource_type'])} ${getString(entry, ['resource_id'])}`.toLowerCase();
     return haystack.includes(filter.trim().toLowerCase());
   });
-  const selectedEntry = items.find((entry) => getString(entry, ['id', 'audit_id'], '') === selectedId) ?? null;
+  const selectedEntry = items.find((entry) => auditEntrySelectionKey(entry) === selectedId) ?? null;
+
+  useEffect(() => {
+    setShowRawAuditMetadata(false);
+  }, [selectedId]);
+
   const columns: TableColumn<DataItem>[] = [
     { key: 'time', label: 'Time', render: (item) => formatDate(item.timestamp ?? item.created_at) },
     { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
     { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'], '')} ${getString(item, ['resource_id'], '')}`.trim() },
-    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role', 'actor_user_id'], 'system') },
-    {
-      key: 'inspect',
-      label: 'Inspect',
-      render: (item) => {
-        const id = getString(item, ['id', 'audit_id'], getString(item, ['created_at'], ''));
-        return <Button size="sm" variant={id === selectedId ? 'default' : 'secondary'} onClick={() => setSelectedId(id)}>Open</Button>;
-      }
-    }
+    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role', 'actor_user_id'], 'system') }
   ];
 
   return (
@@ -278,6 +509,7 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
         <EmptyState icon={ClipboardList} title="Audit access required." body="Switch to owner, admin, SOC, or auditor role to read the tenant audit log." />
       ) : (
         <>
+          <div className="split">
           <Card>
             <CardHeader>
               <CardTitle>Audit log</CardTitle>
@@ -286,9 +518,18 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
             <CardContent>
               <div className="product-form">
                 <label className="full"><span>Filter</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="action, resource type, or id" /></label>
-                <label><span>Custody chain only</span><input type="checkbox" checked={custodyOnly} onChange={(event) => setCustodyOnly(event.target.checked)} /></label>
+                <label className="check-row full"><input type="checkbox" name="custody_only" checked={custodyOnly} onChange={(event) => setCustodyOnly(event.target.checked)} /><span>Custody chain only</span></label>
               </div>
-              <DataTable columns={columns} items={items.slice().reverse()} empty={<EmptyState icon={ClipboardList} title="No audit entries." body="Security-relevant actions will appear here after workflow activity." />} />
+              <DataTable
+                columns={columns}
+                items={items.slice().reverse()}
+                selectedId={selectedId || null}
+                getRowId={(item) => auditEntrySelectionKey(item)}
+                getRowProps={(item) => ({
+                  onClick: () => setSelectedId(auditEntrySelectionKey(item))
+                })}
+                empty={<EmptyState icon={ClipboardList} title="No audit entries." body="Security-relevant actions will appear here after workflow activity." />}
+              />
             </CardContent>
           </Card>
           {selectedEntry ? (
@@ -301,13 +542,54 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
                 <div><span>Actor</span><strong>{getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})</strong></div>
                 <div><span>Resource</span><strong>{getString(selectedEntry, ['resource_id'])}</strong></div>
                 <div><span>Timestamp</span><strong>{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</strong></div>
-                <div><span>Metadata keys</span><strong>{Object.keys((selectedEntry.metadata as object) ?? {}).join(', ') || 'none'}</strong></div>
-                {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' ? (
-                  <pre className="codeblock">{JSON.stringify(selectedEntry.metadata, null, 2).slice(0, 1800)}</pre>
-                ) : null}
+                {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' && !Array.isArray(selectedEntry.metadata) ? (
+                  isFlatMetadataObject(selectedEntry.metadata)
+                    ? Object.entries(selectedEntry.metadata).map(([key, value]) => (
+                      <div key={key}><span>{key}</span><strong>{value === null ? 'null' : String(value)}</strong></div>
+                    ))
+                    : <div><span>Metadata</span><strong className="muted">Structured metadata — use View raw for full JSON.</strong></div>
+                ) : (
+                  <div><span>Metadata</span><strong>none</strong></div>
+                )}
+                {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' ? (() => {
+                  const metadataJson = JSON.stringify(selectedEntry.metadata, null, 2);
+                  const metadataTruncated = metadataJson.length > 1800;
+                  const downloadId = getString(selectedEntry, ['id', 'audit_id'], 'audit-entry');
+                  return (
+                    <div className="full">
+                      <div className="row-actions">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-expanded={showRawAuditMetadata}
+                          aria-controls="audit-raw-metadata-panel"
+                          onClick={() => setShowRawAuditMetadata((open) => !open)}
+                        >
+                          {showRawAuditMetadata ? 'Hide raw metadata' : 'View raw'}
+                        </Button>
+                        {metadataTruncated ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => downloadJsonFile(`audit-metadata-${downloadId}.json`, selectedEntry.metadata)}
+                          >
+                            Download full metadata
+                          </Button>
+                        ) : null}
+                      </div>
+                      {showRawAuditMetadata ? (
+                        <div className="stack-tight full" id="audit-raw-metadata-panel">
+                          <pre className="codeblock">{metadataJson.slice(0, 1800)}</pre>
+                          {metadataTruncated ? <Badge tone="warn">Truncated — download for full JSON</Badge> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })() : null}
               </CardContent>
             </Card>
           ) : null}
+          </div>
         </>
       )}
     </div>
@@ -315,23 +597,53 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
 }
 
 export function ReleaseEvidencePage({ data, session }: { data: PortalData; session: Session }) {
+  const [showGapTechnicalDetails, setShowGapTechnicalDetails] = useState(false);
+  const [clipboardNotice, setClipboardNotice] = useState('');
   const allowed = canReadReleaseEvidence(session.role);
   const attestation = data.releaseAttestation;
   const coverage = computeReleaseEvidenceCoverage(data.releaseEvidence);
+  const missingKindColumns: TableColumn<{ kind: string }>[] = [
+    { key: 'kind', label: 'Kind', render: (item) => item.kind },
+    { key: 'status', label: 'Status', render: () => <Badge tone="warn">Missing</Badge> }
+  ];
   const columns: TableColumn<DataItem>[] = [
     { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{getString(item, ['kind'])}</Badge> },
-    { key: 'status', label: 'Status', render: (item) => getString(item, ['status', 'validation_status'], 'recorded') },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => {
+        const status = getString(item, ['status', 'validation_status'], 'recorded');
+        return <Badge tone={releaseEvidenceStatusBadgeTone(status)}>{formatGovernanceStatusLabel(status, 'Recorded')}</Badge>;
+      }
+    },
     { key: 'validation', label: 'Validation', render: (item) => summarizeReleaseEvidenceValidation(getNestedItem(item, ['validation']) ?? (item.validation as DataItem | undefined) ?? null) },
     { key: 'release', label: 'Release', render: (item) => getString(item, ['release_id', 'id']) },
     { key: 'custody', label: 'Custody', render: (item) => {
       const uri = pickReleaseEvidenceCustodyUri(getNestedItem(item, ['evidence']) ?? (item.evidence as DataItem | undefined));
-      return uri ? uri.slice(0, 48) + (uri.length > 48 ? '…' : '') : 'metadata-only';
+      if (!uri) return <Badge tone="muted">Metadata only</Badge>;
+      return (
+        <div className="row-actions">
+          <span className="traffic-path-label" title={uri}>
+            <code>{uri}</code>
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label="Copy custody URI"
+            onClick={() => {
+              void navigator.clipboard.writeText(uri).then(() => setClipboardNotice('Custody URI copied to clipboard.')).catch(() => setClipboardNotice('Could not copy custody URI.'));
+            }}
+          >
+            <Copy size={14} aria-hidden="true" />
+          </Button>
+        </div>
+      );
     } },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
   ];
 
-  function exportGapLedger() {
-    const payload = {
+  function gapLedgerTechnicalPayload() {
+    return {
       exported_at: new Date().toISOString(),
       tenant_id: session.tenant_id ?? 'ten_demo',
       coverage,
@@ -343,7 +655,29 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
         custody_uri: pickReleaseEvidenceCustodyUri(getNestedItem(item, ['evidence']) ?? (item.evidence as DataItem | undefined))
       }))
     };
-    void navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+  }
+
+  function copyGapLedgerSummary() {
+    const missingLine = coverage.missing.length > 0
+      ? `Missing kinds: ${coverage.missing.join(', ')}.`
+      : 'All required kinds are recorded.';
+    const summary = [
+      `Release evidence gap ledger — ${session.tenant_id ?? 'ten_demo'}`,
+      `Recorded ${coverage.recorded} of ${coverage.expected} required kinds.`,
+      missingLine,
+      `Attestation signoff: ${getNestedString(attestation, ['signoff_status'], 'unknown')}.`,
+      `Production ready: ${String(attestation?.production_ready ?? 'unknown')}.`,
+      `Exported at ${new Date().toISOString()}.`
+    ].join('\n');
+    void navigator.clipboard.writeText(summary)
+      .then(() => setClipboardNotice('Gap summary copied to clipboard.'))
+      .catch(() => setClipboardNotice('Could not copy gap summary.'));
+  }
+
+  function copyGapLedgerTechnicalJson() {
+    void navigator.clipboard.writeText(JSON.stringify(gapLedgerTechnicalPayload(), null, 2))
+      .then(() => setClipboardNotice('Technical JSON copied to clipboard.'))
+      .catch(() => setClipboardNotice('Could not copy technical JSON.'));
   }
 
   return (
@@ -353,11 +687,13 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
         <EmptyState icon={FileText} title="Release evidence access required." body="Switch to owner, admin, SOC, or auditor role to inspect production release evidence." />
       ) : (
         <>
-          <div className="metric-grid three">
-            <MetricCard label="Evidence kinds" value={`${coverage.recorded}/${coverage.expected}`} sub={coverage.kindsComplete ? 'Inventory complete' : `${coverage.missing.length} kinds missing`} icon={FileText} tone={coverage.kindsComplete ? 'success' : 'warn'} />
-            <MetricCard label="Attestation" value={getNestedString(attestation, ['signoff_status'], 'unknown')} sub="Staging readiness attestation" icon={ShieldCheck} tone="success" />
-            <MetricCard label="Production ready" value={String(attestation?.production_ready ?? 'unknown')} sub="Metadata-only release gate snapshot" icon={FileCheck2} tone="muted" />
-          </div>
+          <PageContextSummary>
+            Evidence kinds <span className="tabular-nums">{coverage.recorded}/{coverage.expected}</span>
+            {coverage.kindsComplete ? ' · inventory complete' : ` · ${coverage.missing.length} missing`} · attestation{' '}
+            {formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status'], 'unknown'), 'unknown')} · production{' '}
+            {productionReadyLabel(attestation?.production_ready)}
+          </PageContextSummary>
+          {clipboardNotice ? <div className="form-banner info" role="status" aria-live="polite">{clipboardNotice}</div> : null}
           <Card>
             <CardHeader>
               <CardTitle>Gap ledger</CardTitle>
@@ -366,12 +702,41 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
             <CardContent className="product-form">
               <p className="muted">Recorded {coverage.recorded} of {coverage.expected} required kinds. Customer launch remains gated by staging, legal, SOC, and security signoffs.</p>
               {coverage.missing.length > 0 ? (
-                <div className="queue-list">
-                  {coverage.missing.slice(0, 12).map((kind) => <div key={kind}><Badge tone="warn">{kind}</Badge></div>)}
+                <div className="stack-tight">
+                  <DataTable
+                    columns={missingKindColumns}
+                    items={coverage.missing.slice(0, 12).map((kind) => ({ kind }))}
+                    empty={<EmptyState icon={FileText} title="No missing kinds." body="All required kinds are recorded." />}
+                  />
                   {coverage.missing.length > 12 ? <p className="muted">…and {coverage.missing.length - 12} more kinds.</p> : null}
                 </div>
               ) : <p className="muted">All required kinds are recorded for this tenant inventory snapshot.</p>}
-              <Button size="sm" variant="secondary" onClick={exportGapLedger}>Copy gap ledger JSON</Button>
+              <div className="row-actions">
+                <Button size="sm" onClick={copyGapLedgerSummary}>Copy gap summary</Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-expanded={showGapTechnicalDetails}
+                  aria-controls={showGapTechnicalDetails ? 'release-evidence-technical-export' : undefined}
+                  onClick={() => setShowGapTechnicalDetails((open) => !open)}
+                >
+                  {showGapTechnicalDetails ? 'Hide technical export' : 'Technical export'}
+                </Button>
+              </div>
+              {showGapTechnicalDetails ? (
+                <div className="expand-panel stack-tight" id="release-evidence-technical-export">
+                  <div className="row-actions">
+                    <Button size="sm" variant="secondary" onClick={copyGapLedgerTechnicalJson}>Copy technical JSON</Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => downloadJsonFile(`release-evidence-gap-ledger-${session.tenant_id ?? 'tenant'}.json`, gapLedgerTechnicalPayload())}
+                    >
+                      Download .json
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           <Card>
@@ -387,11 +752,11 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
             <Card>
               <CardHeader>
                 <CardTitle>Attestation snapshot</CardTitle>
-                <CardDescription>From `/v1/production-release-evidence/attestation`.</CardDescription>
+                <CardDescription>Latest staging readiness attestation snapshot for this tenant.</CardDescription>
               </CardHeader>
               <CardContent className="kv-list">
-                <div><span>Signoff status</span><strong>{getNestedString(attestation, ['signoff_status'])}</strong></div>
-                <div><span>Production ready</span><strong>{String(attestation.production_ready ?? 'unknown')}</strong></div>
+                <div><span>Signoff status</span><strong><Badge tone="info">{formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status']), '—')}</Badge></strong></div>
+                <div><span>Production ready</span><strong><Badge tone={productionReadyBadgeTone(attestation.production_ready)}>{productionReadyLabel(attestation.production_ready)}</Badge></strong></div>
                 <div><span>Profile</span><strong>{getNestedString(attestation, ['profile'], 'full')}</strong></div>
                 <div><span>Checked at</span><strong>{formatDate(attestation.checked_at ?? attestation.created_at)}</strong></div>
               </CardContent>
@@ -417,12 +782,20 @@ export function SocConsolePage({
   staffSocSurface?: boolean;
 }) {
   const [busy, setBusy] = useState('');
+  const [queueRefreshing, setQueueRefreshing] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [output, setOutput] = useState('');
-  const [selectedRequestId, setSelectedRequestId] = useState(() => getString(data.highScale[0] ?? {}, ['id'], ''));
-  const [adapterStatus, setAdapterStatus] = useState<DataItem | null>(null);
-  const [postTestReport, setPostTestReport] = useState<DataItem | null>(null);
+  const [outputSummary, setOutputSummary] = useState('');
+  const [showActionTechnicalDetails, setShowActionTechnicalDetails] = useState(false);
+  const [lastActionRequestId, setLastActionRequestId] = useState('');
+
+  function setActionOutput(payload: unknown, requestId = '') {
+    setOutput(JSON.stringify(payload, null, 2));
+    setOutputSummary(summarizeSocActionPayload(payload));
+    setShowActionTechnicalDetails(false);
+    setLastActionRequestId(requestId);
+  }
   const isSoc = staffSocSurface
     ? session.principal === 'staff' && isStaffSocRole(session)
     : session.role === 'soc' && session.principal !== 'staff';
@@ -431,23 +804,25 @@ export function SocConsolePage({
     if (staffSocSurface) return requestSocJson(config, session, path, options);
     return requestJson(config, session, path, options);
   }
-  const activeRequest = data.highScale.find((item) => getString(item, ['id'], '') === selectedRequestId) ?? data.highScale[0] ?? null;
-  const artifacts = Array.isArray(activeRequest?.artifacts) ? activeRequest.artifacts as DataItem[] : [];
-
-  useEffect(() => {
-    if (data.highScale.length === 0) {
-      if (selectedRequestId) setSelectedRequestId('');
-      return;
-    }
-    const selectedStillExists = data.highScale.some((item) => getString(item, ['id'], '') === selectedRequestId);
-    if (!selectedStillExists) setSelectedRequestId(getString(data.highScale[0] ?? {}, ['id'], ''));
-  }, [data.highScale, selectedRequestId]);
-
   const requestColumns: TableColumn<DataItem>[] = [
     { key: 'id', label: 'Request', render: (item) => getString(item, ['id']) },
-    { key: 'state', label: 'State', render: (item) => <Badge tone="warn">{getString(item, ['state'])}</Badge> },
-    { key: 'target', label: 'Target group', render: (item) => getString(item, ['target_group_id']) },
-    { key: 'pack', label: 'Pack', render: (item) => getNestedString(item, ['authorization_pack_status', 'overall'], 'missing') },
+    {
+      key: 'state',
+      label: 'State',
+      render: (item) => {
+        const state = getString(item, ['state']);
+        return <Badge tone={highScaleStateBadgeTone(state)}>{formatGovernanceStatusLabel(state, 'Unknown')}</Badge>;
+      }
+    },
+    { key: 'target', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },
+    {
+      key: 'pack',
+      label: 'Pack',
+      render: (item) => {
+        const overall = getNestedString(item, ['authorization_pack_status', 'overall'], 'missing');
+        return <Badge tone={authorizationPackBadgeTone(overall)}>{authorizationPackLabel(overall)}</Badge>;
+      }
+    },
     {
       key: 'actions',
       label: 'Actions',
@@ -456,32 +831,22 @@ export function SocConsolePage({
         const state = getString(item, ['state'], '');
         const packReady = getNestedString(item, ['authorization_pack_status', 'overall'], '') === 'accepted';
         return (
-          <div className="row-actions">
-            <Button size="sm" variant={id === selectedRequestId ? 'default' : 'secondary'} onClick={() => setSelectedRequestId(id)}>Select</Button>
-            {['submitted', 'under_review'].includes(state) && packReady ? <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void socAction(id, 'approve')}>Approve</Button> : null}
-            {state === 'approved' ? <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void socAction(id, 'schedule', socDevScheduleWindow())}>Schedule</Button> : null}
-            {state === 'scheduled' ? <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void socAction(id, 'start')}>Start</Button> : null}
-            {state === 'running' ? <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void socAction(id, 'stop')}>Stop</Button> : null}
-            {state === 'stopped' ? <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void socAction(id, 'close')}>Close</Button> : null}
-          </div>
-        );
-      }
-    }
-  ];
-
-  const artifactColumns: TableColumn<DataItem>[] = [
-    { key: 'type', label: 'Type', render: (item) => getString(item, ['type']) },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'accepted' ? 'success' : 'warn'}>{getString(item, ['status'])}</Badge> },
-    { key: 'digest', label: 'SHA-256', render: (item) => getString(item, ['content_sha256'], '—').slice(0, 16) },
-    {
-      key: 'actions',
-      label: 'Review',
-      render: (item) => {
-        const artifactId = getString(item, ['id'], '');
-        return (
-          <div className="row-actions">
-            <Button size="sm" variant="secondary" disabled={busy !== '' || !selectedRequestId} onClick={() => void reviewArtifact(selectedRequestId, artifactId, 'accepted')}>Accept</Button>
-            <Button size="sm" variant="ghost" disabled={busy !== '' || !selectedRequestId} onClick={() => void reviewArtifact(selectedRequestId, artifactId, 'rejected')}>Reject</Button>
+          <div className="stack-tight">
+            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('soc-request-detail', id)}>Open</AnchorButton>
+            {['submitted', 'under_review'].includes(state) && packReady ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === `approve-${id}`}
+                disabled={busy !== '' && busy !== `approve-${id}`}
+                onClick={(clickEvent) => {
+                  clickEvent.stopPropagation();
+                  void socAction(id, 'approve');
+                }}
+              >
+                Quick approve
+              </Button>
+            ) : null}
           </div>
         );
       }
@@ -490,6 +855,15 @@ export function SocConsolePage({
 
   async function socAction(requestId: string, action: string, body: Record<string, unknown> = {}) {
     if (!requestId) return null;
+    const lifecycleConfirm: Record<string, string> = {
+      approve: `Approve high-scale request ${requestId} and move it to approved?`,
+      schedule: `Schedule high-scale request ${requestId} for execution?`,
+      start: `Start high-scale execution for ${requestId}? Governed adapter traffic will begin.`,
+      stop: `Stop high-scale execution for ${requestId} immediately?`,
+      close: `Close high-scale request ${requestId} and finalize the test lifecycle?`
+    };
+    const lifecycleMessage = lifecycleConfirm[action];
+    if (lifecycleMessage && !window.confirm(lifecycleMessage)) return null;
     setBusy(`${action}-${requestId}`);
     setError('');
     setMessage('');
@@ -498,9 +872,14 @@ export function SocConsolePage({
         method: 'POST',
         body
       });
-      setOutput(JSON.stringify(payload, null, 2));
+      setActionOutput(payload, requestId);
       setMessage(`SOC ${action} completed for ${requestId}.`);
-      await onRefresh();
+      setQueueRefreshing(true);
+      try {
+        await onRefresh();
+      } finally {
+        setQueueRefreshing(false);
+      }
       return payload;
     } catch (err) {
       const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
@@ -511,48 +890,10 @@ export function SocConsolePage({
     }
   }
 
-  async function reviewArtifact(requestId: string, artifactId: string, status: 'accepted' | 'rejected') {
-    if (!requestId || !artifactId) return;
-    await socAction(requestId, `artifacts/${artifactId}/review`, { status, notes: `SOC ${status} via console` });
-  }
-
-  async function loadAdapterStatus(requestId: string) {
-    if (!requestId) return;
-    setBusy(`adapter-${requestId}`);
-    setError('');
-    try {
-      const payload = await socRequest(`/internal/soc/high-scale/${encodeURIComponent(requestId)}/adapter-status`);
-      setAdapterStatus(payload as DataItem);
-      setOutput(JSON.stringify(payload, null, 2));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Adapter status unavailable.');
-      setAdapterStatus(null);
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function submitSocNote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedRequestId) return;
-    const body = String(new FormData(event.currentTarget).get('body') ?? '').trim();
-    await socAction(selectedRequestId, 'notes', { body });
-    event.currentTarget.reset();
-  }
-
-  async function submitPostTestReport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedRequestId) return;
-    const form = new FormData(event.currentTarget);
-    const payload = await socAction(selectedRequestId, 'post-test-report', {
-      impact_summary: String(form.get('impact_summary') ?? '').trim(),
-      recommendations: String(form.get('recommendations') ?? '').trim(),
-      residual_risk: String(form.get('residual_risk') ?? '').trim()
-    });
-    if (payload) setPostTestReport(payload as DataItem);
-  }
-
   async function setKillSwitch(active: boolean) {
+    if (active) {
+      if (!window.confirm('Activate the tenant kill switch? All high-scale execution for this tenant halts immediately.')) return;
+    } else if (!window.confirm('Clear the kill switch and allow high-scale execution to resume?')) return;
     setBusy(active ? 'kill-on' : 'kill-off');
     setError('');
     setMessage('');
@@ -561,9 +902,14 @@ export function SocConsolePage({
         method: 'POST',
         body: { active, reason: active ? 'SOC console activation' : 'SOC console cleared' }
       });
-      setOutput(JSON.stringify(payload, null, 2));
+      setActionOutput(payload, '');
       setMessage(active ? 'Kill switch activated.' : 'Kill switch cleared.');
-      await onRefresh();
+      setQueueRefreshing(true);
+      try {
+        await onRefresh();
+      } finally {
+        setQueueRefreshing(false);
+      }
     } catch (err) {
       const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
       setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Kill switch action failed.'));
@@ -576,36 +922,56 @@ export function SocConsolePage({
     const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
     return (
       <div className="content">
-        <PageHeader route={staffSocSurface ? 'internal-soc' : 'soc'} />
-        <EmptyState
-          icon={ShieldCheck}
-          title={staffSocSurface ? 'Staff SOC role required.' : 'SOC role required.'}
-          body={staffSocSurface
-            ? 'Sign in with a staff soc_analyst or soc_lead role to use the governed high-scale execution console.'
-            : 'Switch the workspace role to soc to use the governed high-scale execution console.'}
+        <PageHeader
+          route={staffSocSurface ? 'internal-soc' : 'soc'}
+          eyebrow={staffSocSurface ? 'Staff SOC execution plane' : undefined}
         />
-        <Card>
-          <CardHeader>
-            <CardTitle>Kill switch</CardTitle>
-            <CardDescription>Read-only tenant emergency-stop status. Activation and clearance require an SOC role.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-            <div><span>Status</span><strong>{killSwitchActive ? 'Active' : 'Inactive'}</strong></div>
-            <div><span>Reason</span><strong>{getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop')}</strong></div>
-          </CardContent>
-        </Card>
+        <div className="stack-tight">
+          <EmptyState
+            icon={ShieldCheck}
+            title={staffSocSurface ? 'Staff SOC role required.' : 'SOC role required.'}
+            body={staffSocSurface
+              ? 'Sign in with a staff soc_analyst or soc_lead role to use the governed high-scale execution console.'
+              : 'Switch the workspace role to soc to use the governed high-scale execution console.'}
+            actionLabel={staffSocSurface ? 'Open staff login' : undefined}
+            actionHref={staffSocSurface ? '/internal/admin/login' : undefined}
+          />
+          <Card density="compact">
+            <CardHeader>
+              <CardTitle>Kill switch</CardTitle>
+              <CardDescription>Read-only tenant emergency-stop status. Activation and clearance require an SOC role.</CardDescription>
+            </CardHeader>
+            <CardContent className="kv-list">
+              <div><span>Status</span><strong><Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Active' : 'Inactive'}</Badge></strong></div>
+              <div><span>Reason</span><strong>{getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop')}</strong></div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     );
   }
 
+  const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
+
   return (
     <div className="content">
-      <PageHeader route={staffSocSurface ? 'internal-soc' : 'soc'} eyebrow="SOC execution plane" />
-      <div className="metric-grid three">
-        <MetricCard label="Queue" value={data.highScale.length} sub="Governed high-scale requests" icon={Siren} tone="warn" />
-        <MetricCard label="Kill switch" value={(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled) ? 'ON' : 'OFF'} sub={getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop')} icon={ShieldCheck} tone={(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled) ? 'danger' : 'success'} />
-        <MetricCard label="Open findings" value={data.state?.open_findings ?? data.findings.length} sub="Customer posture while tests run" icon={FileCheck2} tone="info" />
+      <PageHeader
+        route={staffSocSurface ? 'internal-soc' : 'soc'}
+        eyebrow="SOC execution plane"
+        actions={staffSocSurface ? <Badge tone="warn">Staff plane</Badge> : undefined}
+      />
+      <div className={killSwitchActive ? 'callout warn' : 'callout info'}>
+        {killSwitchActive ? <Siren size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
+        <span>
+          {killSwitchActive
+            ? 'Kill switch is active — governed high-scale execution is halted for this tenant.'
+            : 'Kill switch is clear; governed runs may proceed when approved and scheduled.'}
+        </span>
       </div>
+      <PageContextSummary>
+        Queue <span className="tabular-nums">{data.highScale.length}</span> governed requests ·{' '}
+        <span className="tabular-nums">{data.state?.open_findings ?? data.findings.length}</span> open findings
+      </PageContextSummary>
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       <Card>
         <CardHeader>
@@ -613,80 +979,62 @@ export function SocConsolePage({
           <CardDescription>Tenant-scoped emergency stop for governed high-scale adapter runs.</CardDescription>
         </CardHeader>
         <CardContent className="row-actions">
-          <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void setKillSwitch(true)}>Activate</Button>
-          <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void setKillSwitch(false)}>Clear</Button>
+          <Button size="sm" variant="danger" loading={busy === 'kill-on'} disabled={busy !== '' && busy !== 'kill-on'} onClick={() => void setKillSwitch(true)}>Activate</Button>
+          <Button size="sm" variant="secondary" loading={busy === 'kill-off'} disabled={busy !== '' && busy !== 'kill-off'} onClick={() => void setKillSwitch(false)}>Clear</Button>
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
           <CardTitle>High-scale queue</CardTitle>
-          <CardDescription>SOC-only lifecycle actions call `/internal/soc/high-scale/*` routes.</CardDescription>
+          <CardDescription>Open a request for the full lifecycle workspace. Quick approve is available here only when the authorization pack is accepted.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <DataTable columns={requestColumns} items={data.highScale} empty={<EmptyState icon={ShieldCheck} title="No high-scale requests." body="Customer requests appear here after intake and authorization-pack review." />} />
+        <CardContent aria-busy={queueRefreshing}>
+          <DataTable
+            columns={requestColumns}
+            items={data.highScale}
+            empty={queueRefreshing ? (
+              <div className="stack-tight" role="status" aria-live="polite">
+                <span className="skeleton skeleton-row" />
+                <span className="skeleton skeleton-row" />
+              </div>
+            ) : (
+              <EmptyState icon={ShieldCheck} title="No high-scale requests." body="Customer requests appear here after intake and authorization-pack review." />
+            )}
+          />
         </CardContent>
       </Card>
-      {activeRequest ? (
-        <div className="split">
-          <Card>
-            <CardHeader>
-              <CardTitle>Authorization artifacts</CardTitle>
-              <CardDescription>Review metadata-only artifacts for {getString(activeRequest, ['id'])}.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable columns={artifactColumns} items={artifacts} empty={<EmptyState icon={FileCheck2} title="No artifacts uploaded." body="Customer authorization pack artifacts appear after metadata-only upload." />} />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Adapter status</CardTitle>
-              <CardDescription>{'Governed adapter dry-run telemetry from `/internal/soc/high-scale/:id/adapter-status`.'}</CardDescription>
-            </CardHeader>
-            <CardContent className="product-form">
-              <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void loadAdapterStatus(selectedRequestId)}>Refresh adapter status</Button>
-              {adapterStatus ? (
-                <div className="kv-list">
-                  <div><span>State</span><strong>{getNestedString(adapterStatus, ['adapter', 'state'], getString(adapterStatus, ['state']))}</strong></div>
-                  <div><span>Traffic generated</span><strong>{String(getNestedString(adapterStatus, ['adapter', 'traffic_generated'], 'false'))}</strong></div>
-                  <div><span>Last updated</span><strong>{formatDate(adapterStatus.updated_at ?? adapterStatus.checked_at)}</strong></div>
-                </div>
-              ) : <p className="muted">Adapter status not loaded yet.</p>}
-            </CardContent>
-          </Card>
-        </div>
+      {output ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {lastActionRequestId
+                ? <>Action output — <code className="traffic-path-label">{lastActionRequestId}</code></>
+                : 'Action output — tenant controls'}
+            </CardTitle>
+            {lastActionRequestId ? (
+              <CardDescription>
+                <AnchorButton size="sm" variant="ghost" href={buildDetailHref('soc-request-detail', lastActionRequestId)}>Open request detail</AnchorButton>
+              </CardDescription>
+            ) : null}
+          </CardHeader>
+          <CardContent>
+            <div className="callout info" role="status" aria-live="polite">
+              <CheckCircle2 size={18} aria-hidden="true" />
+              <span>{outputSummary || 'Action completed successfully.'}</span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-expanded={showActionTechnicalDetails}
+              aria-controls="soc-action-technical-output"
+              onClick={() => setShowActionTechnicalDetails((open) => !open)}
+            >
+              {showActionTechnicalDetails ? 'Hide technical details' : 'View technical details'}
+            </Button>
+            {showActionTechnicalDetails ? <pre className="codeblock" id="soc-action-technical-output">{output}</pre> : null}
+          </CardContent>
+        </Card>
       ) : null}
-      {activeRequest ? (
-        <div className="split">
-          <Card>
-            <CardHeader>
-              <CardTitle>SOC notes</CardTitle>
-              <CardDescription>Metadata-only notes are redacted before persistence.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="product-form" onSubmit={submitSocNote}>
-                <label className="full"><span>Note</span><textarea name="body" rows={4} placeholder="Execution observation or coordination note" required /></label>
-                <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Add SOC note</Button></div>
-              </form>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Post-test report</CardTitle>
-              <CardDescription>Required before close when request is stopped.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="product-form" onSubmit={submitPostTestReport}>
-                <label className="full"><span>Impact summary</span><textarea name="impact_summary" rows={3} required /></label>
-                <label className="full"><span>Recommendations</span><textarea name="recommendations" rows={3} /></label>
-                <label><span>Residual risk</span><input name="residual_risk" defaultValue="low" /></label>
-                <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Save post-test report</Button></div>
-              </form>
-              {postTestReport ? <p className="muted">Report {getString(postTestReport, ['id'])} saved for {getString(postTestReport, ['high_scale_request_id'])}.</p> : null}
-            </CardContent>
-          </Card>
-        </div>
-      ) : null}
-      {output ? <Card><CardHeader><CardTitle>Action output</CardTitle></CardHeader><CardContent><pre className="codeblock">{output}</pre></CardContent></Card> : null}
     </div>
   );
 }

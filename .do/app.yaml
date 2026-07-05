@@ -47,7 +47,7 @@ services:
         value: "8080"
       - key: ASTRANULL_PUBLIC_BASE_URL
         scope: RUN_TIME
-        value: https://astranull.site
+        value: https://astranull-qteog.ondigitalocean.app
       - key: ASTRANULL_PERSISTENCE_MODE
         scope: RUN_TIME
         value: postgres

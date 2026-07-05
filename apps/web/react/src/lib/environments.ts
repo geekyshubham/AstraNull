@@ -17,6 +17,8 @@ export function isActiveTargetGroup(group: DataItem) {
 export type EnvironmentReadinessRow = {
   id: string;
   groups: DataItem[];
+  /** Active declared target groups in this environment. */
+  groupCount: number;
   completedRuns: number;
   groupsWithEvidence: number;
   openFindings: number;
@@ -66,6 +68,7 @@ export function buildEnvironmentReadinessRows(input: {
           : 'needs evidence';
       return {
         ...environment,
+        groupCount: environment.groups.length,
         completedRuns,
         groupsWithEvidence,
         openFindings,

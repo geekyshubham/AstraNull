@@ -126,10 +126,24 @@ export const NAV_ITEMS: NavItem[] = [
     icon: TriangleAlert
   },
   {
+    id: 'finding-detail',
+    label: 'Finding Detail',
+    group: 'validation',
+    description: 'Verdict explanation, triage state, SLA, owner workflow, retest, and custody export for one finding.',
+    icon: TriangleAlert
+  },
+  {
     id: 'evidence',
     label: 'Evidence Vault',
     group: 'validation',
     description: 'Custody-ready evidence, exports, and verdict source material.',
+    icon: FileCheck2
+  },
+  {
+    id: 'evidence-detail',
+    label: 'Evidence Detail',
+    group: 'validation',
+    description: 'Kind, custody digest, linked run and finding context, and export for one vault record.',
     icon: FileCheck2
   },
   {
@@ -203,10 +217,24 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Siren
   },
   {
+    id: 'high-scale-detail',
+    label: 'High-Scale Request Detail',
+    group: 'governance',
+    description: 'Authorization pack, artifacts, lifecycle trail, and provider checklist for one governed request.',
+    icon: Siren
+  },
+  {
     id: 'soc',
     label: 'SOC Console',
     group: 'governance',
     description: 'SOC-gated queue, kill switch state, checklists, and execution notes.',
+    icon: ShieldCheck
+  },
+  {
+    id: 'soc-request-detail',
+    label: 'SOC Request Detail',
+    group: 'governance',
+    description: 'SOC execution workspace with queue context, artifacts, adapter telemetry, and notes for one request.',
     icon: ShieldCheck
   },
   {
