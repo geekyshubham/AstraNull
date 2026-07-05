@@ -205,6 +205,7 @@ describe('dev store migration', () => {
       serviceAccounts: [],
       agents: [],
       agentJobs: [],
+      ownershipVerifications: [],
       probeJobs: [],
       testRuns: [],
       events: [],

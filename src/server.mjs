@@ -29,6 +29,7 @@ import * as agentUpdates from './services/agentUpdates.mjs';
 import * as highScale from './services/highScale.mjs';
 import * as reports from './services/reports.mjs';
 import * as targetGroups from './services/targetGroups.mjs';
+import * as ownershipVerification from './services/ownershipVerification.mjs';
 import * as testPolicies from './services/testPolicies.mjs';
 import * as testRuns from './services/testRuns.mjs';
 import * as tokens from './services/tokens.mjs';
@@ -81,6 +82,7 @@ function defaultServiceDeps() {
   return {
     tenants,
     targetGroups,
+    ownershipVerification,
     testPolicies,
     subscriptions,
     tokens,
@@ -1690,6 +1692,51 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
+  }
+
+  const ownershipConfirmMatch = path.match(/^\/v1\/ownership-verifications\/([^/]+)\/confirm$/);
+  const ownershipIdMatch = path.match(/^\/v1\/ownership-verifications\/([^/]+)$/);
+  const isOwnershipPath =
+    path === '/v1/ownership-verifications' || ownershipConfirmMatch || ownershipIdMatch;
+  if (isOwnershipPath) {
+    if (!serviceDeps.ownershipVerification) {
+      return respondPostgresRouteNotWired(res);
+    }
+    if (path === '/v1/ownership-verifications' && method === 'POST') {
+      const gate = requirePermission(ctx, 'target_group:write');
+      if (!gate.ok) return json(res, gate.status, gate.body);
+      const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+      const result = await serviceDeps.ownershipVerification.createOwnershipChallenge(ctx, body);
+      if (result.error) return json(res, result.status ?? 400, result);
+      return json(res, 201, result);
+    }
+    if (path === '/v1/ownership-verifications' && method === 'GET') {
+      const gate = requirePermission(ctx, 'target_group:read');
+      if (!gate.ok) return json(res, gate.status, gate.body);
+      return json(res, 200, {
+        items: await serviceDeps.ownershipVerification.listOwnershipVerifications(ctx),
+      });
+    }
+    if (ownershipConfirmMatch && method === 'POST') {
+      const gate = requirePermission(ctx, 'target_group:write');
+      if (!gate.ok) return json(res, gate.status, gate.body);
+      const result = await serviceDeps.ownershipVerification.confirmOwnership(
+        ctx,
+        ownershipConfirmMatch[1],
+      );
+      if (result.error) return json(res, result.status ?? 400, result);
+      return json(res, 200, result);
+    }
+    if (ownershipIdMatch && method === 'GET') {
+      const gate = requirePermission(ctx, 'target_group:read');
+      if (!gate.ok) return json(res, gate.status, gate.body);
+      const record = await serviceDeps.ownershipVerification.getOwnershipVerification(
+        ctx,
+        ownershipIdMatch[1],
+      );
+      if (!record) return json(res, 404, { error: 'not_found' });
+      return json(res, 200, record);
+    }
   }
 
   if (path === '/v1/bootstrap-tokens' && method === 'POST') {

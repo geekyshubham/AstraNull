@@ -30,6 +30,7 @@ function emptyStore() {
     serviceAccounts: [],
     agents: [],
     agentJobs: [],
+    ownershipVerifications: [],
     probeJobs: [],
     testRuns: [],
     events: [],

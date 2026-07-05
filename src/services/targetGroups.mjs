@@ -59,6 +59,7 @@ export function createTargetGroup(ctx, body) {
     timezone: body.timezone ?? 'UTC',
     safe_test_windows: Array.isArray(body.safe_test_windows) ? body.safe_test_windows : [],
     safety_policy: normalizeSafetyPolicy(body.safety_policy),
+    ownership_status: 'unverified',
     created_at: new Date().toISOString(),
   };
   getStore().targetGroups.push(record);
