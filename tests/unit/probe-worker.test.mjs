@@ -584,6 +584,20 @@ describe('probe worker poll integration', () => {
 });
 
 describe('executeProbeForJob routing', () => {
+  it('routes origin_leak_scan capability probe via executeProbeForJob', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    const job = baseJob({
+      check_id: 'origin.leak_scan.safe',
+      vector_family: 'origin',
+      probe_profile: { kind: 'origin_leak_scan', max_requests: 14, timeout_ms: 500 },
+      target: { kind: 'fqdn', value: 'nonexistent.invalid' },
+      constraints: { timeout_ms: 500, max_requests: 14 },
+    });
+    const outcome = await executeProbeForJob(job);
+    assert.equal(outcome.metadata.probe_kind, 'origin_leak_scan');
+    assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
+  });
+
   it('routes udp_probe profile kind to bounded UDP datagram probe', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     const job = baseJob({

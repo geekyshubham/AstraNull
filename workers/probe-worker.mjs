@@ -9,6 +9,7 @@ import { hostname } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { executeCapabilityProbe } from '../src/lib/capabilityProbes.mjs';
 import {
   probeAlertWebhookPing,
   probeHttp2Settings,
@@ -656,6 +657,10 @@ export function probeMetadataMarker(job) {
 
 export async function executeProbeForJob(job) {
   const profileKind = job.probe_profile?.kind;
+  const capabilityOutcome = await executeCapabilityProbe(job);
+  if (capabilityOutcome) {
+    return capabilityOutcome;
+  }
   if (profileKind === 'metadata_marker') {
     return probeMetadataMarker(job);
   }

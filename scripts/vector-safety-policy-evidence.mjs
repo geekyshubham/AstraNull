@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
   ALLOWED_PROBE_PROFILE_KINDS,
   CHECK_CATALOG,
-  MAX_PROBE_PROFILE_REQUESTS,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
+  maxProbeRequestsForKind,
   isCustomerRunnable,
 } from '../src/contracts/checks.mjs';
 
@@ -175,7 +175,7 @@ function invalidCustomerRunnableFields(check, policy) {
   }
   const profile = policy.probe_profile;
   if (profile && typeof profile === 'object') {
-    if (profile.max_requests > MAX_PROBE_PROFILE_REQUESTS) {
+    if (profile.max_requests > maxProbeRequestsForKind(profile.kind)) {
       invalid.push({ field: 'probe_profile.max_requests', reason: 'exceeds_catalog_cap' });
     }
     if (profile.timeout_ms > MAX_PROBE_PROFILE_TIMEOUT_MS) {

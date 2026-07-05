@@ -71,6 +71,98 @@ export function simulateProbeResult(check, target, overrideProfile) {
       enable_push: false,
       note: 'Simulated HTTP/2 SETTINGS read.',
     });
+  } else if (probeProfileKind === 'origin_leak_scan') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'origin_leak_scan',
+      leak_signals: external_result === 'connected' ? ['simulated_leak_signal'] : [],
+      leak_count: external_result === 'connected' ? 1 : 0,
+      note: 'Simulated bounded origin leak scan.',
+    });
+  } else if (probeProfileKind === 'host_sni_bypass') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'host_sni_bypass',
+      bypass_signal: external_result === 'connected',
+      note: 'Simulated direct IP + Host/SNI bypass probe.',
+    });
+  } else if (probeProfileKind === 'port_scan_bounded') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'port_scan_bounded',
+      open_ports: external_result === 'connected' ? [22] : [],
+      risky_admin_ports_open: external_result === 'connected' ? [22] : [],
+      note: 'Simulated bounded port scan.',
+    });
+  } else if (probeProfileKind === 'rate_limit_sequence') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'rate_limit_sequence',
+      throttled: external_result === 'blocked',
+      note: 'Simulated rate-limit sequence.',
+    });
+  } else if (probeProfileKind === 'waf_enforcement_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'waf_enforcement_probe',
+      monitor_only_leak: external_result === 'connected',
+      note: 'Simulated WAF enforcement probe.',
+    });
+  } else if (probeProfileKind === 'dnssec_posture') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'dnssec_posture',
+      dnssec_missing: external_result === 'connected',
+      note: 'Simulated DNSSEC posture probe.',
+    });
+  } else if (probeProfileKind === 'dns_open_recursion') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'dns_open_recursion',
+      open_recursion_detected: external_result === 'connected',
+      note: 'Simulated open-recursion probe.',
+    });
+  } else if (probeProfileKind === 'dns_failover_posture') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'dns_failover_posture',
+      weak_failover: external_result === 'connected',
+      note: 'Simulated DNS failover posture probe.',
+    });
+  } else if (probeProfileKind === 'dns_axfr_leak') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'dns_axfr_leak',
+      axfr_refused: external_result === 'blocked',
+      note: 'Simulated AXFR leak probe.',
+    });
+  } else if (probeProfileKind === 'tls_audit') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'tls_audit',
+      tls_issues: external_result === 'connected' ? ['weak_tls_protocol'] : [],
+      note: 'Simulated TLS audit.',
+    });
+  } else if (probeProfileKind === 'cache_abuse_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'cache_abuse_probe',
+      cache_key_weakness: external_result === 'connected',
+      note: 'Simulated cache abuse probe.',
+    });
+  } else if (probeProfileKind === 'api_surface_scan') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'api_surface_scan',
+      exposure_count: external_result === 'connected' ? 1 : 0,
+      note: 'Simulated API surface scan.',
+    });
+  } else if (probeProfileKind === 'cors_posture_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'cors_posture_probe',
+      weak_cors: external_result === 'connected',
+      note: 'Simulated CORS posture probe.',
+    });
+  } else if (probeProfileKind === 'bot_challenge_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'bot_challenge_probe',
+      bot_challenge_missing: external_result === 'connected',
+      note: 'Simulated bot/challenge probe.',
+    });
+  } else if (probeProfileKind === 'graphql_posture_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'graphql_posture_probe',
+      graphql_exposed: external_result === 'connected',
+      note: 'Simulated GraphQL posture probe.',
+    });
   } else {
     baseMetadata.note = 'Metadata-only safe probe simulation — no live traffic to customer targets.';
   }

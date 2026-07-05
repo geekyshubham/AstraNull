@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 import {
   ALLOWED_PROBE_PROFILE_KINDS,
   CHECK_CATALOG,
-  MAX_PROBE_PROFILE_REQUESTS,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
+  maxProbeRequestsForKind,
   WAF_SAFE_CHECK_IDS,
   getCheckById,
   isCustomerRunnable,
@@ -143,7 +143,8 @@ describe('vector catalog', () => {
       const profile = check.probe_profile;
       assert.ok(profile && typeof profile === 'object', check.check_id);
       assert.ok(ALLOWED_PROBE_PROFILE_KINDS.includes(profile.kind), check.check_id);
-      assert.ok(profile.max_requests >= 1 && profile.max_requests <= MAX_PROBE_PROFILE_REQUESTS, check.check_id);
+      const requestCap = maxProbeRequestsForKind(profile.kind);
+      assert.ok(profile.max_requests >= 1 && profile.max_requests <= requestCap, check.check_id);
       assert.ok(profile.timeout_ms >= 100 && profile.timeout_ms <= MAX_PROBE_PROFILE_TIMEOUT_MS, check.check_id);
       if (profile.kind === 'http_head') {
         assert.equal(profile.method, 'HEAD');
@@ -183,7 +184,7 @@ describe('vector catalog', () => {
       assert.equal(isCustomerRunnable(check), true, checkId);
       const profile = check.probe_profile;
       assert.ok(profile.scenario_family, checkId);
-      assert.ok(profile.max_requests <= MAX_PROBE_PROFILE_REQUESTS, checkId);
+      assert.ok(profile.max_requests <= maxProbeRequestsForKind(profile.kind), checkId);
       assert.ok(profile.timeout_ms <= MAX_PROBE_PROFILE_TIMEOUT_MS, checkId);
     }
   });

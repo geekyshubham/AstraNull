@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  MAX_PROBE_PROFILE_REQUESTS,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
+  maxProbeRequestsForKind,
   WAF_SAFE_CHECK_IDS,
   WAF_SAFE_PROBE_METADATA_KEYS,
   getCheckById,
@@ -59,7 +59,7 @@ describe('safety catalog', () => {
     for (const checkId of WAF_SAFE_CHECK_IDS) {
       const check = getCheckById(checkId);
       const profile = check.probe_profile;
-      assert.ok(profile.max_requests >= 1 && profile.max_requests <= MAX_PROBE_PROFILE_REQUESTS, checkId);
+      assert.ok(profile.max_requests >= 1 && profile.max_requests <= maxProbeRequestsForKind(profile.kind), checkId);
       assert.ok(profile.timeout_ms >= 100 && profile.timeout_ms <= MAX_PROBE_PROFILE_TIMEOUT_MS, checkId);
     }
   });
