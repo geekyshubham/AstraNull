@@ -51,9 +51,9 @@ function parseTestCounts(logName, { sumPasses = false } = {}) {
   if (content.startsWith('SKIPPED:')) {
     return { pass: 0, fail: 0, skipped: true };
   }
-  const tail = content.slice(-8000);
-  const passMatches = [...tail.matchAll(/ℹ pass (\d+)/g)];
-  const failMatches = [...tail.matchAll(/ℹ fail (\d+)/g)];
+  const scan = sumPasses ? content : content.slice(-8000);
+  const passMatches = [...scan.matchAll(/ℹ pass (\d+)/g)];
+  const failMatches = [...scan.matchAll(/ℹ fail (\d+)/g)];
   const pass = sumPasses
     ? passMatches.reduce((sum, m) => sum + Number(m[1]), 0)
     : (passMatches.length ? Number(passMatches.at(-1)[1]) : 0);
