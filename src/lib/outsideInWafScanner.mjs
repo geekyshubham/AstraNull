@@ -6,6 +6,8 @@
  */
 
 import { createHash } from 'node:crypto';
+import { resolve4, resolveCname } from 'node:dns/promises';
+import tls from 'node:tls';
 import { classifyWafPosture } from '../contracts/wafPosture.mjs';
 import { classifyWafProductFromSignals } from './wafProductCatalog.mjs';
 
@@ -68,7 +70,44 @@ const BLOCK_PAGE_SIGNATURE_RULES = Object.freeze([
   { id: 'block_sig_radware_v1', pattern: /radware|appwall/i },
   { id: 'block_sig_paloalto_v1', pattern: /palo alto|prisma/i },
   { id: 'block_sig_generic_waf_v1', pattern: /access denied|request rejected|security policy|web application firewall/i },
+  { id: 'block_sig_alertlogic_v1', pattern: /alert logic|reference id.*cannot be found/i },
+  { id: 'block_sig_zscaler_v1', pattern: /zscaler|zscloud\.net|accenture policy/i },
+  { id: 'block_sig_vercel_v1', pattern: /vercel security checkpoint|\/vercel\/security\//i },
+  { id: 'block_sig_zenedge_v1', pattern: /zenedge|x-zen-fury/i },
+  { id: 'block_sig_wordfence_v1', pattern: /wordfence|wf-waf/i },
+  { id: 'block_sig_ddosguard_v1', pattern: /ddos-guard|__ddg/i },
+  { id: 'block_sig_airlock_v1', pattern: /airlock|al[_-]?sess/i },
+  { id: 'block_sig_azion_v1', pattern: /azion|x-azion-/i },
+  { id: 'block_sig_qrator_v1', pattern: /qrator/i },
+  { id: 'block_sig_cloudbric_v1', pattern: /cloudbric/i },
+  { id: 'block_sig_safedog_v1', pattern: /safedog/i },
+  { id: 'block_sig_yundun_v1', pattern: /yundun/i },
+  { id: 'block_sig_imunify360_v1', pattern: /imunify360/i },
+  { id: 'block_sig_link11_v1', pattern: /rhino-core-shield|link11/i },
+  { id: 'block_sig_nexusguard_v1', pattern: /nexusguard/i },
+  { id: 'block_sig_dotdefender_v1', pattern: /dotdefender/i },
+  { id: 'block_sig_webseal_v1', pattern: /webseal|ibm security access manager/i },
+  { id: 'block_sig_denyall_v1', pattern: /denyall|da_session/i },
+  { id: 'block_sig_sitelock_v1', pattern: /sitelock|trueshield/i },
+  { id: 'block_sig_distil_v1', pattern: /distil networks|distil_r_blocked/i },
+  { id: 'block_sig_godaddy_v1', pattern: /godaddy.*waf|site security/i },
+  { id: 'block_sig_malcare_v1', pattern: /malcare|blogvault/i },
+  { id: 'block_sig_webarx_v1', pattern: /webarx|patchstack/i },
+  { id: 'block_sig_naxsi_v1', pattern: /naxsi/i },
+  { id: 'block_sig_arvancloud_v1', pattern: /arvancloud/i },
+  { id: 'block_sig_baidu_v1', pattern: /yunjiasu|baidu.*waf/i },
+  { id: 'block_sig_chuangyu_v1', pattern: /chuangyu|365cyd/i },
+  { id: 'block_sig_knownsec_v1', pattern: /knownsec|ks-waf/i },
+  { id: 'block_sig_jiasule_v1', pattern: /jiasule/i },
+  { id: 'block_sig_anquanbao_v1', pattern: /anquanbao/i },
+  { id: 'block_sig_safeline_v1', pattern: /safeline|chaitin/i },
+  { id: 'block_sig_ptaf_v1', pattern: /ptaf|positive technologies/i },
+  { id: 'block_sig_variti_v1', pattern: /variti/i },
+  { id: 'block_sig_transip_v1', pattern: /transip.*waf|webshield/i },
 ]);
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_BASELINE_REDIRECT_HOPS = 2;
 
 function randomParamName() {
   return `p${createHash('sha256').update(String(Date.now())).digest('hex').slice(0, 8)}`;
@@ -345,6 +384,174 @@ function buildUrl(baseUrl, { pathSuffix = '', params = {}, rawParams = {} } = {}
   return href;
 }
 
+function normalizeDnsHostname(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/\.$/, '');
+}
+
+/**
+ * Single CNAME/A lookup chain for metadata-only WAF catalog matching.
+ * @param {string} hostname
+ * @param {{ resolveCname?: typeof resolveCname, resolve4?: typeof resolve4 }} [deps]
+ */
+export async function resolveOutsideInDnsHints(hostname, deps = {}) {
+  const host = normalizeDnsHostname(hostname);
+  if (!host) {
+    return { dns_chain: null, error_class: 'missing_hostname' };
+  }
+
+  const resolveCnameFn = deps.resolveCname ?? resolveCname;
+  const resolve4Fn = deps.resolve4 ?? resolve4;
+  const chain = [host];
+
+  try {
+    try {
+      const cnames = await resolveCnameFn(host);
+      const cname = normalizeDnsHostname(cnames?.[0]);
+      if (cname && cname !== host) chain.push(cname);
+    } catch {
+      /* ENODATA / ENOTFOUND — proceed to A lookup */
+    }
+
+    const lookupHost = chain[chain.length - 1];
+    try {
+      const addresses = await resolve4Fn(lookupHost);
+      const address = String(addresses?.[0] ?? '').trim();
+      if (address) chain.push(address);
+    } catch {
+      /* A lookup optional for dns_chain hint */
+    }
+  } catch (err) {
+    return {
+      dns_chain: host,
+      error_class: err?.code ?? err?.name ?? 'dns_lookup_failed',
+    };
+  }
+
+  return { dns_chain: chain.join(' ') };
+}
+
+/**
+ * One bounded TLS handshake read (protocol + cipher name only). Does not count toward HTTP budget.
+ * @param {string} url
+ * @param {{ tlsConnect?: typeof tls.connect, timeoutMs?: number }} [deps]
+ */
+export async function resolveOutsideInTlsHints(url, deps = {}) {
+  let parsed;
+  try {
+    parsed = new URL(String(url ?? '').trim());
+  } catch {
+    return { tls_protocol_hint: null, tls_cipher_hint: null, error_class: 'invalid_url' };
+  }
+
+  if (parsed.protocol !== 'https:') {
+    return { tls_protocol_hint: null, tls_cipher_hint: null };
+  }
+
+  const tlsConnectFn = deps.tlsConnect ?? tls.connect;
+  const timeoutMs = Number.isInteger(deps.timeoutMs) && deps.timeoutMs > 0 ? deps.timeoutMs : 3000;
+  const port = parsed.port ? Number(parsed.port) : 443;
+  const host = parsed.hostname;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = tlsConnectFn({
+      host,
+      port,
+      servername: host,
+      rejectUnauthorized: false,
+    });
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({
+        tls_protocol_hint: null,
+        tls_cipher_hint: null,
+        error_class: 'tls_timeout',
+      });
+    }, timeoutMs);
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.once('secureConnect', () => {
+      finish({
+        tls_protocol_hint: socket.getProtocol() ?? null,
+        tls_cipher_hint: socket.getCipher()?.name ?? null,
+      });
+    });
+    socket.once('error', (err) => {
+      finish({
+        tls_protocol_hint: null,
+        tls_cipher_hint: null,
+        error_class: err?.code ?? err?.name ?? 'tls_handshake_failed',
+      });
+    });
+  });
+}
+
+function resolveRedirectTarget(location, baseUrl) {
+  const raw = String(location ?? '').trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw, baseUrl).href;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Baseline GET with optional manual redirect follow (bounded, baseline only).
+ */
+async function runBaselineGet(url, headers, { followRedirects = false, timeoutMs, deps } = {}) {
+  let currentUrl = url;
+  let redirectHops = 0;
+  let finalUrlHostname = null;
+
+  while (true) {
+    const { res, bodyText, error } = await boundedRequest(
+      currentUrl,
+      { method: 'GET', headers },
+      timeoutMs,
+      deps,
+    );
+
+    try {
+      finalUrlHostname = new URL(currentUrl).hostname;
+    } catch {
+      finalUrlHostname = null;
+    }
+
+    if (error || !res) {
+      const snapshot = error
+        ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
+        : responseSnapshot(res, bodyText);
+      return { snapshot, redirect_hops: redirectHops, final_url_hostname: finalUrlHostname };
+    }
+
+    if (followRedirects && REDIRECT_STATUSES.has(res.status) && redirectHops < MAX_BASELINE_REDIRECT_HOPS) {
+      const nextUrl = resolveRedirectTarget(headerValue(res, 'location'), currentUrl);
+      if (nextUrl && nextUrl !== currentUrl) {
+        redirectHops += 1;
+        currentUrl = nextUrl;
+        continue;
+      }
+    }
+
+    return {
+      snapshot: responseSnapshot(res, bodyText),
+      redirect_hops: redirectHops,
+      final_url_hostname: finalUrlHostname,
+    };
+  }
+}
+
 async function boundedRequest(url, { method = 'GET', headers = {}, body = null }, timeoutMs, deps) {
   const fetchFn = deps.fetchFn ?? fetch;
   const controller = new AbortController();
@@ -414,7 +621,11 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
  *   agentCorroborated?: boolean,
  *   requireAgentForProtected?: boolean,
  *   domXssValidation?: string,
+ *   followRedirects?: boolean,
  *   fetchFn?: typeof fetch,
+ *   resolveCname?: typeof resolveCname,
+ *   resolve4?: typeof resolve4,
+ *   tlsConnect?: typeof tls.connect,
  *   originBypassFn?: (args: object) => Promise<{ res: object|null, error: Error|null }>,
  * }} options
  */
@@ -428,7 +639,13 @@ export async function runOutsideInWafScan(options = {}) {
     ? options.budget
     : OUTSIDE_IN_SCAN_DEFAULT_BUDGET;
   const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 5000;
-  const deps = { fetchFn: options.fetchFn };
+  const followRedirects = options.followRedirects === true;
+  const deps = {
+    fetchFn: options.fetchFn,
+    resolveCname: options.resolveCname,
+    resolve4: options.resolve4,
+    tlsConnect: options.tlsConnect,
+  };
   const started = Date.now();
   let requestsSent = 0;
   const phaseLog = [];
@@ -440,6 +657,15 @@ export async function runOutsideInWafScan(options = {}) {
   })();
   const plan = buildOutsideInScanPlan(budget, { hasDirectIp: Boolean(directIp && hostname) });
   const plannedPhases = new Set(plan.map((entry) => entry.phase));
+
+  const [initialDnsHints, tlsHints] = await Promise.all([
+    hostname ? resolveOutsideInDnsHints(hostname, deps) : Promise.resolve({ dns_chain: null }),
+    resolveOutsideInTlsHints(url, { tlsConnect: deps.tlsConnect, timeoutMs: Math.min(timeoutMs, 3000) }),
+  ]);
+
+  let redirectHops = 0;
+  let finalUrlHostname = null;
+  let dnsChainHint = initialDnsHints.dns_chain ?? null;
 
   async function runGetPhase(phase, requestUrl, headers) {
     if (requestsSent >= budget) return null;
@@ -460,8 +686,26 @@ export async function runOutsideInWafScan(options = {}) {
   let noUserAgent = null;
 
   if (plannedPhases.has('baseline')) {
-    baseline = await runGetPhase('baseline', url, { ...DEFAULT_BROWSER_HEADERS });
-    if (!baseline) return { error_class: 'request_budget_exhausted', requests_sent: requestsSent, phases: phaseLog };
+    if (requestsSent >= budget) {
+      return { error_class: 'request_budget_exhausted', requests_sent: requestsSent, phases: phaseLog };
+    }
+    requestsSent += 1;
+    const baselineResult = await runBaselineGet(url, { ...DEFAULT_BROWSER_HEADERS }, {
+      followRedirects,
+      timeoutMs,
+      deps,
+    });
+    baseline = baselineResult.snapshot;
+    redirectHops = baselineResult.redirect_hops;
+    finalUrlHostname = baselineResult.final_url_hostname;
+    phaseLog.push({ phase: 'baseline', status_code: baseline.status_code, redirect_hops: redirectHops });
+
+    if (followRedirects && finalUrlHostname && finalUrlHostname !== hostname) {
+      const finalDnsHints = await resolveOutsideInDnsHints(finalUrlHostname, deps);
+      if (finalDnsHints.dns_chain) {
+        dnsChainHint = [dnsChainHint, finalDnsHints.dns_chain].filter(Boolean).join(' ');
+      }
+    }
   }
 
   if (plannedPhases.has('combined_marker')) {
@@ -670,10 +914,18 @@ export async function runOutsideInWafScan(options = {}) {
   const vendorClassification = classifyWafProductFromSignals({
     header_names: [...new Set([...(baseline?.header_names ?? []), ...(signalSource?.header_names ?? [])])],
     cookie_names: [...new Set([...(baseline?.cookie_names ?? []), ...(signalSource?.cookie_names ?? [])])],
+    dns_chain: dnsChainHint ?? '',
     block_page_signature_id: attackSnapshot?.block_page_signature_id ?? baseline?.block_page_signature_id ?? null,
     customer_vendor_hint: options.customerVendorHint ?? null,
     waf_present: generic.detected || Boolean(attackSnapshot?.block_page_signature_id),
   });
+
+  const vendorChainHints = (vendorClassification.candidates ?? []).slice(0, 3).map((candidate) => ({
+    vendor: candidate.vendor,
+    product: candidate.product,
+    confidence: candidate.confidence,
+    matched_signals: candidate.matched_signals ?? [],
+  }));
 
   const wafDetected = Boolean(vendorClassification.best) || generic.detected;
   const evasionBypassSuspected = detectEvasionBypass(markerResults);
@@ -714,6 +966,12 @@ export async function runOutsideInWafScan(options = {}) {
     origin_bypass_confirmed: originBypassConfirmed,
     origin_bypass_status_code: originBypassStatus,
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),
+    vendor_chain_hints: vendorChainHints,
+    dns_chain_hint: dnsChainHint,
+    tls_protocol_hint: tlsHints.tls_protocol_hint ?? null,
+    tls_cipher_hint: tlsHints.tls_cipher_hint ?? null,
+    redirect_hops: redirectHops,
+    final_url_hostname: finalUrlHostname,
     ...posture,
     external_result,
   };

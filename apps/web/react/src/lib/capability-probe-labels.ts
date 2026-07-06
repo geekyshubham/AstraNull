@@ -1,4 +1,4 @@
-import type { DataItem } from './types';
+import type { BadgeTone, DataItem } from './types';
 
 export const CAPABILITY_PROBE_KIND_LABELS: Record<string, string> = {
   origin_leak_scan: 'Origin leak scan',
@@ -76,4 +76,79 @@ export function externalResultTone(result: string): 'success' | 'warn' | 'danger
   if (normalized === 'connected') return 'warn';
   if (normalized === 'error' || normalized === 'timeout') return 'danger';
   return 'muted';
+}
+
+export const OUTSIDE_IN_POSTURE_LABELS: Record<string, string> = {
+  Protected: 'Protected',
+  'Detected, not validated': 'Detected, not validated',
+  Underprotected: 'Underprotected',
+  'Bypass Risk': 'Bypass Risk',
+  Unprotected: 'Unprotected',
+  Excluded: 'Excluded',
+};
+
+const OUTSIDE_IN_POSTURE_TONES: Record<string, BadgeTone> = {
+  Protected: 'success',
+  'Detected, not validated': 'warn',
+  Underprotected: 'danger',
+  'Bypass Risk': 'danger',
+  Unprotected: 'danger',
+  Excluded: 'muted',
+};
+
+const OUTSIDE_IN_POSTURE_STATUS_LABELS: Record<string, string> = {
+  protected: 'Protected',
+  underprotected: 'Underprotected',
+  unknown: 'Detected, not validated',
+  unprotected: 'Unprotected',
+  excluded: 'Excluded',
+};
+
+export const DOM_XSS_VALIDATION_LABELS: Record<string, string> = {
+  agent_required: 'Agent observation required',
+  reflection_observed: 'DOM XSS reflection observed',
+  agent_corroborated_blocked: 'Agent corroborated block',
+  marker_reached_origin: 'Marker reached origin',
+  agent_observed_no_reflection: 'Agent observed, no reflection',
+};
+
+const OUTSIDE_IN_POSTURE_EXPLANATIONS: Record<string, string> = {
+  Protected: 'Safe attack markers were blocked at the edge and your agent confirmed enforcement.',
+  'Detected, not validated':
+    'A WAF was detected from the outside, but agent corroboration is still needed to confirm protection.',
+  Underprotected: 'Safe attack markers were not consistently blocked by the edge WAF.',
+  'Bypass Risk': 'Traffic may reach origin without WAF protection—review bypass paths immediately.',
+  Unprotected: 'No WAF signals were detected on this asset from the outside-in scan.',
+  Excluded: 'This asset is excluded from outside-in WAF scanning.',
+};
+
+function normalizeOutsideInPostureLabel(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (OUTSIDE_IN_POSTURE_LABELS[trimmed]) return trimmed;
+  const fromStatus = OUTSIDE_IN_POSTURE_STATUS_LABELS[trimmed.toLowerCase()];
+  return fromStatus ?? trimmed;
+}
+
+export function postureLabelTone(postureLabel: string): BadgeTone {
+  const normalized = normalizeOutsideInPostureLabel(postureLabel);
+  return OUTSIDE_IN_POSTURE_TONES[normalized] ?? 'muted';
+}
+
+export function outsideInPostureLabel(postureLabel: string) {
+  const normalized = normalizeOutsideInPostureLabel(postureLabel);
+  return OUTSIDE_IN_POSTURE_LABELS[normalized] ?? normalized.replaceAll('_', ' ');
+}
+
+export function outsideInPostureExplanation(postureLabel: string) {
+  const normalized = normalizeOutsideInPostureLabel(postureLabel);
+  return (
+    OUTSIDE_IN_POSTURE_EXPLANATIONS[normalized]
+    ?? 'Review outside-in WAF scan evidence and confirm enforcement with your agent.'
+  );
+}
+
+export function domXssValidationLabel(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return DOM_XSS_VALIDATION_LABELS[normalized] ?? value.replaceAll('_', ' ');
 }

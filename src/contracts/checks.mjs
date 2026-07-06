@@ -95,6 +95,8 @@ const ALLOWED_WAF_COLLECT_KEYS = new Set([
   'origin_bypass_confirmed',
   'evasion_bypass_suspected',
   'agent_corroboration_required',
+  'dns_chain_hint',
+  'tls_fingerprint_hint',
 ]);
 
 export const WAF_SAFE_CHECK_IDS = Object.freeze([
@@ -145,6 +147,7 @@ export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'expected_vendor_hint',
   'require_agent_for_protected',
   'agent_corroborated',
+  'follow_redirects',
 ]);
 
 export function buildProbeProfile({
@@ -533,6 +536,7 @@ export const CHECK_CATALOG = [
       expected_action: 'block',
       nonce_hash_only: true,
       require_agent_for_protected: true,
+      follow_redirects: false,
       collect: [
         'status_code',
         'waf_product_hint',

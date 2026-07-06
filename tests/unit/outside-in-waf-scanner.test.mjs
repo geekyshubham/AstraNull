@@ -7,6 +7,8 @@ import {
   buildOutsideInPostureReport,
   buildOutsideInScanPlan,
   detectGenericWafPresence,
+  resolveOutsideInDnsHints,
+  resolveOutsideInTlsHints,
   runOutsideInWafScan,
 } from '../../src/lib/outsideInWafScanner.mjs';
 import {
@@ -40,6 +42,92 @@ describe('outside-in WAF scanner', () => {
     assert.equal(check.probe_profile.kind, 'outside_in_waf_scan');
     assert.equal(check.probe_profile.max_requests, 10);
     assert.equal(check.probe_profile.require_agent_for_protected, true);
+    assert.equal(check.probe_profile.follow_redirects, false);
+  });
+
+  it('resolveOutsideInDnsHints builds a single CNAME/A chain string', async () => {
+    const hints = await resolveOutsideInDnsHints('shop.example.test', {
+      resolveCname: async () => ['edge.cdn.cloudflare.net.'],
+      resolve4: async () => ['198.51.100.10'],
+    });
+    assert.equal(hints.dns_chain, 'shop.example.test edge.cdn.cloudflare.net 198.51.100.10');
+  });
+
+  it('resolveOutsideInTlsHints reads protocol and cipher without HTTP budget', async () => {
+    const hints = await resolveOutsideInTlsHints('https://edge.example.test/', {
+      timeoutMs: 500,
+      tlsConnect: (options) => {
+        const handlers = {};
+        const socket = {
+          destroyed: false,
+          destroy() { this.destroyed = true; },
+          once(event, fn) { handlers[event] = fn; },
+          getProtocol: () => 'TLSv1.3',
+          getCipher: () => ({ name: 'TLS_AES_128_GCM_SHA256' }),
+        };
+        queueMicrotask(() => handlers.secureConnect?.());
+        return socket;
+      },
+    });
+    assert.equal(hints.tls_protocol_hint, 'TLSv1.3');
+    assert.equal(hints.tls_cipher_hint, 'TLS_AES_128_GCM_SHA256');
+  });
+
+  it('follow_redirects follows up to two baseline redirects and fingerprints final host DNS', async () => {
+    const baseUrl = 'https://shop.example.test/';
+    const fetchCalls = [];
+    const outcome = await runOutsideInWafScan({
+      url: baseUrl,
+      hostname: 'shop.example.test',
+      budget: 6,
+      timeoutMs: 1000,
+      followRedirects: true,
+      resolveCname: async (host) => {
+        if (host === 'edge.cdn.cloudflare.net') return [];
+        return ['edge.cdn.cloudflare.net'];
+      },
+      resolve4: async () => ['198.51.100.10'],
+      tlsConnect: (options) => {
+        const handlers = {};
+        const socket = {
+          destroy() {},
+          once(event, fn) { handlers[event] = fn; },
+          getProtocol: () => 'TLSv1.3',
+          getCipher: () => ({ name: 'TLS_AES_128_GCM_SHA256' }),
+        };
+        queueMicrotask(() => handlers.secureConnect?.());
+        return socket;
+      },
+      fetchFn: async (url, init) => {
+        fetchCalls.push(url);
+        if (url === baseUrl) {
+          return mockResponse(302, { location: 'https://edge.cdn.cloudflare.net/' });
+        }
+        if (url === 'https://edge.cdn.cloudflare.net/') {
+          return mockResponse(200, {
+            server: 'cloudflare',
+            'cf-ray': 'redirected',
+            'set-cookie': '__cf_bm=1; Path=/',
+          });
+        }
+        return mockResponse(403, {
+          server: 'cloudflare',
+          'cf-ray': 'blocked',
+          __body: 'Cloudflare',
+        });
+      },
+    });
+
+    assert.equal(outcome.redirect_hops, 1);
+    assert.equal(outcome.final_url_hostname, 'edge.cdn.cloudflare.net');
+    assert.ok(outcome.dns_chain_hint.includes('edge.cdn.cloudflare.net'));
+    assert.equal(outcome.tls_protocol_hint, 'TLSv1.3');
+    assert.equal(outcome.tls_cipher_hint, 'TLS_AES_128_GCM_SHA256');
+    assert.ok(outcome.vendor_chain_hints.length > 0);
+    assert.equal(outcome.detected_vendor, 'cloudflare');
+    assert.equal(fetchCalls[0], baseUrl);
+    assert.equal(fetchCalls[1], 'https://edge.cdn.cloudflare.net/');
+    assert.equal(outcome.requests_sent, 6);
   });
 
   it('buildOutsideInScanPlan prioritizes evasion phases within budget', () => {

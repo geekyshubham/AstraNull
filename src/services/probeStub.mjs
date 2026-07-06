@@ -118,6 +118,17 @@ export function simulateProbeResult(check, target, overrideProfile) {
         { family: 'content_type_confusion', variant: 'json_header_form_body', blocked, allowed: !blocked },
         { family: 'multipart_confusion', variant: 'multipart_form_field', blocked, allowed: !blocked },
       ],
+      marker_summary: {
+        probes_sent: 4,
+        blocked_count: blocked ? 4 : 0,
+        allowed_count: blocked ? 0 : 4,
+        challenged_count: 0,
+        evasion_probes_sent: 2,
+      },
+      scan_plan: ['baseline', 'combined_marker', 'sqli_marker', 'content_type_confusion'],
+      generic_waf_reasons: blocked ? ['status_code_drift'] : [],
+      probe_validation_passed: blocked,
+      dom_xss_validation: 'agent_required',
       note: 'Simulated outside-in WAF scanner.',
     });
   } else if (probeProfileKind === 'dnssec_posture') {

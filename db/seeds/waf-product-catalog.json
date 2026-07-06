@@ -2,9 +2,9 @@
   "manifest": {
     "catalog_version": "2026.07.01",
     "fingerprint_version": "2026.07.01",
-    "entry_count": 52,
+    "entry_count": 132,
     "entry_count_target": 50,
-    "checksum_sha256": "5a3339fba39b8403f9b53df821e0be0da1ac643fdbccbc351ebb3e8e6307ed1e"
+    "checksum_sha256": "3d38ab98cbee1e7aabdec32d93d06b89023982021baef541633bdfb6696b0eb7"
   },
   "entries": [
     {
@@ -1219,6 +1219,1595 @@
       ],
       "connector_provider_ids": [
         "generic_waf"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_alertlogic",
+      "vendor": "alertlogic",
+      "product": "Alert Logic WAF",
+      "deployment_type": "cloud_native",
+      "header_name_patterns": [
+        "^x-alertlogic-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".alertlogic.com",
+        ".alertlogic.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_alertlogic_v1"
+      ],
+      "connector_provider_ids": [
+        "alertlogic"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_airlock",
+      "vendor": "airlock",
+      "product": "Airlock WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-airlock-"
+      ],
+      "cookie_name_patterns": [
+        "^al[_-]?(sess|lb)$"
+      ],
+      "dns_patterns": [
+        ".airlock.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_airlock_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_arvancloud",
+      "vendor": "arvancloud",
+      "product": "ArvanCloud WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-arvan-",
+        "^arvan-"
+      ],
+      "cookie_name_patterns": [
+        "^arvancloud_"
+      ],
+      "dns_patterns": [
+        ".arvancloud.ir",
+        ".arvancloud.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_arvancloud_v1"
+      ],
+      "connector_provider_ids": [
+        "arvancloud"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_azion",
+      "vendor": "azion",
+      "product": "Azion Edge WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-azion-edge-pop$",
+        "^x-azion-request-id$"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".azioncdn.net",
+        ".azion.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_azion_v1"
+      ],
+      "connector_provider_ids": [
+        "azion"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_baffinbay",
+      "vendor": "baffinbay",
+      "product": "Baffin Bay WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-baffinbay-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".baffinbay.io"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_baidu_yunjiasu",
+      "vendor": "baidu",
+      "product": "Baidu Yunjiasu WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-yunjiasu-",
+        "^yunjiasu-"
+      ],
+      "cookie_name_patterns": [
+        "^yunjiasu_"
+      ],
+      "dns_patterns": [
+        ".yunjiasu.com",
+        ".baidu.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_baidu_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_barikode",
+      "vendor": "barikode",
+      "product": "Barikode WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-barikode-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".barikode.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_bekchy",
+      "vendor": "bekchy",
+      "product": "Bekchy WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-bekchy-"
+      ],
+      "cookie_name_patterns": [
+        "^bekchy_"
+      ],
+      "dns_patterns": [
+        ".bekchy.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_beluga",
+      "vendor": "beluga",
+      "product": "Beluga CDN WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-beluga-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".belugacdn.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_binarysec",
+      "vendor": "binarysec",
+      "product": "BinarySEC WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-binarysec-"
+      ],
+      "cookie_name_patterns": [
+        "^binarysec"
+      ],
+      "dns_patterns": [
+        ".binarysec.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_bitninja",
+      "vendor": "bitninja",
+      "product": "BitNinja WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-bitninja-",
+        "^bn-"
+      ],
+      "cookie_name_patterns": [
+        "^bn_"
+      ],
+      "dns_patterns": [
+        ".bitninja.io"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_blockdos",
+      "vendor": "blockdos",
+      "product": "BlockDoS WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-blockdos-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".blockdos.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_bluedon",
+      "vendor": "bluedon",
+      "product": "Bluedon WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-bluedon-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".bluedon.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_bulletproof",
+      "vendor": "bulletproof",
+      "product": "Bulletproof Security WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-bulletproof-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".bulletproof.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_cerber",
+      "vendor": "cerber",
+      "product": "Cerber Tech WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-cerber-"
+      ],
+      "cookie_name_patterns": [
+        "^cerber_"
+      ],
+      "dns_patterns": [
+        ".cerber.tech"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_chinacache",
+      "vendor": "chinacache",
+      "product": "ChinaCache WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cc-"
+      ],
+      "cookie_name_patterns": [
+        "^cc_"
+      ],
+      "dns_patterns": [
+        ".chinacache.net",
+        ".ccgslb.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_chuangyu",
+      "vendor": "chuangyu",
+      "product": "Chuangyu 365cyd WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-365cyd-"
+      ],
+      "cookie_name_patterns": [
+        "^365cyd_"
+      ],
+      "dns_patterns": [
+        ".365cyd.com",
+        ".chuangyu.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_chuangyu_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_cisco_ace",
+      "vendor": "cisco",
+      "product": "Cisco ACE XML Gateway",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-ace-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".cisco.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [
+        "cisco"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_cloudbric",
+      "vendor": "cloudbric",
+      "product": "Cloudbric WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cloudbric-"
+      ],
+      "cookie_name_patterns": [
+        "^cloudbric_"
+      ],
+      "dns_patterns": [
+        ".cloudbric.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_cloudbric_v1"
+      ],
+      "connector_provider_ids": [
+        "cloudbric"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_cloudfloordns",
+      "vendor": "cloudfloor",
+      "product": "Cloudfloor DNS WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cloudfloor-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".cloudfloordns.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_cloudprotector",
+      "vendor": "cloudprotector",
+      "product": "CloudProtector WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cloudprotector-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".cloudprotector.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_comodo",
+      "vendor": "comodo",
+      "product": "Comodo cWatch WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-comodo-"
+      ],
+      "cookie_name_patterns": [
+        "^cwatch_"
+      ],
+      "dns_patterns": [
+        ".comodo.com",
+        ".cwatch.comodo.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_ddosguard",
+      "vendor": "ddosguard",
+      "product": "DDoS-Guard WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-ddg-",
+        "^ddg-"
+      ],
+      "cookie_name_patterns": [
+        "^__ddg1",
+        "^__ddg2",
+        "^__ddgid",
+        "^__ddgmark"
+      ],
+      "dns_patterns": [
+        ".ddos-guard.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_ddosguard_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_denyall",
+      "vendor": "denyall",
+      "product": "DenyAll rWeb WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-denyall-"
+      ],
+      "cookie_name_patterns": [
+        "^da_session"
+      ],
+      "dns_patterns": [
+        ".denyall.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_denyall_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_distil",
+      "vendor": "distil",
+      "product": "Distil Networks WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-distil-"
+      ],
+      "cookie_name_patterns": [
+        "^distil_"
+      ],
+      "dns_patterns": [
+        ".distilnetworks.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_distil_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_dosarrest",
+      "vendor": "dosarrest",
+      "product": "DOSarrest WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-dosarrest-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".dosarrest.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_dotdefender",
+      "vendor": "dotdefender",
+      "product": "dotDefender WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-dotdefender-denied$"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".dotdefender.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_dotdefender_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_edgecast",
+      "vendor": "edgecast",
+      "product": "EdgeCast WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-ecd-",
+        "^ecd-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".edgecastcdn.net",
+        ".systemcdn.net"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [
+        "verizon"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_godaddy",
+      "vendor": "godaddy",
+      "product": "GoDaddy Website Security WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-godaddy-"
+      ],
+      "cookie_name_patterns": [
+        "^gd_"
+      ],
+      "dns_patterns": [
+        ".godaddy.com",
+        ".secureserver.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_godaddy_v1"
+      ],
+      "connector_provider_ids": [
+        "godaddy"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_greywizard",
+      "vendor": "greywizard",
+      "product": "GreyWizard WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-greywizard-"
+      ],
+      "cookie_name_patterns": [
+        "^gw_"
+      ],
+      "dns_patterns": [
+        ".greywizard.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_hyperguard",
+      "vendor": "hyperguard",
+      "product": "HyperGuard WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-hyperguard-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".hyperguard.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_ibmdatapower",
+      "vendor": "ibm",
+      "product": "IBM DataPower Gateway WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-backside-transport$"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".ibm.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_webseal_v1"
+      ],
+      "connector_provider_ids": [
+        "ibm"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_imunify360",
+      "vendor": "imunify360",
+      "product": "Imunify360 WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-imunify-",
+        "^imunify-"
+      ],
+      "cookie_name_patterns": [
+        "^imunify"
+      ],
+      "dns_patterns": [
+        ".imunify360.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_imunify360_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_indusguard",
+      "vendor": "indusguard",
+      "product": "IndusGuard WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-indusguard-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".indusface.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_instartdx",
+      "vendor": "instart",
+      "product": "Instart DX WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-instart-"
+      ],
+      "cookie_name_patterns": [
+        "^instart_"
+      ],
+      "dns_patterns": [
+        ".instart.net"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_janusec",
+      "vendor": "janusec",
+      "product": "Janusec Application Gateway",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-janusec-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".janusec.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_jiasule",
+      "vendor": "jiasule",
+      "product": "Jiasule WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-js-"
+      ],
+      "cookie_name_patterns": [
+        "^jsl_"
+      ],
+      "dns_patterns": [
+        ".jiasule.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_jiasule_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_kemp",
+      "vendor": "kemp",
+      "product": "Kemp LoadMaster WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-kemp-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".kemptechnologies.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_knownsec",
+      "vendor": "knownsec",
+      "product": "KnownSec KS-WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-ks-waf-"
+      ],
+      "cookie_name_patterns": [
+        "^ks_"
+      ],
+      "dns_patterns": [
+        ".knownsec.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_knownsec_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_limelight",
+      "vendor": "limelight",
+      "product": "Limelight CDN WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-ll-"
+      ],
+      "cookie_name_patterns": [
+        "^limelight",
+        "^lmg_sessid",
+        "^lg_sessid"
+      ],
+      "dns_patterns": [
+        ".llnwd.net",
+        ".limelight.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [
+        "limelight"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_link11",
+      "vendor": "link11",
+      "product": "Link11 WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-link11-",
+        "^rhino-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".link11.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_link11_v1"
+      ],
+      "connector_provider_ids": [
+        "link11"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_litespeed",
+      "vendor": "litespeed",
+      "product": "LiteSpeed WebADC WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-litespeed-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".litespeedtech.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_malcare",
+      "vendor": "malcare",
+      "product": "MalCare WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-malcare-"
+      ],
+      "cookie_name_patterns": [
+        "^mc_"
+      ],
+      "dns_patterns": [
+        ".malcare.com",
+        ".blogvault.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_malcare_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_naxsi",
+      "vendor": "naxsi",
+      "product": "NAXSI WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-data-origin$"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [],
+      "block_page_signature_ids": [
+        "block_sig_naxsi_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_nemesida",
+      "vendor": "nemesida",
+      "product": "Nemesida WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-nemesida-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".nemesida.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_nexusguard",
+      "vendor": "nexusguard",
+      "product": "Nexusguard WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-nexusguard-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".nexusguard.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_nexusguard_v1"
+      ],
+      "connector_provider_ids": [
+        "nexusguard"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_ninja",
+      "vendor": "ninja",
+      "product": "NinjaFirewall WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-ninja-"
+      ],
+      "cookie_name_patterns": [
+        "^ninja_"
+      ],
+      "dns_patterns": [
+        ".nintechnet.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_pentawaf",
+      "vendor": "pentawaf",
+      "product": "PentaWAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-pentawaf-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".pentasecurity.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_pksec",
+      "vendor": "pksec",
+      "product": "PKSEC WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-pksec-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".pksec.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_profense",
+      "vendor": "profense",
+      "product": "Profense WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-profense-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".armorlogic.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_ptaf",
+      "vendor": "ptaf",
+      "product": "PT Application Firewall",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-ptaf-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".ptsecurity.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_ptaf_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_qrator",
+      "vendor": "qrator",
+      "product": "Qrator WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-qrator-",
+        "^qrator-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".qrator.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_qrator_v1"
+      ],
+      "connector_provider_ids": [
+        "qrator"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_safedog",
+      "vendor": "safedog",
+      "product": "SafeDog WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-safedog-",
+        "^safedog-"
+      ],
+      "cookie_name_patterns": [
+        "^safedog-flow-item"
+      ],
+      "dns_patterns": [
+        ".safedog.cn"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_safedog_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_safeline",
+      "vendor": "safeline",
+      "product": "Chaitin SafeLine WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-safeline-"
+      ],
+      "cookie_name_patterns": [
+        "^sl_"
+      ],
+      "dns_patterns": [
+        ".chaitin.cn"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_safeline_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_scutum",
+      "vendor": "scutum",
+      "product": "Scutum WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-scutum-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".scutum.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_securesphere",
+      "vendor": "imperva",
+      "product": "Imperva SecureSphere WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-securesphere-"
+      ],
+      "cookie_name_patterns": [
+        "^incap_ses",
+        "^visid_incap"
+      ],
+      "dns_patterns": [
+        ".imperva.com",
+        ".incapsula.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_incap_v1",
+        "block_sig_imperva_v1"
+      ],
+      "connector_provider_ids": [
+        "imperva"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_shieldsecurity",
+      "vendor": "shieldsecurity",
+      "product": "Shield Security WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-shield-"
+      ],
+      "cookie_name_patterns": [
+        "^shield_"
+      ],
+      "dns_patterns": [
+        ".getshieldsecurity.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_sitelock",
+      "vendor": "sitelock",
+      "product": "SiteLock TrueShield WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-sitelock-"
+      ],
+      "cookie_name_patterns": [
+        "^sitelock_"
+      ],
+      "dns_patterns": [
+        ".sitelock.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_sitelock_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_squarespace",
+      "vendor": "squarespace",
+      "product": "Squarespace WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-squarespace-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".squarespace.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_teros",
+      "vendor": "teros",
+      "product": "Teros WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^x-teros-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".teros.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_transip",
+      "vendor": "transip",
+      "product": "TransIP Web Shield WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-transip-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".transip.nl",
+        ".transip.eu"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_transip_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_uewaf",
+      "vendor": "uewaf",
+      "product": "UEWAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-uewaf-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".ucloud.cn"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_variti",
+      "vendor": "variti",
+      "product": "Variti WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-variti-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".variti.io"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_variti_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_vercel",
+      "vendor": "vercel",
+      "product": "Vercel WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-vercel-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".vercel-dns.com",
+        ".vercel.app"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_vercel_v1"
+      ],
+      "connector_provider_ids": [
+        "vercel"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_viettel",
+      "vendor": "viettel",
+      "product": "Viettel WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-viettel-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".viettelidc.com.vn"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_virusdie",
+      "vendor": "virusdie",
+      "product": "Virusdie WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-virusdie-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".virusdie.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_webarx",
+      "vendor": "webarx",
+      "product": "WebARX WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-webarx-"
+      ],
+      "cookie_name_patterns": [
+        "^webarx_"
+      ],
+      "dns_patterns": [
+        ".webarx.com",
+        ".patchstack.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_webarx_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_webknight",
+      "vendor": "webknight",
+      "product": "WebKnight WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-webknight-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_webseal",
+      "vendor": "ibm",
+      "product": "IBM WebSEAL WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".ibm.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_webseal_v1"
+      ],
+      "connector_provider_ids": [
+        "ibm"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_webtotem",
+      "vendor": "webtotem",
+      "product": "WebTotem WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-webtotem-"
+      ],
+      "cookie_name_patterns": [
+        "^wt_"
+      ],
+      "dns_patterns": [
+        ".webtotem.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_wordfence",
+      "vendor": "wordfence",
+      "product": "Wordfence WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-wf-",
+        "^wf-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [],
+      "block_page_signature_ids": [
+        "block_sig_wordfence_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_yundun",
+      "vendor": "yundun",
+      "product": "Yundun WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cache$",
+        "^x-yundun-"
+      ],
+      "cookie_name_patterns": [
+        "^yd_cookie"
+      ],
+      "dns_patterns": [
+        ".yundun.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_yundun_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_yunsuo",
+      "vendor": "yunsuo",
+      "product": "Yunsuo WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [
+        "^x-yunsuo-"
+      ],
+      "cookie_name_patterns": [
+        "^yunsuo_"
+      ],
+      "dns_patterns": [
+        ".yunsuo.com"
+      ],
+      "block_page_signature_ids": [],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_zenedge",
+      "vendor": "zenedge",
+      "product": "Zenedge WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-zen-fury$",
+        "^x-zenedge-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".zenedge.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_zenedge_v1"
+      ],
+      "connector_provider_ids": [
+        "oracle"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_zscaler",
+      "vendor": "zscaler",
+      "product": "Zscaler Cloud WAF",
+      "deployment_type": "cloud_native",
+      "header_name_patterns": [
+        "^x-zscaler-",
+        "^zs-"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".zscloud.net",
+        ".zscaler.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_zscaler_v1"
+      ],
+      "connector_provider_ids": [
+        "zscaler"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_anquanbao",
+      "vendor": "anquanbao",
+      "product": "Anquanbao WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-anquanbao-"
+      ],
+      "cookie_name_patterns": [
+        "^aqb_"
+      ],
+      "dns_patterns": [
+        ".anquanbao.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_anquanbao_v1"
+      ],
+      "connector_provider_ids": [],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_incapsula_edge",
+      "vendor": "imperva",
+      "product": "Incapsula CDN Edge WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-cdn$"
+      ],
+      "cookie_name_patterns": [
+        "^incap_ses",
+        "^visid_incap",
+        "^nlbi_"
+      ],
+      "dns_patterns": [
+        ".incapdns.net",
+        ".incapsula.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_incap_v1",
+        "block_sig_incapsula_generic_v1"
+      ],
+      "connector_provider_ids": [
+        "imperva"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_wallarm_nginx",
+      "vendor": "wallarm",
+      "product": "Wallarm Nginx Module WAF",
+      "deployment_type": "reverse_proxy",
+      "header_name_patterns": [],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".wallarm.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_wallarm_v1"
+      ],
+      "connector_provider_ids": [
+        "wallarm"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_citrix_adc",
+      "vendor": "citrix",
+      "product": "Citrix ADC Advanced WAF",
+      "deployment_type": "appliance",
+      "header_name_patterns": [
+        "^ns_af$",
+        "^citrix-ads-"
+      ],
+      "cookie_name_patterns": [
+        "^NSC_",
+        "^Citrix_ADC_"
+      ],
+      "dns_patterns": [
+        ".citrixcloud.net",
+        ".cloud.com"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_citrix_v1"
+      ],
+      "connector_provider_ids": [
+        "citrix"
+      ],
+      "fingerprint_version": "2026.07.01",
+      "enabled": true
+    },
+    {
+      "id": "waf_prod_sucuri_cloudproxy",
+      "vendor": "sucuri",
+      "product": "Sucuri CloudProxy WAF",
+      "deployment_type": "cdn",
+      "header_name_patterns": [
+        "^x-sucuri-id$",
+        "^x-sucuri-cache$",
+        "^x-sucuri-block$"
+      ],
+      "cookie_name_patterns": [],
+      "dns_patterns": [
+        ".sucuri.net",
+        ".cloudproxy.sucuri.net"
+      ],
+      "block_page_signature_ids": [
+        "block_sig_sucuri_v1"
+      ],
+      "connector_provider_ids": [
+        "sucuri"
       ],
       "fingerprint_version": "2026.07.01",
       "enabled": true

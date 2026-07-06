@@ -454,6 +454,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     directIp,
     budget,
     timeoutMs,
+    followRedirects: job.probe_profile?.follow_redirects === true,
     wafRequired: job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
     agentCorroborated: job.probe_profile?.agent_corroborated === true
@@ -461,6 +462,9 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     requireAgentForProtected: job.probe_profile?.require_agent_for_protected !== false,
     domXssValidation,
     fetchFn: deps.fetchFn,
+    resolveCname: deps.resolveCname,
+    resolve4: deps.resolve4,
+    tlsConnect: deps.tlsConnect,
     originBypassFn: directIp && hostname
       ? async ({ directIp: ip, hostname: host, timeoutMs: tmo, deps: innerDeps }) => {
         const useHttps = job.probe_profile?.use_https !== false;

@@ -1,7 +1,11 @@
 import { Badge } from '../ui/badge';
 import {
   capabilityProbeKindLabel,
+  domXssValidationLabel,
   externalResultTone,
+  outsideInPostureExplanation,
+  outsideInPostureLabel,
+  postureLabelTone,
   probeEventMetadata,
 } from '../../lib/capability-probe-labels';
 import type { DataItem } from '../../lib/types';
@@ -28,6 +32,82 @@ function formatBool(value: unknown) {
 }
 
 type EvidenceRow = { label: string; value: string };
+
+function formatMarkerProbes(meta: DataItem) {
+  const summary = meta.marker_summary as DataItem | undefined;
+  if (summary && typeof summary === 'object') {
+    const blocked = getString(summary, ['blocked_count'], '0');
+    const allowed = getString(summary, ['allowed_count'], '0');
+    const challenged = getString(summary, ['challenged_count'], '0');
+    const sent = getString(summary, ['probes_sent'], '0');
+    return `${blocked} blocked, ${allowed} allowed, ${challenged} challenged (${sent} probes)`;
+  }
+
+  if (!Array.isArray(meta.marker_probes) || meta.marker_probes.length === 0) return '—';
+
+  return meta.marker_probes
+    .map((entry) => {
+      const row = entry as DataItem;
+      const family = getString(row, ['family']);
+      const variant = getString(row, ['variant']);
+      const outcome = row.challenged === true
+        ? 'challenged'
+        : row.blocked === true
+          ? 'blocked'
+          : row.allowed === true
+            ? 'allowed'
+            : 'inconclusive';
+      return variant ? `${family}/${variant}: ${outcome}` : `${family}: ${outcome}`;
+    })
+    .join(', ');
+}
+
+function formatVendorCandidates(meta: DataItem) {
+  if (!Array.isArray(meta.vendor_candidates) || meta.vendor_candidates.length === 0) {
+    return getString(meta, ['detected_vendor', 'waf_product_hint'], '—');
+  }
+
+  return meta.vendor_candidates
+    .slice(0, 3)
+    .map((entry) => {
+      const row = entry as DataItem;
+      const vendor = getString(row, ['vendor']);
+      const product = getString(row, ['product']);
+      const confidence = row.confidence;
+      const label = product ? `${vendor}/${product}` : vendor;
+      if (confidence === undefined || confidence === null || confidence === '') return label;
+      return `${label} (${confidence})`;
+    })
+    .join(', ');
+}
+
+function outsideInWafScanRows(meta: DataItem): EvidenceRow[] {
+  return [
+    { label: 'WAF detected', value: formatBool(meta.waf_fingerprint_detected ?? meta.waf_detected) },
+    { label: 'Detected vendor', value: getString(meta, ['detected_vendor', 'waf_product_hint']) },
+    { label: 'Scan phases', value: formatList(meta.scan_plan) },
+    { label: 'Generic WAF signals', value: formatList(meta.generic_waf_reasons) },
+    { label: 'DNS hint', value: getString(meta, ['dns_chain_hint']) },
+    { label: 'TLS protocol', value: getString(meta, ['tls_protocol_hint', 'tls_protocol']) },
+    {
+      label: 'Redirect hops',
+      value: meta.redirect_hops === undefined || meta.redirect_hops === null
+        ? '—'
+        : String(meta.redirect_hops),
+    },
+    { label: 'Vendor candidates', value: formatVendorCandidates(meta) },
+    { label: 'Probe validation', value: formatBool(meta.probe_validation_passed) },
+    { label: 'Agent corroboration required', value: formatBool(meta.agent_corroboration_required) },
+    { label: 'Agent corroborated', value: formatBool(meta.agent_corroborated) },
+    { label: 'Evasion bypass', value: formatBool(meta.evasion_bypass_suspected) },
+    { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
+    {
+      label: 'DOM XSS validation',
+      value: domXssValidationLabel(getString(meta, ['dom_xss_validation'], 'agent_required')),
+    },
+    { label: 'Marker probes', value: formatMarkerProbes(meta) },
+  ];
+}
 
 function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
   switch (probeKind) {
@@ -61,29 +141,7 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         { label: 'Monitor-only leak', value: formatBool(meta.monitor_only_leak) },
       ];
     case 'outside_in_waf_scan':
-      return [
-        { label: 'Posture', value: getString(meta, ['posture_label', 'posture_status']) },
-        { label: 'WAF detected', value: formatBool(meta.waf_fingerprint_detected ?? meta.waf_detected) },
-        { label: 'Detected vendor', value: getString(meta, ['detected_vendor', 'waf_product_hint']) },
-        { label: 'Agent corroborated', value: formatBool(meta.agent_corroborated) },
-        { label: 'Evasion bypass', value: formatBool(meta.evasion_bypass_suspected) },
-        { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
-        { label: 'DOM XSS', value: getString(meta, ['dom_xss_validation'], 'agent_required') },
-        {
-          label: 'Marker probes',
-          value: Array.isArray(meta.marker_probes)
-            ? meta.marker_probes
-                .map((entry) => {
-                  const row = entry as DataItem;
-                  const family = getString(row, ['family']);
-                  const variant = getString(row, ['variant']);
-                  const blocked = row.blocked === true ? 'blocked' : row.allowed === true ? 'allowed' : 'inconclusive';
-                  return variant ? `${family}/${variant}: ${blocked}` : `${family}: ${blocked}`;
-                })
-                .join(', ')
-            : '—',
-        },
-      ];
+      return outsideInWafScanRows(meta);
     case 'rate_limit_sequence':
       return [
         { label: 'Status sequence', value: formatList(meta.status_sequence) },
@@ -172,10 +230,26 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
   }
 }
 
+function OutsideInWafPostureSummary({ meta }: { meta: DataItem }) {
+  const postureRaw = getString(meta, ['posture_label', 'posture_status']);
+  const postureLabel = outsideInPostureLabel(postureRaw);
+
+  return (
+    <div className="capability-probe-posture-row verdict-explanation-item verdict-explanation-item--full">
+      <span>Posture</span>
+      <div className="capability-probe-posture-value">
+        <Badge tone={postureLabelTone(postureRaw)}>{postureLabel || '—'}</Badge>
+        {postureRaw ? <p className="muted small">{outsideInPostureExplanation(postureRaw)}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
   const { meta, probeKind, externalResult } = probeEventMetadata(event);
   const rows = rowsForProbeKind(probeKind, meta);
   const errorClass = getString(meta, ['error_class']);
+  const isOutsideInWafScan = probeKind === 'outside_in_waf_scan';
 
   return (
     <article className="capability-probe-card">
@@ -188,6 +262,7 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
       </div>
       {errorClass ? <p className="muted small">Error: {errorClass}</p> : null}
       <div className="verdict-explanation-grid">
+        {isOutsideInWafScan ? <OutsideInWafPostureSummary meta={meta} /> : null}
         {rows.map((row) => (
           <div key={row.label} className="verdict-explanation-item">
             <span>{row.label}</span>
