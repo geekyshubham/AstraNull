@@ -13951,20 +13951,20 @@ function Ni(e, t) {
       value: Ai(t, ["resolver_host"])
     }, {
       label: "Open recursion",
-      value: Mi(t.open_recursion)
+      value: Mi(t.open_recursion_detected ?? t.open_recursion)
     }];
     case "dns_failover_posture": return [
       {
-        label: "Primary NS",
-        value: ji(t.primary_nameservers)
+        label: "Nameservers",
+        value: ji(t.nameservers)
       },
       {
-        label: "Secondary reachable",
-        value: Mi(t.secondary_reachable)
+        label: "Nameserver count",
+        value: Ai(t, ["nameserver_count"], "0")
       },
       {
-        label: "Failover gap",
-        value: Mi(t.failover_gap)
+        label: "Weak failover",
+        value: Mi(t.weak_failover)
       }
     ];
     case "tls_audit": return [
@@ -13989,26 +13989,33 @@ function Ni(e, t) {
         value: ji(t.tls_issues)
       }
     ];
-    case "cache_abuse_probe": return [{
-      label: "Cache signals",
-      value: ji(t.cache_signals)
-    }, {
-      label: "Sensitive caching risk",
-      value: Mi(t.sensitive_caching_risk)
-    }];
+    case "cache_abuse_probe": return [
+      {
+        label: "Sensitive cached",
+        value: Mi(t.sensitive_cached)
+      },
+      {
+        label: "Cache key weakness",
+        value: Mi(t.cache_key_weakness)
+      },
+      {
+        label: "Observations",
+        value: ji(Array.isArray(t.observations) ? t.observations.map((e) => String(e.status ?? "")) : [])
+      }
+    ];
     case "api_surface_scan": return [{
-      label: "Discovered paths",
-      value: ji(t.discovered_paths)
+      label: "Exposed paths",
+      value: Array.isArray(t.exposed_paths) ? t.exposed_paths.map((e) => `${e.path} (${e.status})`).join(", ") : ji(t.discovered_paths)
     }, {
       label: "Exposure count",
       value: Ai(t, ["exposure_count"], "0")
     }];
     case "cors_posture_probe": return [{
       label: "ACAO header",
-      value: Ai(t, ["acao_header"])
+      value: Ai(t, ["access_control_allow_origin", "acao_header"])
     }, {
-      label: "Permissive CORS",
-      value: Mi(t.permissive_cors)
+      label: "Weak CORS",
+      value: Mi(t.weak_cors ?? t.permissive_cors)
     }];
     case "graphql_posture_probe": return [{
       label: "GraphQL path",

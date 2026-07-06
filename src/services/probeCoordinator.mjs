@@ -294,7 +294,9 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
         message: 'Probe result body must be a JSON object.',
       };
     }
-    const validated = validateProbeResultBody(body, job.constraints ?? {});
+    const validated = validateProbeResultBody(body, job.constraints ?? {}, {
+      probeKind: job.probe_profile?.kind,
+    });
     if (!validated.ok) {
       return {
         error: validated.error,
@@ -359,7 +361,9 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     return { error: 'job_not_open', status: 409 };
   }
 
-  const validated = validateProbeResultBody(body, job.constraints ?? {});
+  const validated = validateProbeResultBody(body, job.constraints ?? {}, {
+    probeKind: job.probe_profile?.kind,
+  });
   if (!validated.ok) {
     return {
       error: validated.error,

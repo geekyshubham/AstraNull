@@ -43,6 +43,31 @@ function apexDomain(job) {
   return raw || null;
 }
 
+function resolveHostSniTargets(job) {
+  const targetValue = String(job.target?.value ?? '').trim();
+  let hostname = job.probe_profile?.protected_host ?? apexDomain(job);
+  let directIp = job.probe_profile?.direct_ip ?? job.target?.metadata?.direct_origin_ip ?? null;
+  let requestUrl = null;
+
+  if (targetValue.startsWith('http')) {
+    try {
+      const url = new URL(targetValue);
+      if (!job.probe_profile?.protected_host) hostname = url.hostname;
+      if (!directIp && /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname)) {
+        directIp = url.hostname;
+        requestUrl = targetValue;
+      }
+    } catch {
+      // ignore malformed URL targets
+    }
+  }
+  if (!directIp && job.target?.kind === 'ip') {
+    directIp = targetValue;
+  }
+
+  return { hostname, directIp, requestUrl };
+}
+
 function baseUrlForHost(host, https = true) {
   return `${https ? 'https' : 'http'}://${host}/`;
 }
@@ -249,8 +274,7 @@ export async function probeOriginLeakScan(job, deps = {}) {
  */
 export async function probeHostSniBypass(job, deps = {}) {
   const kind = 'host_sni_bypass';
-  const hostname = job.probe_profile?.protected_host ?? apexDomain(job);
-  const directIp = job.probe_profile?.direct_ip ?? job.target?.metadata?.direct_origin_ip;
+  const { hostname, directIp, requestUrl } = resolveHostSniTargets(job);
   if (!hostname || !directIp) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'missing_direct_ip_or_host' }), requests_sent: 0, duration_ms: 0 };
   }
@@ -263,10 +287,10 @@ export async function probeHostSniBypass(job, deps = {}) {
     ...(job.probe_profile?.marker ? { 'x-astranull-marker': String(job.probe_profile.marker) } : {}),
   };
   const hasInjectedFetch = typeof deps.fetchFn === 'function';
-  const useHttps = !hasInjectedFetch && job.probe_profile?.use_https !== false;
+  const useHttps = !hasInjectedFetch && job.probe_profile?.use_https !== false && !requestUrl;
   const { res, error } = useHttps
     ? await httpsHeadWithSni(directIp, hostname, { headers, timeoutMs }, deps)
-    : await boundedFetch(`http://${directIp}/`, {
+    : await boundedFetch(requestUrl ?? `http://${directIp}/`, {
       timeoutMs,
       fetchOptions: { method: 'HEAD', headers, redirect: 'manual' },
     }, deps);
@@ -460,20 +484,17 @@ export async function probeDnssecPosture(job, deps = {}) {
   let dnskey_count = 0;
   let ds_count = 0;
   let requestsSent = 0;
+  const queryBudget = resolveBoundedSequenceBudget(job, { ceiling: 2 });
+  const queries = ['DNSKEY', 'DS'].slice(0, queryBudget);
 
-  try {
-    const keys = await resolveFn(zone, 'DNSKEY');
-    dnskey_count = keys?.length ?? 0;
-    requestsSent += 1;
-  } catch {
-    requestsSent += 1;
-  }
-
-  try {
-    const ds = await resolveFn(zone, 'DS');
-    ds_count = ds?.length ?? 0;
-    requestsSent += 1;
-  } catch {
+  for (const recordType of queries) {
+    try {
+      const records = await resolveFn(zone, recordType);
+      if (recordType === 'DNSKEY') dnskey_count = records?.length ?? 0;
+      if (recordType === 'DS') ds_count = records?.length ?? 0;
+    } catch {
+      // missing record types count as not configured
+    }
     requestsSent += 1;
   }
 
@@ -624,11 +645,12 @@ export async function probeCacheAbuse(job, deps = {}) {
 
   const started = Date.now();
   const observations = [];
+  const maxObservations = resolveBoundedSequenceBudget(job, { ceiling: 3 });
   const urls = [
     base,
     `${base}${base.includes('?') ? '&' : '?'}cb=${Date.now()}`,
     base,
-  ];
+  ].slice(0, maxObservations);
 
   for (const url of urls) {
     const { res } = await boundedFetch(url, {
@@ -682,7 +704,8 @@ export async function probeApiSurfaceScan(job, deps = {}) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
 
-  const paths = (job.probe_profile?.paths ?? API_DOC_PATHS).slice(0, 6);
+  const budget = resolveProbeRequestBudget(job);
+  const paths = (job.probe_profile?.paths ?? API_DOC_PATHS).slice(0, budget);
   const started = Date.now();
   const exposed_paths = [];
 
@@ -917,11 +940,16 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
 
   const started = Date.now();
   const nameservers = await resolveNs(zone, deps);
-  const declaredSecondary = (job.probe_profile?.secondary_nameservers ?? []).slice(0, 2);
+  let requestsSent = 1;
+  const budget = resolveProbeRequestBudget(job);
+  const remainingBudget = Math.max(0, budget - requestsSent);
+  const declaredSecondary = (job.probe_profile?.secondary_nameservers ?? []).slice(0, remainingBudget);
   const secondary_results = [];
 
   for (const ns of declaredSecondary) {
+    if (requestsSent >= budget) break;
     const addrs = await resolve4(ns, deps);
+    requestsSent += 1;
     secondary_results.push({ nameserver: ns, reachable: addrs.length > 0, addresses: addrs.slice(0, 2) });
   }
 
@@ -939,7 +967,7 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
       secondary_results,
       weak_failover,
     }),
-    requests_sent: 1 + secondary_results.length,
+    requests_sent: requestsSent,
     duration_ms: durationMs,
   };
 }

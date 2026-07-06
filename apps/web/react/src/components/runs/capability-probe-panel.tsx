@@ -83,13 +83,13 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
     case 'dns_open_recursion':
       return [
         { label: 'Resolver host', value: getString(meta, ['resolver_host']) },
-        { label: 'Open recursion', value: formatBool(meta.open_recursion) },
+        { label: 'Open recursion', value: formatBool(meta.open_recursion_detected ?? meta.open_recursion) },
       ];
     case 'dns_failover_posture':
       return [
-        { label: 'Primary NS', value: formatList(meta.primary_nameservers) },
-        { label: 'Secondary reachable', value: formatBool(meta.secondary_reachable) },
-        { label: 'Failover gap', value: formatBool(meta.failover_gap) },
+        { label: 'Nameservers', value: formatList(meta.nameservers) },
+        { label: 'Nameserver count', value: getString(meta, ['nameserver_count'], '0') },
+        { label: 'Weak failover', value: formatBool(meta.weak_failover) },
       ];
     case 'tls_audit':
       return [
@@ -101,18 +101,31 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
       ];
     case 'cache_abuse_probe':
       return [
-        { label: 'Cache signals', value: formatList(meta.cache_signals) },
-        { label: 'Sensitive caching risk', value: formatBool(meta.sensitive_caching_risk) },
+        { label: 'Sensitive cached', value: formatBool(meta.sensitive_cached) },
+        { label: 'Cache key weakness', value: formatBool(meta.cache_key_weakness) },
+        {
+          label: 'Observations',
+          value: formatList(
+            Array.isArray(meta.observations)
+              ? meta.observations.map((entry) => String((entry as DataItem).status ?? ''))
+              : [],
+          ),
+        },
       ];
     case 'api_surface_scan':
       return [
-        { label: 'Discovered paths', value: formatList(meta.discovered_paths) },
+        {
+          label: 'Exposed paths',
+          value: Array.isArray(meta.exposed_paths)
+            ? meta.exposed_paths.map((entry) => `${entry.path} (${entry.status})`).join(', ')
+            : formatList(meta.discovered_paths),
+        },
         { label: 'Exposure count', value: getString(meta, ['exposure_count'], '0') },
       ];
     case 'cors_posture_probe':
       return [
-        { label: 'ACAO header', value: getString(meta, ['acao_header']) },
-        { label: 'Permissive CORS', value: formatBool(meta.permissive_cors) },
+        { label: 'ACAO header', value: getString(meta, ['access_control_allow_origin', 'acao_header']) },
+        { label: 'Weak CORS', value: formatBool(meta.weak_cors ?? meta.permissive_cors) },
       ];
     case 'graphql_posture_probe':
       return [

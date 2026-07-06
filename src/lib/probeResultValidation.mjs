@@ -1,3 +1,4 @@
+import { maxProbeRequestsForKind } from '../contracts/checks.mjs';
 import { redactObject } from './redact.mjs';
 
 const DEFAULT_MAX_REQUESTS = 1;
@@ -86,7 +87,7 @@ function sanitizeSafetyAttestation(attestation) {
   return out;
 }
 
-export function validateSafetyAttestation(body, constraints) {
+export function validateSafetyAttestation(body, constraints, { probeKind } = {}) {
   const attestation = body?.safety_attestation ?? body?.execution_summary;
   if (attestation == null) {
     return {
@@ -129,7 +130,9 @@ export function validateSafetyAttestation(body, constraints) {
       message: 'safety_attestation.duration_ms must be a non-negative integer.',
     };
   }
-  const maxRequests = constraints.max_requests ?? DEFAULT_MAX_REQUESTS;
+  const constraintCap = constraints.max_requests ?? DEFAULT_MAX_REQUESTS;
+  const kindCap = probeKind ? maxProbeRequestsForKind(probeKind) : constraintCap;
+  const maxRequests = Math.min(constraintCap, kindCap);
   const timeoutMs = constraints.timeout_ms ?? DEFAULT_TIMEOUT_CAP_MS;
   if (requestsSent > maxRequests || durationMs > timeoutMs) {
     return {
@@ -155,7 +158,7 @@ export function sanitizeWorkerProbeMetadata(metadata) {
   return redactObject(stripped);
 }
 
-export function validateProbeResultBody(body, constraints) {
+export function validateProbeResultBody(body, constraints, { probeKind } = {}) {
   if (bodyContainsRawPacketFields(body)) {
     return {
       error: 'raw_packet_rejected',
@@ -173,7 +176,10 @@ export function validateProbeResultBody(body, constraints) {
     };
   }
 
-  const attestationResult = validateSafetyAttestation(body, constraints ?? {});
+  const resolvedProbeKind = probeKind ?? body?.metadata?.probe_kind ?? body?.metadata?.profile_kind ?? null;
+  const attestationResult = validateSafetyAttestation(body, constraints ?? {}, {
+    probeKind: resolvedProbeKind,
+  });
   if (!attestationResult.ok) {
     return {
       error: attestationResult.error,

@@ -149,7 +149,7 @@ describe('vector safety policy evidence', () => {
       (p) => p.check_id === 'origin.direct_reachability.safe',
     );
     assert.ok(sample);
-    assert.equal(sample.allowed_payload_type, 'http_head');
+    assert.equal(sample.allowed_payload_type, 'host_sni_bypass');
     assert.equal(sample.approval_level, 'customer_self_service');
     assert.ok(sample.failure_handling?.remediation_template);
 

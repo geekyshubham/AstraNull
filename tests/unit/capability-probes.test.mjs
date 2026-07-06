@@ -66,6 +66,24 @@ describe('capability probes P0/P1', () => {
     assert.ok(outcome.metadata.leak_signals.some((s) => s.startsWith('subdomain_origin_divergence:')));
   });
 
+  it('host/SNI bypass derives direct IP and URL from declared http target', async () => {
+    const outcome = await probeHostSniBypass(
+      job({
+        target: { kind: 'url', value: 'http://198.51.100.7:8080/health' },
+        probe_profile: { kind: 'host_sni_bypass', protected_host: 'edge.example.test' },
+      }),
+      {
+        fetchFn: async (url, init) => {
+          assert.equal(url, 'http://198.51.100.7:8080/health');
+          assert.equal(init.headers.Host, 'edge.example.test');
+          return { status: 200, headers: { get: () => null } };
+        },
+      },
+    );
+    assert.equal(outcome.metadata.bypass_signal, true);
+    assert.equal(outcome.metadata.direct_ip, '198.51.100.7');
+  });
+
   it('host/SNI bypass detects direct IP reachability via injectable fetchFn', async () => {
     const outcome = await probeHostSniBypass(
       job({
@@ -461,5 +479,11 @@ describe('capability probes P0/P1', () => {
     assert.equal(getCheckById('dns.zone_transfer_exposure.safe').probe_profile.kind, 'dns_axfr_leak');
     assert.equal(getCheckById('dns.secondary_failover.safe').probe_profile.kind, 'dns_failover_posture');
     assert.equal(getCheckById('l7.bot_challenge_marker.safe').probe_profile.kind, 'bot_challenge_probe');
+    assert.equal(getCheckById('origin.direct_bypass.safe').probe_profile.kind, 'host_sni_bypass');
+    assert.equal(getCheckById('waf.marker_rule.safe').probe_profile.kind, 'waf_enforcement_probe');
+    assert.equal(getCheckById('waf.origin_bypass.safe').probe_profile.kind, 'host_sni_bypass');
+    assert.equal(getCheckById('tls.profile_exposure.safe').probe_profile.kind, 'tls_audit');
+    assert.equal(getCheckById('l7.api_quota_exhaustion.safe').probe_profile.kind, 'rate_limit_sequence');
+    assert.equal(getCheckById('protocol.http2_readiness.safe').probe_profile.kind, 'http2_settings');
   });
 });

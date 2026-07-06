@@ -58,8 +58,8 @@ function baseJob(overrides = {}) {
     expected_behavior: 'must_block_before_origin',
     ...(overrides.target ?? {}),
   };
-  const checkId = overrides.check_id ?? 'origin.direct_bypass.safe';
-  const check = getCheckById(checkId) ?? getCheckById('origin.direct_bypass.safe');
+  const checkId = overrides.check_id ?? 'path.protected_canary.safe';
+  const check = getCheckById(checkId) ?? getCheckById('path.protected_canary.safe');
   const job = {
     id: 'pjob_test',
     tenant_id: 'ten_demo',
@@ -545,7 +545,7 @@ describe('probe worker poll integration', () => {
     const started = startTestRun(
       pollCtx,
       {
-        check_id: 'origin.direct_bypass.safe',
+        check_id: 'path.protected_canary.safe',
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
       },
@@ -584,25 +584,67 @@ describe('probe worker poll integration', () => {
 });
 
 describe('executeProbeForJob routing', () => {
-  it('routes origin_leak_scan capability probe via executeProbeForJob', async () => {
-    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
-    const job = baseJob({
-      check_id: 'origin.leak_scan.safe',
-      vector_family: 'origin',
-      probe_profile: { kind: 'origin_leak_scan', max_requests: 14, timeout_ms: 500 },
-      target: { kind: 'fqdn', value: 'nonexistent.invalid' },
-      constraints: { timeout_ms: 500, max_requests: 14 },
+  const CAPABILITY_ROUTING_CASES = [
+    { kind: 'origin_leak_scan', check_id: 'origin.leak_scan.safe', vector_family: 'origin' },
+    { kind: 'host_sni_bypass', check_id: 'origin.host_sni_bypass.safe', vector_family: 'origin', target: { kind: 'url', value: 'http://198.51.100.7/' }, probe_profile: { kind: 'host_sni_bypass', protected_host: 'edge.test', direct_ip: '198.51.100.7', max_requests: 1, timeout_ms: 500 } },
+    { kind: 'port_scan_bounded', check_id: 'l3.firewall_exposure_scan.safe', vector_family: 'l3_l4' },
+    { kind: 'rate_limit_sequence', check_id: 'l7.low_rate_rate_limit.safe', vector_family: 'l7' },
+    { kind: 'waf_enforcement_probe', check_id: 'waf.enforcement.safe', vector_family: 'waf' },
+    { kind: 'dnssec_posture', check_id: 'dns.dnssec_expensive_query.safe', vector_family: 'dns' },
+    { kind: 'dns_open_recursion', check_id: 'dns.open_recursion_behavior.safe', vector_family: 'dns' },
+    { kind: 'dns_failover_posture', check_id: 'dns.secondary_failover.safe', vector_family: 'dns' },
+    { kind: 'dns_axfr_leak', check_id: 'dns.zone_transfer_exposure.safe', vector_family: 'dns' },
+    { kind: 'tls_audit', check_id: 'tls.full_audit.safe', vector_family: 'tls' },
+    { kind: 'cache_abuse_probe', check_id: 'l7.cache_busting.safe', vector_family: 'l7' },
+    { kind: 'api_surface_scan', check_id: 'l7.api_surface_scan.safe', vector_family: 'l7' },
+    { kind: 'cors_posture_probe', check_id: 'l7.cors_posture.safe', vector_family: 'l7' },
+    { kind: 'bot_challenge_probe', check_id: 'l7.bot_challenge_marker.safe', vector_family: 'l7' },
+    { kind: 'graphql_posture_probe', check_id: 'l7.graphql_complexity.safe', vector_family: 'l7' },
+  ];
+
+  for (const routeCase of CAPABILITY_ROUTING_CASES) {
+    it(`routes ${routeCase.kind} via executeProbeForJob`, async () => {
+      const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+      const check = getCheckById(routeCase.check_id);
+      const job = baseJob({
+        check_id: routeCase.check_id,
+        vector_family: routeCase.vector_family,
+        probe_profile: routeCase.probe_profile ?? check.probe_profile,
+        target: routeCase.target ?? { kind: 'fqdn', value: 'nonexistent.invalid' },
+        constraints: {
+          timeout_ms: 500,
+          max_requests: check.probe_profile.max_requests,
+        },
+      });
+      const outcome = await executeProbeForJob(job, {
+        signedJobVerified: true,
+        fetchFn: async () => ({ status: 403, headers: { get: () => null } }),
+        resolve4Fn: async () => [],
+        resolve6Fn: async () => [],
+        resolveNsFn: async () => ['ns1.invalid'],
+        connectFn: () => {
+          const handlers = {};
+          const socket = {
+            on: (event, fn) => { handlers[event] = fn; },
+            once: (event, fn) => { handlers[event] = fn; },
+            destroy: () => {},
+            write: () => {},
+            end: () => {},
+            setTimeout: () => {},
+          };
+          queueMicrotask(() => {
+            handlers.error?.(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }));
+          });
+          return socket;
+        },
+        resolveFn: async () => [],
+        resolve4ExternalFn: async () => { throw new Error('refused'); },
+      });
+      assert.equal(outcome.metadata.probe_kind, routeCase.kind);
+      assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
+      assert.notEqual(outcome.metadata.error_class, 'live_probe_requires_signed_worker');
     });
-    const outcome = await executeProbeForJob(job, {
-      signedJobVerified: true,
-      resolve4Fn: async (host) => (host === 'nonexistent.invalid' ? ['203.0.113.10'] : []),
-      resolve6Fn: async () => [],
-      fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
-    });
-    assert.equal(outcome.metadata.probe_kind, 'origin_leak_scan');
-    assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
-    assert.notEqual(outcome.metadata.error_class, 'live_probe_requires_signed_worker');
-  });
+  }
 
   it('routes udp_probe profile kind to bounded UDP datagram probe', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
