@@ -1,12 +1,37 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { buildProbeProfile, WAF_SAFE_PROBE_METADATA_KEYS } from '../contracts/checks.mjs';
+import {
+  buildProbeProfile,
+  CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
+  WAF_SAFE_PROBE_METADATA_KEYS,
+} from '../contracts/checks.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { stableStringify } from './agentUpdates.mjs';
 
 const DEFAULT_MAX_REQUESTS = 1;
 const DEFAULT_TIMEOUT_CAP_MS = 5000;
 
-const BENIGN_PROBE_PROFILE_OVERRIDE_KEYS = new Set(['marker', ...WAF_SAFE_PROBE_METADATA_KEYS]);
+const CAPABILITY_ARRAY_OVERRIDE_KEYS = new Set(['ports', 'paths', 'secondary_nameservers', 'collect']);
+
+const BENIGN_PROBE_PROFILE_OVERRIDE_KEYS = new Set([
+  'marker',
+  ...WAF_SAFE_PROBE_METADATA_KEYS,
+  ...CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
+]);
+
+const SAFE_TARGET_METADATA_KEYS = new Set([
+  'alert_webhook_url',
+  'webhook_url',
+  'direct_origin_ip',
+  'declared_apex_domain',
+  'protected_host',
+  'resolver_host',
+  'zone',
+  'graphql_path',
+]);
+
+const TARGET_TO_PROFILE_ALIASES = Object.freeze({
+  direct_origin_ip: 'direct_ip',
+});
 
 function safeEqualUtf8(a, b) {
   if (!a || !b) return false;
@@ -14,6 +39,29 @@ function safeEqualUtf8(a, b) {
   const bb = Buffer.from(b, 'utf8');
   if (ba.length !== bb.length) return false;
   return timingSafeEqual(ba, bb);
+}
+
+function mergeCapabilityOverride(merged, key, override) {
+  if (key === 'nonce_hash_only') {
+    if (override.nonce_hash_only === true) merged.nonce_hash_only = true;
+    return;
+  }
+  if (CAPABILITY_ARRAY_OVERRIDE_KEYS.has(key)) {
+    if (!Array.isArray(override[key])) return;
+    const values = override[key]
+      .map((entry) => (typeof entry === 'number' ? entry : String(entry).trim()))
+      .filter((entry) => entry !== '' && entry != null)
+      .slice(0, 16);
+    if (values.length > 0) merged[key] = values;
+    return;
+  }
+  if (key === 'use_https') {
+    if (typeof override.use_https === 'boolean') merged.use_https = override.use_https;
+    return;
+  }
+  if (override[key] != null) {
+    merged[key] = String(override[key]).slice(0, 128);
+  }
 }
 
 export function resolveJobProbeProfile(check, override) {
@@ -24,17 +72,25 @@ export function resolveJobProbeProfile(check, override) {
   if (typeof override !== 'object' || Array.isArray(override)) return base;
   const merged = { ...base };
   for (const key of BENIGN_PROBE_PROFILE_OVERRIDE_KEYS) {
-    if (key === 'nonce_hash_only') {
-      if (override.nonce_hash_only === true) merged.nonce_hash_only = true;
-      continue;
+    mergeCapabilityOverride(merged, key, override);
+  }
+  return buildProbeProfile(merged);
+}
+
+function enrichProbeProfileFromTarget(profile, target) {
+  const raw = target?.metadata_json ?? target?.metadata;
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return profile;
+  const merged = { ...profile };
+  for (const [targetKey, profileKey] of Object.entries(TARGET_TO_PROFILE_ALIASES)) {
+    if (merged[profileKey] != null) continue;
+    const value = raw[targetKey];
+    if (typeof value === 'string' && value.trim()) {
+      merged[profileKey] = value.trim().slice(0, 128);
     }
-    if (key === 'collect') {
-      if (Array.isArray(override.collect)) merged.collect = override.collect;
-      continue;
-    }
-    if (override[key] != null) {
-      merged[key] = String(override[key]).slice(0, 128);
-    }
+  }
+  for (const key of CAPABILITY_PROFILE_PASSTHROUGH_KEYS) {
+    if (merged[key] != null || raw[key] == null) continue;
+    mergeCapabilityOverride(merged, key, raw);
   }
   return buildProbeProfile(merged);
 }
@@ -70,8 +126,6 @@ export function normalizeJobConstraints(safetyConstraints, probeProfile) {
   out.timeout_ms = Math.min(timeoutMs, DEFAULT_TIMEOUT_CAP_MS);
   return out;
 }
-
-const SAFE_TARGET_METADATA_KEYS = new Set(['alert_webhook_url', 'webhook_url']);
 
 function safeTargetMetadata(target) {
   const raw = target.metadata_json ?? target.metadata;
@@ -157,7 +211,10 @@ export function buildSignedProbeJobRecord({
 }) {
   const nonce = generateNonce();
   const nonce_hash = hashNonce(nonce);
-  const resolvedProbeProfile = resolveJobProbeProfile(check, probeProfile);
+  const resolvedProbeProfile = enrichProbeProfileFromTarget(
+    resolveJobProbeProfile(check, probeProfile),
+    target,
+  );
   const constraints = normalizeJobConstraints(run.safety_constraints, resolvedProbeProfile);
   const job = {
     id: newId(),

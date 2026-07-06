@@ -14,6 +14,7 @@ import { ROUTE_BY_ID } from '../lib/navigation';
 import { buildDetailHref, getRouteEntityId } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { formatDate, formatExpectedBehavior, scoreTone } from '../lib/utils';
+import { CapabilityProbeResultsPanel } from '../components/runs/capability-probe-panel';
 import { RunTimelineViz, TruthTablePanel, VerdictExplanationPanel } from '../components/runs/run-proof-panels';
 import {
   agentHeartbeatFreshness,
@@ -987,14 +988,7 @@ function RunDetailView({
           </CardHeader>
           <CardContent>
             {probeEvents.length === 0 ? <EmptyState icon={Activity} title="No probe results yet." body="Outside probe observations appear after the probe window runs." /> : (
-              <div className="kv-list">
-                {probeEvents.map((event, index) => (
-                  <div key={getString(event, ['id'], String(index))}>
-                    <span>{formatDate(event.timestamp ?? event.created_at)}</span>
-                    <strong>{getNestedString(event, ['metadata', 'external_result'], getString(event, ['external_result'], getString(event, ['source'], 'probe_result')))}</strong>
-                  </div>
-                ))}
-              </div>
+              <CapabilityProbeResultsPanel events={probeEvents} />
             )}
           </CardContent>
         </Card>

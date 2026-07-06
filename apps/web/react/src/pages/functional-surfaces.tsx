@@ -51,6 +51,7 @@ import {
   placementStatusHint,
   placementFactorScore
 } from '../lib/agent-helpers';
+import { formatRequiredSetupList } from '../lib/capability-probe-labels';
 import {
   CHECK_SAFETY_SCOPE_TABS,
   countChecksBySafetyScope,
@@ -1173,6 +1174,15 @@ export function ValidationSurfacePage({
           const description = getString(item, ['description'], '');
           if (!description || description === '—') return '—';
           return <span title={description}>{truncateText(description)}</span>;
+        }
+      },
+      {
+        key: 'setup',
+        label: 'Required setup',
+        render: (item) => {
+          const setup = formatRequiredSetupList(item);
+          if (setup.length === 0) return <span className="muted">—</span>;
+          return <span title={setup.join(' · ')}>{truncateText(setup.join(', '), 56)}</span>;
         }
       },
       {

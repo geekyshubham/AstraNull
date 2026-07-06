@@ -111,7 +111,7 @@ function applyWafSafeProbeMetadata(profile, meta = {}) {
   }
 }
 
-const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
+export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'protected_host',
   'direct_ip',
   'scan_host',
