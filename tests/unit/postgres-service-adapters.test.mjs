@@ -740,6 +740,64 @@ describe('postgres agent service adapters', () => {
     assert.equal(heartbeatFields.probe_endpoint, undefined);
   });
 
+  it('heartbeatAgent accepts probe_endpoint when declared_fqdn matches prebind and target group', async () => {
+    const matchingFqdn = 'api.shop.example.com';
+    const agent = {
+      id: 'agent_bind_ok',
+      tenant_id: 'ten_demo',
+      bootstrap_token_id: 'token_prebind',
+      target_group_id: 'tg_shop',
+      credential_hash: 'h',
+      credential_salt: 's',
+    };
+    const probeEndpoint = {
+      declared_fqdn: matchingFqdn,
+      discovered_public_ip: '203.0.113.55',
+      listen_port: 18080,
+      path_prefix: '/astranull-canary',
+      discovered_via: 'dns_resolve',
+    };
+    let heartbeatFields;
+    const { repositories, auditEvents } = createRecordingAgentRepositories({
+      updateAgentHeartbeat: async (_scope, fields) => {
+        heartbeatFields = fields;
+        return { ...agent, ...fields };
+      },
+      authTokens: {
+        getBootstrapTokenById: async (ctx, id) => {
+          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
+          assert.equal(id, 'token_prebind');
+          return { id, prebind_fqdn: matchingFqdn };
+        },
+      },
+      coreCatalog: {
+        getTargetGroup: async (ctx, id) => {
+          assert.deepEqual(ctx, { tenantId: 'ten_demo' });
+          assert.equal(id, 'tg_shop');
+          return {
+            id,
+            targets: [{ kind: 'fqdn', value: matchingFqdn }],
+          };
+        },
+      },
+    });
+    const { agents } = createPostgresAgentServices(repositories, {
+      tokens: { consumeBootstrapToken: async () => ({}) },
+      now: () => FIXED_NOW,
+    });
+
+    const result = await agents.heartbeatAgent(agent, { probe_endpoint: probeEndpoint });
+
+    assert.equal(result.probe_endpoint_accepted, true);
+    assert.equal(heartbeatFields.probe_endpoint_status, 'reported');
+    assert.equal(heartbeatFields.probe_endpoint_error, null);
+    assert.equal(heartbeatFields.probe_endpoint.declared_fqdn, matchingFqdn);
+    assert.equal(heartbeatFields.last_token_validation_status, 'valid');
+    const heartbeatAudit = auditEvents.find((e) => e.action === 'agent.heartbeat');
+    assert.equal(heartbeatAudit.metadata.probe_endpoint_accepted, true);
+    assert.equal(heartbeatAudit.metadata.token_valid, true);
+  });
+
   it('requireAgentAuth accepts valid addressed credential and audits invalid only when row exists', async () => {
     const tenantId = 'ten_demo';
     const agentId = 'agent_auth';

@@ -82,10 +82,31 @@ describe('checkProbeEndpointBinding', () => {
     assert.equal(result.error, 'target_group_mismatch');
   });
 
-  it('passes when prebind is null and target list is empty', () => {
+  it('passes when prebind is null and target list is empty without resolved group', () => {
     const result = checkProbeEndpointBinding(
       { declared_fqdn: matchingFqdn },
       { prebindFqdn: null, targetGroupFqdns: [] },
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it('fails target_group_mismatch when group is resolved but fqdn list is empty', () => {
+    const result = checkProbeEndpointBinding(
+      { declared_fqdn: matchingFqdn },
+      { prebindFqdn: matchingFqdn, targetGroupFqdns: [], targetGroupResolved: true },
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'target_group_mismatch');
+  });
+
+  it('passes when group is resolved and fqdn is in target list', () => {
+    const result = checkProbeEndpointBinding(
+      { declared_fqdn: matchingFqdn },
+      {
+        prebindFqdn: matchingFqdn,
+        targetGroupFqdns: [matchingFqdn],
+        targetGroupResolved: true,
+      },
     );
     assert.equal(result.ok, true);
   });

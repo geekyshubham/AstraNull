@@ -96,7 +96,11 @@ export function heartbeatAgent(agent, body) {
             && t.kind === 'fqdn',
         )
         .map((t) => String(t.value).trim().toLowerCase());
-      const binding = checkProbeEndpointBinding(result.normalized, { prebindFqdn, targetGroupFqdns });
+      const binding = checkProbeEndpointBinding(result.normalized, {
+        prebindFqdn,
+        targetGroupFqdns,
+        targetGroupResolved: Boolean(agent.target_group_id),
+      });
       if (!binding.ok) {
         agent.probe_endpoint_status = 'rejected';
         agent.probe_endpoint_error = binding.error;

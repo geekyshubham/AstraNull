@@ -281,7 +281,10 @@ export function validateProbeEndpoint(endpoint, options = {}) {
   return { ok: true, normalized };
 }
 
-export function checkProbeEndpointBinding(normalized, { prebindFqdn = null, targetGroupFqdns = [] } = {}) {
+export function checkProbeEndpointBinding(
+  normalized,
+  { prebindFqdn = null, targetGroupFqdns = [], targetGroupResolved = false } = {},
+) {
   if (!normalized.declared_fqdn) {
     return { ok: true };
   }
@@ -297,7 +300,17 @@ export function checkProbeEndpointBinding(normalized, { prebindFqdn = null, targ
     }
   }
 
-  if (Array.isArray(targetGroupFqdns) && targetGroupFqdns.length > 0) {
+  if (targetGroupResolved) {
+    const allowed = (Array.isArray(targetGroupFqdns) ? targetGroupFqdns : [])
+      .map((fqdn) => String(fqdn).trim().toLowerCase());
+    if (allowed.length === 0 || !allowed.includes(normalized.declared_fqdn)) {
+      return {
+        ok: false,
+        error: 'target_group_mismatch',
+        message: 'declared_fqdn is not listed in the agent target group',
+      };
+    }
+  } else if (Array.isArray(targetGroupFqdns) && targetGroupFqdns.length > 0) {
     const allowed = targetGroupFqdns.map((fqdn) => String(fqdn).trim().toLowerCase());
     if (!allowed.includes(normalized.declared_fqdn)) {
       return {

@@ -174,6 +174,7 @@ export function createPostgresAgentServices(repositories, options = {}) {
         if (result.ok) {
           let prebindFqdn = null;
           let targetGroupFqdns = [];
+          let targetGroupResolved = false;
 
           if (
             authTokens
@@ -199,11 +200,13 @@ export function createPostgresAgentServices(repositories, options = {}) {
             targetGroupFqdns = (targetGroup?.targets ?? [])
               .filter((t) => t.kind === 'fqdn')
               .map((t) => String(t.value).trim().toLowerCase());
+            targetGroupResolved = true;
           }
 
           const binding = checkProbeEndpointBinding(result.normalized, {
             prebindFqdn,
             targetGroupFqdns,
+            targetGroupResolved,
           });
           if (!binding.ok) {
             heartbeatFields.probe_endpoint_status = 'rejected';

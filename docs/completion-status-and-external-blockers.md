@@ -27,7 +27,8 @@ Per `AGENTS.md` safe-by-default and no-IP-inventory-discovery — live probes ru
 - `origin.leak_scan.safe` — bounded prefix scan on the declared apex only (12 fixed labels); not internet-wide subdomain discovery.
 - `l3.firewall_exposure_scan.safe` — TCP connect sweep on customer-declared host/IP and capped port list; not arbitrary network mapping.
 - `origin.host_sni_bypass.safe` — uses customer-declared `direct_ip` or prior leak signals; no credential-free CDN origin hunting.
-- Checks still `metadata_marker`-only: `protocol.grpc_reflection_stream.safe`, `protocol.websocket_connection_controls.safe` (heavy deps deferred).
+- Check still `metadata_marker`-only: `protocol.grpc_reflection_stream.safe` (protobuf+h2 stream framing deps deferred; `[?]` in DET-015).
+- `protocol.websocket_connection_controls.safe` upgraded to bounded `websocket_upgrade_posture` live probe (`src/lib/safeNetworkProbes.mjs`, worker dispatch, tests in `safe-network-probes.test.mjs`).
 
 ## B. Remaining in-repo (buildable, not done this pass)
 
