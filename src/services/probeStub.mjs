@@ -103,6 +103,19 @@ export function simulateProbeResult(check, target, overrideProfile) {
       monitor_only_leak: external_result === 'connected',
       note: 'Simulated WAF enforcement probe.',
     });
+  } else if (probeProfileKind === 'outside_in_waf_scan') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'outside_in_waf_scan',
+      waf_fingerprint_detected: external_result === 'blocked',
+      posture_label: external_result === 'blocked' ? 'Protected' : 'Underprotected',
+      posture_status: external_result === 'blocked' ? 'protected' : 'underprotected',
+      marker_probes: [
+        { family: 'sqli_marker', blocked: external_result === 'blocked', allowed: external_result === 'connected' },
+        { family: 'xss_marker', blocked: external_result === 'blocked', allowed: external_result === 'connected' },
+        { family: 'path_traversal_marker', blocked: external_result === 'blocked', allowed: external_result === 'connected' },
+      ],
+      note: 'Simulated outside-in WAF scanner.',
+    });
   } else if (probeProfileKind === 'dnssec_posture') {
     Object.assign(baseMetadata, {
       probe_kind: 'dnssec_posture',

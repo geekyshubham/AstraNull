@@ -590,6 +590,7 @@ describe('executeProbeForJob routing', () => {
     { kind: 'port_scan_bounded', check_id: 'l3.firewall_exposure_scan.safe', vector_family: 'l3_l4' },
     { kind: 'rate_limit_sequence', check_id: 'l7.low_rate_rate_limit.safe', vector_family: 'l7' },
     { kind: 'waf_enforcement_probe', check_id: 'waf.enforcement.safe', vector_family: 'waf' },
+    { kind: 'outside_in_waf_scan', check_id: 'waf.fingerprint.safe', vector_family: 'waf' },
     { kind: 'dnssec_posture', check_id: 'dns.dnssec_expensive_query.safe', vector_family: 'dns' },
     { kind: 'dns_open_recursion', check_id: 'dns.open_recursion_behavior.safe', vector_family: 'dns' },
     { kind: 'dns_failover_posture', check_id: 'dns.secondary_failover.safe', vector_family: 'dns' },

@@ -60,6 +60,27 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         { label: 'WAF enforced', value: formatBool(meta.waf_enforced) },
         { label: 'Monitor-only leak', value: formatBool(meta.monitor_only_leak) },
       ];
+    case 'outside_in_waf_scan':
+      return [
+        { label: 'Posture', value: getString(meta, ['posture_label', 'posture_status']) },
+        { label: 'WAF detected', value: formatBool(meta.waf_fingerprint_detected ?? meta.waf_detected) },
+        { label: 'Detected vendor', value: getString(meta, ['detected_vendor', 'waf_product_hint']) },
+        { label: 'Confidence', value: getString(meta, ['waf_confidence']) },
+        { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
+        {
+          label: 'Marker probes',
+          value: Array.isArray(meta.marker_probes)
+            ? meta.marker_probes
+                .map((entry) => {
+                  const row = entry as DataItem;
+                  const family = getString(row, ['family']);
+                  const blocked = row.blocked === true ? 'blocked' : row.allowed === true ? 'allowed' : 'inconclusive';
+                  return `${family}: ${blocked}`;
+                })
+                .join(', ')
+            : '—',
+        },
+      ];
     case 'rate_limit_sequence':
       return [
         { label: 'Status sequence', value: formatList(meta.status_sequence) },

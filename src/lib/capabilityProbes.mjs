@@ -14,6 +14,8 @@ import {
   resolveProbeRequestBudget,
 } from './probeRequestBudget.mjs';
 import { runDnsTcpAxfrQuery } from './dnsTcpAxfrSession.mjs';
+import { runOutsideInWafScan } from './outsideInWafScanner.mjs';
+import { enrichProbeMetadataWithWafCatalog } from './wafProductCatalog.mjs';
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
@@ -413,6 +415,90 @@ export async function probeRateLimitSequence(job, deps = {}) {
       rate_limit_enforced: throttled,
     }),
     requests_sent: statuses.length,
+    duration_ms: durationMs,
+  };
+}
+
+/**
+ * Outside-in WAF scanner: fingerprint, benign class markers, optional origin bypass, posture report.
+ */
+export async function probeOutsideInWafScan(job, deps = {}) {
+  const kind = 'outside_in_waf_scan';
+  const targetValue = String(job.target?.value ?? '').trim();
+  const url = targetValue.startsWith('http') ? targetValue : baseUrlForHost(apexDomain(job) ?? '');
+  if (!url) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, { error_class: 'unsupported_target' }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  const { hostname, directIp } = resolveHostSniTargets(job);
+  const budget = resolveProbeRequestBudget(job);
+  const timeoutMs = job.constraints?.timeout_ms ?? 5000;
+  const started = Date.now();
+
+  const scan = await runOutsideInWafScan({
+    url,
+    hostname,
+    directIp,
+    budget,
+    timeoutMs,
+    wafRequired: job.probe_profile?.waf_required !== false,
+    customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
+    fetchFn: deps.fetchFn,
+    originBypassFn: directIp && hostname
+      ? async ({ directIp: ip, hostname: host, timeoutMs: tmo, deps: innerDeps }) => {
+        const useHttps = job.probe_profile?.use_https !== false;
+        if (useHttps && !innerDeps.fetchFn) {
+          return httpsHeadWithSni(ip, host, { timeoutMs: tmo }, innerDeps);
+        }
+        return boundedFetch(`http://${ip}/`, {
+          timeoutMs: tmo,
+          fetchOptions: {
+            method: 'HEAD',
+            redirect: 'manual',
+            headers: { Host: host },
+          },
+        }, innerDeps);
+      }
+      : undefined,
+  });
+
+  const durationMs = Date.now() - started;
+  if (scan.error_class && !scan.posture_status) {
+    return {
+      external_result: 'error',
+      metadata: enrichProbeMetadataWithWafCatalog(
+        withKind(job, kind, { ...scan, duration_ms: durationMs }),
+        job.check_id,
+      ),
+      requests_sent: scan.requests_sent ?? 0,
+      duration_ms: durationMs,
+    };
+  }
+
+  const external = scan.origin_bypass_confirmed
+    ? 'connected'
+    : scan.validation_failed
+      ? 'connected'
+      : scan.waf_detected
+        ? 'blocked'
+        : 'connected';
+
+  return {
+    external_result: external,
+    metadata: enrichProbeMetadataWithWafCatalog(
+      withKind(job, kind, {
+        duration_ms: durationMs,
+        scenario_family: 'fingerprint',
+        ...scan,
+      }),
+      job.check_id,
+    ),
+    requests_sent: scan.requests_sent ?? 0,
     duration_ms: durationMs,
   };
 }
@@ -973,6 +1059,7 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
 }
 
 export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
+  outside_in_waf_scan: probeOutsideInWafScan,
   origin_leak_scan: probeOriginLeakScan,
   host_sni_bypass: probeHostSniBypass,
   port_scan_bounded: probePortScanBounded,

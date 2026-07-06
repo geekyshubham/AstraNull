@@ -27,6 +27,7 @@ export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'cors_posture_probe',
   'bot_challenge_probe',
   'graphql_posture_probe',
+  'outside_in_waf_scan',
 ]);
 
 export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
@@ -45,6 +46,7 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   cors_posture_probe: 1,
   bot_challenge_probe: 1,
   graphql_posture_probe: 1,
+  outside_in_waf_scan: 5,
 });
 
 export function maxProbeRequestsForKind(kind) {
@@ -503,24 +505,33 @@ export const CHECK_CATALOG = [
   safeCheck({
     check_id: 'waf.fingerprint.safe',
     version: '1.0.0',
-    name: 'WAF Fingerprint (Safe)',
+    name: 'Outside-In WAF Scanner (Safe)',
     vector_family: 'waf',
-    description: 'Bounded HEAD metadata to infer WAF presence from response class headers — no bypass attempts.',
+    description:
+      'Bounded outside-in scan: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.',
     required_agent_modes: ['heartbeat'],
-    supported_targets: ['url', 'fqdn'],
+    supported_targets: ['url', 'fqdn', 'ip'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_fingerprint_probe'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Up to three HEAD probes collect server/WAF hint metadata only; no auth bypass or high rate.',
+    verdict_logic:
+      'Up to five bounded GET/HEAD probes fingerprint the edge, validate class markers are blocked, test declared origin bypass, and emit Protected/Underprotected/Bypass Risk posture.',
     probe_profile: {
-      kind: 'http_head',
-      max_requests: 3,
+      kind: 'outside_in_waf_scan',
+      max_requests: 5,
       timeout_ms: 5000,
       scenario_family: 'fingerprint',
-      expected_action: 'log_only_expected',
+      expected_action: 'block',
       nonce_hash_only: true,
-      collect: ['status_code', 'server_header', 'waf_product_hint', 'tls_fingerprint_hint'],
+      collect: [
+        'status_code',
+        'waf_product_hint',
+        'marker_probes',
+        'posture_status',
+        'posture_label',
+        'origin_bypass_confirmed',
+      ],
     },
-    safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
+    safety_constraints: { max_events: 5, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),

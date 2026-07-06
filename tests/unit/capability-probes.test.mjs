@@ -24,6 +24,7 @@ import {
   probeRateLimitSequence,
   probeTlsAudit,
   probeWafEnforcement,
+  probeOutsideInWafScan,
   executeCapabilityProbe,
 } from '../../src/lib/capabilityProbes.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';

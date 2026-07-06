@@ -5,6 +5,7 @@ export const CAPABILITY_PROBE_KIND_LABELS: Record<string, string> = {
   host_sni_bypass: 'CDN/WAF bypass (Host/SNI)',
   port_scan_bounded: 'Firewall exposure scan',
   waf_enforcement_probe: 'WAF enforcement probe',
+  outside_in_waf_scan: 'Outside-in WAF scanner',
   rate_limit_sequence: 'Rate-limit probe',
   dnssec_posture: 'DNSSEC posture',
   dns_axfr_leak: 'AXFR leak check',
