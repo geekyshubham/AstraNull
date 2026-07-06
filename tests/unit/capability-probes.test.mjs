@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { describe, it } from 'node:test';
 import {
   buildAxfrDnsMessage,
@@ -21,6 +22,7 @@ import {
   probeTlsAudit,
   probeWafEnforcement,
   executeCapabilityProbe,
+  isLiveCapabilityProbeAuthorized,
 } from '../../src/lib/capabilityProbes.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 
@@ -197,6 +199,57 @@ describe('capability probes P0/P1', () => {
     const parsed = parseDnsResponseHeader(framed);
     assert.equal(parsed.rcode, 5);
     assert.equal(parsed.answer_count, 0);
+    assert.equal(parsed.incomplete, false);
+    assert.equal(parsed.tcp_framed, true);
+  });
+
+  it('parseDnsResponseHeader marks partial TCP frames incomplete', () => {
+    const dns = Buffer.alloc(12);
+    dns[3] = 0x05;
+    const framed = frameDnsTcpMessage(dns);
+    const partial = framed.subarray(0, 6);
+    const parsed = parseDnsResponseHeader(partial);
+    assert.equal(parsed.incomplete, true);
+    assert.equal(parsed.tcp_framed, true);
+    assert.equal(parsed.rcode, null);
+  });
+
+  it('axfr leak probe integrates with a local TCP DNS responder', async () => {
+    const refusedDns = Buffer.alloc(12);
+    refusedDns[3] = 0x05;
+    const refusedFramed = frameDnsTcpMessage(refusedDns);
+    let receivedQuery = null;
+
+    const server = net.createServer((socket) => {
+      socket.on('data', (buf) => {
+        receivedQuery = buf;
+        socket.write(refusedFramed);
+      });
+      socket.on('error', () => {});
+    });
+
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const { port } = server.address();
+
+    try {
+      const outcome = await probeAxfrLeak(job({
+        probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+      }), {
+        resolveNsFn: async () => ['127.0.0.1'],
+        connectFn: (opts) => net.connect({ ...opts, port }),
+      });
+
+      assert.ok(receivedQuery);
+      assert.equal(receivedQuery.readUInt16BE(0), receivedQuery.length - 2);
+      assert.equal(outcome.external_result, 'blocked');
+      assert.equal(outcome.metadata.axfr_refused, true);
+      assert.equal(outcome.metadata.rcode, 5);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('axfr leak probe sends TCP-framed query and treats REFUSED rcode as blocked', async () => {
@@ -212,6 +265,8 @@ describe('capability probes P0/P1', () => {
       connectFn: () => ({
         once(event, handler) {
           if (event === 'connect') setImmediate(() => handler());
+        },
+        on(event, handler) {
           if (event === 'data') setImmediate(() => handler(refusedFramed));
         },
         write(buf) {
@@ -347,6 +402,29 @@ describe('capability probes P0/P1', () => {
     });
     assert.equal(outcome.metadata.probe_kind, 'bot_challenge_probe');
     assert.equal(outcome.external_result, 'blocked');
+  });
+
+  it('executeCapabilityProbe blocks unsigned live probes without injectable deps', async () => {
+    const outcome = await executeCapabilityProbe(job({
+      probe_profile: {
+        kind: 'host_sni_bypass',
+        protected_host: 'edge.example.test',
+        direct_ip: '198.51.100.7',
+      },
+    }));
+    assert.equal(outcome.metadata.probe_kind, 'host_sni_bypass');
+    assert.equal(outcome.metadata.error_class, 'live_probe_requires_signed_worker');
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.requests_sent, 0);
+  });
+
+  it('isLiveCapabilityProbeAuthorized accepts signed worker verification context', () => {
+    assert.equal(isLiveCapabilityProbeAuthorized(job(), { signedJobVerified: true }), true);
+    assert.equal(isLiveCapabilityProbeAuthorized(job(), {}), false);
+    assert.equal(
+      isLiveCapabilityProbeAuthorized(job(), { fetchFn: async () => ({ status: 200, headers: { get: () => null } }) }),
+      true,
+    );
   });
 
   it('catalog includes full P0/P1 capability checks with live probe kinds', () => {

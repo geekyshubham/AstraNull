@@ -22,9 +22,11 @@ All verified with `make verify` (lint ok; 2077 unit + 230 integration + 15 e2e p
 | **AG-017 Postgres parity** | Migration `0024_ownership_verifications.sql` + `db/schema.sql` (table + per-tenant RLS; `target_groups.validation_mode/ownership_status/dns_ownership`; `probe_jobs.ownership_verification_id`); `ownershipVerificationRepository.mjs` + service adapters (tenant-scoped; mirror in-memory signatures incl. signed `ownership_challenge` job dispatch); `dnsOwnership` PG service; coreCatalog target-group column persistence; runtime wiring. | `scripts/validate-db-schema.mjs` ok; `postgres-tenant-query-audit.mjs` 0 findings (table added to enforced tenant list); `tests/unit/postgres-ownership-verification-service-adapters.test.mjs` pass; guard tests (migration latest-version, repository keys, runtime harness) updated without weakening validation; `make verify` green |
 
 ### Safety judgment (bounded live probes vs metadata-only)
-Per `AGENTS.md` safe-by-default — live probes run only on **customer-declared** targets via signed-worker jobs, with hard caps (e.g. 12 subdomain prefixes, 15 ports, single AXFR attempt, no flooding):
-- `dns.zone_transfer_exposure.safe` → `dns_axfr_leak` — one TCP-53 AXFR attempt with RFC 1035 framing; refuses/leak metadata only.
-- `origin.leak_scan.safe`, `l3.firewall_exposure_scan.safe`, etc. — bounded recon on declared apex/host; not internet-wide discovery.
+Per `AGENTS.md` safe-by-default and no-IP-inventory-discovery — live probes run only on **customer-declared** targets via signed-worker jobs, with hard caps (e.g. 12 subdomain prefixes, 15 ports, single AXFR attempt, no flooding). `executeCapabilityProbe` fails closed unless the job was verified by the signed worker (`signedJobVerified`), carries a valid `job_signature`, or the caller supplies injectable I/O deps (unit tests / verification harness only):
+- `dns.zone_transfer_exposure.safe` → `dns_axfr_leak` — one TCP-53 AXFR attempt with RFC 1035 framing against the declared zone's first NS; refuses/leak metadata only; not zone enumeration.
+- `origin.leak_scan.safe` — bounded prefix scan on the declared apex only (12 fixed labels); not internet-wide subdomain discovery.
+- `l3.firewall_exposure_scan.safe` — TCP connect sweep on customer-declared host/IP and capped port list; not arbitrary network mapping.
+- `origin.host_sni_bypass.safe` — uses customer-declared `direct_ip` or prior leak signals; no credential-free CDN origin hunting.
 - Checks still `metadata_marker`-only: `protocol.grpc_reflection_stream.safe`, `protocol.websocket_connection_controls.safe` (heavy deps deferred).
 
 ## B. Remaining in-repo (buildable, not done this pass)

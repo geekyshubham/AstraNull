@@ -7,6 +7,18 @@ import { Resolver } from 'node:dns/promises';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
+import { verifyProbeJobSignature } from './probeJobs.mjs';
+
+const INJECTABLE_IO_DEPS = Object.freeze([
+  'fetchFn',
+  'connectFn',
+  'httpsRequestFn',
+  'resolve4Fn',
+  'resolve6Fn',
+  'resolveFn',
+  'resolveNsFn',
+  'resolve4ExternalFn',
+]);
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
@@ -518,13 +530,61 @@ export function frameDnsTcpMessage(message) {
 
 /** Parse DNS header from a TCP DNS response (strips 2-byte length prefix when present). */
 export function parseDnsResponseHeader(chunk) {
-  const hasTcpPrefix = chunk.length >= 14;
-  const dnsMessage = hasTcpPrefix && chunk.readUInt16BE(0) === chunk.length - 2
-    ? chunk.subarray(2)
-    : chunk;
-  const rcode = (dnsMessage[3] ?? 0) & 0x0f;
-  const answerCount = dnsMessage.length >= 8 ? dnsMessage.readUInt16BE(6) : 0;
-  return { rcode, answer_count: answerCount, dns_message: dnsMessage };
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? []);
+  if (buffer.length < 12) {
+    if (buffer.length >= 2) {
+      const declaredLen = buffer.readUInt16BE(0);
+      if (declaredLen >= 12 && buffer.length < declaredLen + 2) {
+        return {
+          rcode: null,
+          answer_count: 0,
+          dns_message: buffer,
+          incomplete: true,
+          tcp_framed: true,
+        };
+      }
+    }
+    return {
+      rcode: null,
+      answer_count: 0,
+      dns_message: buffer,
+      incomplete: true,
+      tcp_framed: false,
+    };
+  }
+
+  const declaredLen = buffer.readUInt16BE(0);
+  const tcpFramed = declaredLen >= 12 && buffer.length >= declaredLen + 2;
+  if (tcpFramed && buffer.length < declaredLen + 2) {
+    return {
+      rcode: null,
+      answer_count: 0,
+      dns_message: buffer,
+      incomplete: true,
+      tcp_framed: true,
+    };
+  }
+
+  const dnsMessage = tcpFramed ? buffer.subarray(2, 2 + declaredLen) : buffer;
+  if (dnsMessage.length < 12) {
+    return {
+      rcode: null,
+      answer_count: 0,
+      dns_message: dnsMessage,
+      incomplete: true,
+      tcp_framed: tcpFramed,
+    };
+  }
+
+  const rcode = dnsMessage[3] & 0x0f;
+  const answerCount = dnsMessage.readUInt16BE(6);
+  return {
+    rcode,
+    answer_count: answerCount,
+    dns_message: dnsMessage,
+    incomplete: false,
+    tcp_framed: tcpFramed,
+  };
 }
 
 /**
@@ -562,15 +622,20 @@ export async function probeAxfrLeak(job, deps = {}) {
       resolve({ axfr_refused: true, reason: 'timeout' });
     }, timeoutMs);
 
+    let responseBuffer = Buffer.alloc(0);
+
     socket.once('connect', () => {
       socket.write(frameDnsTcpMessage(buildAxfrDnsMessage(zone)));
     });
-    socket.once('data', (chunk) => {
+    socket.on('data', (chunk) => {
       if (settled) return;
+      responseBuffer = Buffer.concat([responseBuffer, chunk]);
+      const parsed = parseDnsResponseHeader(responseBuffer);
+      if (parsed.incomplete) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      const { rcode, answer_count: answerCount } = parseDnsResponseHeader(chunk);
+      const { rcode, answer_count: answerCount } = parsed;
       if (rcode === 0 && answerCount > 0) {
         resolve({ axfr_leak: true, rcode, answer_count: answerCount });
       } else {
@@ -1023,9 +1088,34 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   graphql_posture_probe: probeGraphqlPosture,
 });
 
+export function hasInjectableIoDeps(deps = {}) {
+  return INJECTABLE_IO_DEPS.some((key) => typeof deps[key] === 'function');
+}
+
+/** Fail closed unless the caller is a signed worker, a signed job, or an injectable test consumer. */
+export function isLiveCapabilityProbeAuthorized(job, deps = {}) {
+  if (deps.skipLiveProbeGuard === true) return true;
+  if (deps.signedJobVerified === true) return true;
+  if (hasInjectableIoDeps(deps)) return true;
+  if (deps.probeWorkerSecret && verifyProbeJobSignature(job, deps.probeWorkerSecret)) return true;
+  return false;
+}
+
 export async function executeCapabilityProbe(job, deps = {}) {
   const kind = job.probe_profile?.kind;
   const fn = CAPABILITY_PROBE_DISPATCH[kind];
   if (!fn) return null;
+  if (!isLiveCapabilityProbeAuthorized(job, deps)) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'live_probe_requires_signed_worker',
+        simulation: 'SAFE_PROBE_SIMULATION',
+        note: 'Live capability probes require a signed-worker job or injectable test deps.',
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
   return fn(job, deps);
 }

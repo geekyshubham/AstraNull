@@ -655,9 +655,9 @@ export function probeMetadataMarker(job) {
   };
 }
 
-export async function executeProbeForJob(job) {
+export async function executeProbeForJob(job, deps = {}) {
   const profileKind = job.probe_profile?.kind;
-  const capabilityOutcome = await executeCapabilityProbe(job);
+  const capabilityOutcome = await executeCapabilityProbe(job, deps);
   if (capabilityOutcome) {
     return capabilityOutcome;
   }
@@ -702,7 +702,10 @@ export async function processJob(config, job) {
     );
   }
 
-  const outcome = await executeProbeForJob(job);
+  const outcome = await executeProbeForJob(job, {
+    probeWorkerSecret: config.secret,
+    signedJobVerified: true,
+  });
   return buildResultBody(job, outcome.external_result, outcome.metadata, {
     requests_sent: outcome.requests_sent,
     duration_ms: outcome.duration_ms,

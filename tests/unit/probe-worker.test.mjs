@@ -593,9 +593,15 @@ describe('executeProbeForJob routing', () => {
       target: { kind: 'fqdn', value: 'nonexistent.invalid' },
       constraints: { timeout_ms: 500, max_requests: 14 },
     });
-    const outcome = await executeProbeForJob(job);
+    const outcome = await executeProbeForJob(job, {
+      signedJobVerified: true,
+      resolve4Fn: async (host) => (host === 'nonexistent.invalid' ? ['203.0.113.10'] : []),
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
+    });
     assert.equal(outcome.metadata.probe_kind, 'origin_leak_scan');
     assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
+    assert.notEqual(outcome.metadata.error_class, 'live_probe_requires_signed_worker');
   });
 
   it('routes udp_probe profile kind to bounded UDP datagram probe', async () => {
