@@ -8,11 +8,8 @@ import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
-import {
-  accumulateDnsTcpResponse,
-  buildAxfrDnsMessage,
-  frameDnsTcpMessage,
-} from './dnsTcpWire.mjs';
+import { resolveProbeRequestBudget } from './probeRequestBudget.mjs';
+import { runDnsTcpAxfrQuery } from './dnsTcpAxfrSession.mjs';
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
@@ -303,7 +300,8 @@ export async function probePortScanBounded(job, deps = {}) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
 
-  const ports = (job.probe_profile?.ports ?? RISKY_ADMIN_PORTS).slice(0, 15);
+  const budget = resolveProbeRequestBudget(job);
+  const ports = (job.probe_profile?.ports ?? RISKY_ADMIN_PORTS).slice(0, budget);
   const timeoutMs = Math.min(3000, job.constraints?.timeout_ms ?? 3000);
   const started = Date.now();
   const open_ports = [];
@@ -318,6 +316,7 @@ export async function probePortScanBounded(job, deps = {}) {
   }
 
   for (const port of ports) {
+    if (requestsSent >= budget) break;
     const state = await tcpConnectProbe(resolvedHost, port, timeoutMs, deps.connectFn);
     requestsSent += 1;
     if (state === 'open') open_ports.push(port);
@@ -511,45 +510,13 @@ export async function probeAxfrLeak(job, deps = {}) {
   }
 
   const nsHost = nameservers[0];
-  const connectFn = deps.connectFn ?? net.connect;
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
 
-  const outcome = await new Promise((resolve) => {
-    let settled = false;
-    const socket = connectFn({ host: nsHost, port: 53, timeout: timeoutMs });
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve({ axfr_refused: true, reason: 'timeout' });
-    }, timeoutMs);
-
-    let responseBuffer = Buffer.alloc(0);
-
-    socket.once('connect', () => {
-      socket.write(frameDnsTcpMessage(buildAxfrDnsMessage(zone)));
-    });
-    socket.on('data', (chunk) => {
-      if (settled) return;
-      const accumulated = accumulateDnsTcpResponse(responseBuffer, chunk, { transport: 'tcp' });
-      responseBuffer = accumulated.buffer;
-      if (!accumulated.complete) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      const { rcode, answer_count: answerCount } = accumulated.parsed;
-      if (rcode === 0 && answerCount > 0) {
-        resolve({ axfr_leak: true, rcode, answer_count: answerCount });
-      } else {
-        resolve({ axfr_refused: true, rcode, answer_count: answerCount });
-      }
-    });
-    socket.once('error', (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ axfr_refused: true, reason: err.code ?? 'error' });
-    });
+  const outcome = await runDnsTcpAxfrQuery({
+    nsHost,
+    zone,
+    timeoutMs,
+    connectFn: deps.connectFn,
   });
 
   const durationMs = Date.now() - started;
@@ -557,7 +524,7 @@ export async function probeAxfrLeak(job, deps = {}) {
   return {
     external_result: leaked ? 'connected' : 'blocked',
     metadata: withKind(job, kind, { duration_ms: durationMs, zone, nameserver: nsHost, ...outcome }),
-    requests_sent: 1,
+    requests_sent: 2,
     duration_ms: durationMs,
   };
 }

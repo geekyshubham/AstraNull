@@ -38,6 +38,6 @@ describe('capability probes live public DNS (unaided I/O)', () => {
     } else {
       assert.ok(outcome.metadata.rcode >= 1 && outcome.metadata.rcode <= 15, `unexpected DNS rcode ${outcome.metadata.rcode}`);
     }
-    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.requests_sent, 2);
   });
 });

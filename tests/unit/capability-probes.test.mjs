@@ -96,6 +96,35 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.bypass_signal, true);
   });
 
+  it('port scan respects max_requests from probe profile', async () => {
+    const probedPorts = [];
+    const outcome = await probePortScanBounded(
+      job({
+        constraints: { timeout_ms: 1000 },
+        target: { value: '10.0.0.5' },
+        probe_profile: {
+          kind: 'port_scan_bounded',
+          max_requests: 3,
+          ports: [22, 443, 80, 8080, 9999],
+        },
+      }),
+      {
+        connectFn: ({ port }, cb) => {
+          probedPorts.push(port);
+          const socket = {
+            once(event, handler) {
+              if (event === 'error') setImmediate(() => handler({ code: 'ECONNREFUSED' }));
+            },
+            destroy() {},
+          };
+          return socket;
+        },
+      },
+    );
+    assert.deepEqual(probedPorts, [22, 443, 80]);
+    assert.equal(outcome.requests_sent, 3);
+  });
+
   it('port scan bounded reports risky admin ports', async () => {
     const outcome = await probePortScanBounded(
       job({
@@ -243,6 +272,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'blocked');
     assert.equal(outcome.metadata.axfr_refused, true);
     assert.notEqual(outcome.metadata.axfr_leak, true);
+    assert.equal(outcome.requests_sent, 2);
   });
 
   it('tls audit reports weak protocol issues', async () => {
