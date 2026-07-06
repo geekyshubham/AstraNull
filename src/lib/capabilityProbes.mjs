@@ -8,7 +8,11 @@ import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
-import { resolveProbeRequestBudget } from './probeRequestBudget.mjs';
+import {
+  countAxfrProbeRequests,
+  resolveBoundedSequenceBudget,
+  resolveProbeRequestBudget,
+} from './probeRequestBudget.mjs';
 import { runDnsTcpAxfrQuery } from './dnsTcpAxfrSession.mjs';
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
@@ -166,6 +170,7 @@ export async function probeOriginLeakScan(job, deps = {}) {
   }
 
   const started = Date.now();
+  const budget = resolveProbeRequestBudget(job);
   let requestsSent = 0;
   const leak_signals = [];
   const subdomains_scanned = [];
@@ -197,7 +202,7 @@ export async function probeOriginLeakScan(job, deps = {}) {
   }
 
   for (const prefix of BOUNDED_SUBDOMAIN_PREFIXES) {
-    if (requestsSent >= (job.constraints?.max_requests ?? 14)) break;
+    if (requestsSent >= budget) break;
     const host = `${prefix}.${domain}`;
     subdomains_scanned.push(host);
     const ips = await resolve4(host, deps);
@@ -350,7 +355,7 @@ export async function probeRateLimitSequence(job, deps = {}) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
 
-  const maxSeq = Math.min(5, job.probe_profile?.max_requests ?? 5);
+  const maxSeq = resolveBoundedSequenceBudget(job, { ceiling: 5 });
   const started = Date.now();
   const statuses = [];
   let throttled = false;
@@ -504,7 +509,7 @@ export async function probeAxfrLeak(job, deps = {}) {
     return {
       external_result: 'blocked',
       metadata: withKind(job, kind, { axfr_refused: true, reason: 'no_nameservers', zone }),
-      requests_sent: 1,
+      requests_sent: countAxfrProbeRequests({ nameserverResolved: true, tcpAttempted: false }),
       duration_ms: Date.now() - started,
     };
   }
@@ -524,7 +529,7 @@ export async function probeAxfrLeak(job, deps = {}) {
   return {
     external_result: leaked ? 'connected' : 'blocked',
     metadata: withKind(job, kind, { duration_ms: durationMs, zone, nameserver: nsHost, ...outcome }),
-    requests_sent: 2,
+    requests_sent: countAxfrProbeRequests({ nameserverResolved: true, tcpAttempted: true }),
     duration_ms: durationMs,
   };
 }

@@ -8,6 +8,7 @@ import {
   frameDnsTcpMessage,
 } from '../../src/lib/dnsTcpWire.mjs';
 import {
+  BOUNDED_SUBDOMAIN_PREFIXES,
   probeApiSurfaceScan,
   probeAxfrLeak,
   probeBotChallenge,
@@ -37,6 +38,19 @@ function job(overrides = {}) {
 }
 
 describe('capability probes P0/P1', () => {
+  it('origin leak scan stops at constraints max_requests budget', async () => {
+    const outcome = await probeOriginLeakScan(job({
+      constraints: { max_requests: 4, timeout_ms: 1000 },
+    }), {
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 404, headers: { get: () => null } }),
+    });
+    assert.equal(outcome.requests_sent, 4);
+    assert.equal(outcome.metadata.subdomains_scanned.length, 1);
+    assert.ok(outcome.metadata.subdomains_scanned.length < BOUNDED_SUBDOMAIN_PREFIXES.length);
+  });
+
   it('origin leak scan reports leak signals from subdomain divergence', async () => {
     const outcome = await probeOriginLeakScan(job(), {
       resolve4Fn: async (host) => {
@@ -239,6 +253,17 @@ describe('capability probes P0/P1', () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  it('axfr leak probe counts resolve-only when no nameservers', async () => {
+    const outcome = await probeAxfrLeak(job({
+      probe_profile: { kind: 'dns_axfr_leak', zone: 'missing.test' },
+    }), {
+      resolveNsFn: async () => [],
+    });
+    assert.equal(outcome.metadata.axfr_refused, true);
+    assert.equal(outcome.metadata.reason, 'no_nameservers');
+    assert.equal(outcome.requests_sent, 1);
   });
 
   it('axfr leak probe sends TCP-framed query and treats REFUSED rcode as blocked', async () => {

@@ -16,3 +16,19 @@ export function resolveProbeRequestBudget(job) {
   }
   return DEFAULT_PROBE_REQUEST_BUDGET;
 }
+
+/** Cap a probe sequence length (e.g. rate-limit HEADs) by job budget and a hard ceiling. */
+export function resolveBoundedSequenceBudget(job, { ceiling = 5 } = {}) {
+  return Math.min(ceiling, resolveProbeRequestBudget(job));
+}
+
+/**
+ * AXFR probe accounting: one resolveNs attempt plus optional single TCP-53 query.
+ * @param {{ nameserverResolved: boolean, tcpAttempted: boolean }} counts
+ */
+export function countAxfrProbeRequests({ nameserverResolved, tcpAttempted }) {
+  let n = 0;
+  if (nameserverResolved) n += 1;
+  if (tcpAttempted) n += 1;
+  return n;
+}

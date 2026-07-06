@@ -20,7 +20,9 @@ function signedAxfrJob(zone) {
   return job;
 }
 
-describe('capability probes live public DNS (unaided I/O)', () => {
+const skipPublic = process.env.ASTRANULL_SKIP_PUBLIC_DNS === '1';
+
+describe('capability probes live public DNS (unaided I/O)', { skip: skipPublic }, () => {
   it('dns_axfr_leak uses real resolveNs + net.connect against example.com NS', async () => {
     const outcome = await executeCapabilityProbe(
       signedAxfrJob('example.com'),

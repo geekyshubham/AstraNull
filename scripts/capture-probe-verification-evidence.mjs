@@ -181,6 +181,14 @@ if (process.env.ASTRANULL_SKIP_PUBLIC_DNS === '1') {
   run('npm', ['run', 'test:live-dns'], 'axfr-public-live.log');
 }
 
+const capabilityCounts = parseTestCounts('capability-probes.log');
+const fullSuiteCounts = parseTestCounts('full-suite.log', { sumPasses: true });
+const axfrCounts = parseTestCounts('axfr-public-live.log');
+const totalFail =
+  capabilityCounts.fail + fullSuiteCounts.fail + (axfrSkipped ? 0 : axfrCounts.fail);
+const evidenceOkLine =
+  `EVIDENCE_OK capability_probes_pass=${capabilityCounts.pass} full_suite_pass=${fullSuiteCounts.pass} axfr_live_pass=${axfrSkipped ? 'skipped' : axfrCounts.pass} capability_probes_fail=${capabilityCounts.fail} full_suite_fail=${fullSuiteCounts.fail} axfr_live_fail=${axfrSkipped ? 'skipped' : axfrCounts.fail} total_fail=${totalFail}`;
+
 const evidenceNotes = `# Probe verification evidence notes
 
 ## Plan steps (mechanical)
@@ -192,20 +200,16 @@ const evidenceNotes = `# Probe verification evidence notes
 
 ## Live I/O (supplemental, post step 6)
 - **axfr-public-live.log**: \`npm run test:live-dns\` — real \`dns.resolveNs\` + \`net.connect\` to example.com NS; \`job_signature\` auth only. Skipped when \`ASTRANULL_SKIP_PUBLIC_DNS=1\`.
-- **dns-tcp-wire.log**: \`accumulateDnsTcpResponse\` split-chunk framing (wire module; probe delegates accumulation).
+- **dns-tcp-wire.log**: \`accumulateDnsTcpResponse\` split-chunk framing (wire module; \`dnsTcpAxfrSession\` owns socket loop).
+
+## Capture result
+${evidenceOkLine}
 `;
 writeFileSync(join(scratch, 'evidence-notes.md'), evidenceNotes);
-
-const capabilityCounts = parseTestCounts('capability-probes.log');
-const fullSuiteCounts = parseTestCounts('full-suite.log', { sumPasses: true });
-const axfrCounts = parseTestCounts('axfr-public-live.log');
-const totalFail =
-  capabilityCounts.fail + fullSuiteCounts.fail + (axfrSkipped ? 0 : axfrCounts.fail);
+writeFileSync(join(scratch, 'evidence-ok.log'), `${evidenceOkLine}\n`);
 
 console.log(`probe verification evidence written to ${scratch}`);
-console.log(
-  `EVIDENCE_OK capability_probes_pass=${capabilityCounts.pass} full_suite_pass=${fullSuiteCounts.pass} axfr_live_pass=${axfrSkipped ? 'skipped' : axfrCounts.pass} capability_probes_fail=${capabilityCounts.fail} full_suite_fail=${fullSuiteCounts.fail} axfr_live_fail=${axfrSkipped ? 'skipped' : axfrCounts.fail} total_fail=${totalFail}`,
-);
+console.log(evidenceOkLine);
 if (totalFail > 0) {
   process.exit(1);
 }
