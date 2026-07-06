@@ -171,16 +171,18 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'connected');
   });
 
-  it('axfr leak probe integrates with a local TCP DNS responder', async () => {
+  it('probeAxfrLeak accumulates split TCP response chunks before parsing', async () => {
     const refusedDns = Buffer.alloc(12);
     refusedDns[3] = 0x05;
     const refusedFramed = frameDnsTcpMessage(refusedDns);
+    const chunk1 = refusedFramed.subarray(0, 4);
+    const chunk2 = refusedFramed.subarray(4);
     let receivedQuery = null;
 
     const server = net.createServer((socket) => {
       socket.on('data', (buf) => {
         receivedQuery = buf;
-        socket.write(refusedFramed);
+        socket.write(chunk1, () => socket.write(chunk2));
       });
       socket.on('error', () => {});
     });
@@ -195,6 +197,7 @@ describe('capability probes P0/P1', () => {
       const outcome = await probeAxfrLeak(job({
         probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
       }), {
+        signedJobVerified: true,
         resolveNsFn: async () => ['127.0.0.1'],
         connectFn: (opts) => net.connect({ ...opts, port }),
       });
