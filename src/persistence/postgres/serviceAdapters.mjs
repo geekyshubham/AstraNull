@@ -148,6 +148,16 @@ export {
   createPostgresTestPolicyServices,
 } from './testPolicyServiceAdapters.mjs';
 
+export {
+  SUBSCRIPTION_INTERNAL_MANAGEMENT_REPOSITORY_METHODS,
+  SUBSCRIPTION_CORE_CATALOG_REPOSITORY_METHODS,
+  SUBSCRIPTION_AGENT_CONTROL_REPOSITORY_METHODS,
+  SUBSCRIPTION_VALIDATION_EVIDENCE_REPOSITORY_METHODS,
+  SUBSCRIPTION_HIGH_SCALE_REPOSITORY_METHODS,
+  POSTGRES_SUBSCRIPTION_SERVICE_METHODS,
+  createPostgresSubscriptionServices,
+} from './subscriptionServiceAdapters.mjs';
+
 /**
  * @param {{ coreCatalog?: Record<string, unknown> }} repositories
  * @returns {{ tenants: Record<string, (...args: unknown[]) => unknown>, targetGroups: Record<string, (...args: unknown[]) => unknown> }}

@@ -91,6 +91,60 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(unwired.json.error, 'postgres_route_not_wired');
   });
 
+  it('returns postgres_route_not_wired for /v1/subscription/current when no service is injected', async () => {
+    ({ server, baseUrl } = listenPostgresServer({
+      tenants: { async getCurrentTenant() { return { id: 'ten_demo', name: 'Demo' }; } },
+    }));
+
+    const res = await request(baseUrl, 'GET', '/v1/subscription/current', {
+      headers: demoHeaders('admin'),
+    });
+    assert.equal(res.status, 503);
+    assert.equal(res.json.error, 'postgres_route_not_wired');
+  });
+
+  it('serves /v1/subscription/current through the injected Postgres subscription service', async () => {
+    let summaryCtx = null;
+    const subscriptions = {
+      async getCurrentSubscriptionSummary(ctx) {
+        summaryCtx = ctx;
+        return {
+          tenant_id: ctx.tenantId,
+          account: { tenant_id: ctx.tenantId, support_owner: 'staff_owner', region: 'us', lifecycle_state: 'active' },
+          subscription: { tenant_id: ctx.tenantId, plan_id: 'professional', status: 'active' },
+          plan: { id: 'professional', name: 'Professional' },
+          usage: {
+            users: 2,
+            target_groups: 3,
+            agents: 1,
+            safe_runs_started_last_hour: 0,
+            open_findings: 0,
+            pending_high_scale_requests: 0,
+            audit_events: 0,
+          },
+          support: {
+            owner: 'staff_owner',
+            lifecycle_state: 'active',
+            region: 'us',
+            escalation_state: 'nominal',
+            recent_audit: [],
+          },
+        };
+      },
+    };
+    ({ server, baseUrl } = listenPostgresServer({ subscriptions }));
+
+    const res = await request(baseUrl, 'GET', '/v1/subscription/current', {
+      headers: demoHeaders('admin'),
+    });
+    assert.equal(res.status, 200);
+    assert.notEqual(res.json.error, 'postgres_route_not_wired');
+    assert.equal(res.json.tenant_id, 'ten_demo');
+    assert.equal(res.json.subscription.plan_id, 'professional');
+    assert.equal(res.json.usage.target_groups, 3);
+    assert.equal(summaryCtx.tenantId, 'ten_demo');
+  });
+
   it('wires public sign-up and internal admin routes through injected Postgres services', async () => {
     const calls = [];
     const internalManagement = {
