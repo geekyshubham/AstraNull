@@ -74,7 +74,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   function te(e, t) {
     return typeof e == "object" && e && e.key != null ? k("" + e.key) : t.toString(36);
   }
-  function ne(e) {
+  function A(e) {
     switch (e.status) {
       case "fulfilled": return e.value;
       case "rejected": throw e.reason;
@@ -89,7 +89,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     }
     throw e;
   }
-  function re(e, r, i, a, o) {
+  function ne(e, r, i, a, o) {
     var s = typeof e;
     (s === "undefined" || s === "boolean") && (e = null);
     var c = !1;
@@ -105,30 +105,30 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         case n:
           c = !0;
           break;
-        case d: return c = e._init, re(c(e._payload), r, i, a, o);
+        case d: return c = e._init, ne(c(e._payload), r, i, a, o);
       }
     }
-    if (c) return o = o(e), c = a === "" ? "." + te(e, 0) : a, S(o) ? (i = "", c != null && (i = c.replace(ee, "$&/") + "/"), re(o, r, i, "", function(e) {
+    if (c) return o = o(e), c = a === "" ? "." + te(e, 0) : a, S(o) ? (i = "", c != null && (i = c.replace(ee, "$&/") + "/"), ne(o, r, i, "", function(e) {
       return e;
     })) : o != null && (O(o) && (o = D(o, i + (o.key == null || e && e.key === o.key ? "" : ("" + o.key).replace(ee, "$&/") + "/") + c)), r.push(o)), 1;
     c = 0;
     var l = a === "" ? "." : a + ":";
-    if (S(e)) for (var u = 0; u < e.length; u++) a = e[u], s = l + te(a, u), c += re(a, r, i, s, o);
-    else if (u = m(e), typeof u == "function") for (e = u.call(e), u = 0; !(a = e.next()).done;) a = a.value, s = l + te(a, u++), c += re(a, r, i, s, o);
+    if (S(e)) for (var u = 0; u < e.length; u++) a = e[u], s = l + te(a, u), c += ne(a, r, i, s, o);
+    else if (u = m(e), typeof u == "function") for (e = u.call(e), u = 0; !(a = e.next()).done;) a = a.value, s = l + te(a, u++), c += ne(a, r, i, s, o);
     else if (s === "object") {
-      if (typeof e.then == "function") return re(ne(e), r, i, a, o);
+      if (typeof e.then == "function") return ne(A(e), r, i, a, o);
       throw r = String(e), Error("Objects are not valid as a React child (found: " + (r === "[object Object]" ? "object with keys {" + Object.keys(e).join(", ") + "}" : r) + "). If you meant to render a collection of children, use an array instead.");
     }
     return c;
   }
-  function ie(e, t, n) {
+  function re(e, t, n) {
     if (e == null) return e;
     var r = [], i = 0;
-    return re(e, r, "", "", function(e) {
+    return ne(e, r, "", "", function(e) {
       return t.call(n, e, i++);
     }), r;
   }
-  function ae(e) {
+  function ie(e) {
     if (e._status === -1) {
       var t = e._result;
       t = t(), t.then(function(t) {
@@ -140,7 +140,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     if (e._status === 1) return e._result.default;
     throw e._result;
   }
-  var A = typeof reportError == "function" ? reportError : function(e) {
+  var j = typeof reportError == "function" ? reportError : function(e) {
     if (typeof window == "object" && typeof window.ErrorEvent == "function") {
       var t = new window.ErrorEvent("error", {
         bubbles: !0,
@@ -154,21 +154,21 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       return;
     }
     console.error(e);
-  }, j = {
-    map: ie,
+  }, M = {
+    map: re,
     forEach: function(e, t, n) {
-      ie(e, function() {
+      re(e, function() {
         t.apply(this, arguments);
       }, n);
     },
     count: function(e) {
       var t = 0;
-      return ie(e, function() {
+      return re(e, function() {
         t++;
       }), t;
     },
     toArray: function(e) {
-      return ie(e, function(e) {
+      return re(e, function(e) {
         return e;
       }) || [];
     },
@@ -177,7 +177,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       return e;
     }
   };
-  e.Activity = f, e.Children = j, e.Component = v, e.Fragment = r, e.Profiler = a, e.PureComponent = b, e.StrictMode = i, e.Suspense = l, e.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE = w, e.__COMPILER_RUNTIME = {
+  e.Activity = f, e.Children = M, e.Component = v, e.Fragment = r, e.Profiler = a, e.PureComponent = b, e.StrictMode = i, e.Suspense = l, e.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE = w, e.__COMPILER_RUNTIME = {
     __proto__: null,
     c: function(e) {
       return w.H.useMemoCache(e);
@@ -236,7 +236,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         _status: -1,
         _result: e
       },
-      _init: ae
+      _init: ie
     };
   }, e.memo = function(e, t) {
     return {
@@ -249,9 +249,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     w.T = n;
     try {
       var r = e(), i = w.S;
-      i !== null && i(n, r), typeof r == "object" && r && typeof r.then == "function" && r.then(C, A);
+      i !== null && i(n, r), typeof r == "object" && r && typeof r.then == "function" && r.then(C, j);
     } catch (e) {
-      A(e);
+      j(e);
     } finally {
       t !== null && n.types !== null && (t.types = n.types), w.T = t;
     }
@@ -729,13 +729,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return null;
   }
   var h = Object.assign, g = Symbol.for("react.element"), _ = Symbol.for("react.transitional.element"), v = Symbol.for("react.portal"), y = Symbol.for("react.fragment"), b = Symbol.for("react.strict_mode"), x = Symbol.for("react.profiler"), S = Symbol.for("react.consumer"), C = Symbol.for("react.context"), w = Symbol.for("react.forward_ref"), T = Symbol.for("react.suspense"), E = Symbol.for("react.suspense_list"), D = Symbol.for("react.memo"), O = Symbol.for("react.lazy"), k = Symbol.for("react.activity"), ee = Symbol.for("react.memo_cache_sentinel"), te = Symbol.iterator;
-  function ne(e) {
+  function A(e) {
     return typeof e != "object" || !e ? null : (e = te && e[te] || e["@@iterator"], typeof e == "function" ? e : null);
   }
-  var re = Symbol.for("react.client.reference");
-  function ie(e) {
+  var ne = Symbol.for("react.client.reference");
+  function re(e) {
     if (e == null) return null;
-    if (typeof e == "function") return e.$$typeof === re ? null : e.displayName || e.name || null;
+    if (typeof e == "function") return e.$$typeof === ne ? null : e.displayName || e.name || null;
     if (typeof e == "string") return e;
     switch (e) {
       case y: return "Fragment";
@@ -752,33 +752,33 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       case w:
         var t = e.render;
         return e = e.displayName, e ||= (e = t.displayName || t.name || "", e === "" ? "ForwardRef" : "ForwardRef(" + e + ")"), e;
-      case D: return t = e.displayName || null, t === null ? ie(e.type) || "Memo" : t;
+      case D: return t = e.displayName || null, t === null ? re(e.type) || "Memo" : t;
       case O:
         t = e._payload, e = e._init;
         try {
-          return ie(e(t));
+          return re(e(t));
         } catch {}
     }
     return null;
   }
-  var ae = Array.isArray, A = n.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, j = r.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, oe = {
+  var ie = Array.isArray, j = n.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, M = r.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, ae = {
     pending: !1,
     data: null,
     method: null,
     action: null
-  }, se = [], ce = -1;
-  function le(e) {
+  }, oe = [], se = -1;
+  function ce(e) {
     return { current: e };
   }
-  function M(e) {
-    0 > ce || (e.current = se[ce], se[ce] = null, ce--);
+  function N(e) {
+    0 > se || (e.current = oe[se], oe[se] = null, se--);
   }
-  function N(e, t) {
-    ce++, se[ce] = e.current, e.current = t;
+  function le(e, t) {
+    se++, oe[se] = e.current, e.current = t;
   }
-  var ue = le(null), de = le(null), fe = le(null), pe = le(null);
+  var ue = ce(null), de = ce(null), fe = ce(null), pe = ce(null);
   function me(e, t) {
-    switch (N(fe, t), N(de, e), N(ue, null), t.nodeType) {
+    switch (le(fe, t), le(de, e), le(ue, null), t.nodeType) {
       case 9:
       case 11:
         e = (e = t.documentElement) && (e = e.namespaceURI) ? Vd(e) : 0;
@@ -794,18 +794,18 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         default: e = 0;
       }
     }
-    M(ue), N(ue, e);
+    N(ue), le(ue, e);
   }
   function he() {
-    M(ue), M(de), M(fe);
+    N(ue), N(de), N(fe);
   }
   function ge(e) {
-    e.memoizedState !== null && N(pe, e);
+    e.memoizedState !== null && le(pe, e);
     var t = ue.current, n = Hd(t, e.type);
-    t !== n && (N(de, e), N(ue, n));
+    t !== n && (le(de, e), le(ue, n));
   }
   function _e(e) {
-    de.current === e && (M(ue), M(de)), pe.current === e && (M(pe), Qf._currentValue = oe);
+    de.current === e && (N(ue), N(de)), pe.current === e && (N(pe), Qf._currentValue = ae);
   }
   var ve, ye;
   function be(e) {
@@ -1092,15 +1092,15 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return e &= -e, 2 < e ? 8 < e ? e & 134217727 ? 32 : 268435456 : 8 : 2;
   }
   function ct() {
-    var e = j.p;
+    var e = M.p;
     return e === 0 ? (e = window.event, e === void 0 ? 32 : mp(e.type)) : e;
   }
   function lt(e, t) {
-    var n = j.p;
+    var n = M.p;
     try {
-      return j.p = e, t();
+      return M.p = e, t();
     } finally {
-      j.p = n;
+      M.p = n;
     }
   }
   var ut = Math.random().toString(36).slice(2), dt = "__reactFiber$" + ut, ft = "__reactProps$" + ut, pt = "__reactContainer$" + ut, mt = "__reactEvents$" + ut, ht = "__reactListeners$" + ut, gt = "__reactHandles$" + ut, _t = "__reactResources$" + ut, vt = "__reactMarker$" + ut;
@@ -1312,7 +1312,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     if (t == null) {
       if (r != null) {
         if (n != null) throw Error(i(92));
-        if (ae(r)) {
+        if (ie(r)) {
           if (1 < r.length) throw Error(i(93));
           r = r[0];
         }
@@ -2191,12 +2191,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   function Fi(e) {
     Ei === null ? Ei = [e] : Ei.push(e);
   }
-  var Ii = le(null), Li = null, Ri = null;
+  var Ii = ce(null), Li = null, Ri = null;
   function zi(e, t, n) {
-    N(Ii, t._currentValue), t._currentValue = n;
+    le(Ii, t._currentValue), t._currentValue = n;
   }
   function Bi(e) {
-    e._currentValue = Ii.current, M(Ii);
+    e._currentValue = Ii.current, N(Ii);
   }
   function Vi(e, t, n) {
     for (; e !== null;) {
@@ -2363,17 +2363,17 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       for (r.status = "rejected", r.reason = e, e = 0; e < n.length; e++) (0, n[e])(void 0);
     }), r;
   }
-  var ca = A.S;
-  A.S = function(e, t) {
+  var ca = j.S;
+  j.S = function(e, t) {
     $ = Ae(), typeof t == "object" && t && typeof t.then == "function" && aa(e, t), ca !== null && ca(e, t);
   };
-  var la = le(null);
+  var la = ce(null);
   function ua() {
     var e = la.current;
     return e === null ? Nl.pooledCache : e;
   }
   function da(e, t) {
-    t === null ? N(la, la.current) : N(la, t.pool);
+    t === null ? le(la, la.current) : le(la, t.pool);
   }
   function fa() {
     var e = ua();
@@ -2487,7 +2487,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           case v: return t = q(t, e.mode, n), t.return = e, t;
           case O: return t = ya(t), f(e, t, n);
         }
-        if (ae(t) || ne(t)) return t = ai(t, e.mode, n, null), t.return = e, t;
+        if (ie(t) || A(t)) return t = ai(t, e.mode, n, null), t.return = e, t;
         if (typeof t.then == "function") return f(e, Ta(t), n);
         if (t.$$typeof === C) return f(e, qi(e, t), n);
         Da(e, t);
@@ -2503,7 +2503,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           case v: return n.key === i ? u(e, t, n, r) : null;
           case O: return n = ya(n), p(e, t, n, r);
         }
-        if (ae(n) || ne(n)) return i === null ? d(e, t, n, r, null) : null;
+        if (ie(n) || A(n)) return i === null ? d(e, t, n, r, null) : null;
         if (typeof n.then == "function") return p(e, t, Ta(n), r);
         if (n.$$typeof === C) return p(e, t, qi(e, n), r);
         Da(e, n);
@@ -2518,7 +2518,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           case v: return e = e.get(r.key === null ? n : r.key) || null, u(t, e, r, i);
           case O: return r = ya(r), m(e, t, n, r, i);
         }
-        if (ae(r) || ne(r)) return e = e.get(n) || null, d(t, e, r, i, null);
+        if (ie(r) || A(r)) return e = e.get(n) || null, d(t, e, r, i, null);
         if (typeof r.then == "function") return m(e, t, n, Ta(r), i);
         if (r.$$typeof === C) return m(e, t, n, qi(t, r), i);
         Da(t, r);
@@ -2608,9 +2608,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
             return s(e);
           case O: return o = ya(o), b(e, r, o, c);
         }
-        if (ae(o)) return h(e, r, o, c);
-        if (ne(o)) {
-          if (l = ne(o), typeof l != "function") throw Error(i(150));
+        if (ie(o)) return h(e, r, o, c);
+        if (A(o)) {
+          if (l = A(o), typeof l != "function") throw Error(i(150));
           return o = l.call(o), g(e, r, o, c);
         }
         if (typeof o.then == "function") return b(e, r, Ta(o), c);
@@ -2782,34 +2782,34 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     var n = e.callbacks;
     if (n !== null) for (e.callbacks = null, e = 0; e < n.length; e++) Va(n[e], t);
   }
-  var Ua = le(null), Wa = le(0);
+  var Ua = ce(null), Wa = ce(0);
   function Ga(e, t) {
-    e = Vl, N(Wa, e), N(Ua, t), Vl = e | t.baseLanes;
+    e = Vl, le(Wa, e), le(Ua, t), Vl = e | t.baseLanes;
   }
   function Ka() {
-    N(Wa, Vl), N(Ua, Ua.current);
+    le(Wa, Vl), le(Ua, Ua.current);
   }
   function qa() {
-    Vl = Wa.current, M(Ua), M(Wa);
+    Vl = Wa.current, N(Ua), N(Wa);
   }
-  var Ja = le(null), Ya = null;
+  var Ja = ce(null), Ya = null;
   function Xa(e) {
     var t = e.alternate;
-    N(to, to.current & 1), N(Ja, e), Ya === null && (t === null || Ua.current !== null || t.memoizedState !== null) && (Ya = e);
+    le(to, to.current & 1), le(Ja, e), Ya === null && (t === null || Ua.current !== null || t.memoizedState !== null) && (Ya = e);
   }
   function Za(e) {
-    N(to, to.current), N(Ja, e), Ya === null && (Ya = e);
+    le(to, to.current), le(Ja, e), Ya === null && (Ya = e);
   }
   function Qa(e) {
-    e.tag === 22 ? (N(to, to.current), N(Ja, e), Ya === null && (Ya = e)) : $a(e);
+    e.tag === 22 ? (le(to, to.current), le(Ja, e), Ya === null && (Ya = e)) : $a(e);
   }
   function $a() {
-    N(to, to.current), N(Ja, Ja.current);
+    le(to, to.current), le(Ja, Ja.current);
   }
   function eo(e) {
-    M(Ja), Ya === e && (Ya = null), M(to);
+    N(Ja), Ya === e && (Ya = null), N(to);
   }
-  var to = le(0);
+  var to = ce(0);
   function no(e) {
     for (var t = e; t !== null;) {
       if (t.tag === 13) {
@@ -2840,10 +2840,10 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return !0;
   }
   function _o(e, t, n, r, i, a) {
-    return ro = a, io = t, t.memoizedState = null, t.updateQueue = null, t.lanes = 0, A.H = e === null || e.memoizedState === null ? Ns : X, lo = !1, a = n(r, i), lo = !1, co && (a = yo(t, n, r, i)), vo(e), a;
+    return ro = a, io = t, t.memoizedState = null, t.updateQueue = null, t.lanes = 0, j.H = e === null || e.memoizedState === null ? Ns : X, lo = !1, a = n(r, i), lo = !1, co && (a = yo(t, n, r, i)), vo(e), a;
   }
   function vo(e) {
-    A.H = Ms;
+    j.H = Ms;
     var t = ao !== null && ao.next !== null;
     if (ro = 0, oo = ao = io = null, so = !1, fo = 0, po = null, t) throw Error(i(300));
     e === null || Ys || (e = e.dependencies, e !== null && Wi(e) && (Ys = !0));
@@ -2857,12 +2857,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         var o = e.updateQueue;
         o.lastEffect = null, o.events = null, o.stores = null, o.memoCache != null && (o.memoCache.index = 0);
       }
-      A.H = Ps, o = t(n, r);
+      j.H = Ps, o = t(n, r);
     } while (co);
     return o;
   }
   function bo() {
-    var e = A.H, t = e.useState()[0];
+    var e = j.H, t = e.useState()[0];
     return t = typeof t.then == "function" ? Do(t) : t, e = e.useState()[0], (ao === null ? null : ao.memoizedState) !== e && (io.flags |= 1024), t;
   }
   function xo() {
@@ -2921,7 +2921,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   }
   function Do(e) {
     var t = fo;
-    return fo += 1, po === null && (po = []), e = va(po, e, t), t = io, (oo === null ? t.memoizedState : oo.next) === null && (t = t.alternate, A.H = t === null || t.memoizedState === null ? Ns : X), e;
+    return fo += 1, po === null && (po = []), e = va(po, e, t), t = io, (oo === null ? t.memoizedState : oo.next) === null && (t = t.alternate, j.H = t === null || t.memoizedState === null ? Ns : X), e;
   }
   function Oo(e) {
     if (typeof e == "object" && e) {
@@ -3107,21 +3107,21 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           o.listeners.push(e);
         }
       };
-      A.T === null ? o.isTransition = !1 : n(!0), r(o), n = t.pending, n === null ? (o.next = t.pending = o, Ho(t, o)) : (o.next = n.next, t.pending = n.next = o);
+      j.T === null ? o.isTransition = !1 : n(!0), r(o), n = t.pending, n === null ? (o.next = t.pending = o, Ho(t, o)) : (o.next = n.next, t.pending = n.next = o);
     }
   }
   function Ho(e, t) {
     var n = t.action, r = t.payload, i = e.state;
     if (t.isTransition) {
-      var a = A.T, o = {};
-      A.T = o;
+      var a = j.T, o = {};
+      j.T = o;
       try {
-        var s = n(i, r), c = A.S;
+        var s = n(i, r), c = j.S;
         c !== null && c(o, s), Uo(e, t, s);
       } catch (n) {
         Go(e, t, n);
       } finally {
-        a !== null && o.types !== null && (a.types = o.types), A.T = a;
+        a !== null && o.types !== null && (a.types = o.types), j.T = a;
       }
     } else try {
       a = n(i, r), Uo(e, t, a);
@@ -3335,12 +3335,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return mr(n, t) ? n : Ua.current === null ? !(ro & 42) || ro & 1073741824 && !(Fl & 261930) ? (Ys = !0, e.memoizedState = n) : (e = du(), io.lanes |= e, Ul |= e, t) : (e = ms(e, n, r), mr(e, t) || (Ys = !0), e);
   }
   function gs(e, t, n, r, i) {
-    var a = j.p;
-    j.p = a !== 0 && 8 > a ? a : 8;
-    var o = A.T, s = {};
-    A.T = s, Os(e, !1, t, n);
+    var a = M.p;
+    M.p = a !== 0 && 8 > a ? a : 8;
+    var o = j.T, s = {};
+    j.T = s, Os(e, !1, t, n);
     try {
-      var c = i(), l = A.S;
+      var c = i(), l = j.S;
       l !== null && l(s, c), typeof c == "object" && c && typeof c.then == "function" ? Ds(e, t, sa(c, r), uu(e)) : Ds(e, t, r, uu(e));
     } catch (n) {
       Ds(e, t, {
@@ -3349,14 +3349,14 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         reason: n
       }, uu());
     } finally {
-      j.p = a, o !== null && s.types !== null && (o.types = s.types), A.T = o;
+      M.p = a, o !== null && s.types !== null && (o.types = s.types), j.T = o;
     }
   }
   function _s() {}
   function vs(e, t, n, r) {
     if (e.tag !== 5) throw Error(i(476));
     var a = ys(e).queue;
-    gs(e, a, t, oe, n === null ? _s : function() {
+    gs(e, a, t, ae, n === null ? _s : function() {
       return bs(e), n(r);
     });
   }
@@ -3364,15 +3364,15 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     var t = e.memoizedState;
     if (t !== null) return t;
     t = {
-      memoizedState: oe,
-      baseState: oe,
+      memoizedState: ae,
+      baseState: ae,
       baseQueue: null,
       queue: {
         pending: null,
         lanes: 0,
         dispatch: null,
         lastRenderedReducer: Ao,
-        lastRenderedState: oe
+        lastRenderedState: ae
       },
       next: null
     };
@@ -4074,7 +4074,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     var r = t.pendingProps, i = r.revealOrder, a = r.tail;
     r = r.children;
     var o = to.current, s = (o & 2) != 0;
-    if (s ? (o = o & 1 | 2, t.flags |= 128) : o &= 1, N(to, o), Xs(e, t, r, n), r = Ti ? fi : 0, !s && e !== null && e.flags & 128) a: for (e = t.child; e !== null;) {
+    if (s ? (o = o & 1 | 2, t.flags |= 128) : o &= 1, le(to, o), Xs(e, t, r, n), r = Ti ? fi : 0, !s && e !== null && e.flags & 128) a: for (e = t.child; e !== null;) {
       if (e.tag === 13) e.memoizedState !== null && vc(e, n, t);
       else if (e.tag === 19) vc(e, n, t);
       else if (e.child !== null) {
@@ -4154,7 +4154,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           if (r) return bc(e, t, n);
           t.flags |= 128;
         }
-        if (i = t.memoizedState, i !== null && (i.rendering = null, i.tail = null, i.lastEffect = null), N(to, to.current), r) break;
+        if (i = t.memoizedState, i !== null && (i.rendering = null, i.tail = null, i.lastEffect = null), le(to, to.current), r) break;
         return null;
       case 22: return t.lanes = 0, ec(e, t, n, t.pendingProps);
       case 24: zi(t, Qi, e.memoizedState.cache);
@@ -4184,7 +4184,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
                 break a;
               }
             }
-            throw t = ie(e) || e, Error(i(306, t, ""));
+            throw t = re(e) || e, Error(i(306, t, ""));
           }
         }
         return t;
@@ -4425,13 +4425,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       case 4: return he(), e === null && xd(t.stateNode.containerInfo), Ac(t), null;
       case 10: return Bi(t.type), Ac(t), null;
       case 19:
-        if (M(to), r = t.memoizedState, r === null) return Ac(t), null;
+        if (N(to), r = t.memoizedState, r === null) return Ac(t), null;
         if (a = (t.flags & 128) != 0, o = r.rendering, o === null) if (a) kc(r, !1);
         else {
           if (Hl !== 0 || e !== null && e.flags & 128) for (e = t.child; e !== null;) {
             if (o = no(e), o !== null) {
               for (t.flags |= 128, kc(r, !1), e = o.updateQueue, t.updateQueue = e, Oc(t, e), t.subtreeFlags = 0, e = n, n = t.child; n !== null;) ri(n, e), n = n.sibling;
-              return N(to, to.current & 1 | 2), Ti && vi(t, r.treeForkCount), t.child;
+              return le(to, to.current & 1 | 2), Ti && vi(t, r.treeForkCount), t.child;
             }
             e = e.sibling;
           }
@@ -4443,9 +4443,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           } else 2 * Ae() - r.renderingStartTime > Ql && n !== 536870912 && (t.flags |= 128, a = !0, kc(r, !1), t.lanes = 4194304);
           r.isBackwards ? (o.sibling = t.child, t.child = o) : (e = r.last, e === null ? t.child = o : e.sibling = o, r.last = o);
         }
-        return r.tail === null ? (Ac(t), null) : (e = r.tail, r.rendering = e, r.tail = e.sibling, r.renderingStartTime = Ae(), e.sibling = null, n = to.current, N(to, a ? n & 1 | 2 : n & 1), Ti && vi(t, r.treeForkCount), e);
+        return r.tail === null ? (Ac(t), null) : (e = r.tail, r.rendering = e, r.tail = e.sibling, r.renderingStartTime = Ae(), e.sibling = null, n = to.current, le(to, a ? n & 1 | 2 : n & 1), Ti && vi(t, r.treeForkCount), e);
       case 22:
-      case 23: return eo(t), qa(), r = t.memoizedState !== null, e === null ? r && (t.flags |= 8192) : e.memoizedState !== null !== r && (t.flags |= 8192), r ? n & 536870912 && !(t.flags & 128) && (Ac(t), t.subtreeFlags & 6 && (t.flags |= 8192)) : Ac(t), n = t.updateQueue, n !== null && Oc(t, n.retryQueue), n = null, e !== null && e.memoizedState !== null && e.memoizedState.cachePool !== null && (n = e.memoizedState.cachePool.pool), r = null, t.memoizedState !== null && t.memoizedState.cachePool !== null && (r = t.memoizedState.cachePool.pool), r !== n && (t.flags |= 2048), e !== null && M(la), null;
+      case 23: return eo(t), qa(), r = t.memoizedState !== null, e === null ? r && (t.flags |= 8192) : e.memoizedState !== null !== r && (t.flags |= 8192), r ? n & 536870912 && !(t.flags & 128) && (Ac(t), t.subtreeFlags & 6 && (t.flags |= 8192)) : Ac(t), n = t.updateQueue, n !== null && Oc(t, n.retryQueue), n = null, e !== null && e.memoizedState !== null && e.memoizedState.cachePool !== null && (n = e.memoizedState.cachePool.pool), r = null, t.memoizedState !== null && t.memoizedState.cachePool !== null && (r = t.memoizedState.cachePool.pool), r !== n && (t.flags |= 2048), e !== null && N(la), null;
       case 24: return n = null, e !== null && (n = e.memoizedState.cache), t.memoizedState.cache !== n && (t.flags |= 2048), Bi(Qi), Ac(t), null;
       case 25: return null;
       case 30: return null;
@@ -4471,11 +4471,11 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           Ni();
         }
         return e = t.flags, e & 65536 ? (t.flags = e & -65537 | 128, t) : null;
-      case 19: return M(to), null;
+      case 19: return N(to), null;
       case 4: return he(), null;
       case 10: return Bi(t.type), null;
       case 22:
-      case 23: return eo(t), qa(), e !== null && M(la), e = t.flags, e & 65536 ? (t.flags = e & -65537 | 128, t) : null;
+      case 23: return eo(t), qa(), e !== null && N(la), e = t.flags, e & 65536 ? (t.flags = e & -65537 | 128, t) : null;
       case 24: return Bi(Qi), null;
       case 25: return null;
       default: return null;
@@ -4501,14 +4501,14 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         eo(t);
         break;
       case 19:
-        M(to);
+        N(to);
         break;
       case 10:
         Bi(t.type);
         break;
       case 22:
       case 23:
-        eo(t), qa(), e !== null && M(la);
+        eo(t), qa(), e !== null && N(la);
         break;
       case 24: Bi(Qi);
     }
@@ -5452,7 +5452,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     }
   }, jl = typeof WeakMap == "function" ? WeakMap : Map, Ml = 0, Nl = null, Pl = null, Fl = 0, Il = 0, Ll = null, Rl = !1, zl = !1, Bl = !1, Vl = 0, Hl = 0, Ul = 0, Wl = 0, Gl = 0, Kl = 0, ql = 0, Jl = null, Yl = null, Xl = !1, Zl = 0, $ = 0, Ql = Infinity, $l = null, eu = null, tu = 0, nu = null, ru = null, iu = 0, au = 0, ou = null, su = null, cu = 0, lu = null;
   function uu() {
-    return Ml & 2 && Fl !== 0 ? Fl & -Fl : A.T === null ? ct() : ld();
+    return Ml & 2 && Fl !== 0 ? Fl & -Fl : j.T === null ? ct() : ld();
   }
   function du() {
     if (Kl === 0) if (!(Fl & 536870912) || Ti) {
@@ -5602,19 +5602,19 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return Vl = t, Kr(), n;
   }
   function bu(e, t) {
-    io = null, A.H = Ms, t === pa || t === ha ? (t = xa(), Il = 3) : t === ma ? (t = xa(), Il = 4) : Il = t === Z ? 8 : typeof t == "object" && t && typeof t.then == "function" ? 6 : 1, Ll = t, Pl === null && (Hl = 1, Us(e, J(t, e.current)));
+    io = null, j.H = Ms, t === pa || t === ha ? (t = xa(), Il = 3) : t === ma ? (t = xa(), Il = 4) : Il = t === Z ? 8 : typeof t == "object" && t && typeof t.then == "function" ? 6 : 1, Ll = t, Pl === null && (Hl = 1, Us(e, J(t, e.current)));
   }
   function xu() {
     var e = Ja.current;
     return e === null ? !0 : (Fl & 4194048) === Fl ? Ya === null : (Fl & 62914560) === Fl || Fl & 536870912 ? e === Ya : !1;
   }
   function Su() {
-    var e = A.H;
-    return A.H = Ms, e === null ? Ms : e;
+    var e = j.H;
+    return j.H = Ms, e === null ? Ms : e;
   }
   function Cu() {
-    var e = A.A;
-    return A.A = Al, e;
+    var e = j.A;
+    return j.A = Al, e;
   }
   function wu() {
     Hl = 4, Rl || (Fl & 4194048) !== Fl && Ja.current !== null || (zl = !0), !(Ul & 134217727) && !(Wl & 134217727) || Nl === null || gu(Nl, Fl, Kl, !1);
@@ -5653,7 +5653,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         bu(e, t);
       }
     while (1);
-    return t && e.shellSuspendCounter++, Ri = Li = null, Ml = r, A.H = i, A.A = a, Pl === null && (Nl = null, Fl = 0, Kr()), o;
+    return t && e.shellSuspendCounter++, Ri = Li = null, Ml = r, j.H = i, j.A = a, Pl === null && (Nl = null, Fl = 0, Kr()), o;
   }
   function Eu() {
     for (; Pl !== null;) ku(Pl);
@@ -5726,7 +5726,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         bu(e, t);
       }
     while (1);
-    return Ri = Li = null, A.H = r, A.A = a, Ml = n, Pl === null ? (Nl = null, Fl = 0, Kr(), Hl) : 0;
+    return Ri = Li = null, j.H = r, j.A = a, Ml = n, Pl === null ? (Nl = null, Fl = 0, Kr(), Hl) : 0;
   }
   function Ou() {
     for (; Pl !== null && !Oe();) ku(Pl);
@@ -5812,11 +5812,11 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       if (o = t.lanes | t.childLanes, o |= Gr, nt(e, n, o, s, c, l), e === Nl && (Pl = Nl = null, Fl = 0), ru = t, nu = e, iu = n, au = o, ou = a, su = r, t.subtreeFlags & 10256 || t.flags & 10256 ? (e.callbackNode = null, e.callbackPriority = 0, Ju(Pe, function() {
         return Bu(), null;
       })) : (e.callbackNode = null, e.callbackPriority = 0), r = (t.flags & 13878) != 0, t.subtreeFlags & 13878 || r) {
-        r = A.T, A.T = null, a = j.p, j.p = 2, s = Ml, Ml |= 4;
+        r = j.T, j.T = null, a = M.p, M.p = 2, s = Ml, Ml |= 4;
         try {
           Qc(e, t, n);
         } finally {
-          Ml = s, j.p = a, A.T = r;
+          Ml = s, M.p = a, j.T = r;
         }
       }
       tu = 1, Fu(), Iu(), Lu();
@@ -5827,9 +5827,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       tu = 0;
       var e = nu, t = ru, n = (t.flags & 13878) != 0;
       if (t.subtreeFlags & 13878 || n) {
-        n = A.T, A.T = null;
-        var r = j.p;
-        j.p = 2;
+        n = j.T, j.T = null;
+        var r = M.p;
+        M.p = 2;
         var i = Ml;
         Ml |= 4;
         try {
@@ -5864,7 +5864,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           }
           sp = !!Rd, zd = Rd = null;
         } finally {
-          Ml = i, j.p = r, A.T = n;
+          Ml = i, M.p = r, j.T = n;
         }
       }
       e.current = t, tu = 2;
@@ -5875,15 +5875,15 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       tu = 0;
       var e = nu, t = ru, n = (t.flags & 8772) != 0;
       if (t.subtreeFlags & 8772 || n) {
-        n = A.T, A.T = null;
-        var r = j.p;
-        j.p = 2;
+        n = j.T, j.T = null;
+        var r = M.p;
+        M.p = 2;
         var i = Ml;
         Ml |= 4;
         try {
           $c(e, t.alternate, t);
         } finally {
-          Ml = i, j.p = r, A.T = n;
+          Ml = i, M.p = r, j.T = n;
         }
       }
       tu = 3;
@@ -5899,14 +5899,14 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         Be.onCommitFiberRoot(ze, t, void 0, (t.current.flags & 128) == 128);
       } catch {}
       if (r !== null) {
-        t = A.T, i = j.p, j.p = 2, A.T = null;
+        t = j.T, i = M.p, M.p = 2, j.T = null;
         try {
           for (var a = e.onRecoverableError, o = 0; o < r.length; o++) {
             var s = r[o];
             a(s.value, { componentStack: s.stack });
           }
         } finally {
-          A.T = t, j.p = i;
+          j.T = t, M.p = i;
         }
       }
       iu & 3 && zu(), td(e), i = e.pendingLanes, n & 261930 && i & 42 ? e === lu ? cu++ : (cu = 0, lu = e) : cu = 0, nd(0, !1);
@@ -5922,9 +5922,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     if (tu !== 5) return !1;
     var e = nu, t = au;
     au = 0;
-    var n = st(iu), r = A.T, a = j.p;
+    var n = st(iu), r = j.T, a = M.p;
     try {
-      j.p = 32 > n ? 32 : n, A.T = null, n = ou, ou = null;
+      M.p = 32 > n ? 32 : n, j.T = null, n = ou, ou = null;
       var o = nu, s = iu;
       if (tu = 0, ru = nu = null, iu = 0, Ml & 6) throw Error(i(331));
       var c = Ml;
@@ -5933,7 +5933,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       } catch {}
       return !0;
     } finally {
-      j.p = a, A.T = r, Ru(e, t);
+      M.p = a, j.T = r, Ru(e, t);
     }
   }
   function Vu(e, t, n) {
@@ -7172,8 +7172,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   function gf(e) {
     return typeof e.getRootNode == "function" ? e.getRootNode() : e.nodeType === 9 ? e : e.ownerDocument;
   }
-  var _f = j.d;
-  j.d = {
+  var _f = M.d;
+  M.d = {
     f: vf,
     r: yf,
     D: Sf,
@@ -7565,8 +7565,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     $$typeof: C,
     Provider: null,
     Consumer: null,
-    _currentValue: oe,
-    _currentValue2: oe,
+    _currentValue: ae,
+    _currentValue2: ae,
     _threadCount: 0
   };
   function $f(e, t, n, r, i, a, o, s, c) {
@@ -7610,23 +7610,23 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   }
   var sp = !0;
   function cp(e, t, n, r) {
-    var i = A.T;
-    A.T = null;
-    var a = j.p;
+    var i = j.T;
+    j.T = null;
+    var a = M.p;
     try {
-      j.p = 2, up(e, t, n, r);
+      M.p = 2, up(e, t, n, r);
     } finally {
-      j.p = a, A.T = i;
+      M.p = a, j.T = i;
     }
   }
   function lp(e, t, n, r) {
-    var i = A.T;
-    A.T = null;
-    var a = j.p;
+    var i = j.T;
+    j.T = null;
+    var a = M.p;
     try {
-      j.p = 8, up(e, t, n, r);
+      M.p = 8, up(e, t, n, r);
     } finally {
-      j.p = a, A.T = i;
+      M.p = a, j.T = i;
     }
   }
   function up(e, t, n, r) {
@@ -7970,7 +7970,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   };
   var Lp = n.version;
   if (Lp !== "19.2.7") throw Error(i(527, Lp, "19.2.7"));
-  j.findDOMNode = function(e) {
+  M.findDOMNode = function(e) {
     var t = e._reactInternals;
     if (t === void 0) throw typeof e.render == "function" ? Error(i(188)) : (e = Object.keys(e).join(","), Error(i(268, e)));
     return e = d(t), e = e === null ? null : p(e), e = e === null ? null : e.stateNode, e;
@@ -7979,7 +7979,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     bundleType: 0,
     version: "19.2.7",
     rendererPackageName: "react-dom",
-    currentDispatcherRef: A,
+    currentDispatcherRef: j,
     reconcilerVersion: "19.2.7"
   };
   if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ < "u") {
@@ -8083,13 +8083,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     d: "M9 13v2",
     key: "rq6x2g"
   }]
-]), ne = D("check", [["path", {
+]), A = D("check", [["path", {
   d: "M20 6 9 17l-5-5",
   key: "1gmf2c"
-}]]), re = D("chevron-down", [["path", {
+}]]), ne = D("chevron-down", [["path", {
   d: "m6 9 6 6 6-6",
   key: "qrunsl"
-}]]), ie = D("circle-check", [["circle", {
+}]]), re = D("circle-check", [["circle", {
   cx: "12",
   cy: "12",
   r: "10",
@@ -8097,7 +8097,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
 }], ["path", {
   d: "m9 12 2 2 4-4",
   key: "dzmm74"
-}]]), ae = D("clipboard-list", [
+}]]), ie = D("clipboard-list", [
   ["rect", {
     width: "8",
     height: "4",
@@ -8127,7 +8127,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     d: "M8 16h.01",
     key: "18s6g9"
   }]
-]), A = D("credit-card", [["rect", {
+]), j = D("credit-card", [["rect", {
   width: "20",
   height: "14",
   x: "2",
@@ -8140,7 +8140,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   y1: "10",
   y2: "10",
   key: "1b3vmo"
-}]]), j = D("file-check-corner", [
+}]]), M = D("file-check-corner", [
   ["path", {
     d: "M10.5 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v6",
     key: "g5mvt7"
@@ -8153,7 +8153,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     d: "m14 20 2 2 4-4",
     key: "15kota"
   }]
-]), oe = D("file-text", [
+]), ae = D("file-text", [
   ["path", {
     d: "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z",
     key: "1oefj6"
@@ -8174,13 +8174,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     d: "M16 17H8",
     key: "z1uh3a"
   }]
-]), se = D("gauge", [["path", {
+]), oe = D("gauge", [["path", {
   d: "m12 14 4-4",
   key: "9kzdfg"
 }], ["path", {
   d: "M3.34 19a10 10 0 1 1 17.32 0",
   key: "19p75a"
-}]]), ce = D("info", [
+}]]), se = D("info", [
   ["circle", {
     cx: "12",
     cy: "12",
@@ -8195,7 +8195,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     d: "M12 8h.01",
     key: "e9boi3"
   }]
-]), le = D("key-round", [["path", {
+]), ce = D("key-round", [["path", {
   d: "M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z",
   key: "1s6t7t"
 }], ["circle", {
@@ -8204,7 +8204,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   r: ".5",
   fill: "currentColor",
   key: "w0ekpg"
-}]]), M = D("layout-dashboard", [
+}]]), N = D("layout-dashboard", [
   ["rect", {
     width: "7",
     height: "9",
@@ -8237,7 +8237,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     rx: "1",
     key: "ldoo1y"
   }]
-]), N = D("life-buoy", [
+]), le = D("life-buoy", [
   ["circle", {
     cx: "12",
     cy: "12",
@@ -8979,7 +8979,7 @@ var Me = (e, t) => {
     "stretch",
     "center-safe",
     "end-safe"
-  ], ne = () => ["auto", ...w()], re = () => [
+  ], A = () => ["auto", ...w()], ne = () => [
     bt,
     "auto",
     "full",
@@ -8993,7 +8993,7 @@ var Me = (e, t) => {
     "max",
     "fit",
     ...w()
-  ], ie = () => [
+  ], re = () => [
     bt,
     "screen",
     "full",
@@ -9004,7 +9004,7 @@ var Me = (e, t) => {
     "max",
     "fit",
     ...w()
-  ], ae = () => [
+  ], ie = () => [
     bt,
     "screen",
     "full",
@@ -9016,45 +9016,45 @@ var Me = (e, t) => {
     "max",
     "fit",
     ...w()
-  ], A = () => [
+  ], j = () => [
     e,
     F,
     P
-  ], j = () => [
+  ], M = () => [
     ...b(),
     Ht,
     Lt,
     { position: [F, P] }
-  ], oe = () => ["no-repeat", { repeat: [
+  ], ae = () => ["no-repeat", { repeat: [
     "",
     "x",
     "y",
     "space",
     "round"
-  ] }], se = () => [
+  ] }], oe = () => [
     "auto",
     "cover",
     "contain",
     Ut,
     Mt,
     { size: [F, P] }
-  ], ce = () => [
+  ], se = () => [
     Ct,
     Bt,
     Nt
-  ], le = () => [
+  ], ce = () => [
     "",
     "none",
     "full",
     l,
     F,
     P
-  ], M = () => [
+  ], N = () => [
     "",
     xt,
     Bt,
     Nt
-  ], N = () => [
+  ], le = () => [
     "solid",
     "dashed",
     "dotted",
@@ -9382,38 +9382,38 @@ var Me = (e, t) => {
       pr: [{ pr: w() }],
       pb: [{ pb: w() }],
       pl: [{ pl: w() }],
-      m: [{ m: ne() }],
-      mx: [{ mx: ne() }],
-      my: [{ my: ne() }],
-      ms: [{ ms: ne() }],
-      me: [{ me: ne() }],
-      mbs: [{ mbs: ne() }],
-      mbe: [{ mbe: ne() }],
-      mt: [{ mt: ne() }],
-      mr: [{ mr: ne() }],
-      mb: [{ mb: ne() }],
-      ml: [{ ml: ne() }],
+      m: [{ m: A() }],
+      mx: [{ mx: A() }],
+      my: [{ my: A() }],
+      ms: [{ ms: A() }],
+      me: [{ me: A() }],
+      mbs: [{ mbs: A() }],
+      mbe: [{ mbe: A() }],
+      mt: [{ mt: A() }],
+      mr: [{ mr: A() }],
+      mb: [{ mb: A() }],
+      ml: [{ ml: A() }],
       "space-x": [{ "space-x": w() }],
       "space-x-reverse": ["space-x-reverse"],
       "space-y": [{ "space-y": w() }],
       "space-y-reverse": ["space-y-reverse"],
-      size: [{ size: re() }],
-      "inline-size": [{ inline: ["auto", ...ie()] }],
-      "min-inline-size": [{ "min-inline": ["auto", ...ie()] }],
-      "max-inline-size": [{ "max-inline": ["none", ...ie()] }],
-      "block-size": [{ block: ["auto", ...ae()] }],
-      "min-block-size": [{ "min-block": ["auto", ...ae()] }],
-      "max-block-size": [{ "max-block": ["none", ...ae()] }],
+      size: [{ size: ne() }],
+      "inline-size": [{ inline: ["auto", ...re()] }],
+      "min-inline-size": [{ "min-inline": ["auto", ...re()] }],
+      "max-inline-size": [{ "max-inline": ["none", ...re()] }],
+      "block-size": [{ block: ["auto", ...ie()] }],
+      "min-block-size": [{ "min-block": ["auto", ...ie()] }],
+      "max-block-size": [{ "max-block": ["none", ...ie()] }],
       w: [{ w: [
         s,
         "screen",
-        ...re()
+        ...ne()
       ] }],
       "min-w": [{ "min-w": [
         s,
         "screen",
         "none",
-        ...re()
+        ...ne()
       ] }],
       "max-w": [{ "max-w": [
         s,
@@ -9421,23 +9421,23 @@ var Me = (e, t) => {
         "none",
         "prose",
         { screen: [o] },
-        ...re()
+        ...ne()
       ] }],
       h: [{ h: [
         "screen",
         "lh",
-        ...re()
+        ...ne()
       ] }],
       "min-h": [{ "min-h": [
         "screen",
         "lh",
         "none",
-        ...re()
+        ...ne()
       ] }],
       "max-h": [{ "max-h": [
         "screen",
         "lh",
-        ...re()
+        ...ne()
       ] }],
       "font-size": [{ text: [
         "base",
@@ -9510,15 +9510,15 @@ var Me = (e, t) => {
         "start",
         "end"
       ] }],
-      "placeholder-color": [{ placeholder: A() }],
-      "text-color": [{ text: A() }],
+      "placeholder-color": [{ placeholder: j() }],
+      "text-color": [{ text: j() }],
       "text-decoration": [
         "underline",
         "overline",
         "line-through",
         "no-underline"
       ],
-      "text-decoration-style": [{ decoration: [...N(), "wavy"] }],
+      "text-decoration-style": [{ decoration: [...le(), "wavy"] }],
       "text-decoration-thickness": [{ decoration: [
         xt,
         "from-font",
@@ -9526,7 +9526,7 @@ var Me = (e, t) => {
         F,
         Nt
       ] }],
-      "text-decoration-color": [{ decoration: A() }],
+      "text-decoration-color": [{ decoration: j() }],
       "underline-offset": [{ "underline-offset": [
         xt,
         "auto",
@@ -9613,9 +9613,9 @@ var Me = (e, t) => {
         "padding",
         "content"
       ] }],
-      "bg-position": [{ bg: j() }],
-      "bg-repeat": [{ bg: oe() }],
-      "bg-size": [{ bg: se() }],
+      "bg-position": [{ bg: M() }],
+      "bg-repeat": [{ bg: ae() }],
+      "bg-size": [{ bg: oe() }],
       "bg-image": [{ bg: [
         "none",
         {
@@ -9648,67 +9648,67 @@ var Me = (e, t) => {
         Wt,
         Rt
       ] }],
-      "bg-color": [{ bg: A() }],
-      "gradient-from-pos": [{ from: ce() }],
-      "gradient-via-pos": [{ via: ce() }],
-      "gradient-to-pos": [{ to: ce() }],
-      "gradient-from": [{ from: A() }],
-      "gradient-via": [{ via: A() }],
-      "gradient-to": [{ to: A() }],
-      rounded: [{ rounded: le() }],
-      "rounded-s": [{ "rounded-s": le() }],
-      "rounded-e": [{ "rounded-e": le() }],
-      "rounded-t": [{ "rounded-t": le() }],
-      "rounded-r": [{ "rounded-r": le() }],
-      "rounded-b": [{ "rounded-b": le() }],
-      "rounded-l": [{ "rounded-l": le() }],
-      "rounded-ss": [{ "rounded-ss": le() }],
-      "rounded-se": [{ "rounded-se": le() }],
-      "rounded-ee": [{ "rounded-ee": le() }],
-      "rounded-es": [{ "rounded-es": le() }],
-      "rounded-tl": [{ "rounded-tl": le() }],
-      "rounded-tr": [{ "rounded-tr": le() }],
-      "rounded-br": [{ "rounded-br": le() }],
-      "rounded-bl": [{ "rounded-bl": le() }],
-      "border-w": [{ border: M() }],
-      "border-w-x": [{ "border-x": M() }],
-      "border-w-y": [{ "border-y": M() }],
-      "border-w-s": [{ "border-s": M() }],
-      "border-w-e": [{ "border-e": M() }],
-      "border-w-bs": [{ "border-bs": M() }],
-      "border-w-be": [{ "border-be": M() }],
-      "border-w-t": [{ "border-t": M() }],
-      "border-w-r": [{ "border-r": M() }],
-      "border-w-b": [{ "border-b": M() }],
-      "border-w-l": [{ "border-l": M() }],
-      "divide-x": [{ "divide-x": M() }],
+      "bg-color": [{ bg: j() }],
+      "gradient-from-pos": [{ from: se() }],
+      "gradient-via-pos": [{ via: se() }],
+      "gradient-to-pos": [{ to: se() }],
+      "gradient-from": [{ from: j() }],
+      "gradient-via": [{ via: j() }],
+      "gradient-to": [{ to: j() }],
+      rounded: [{ rounded: ce() }],
+      "rounded-s": [{ "rounded-s": ce() }],
+      "rounded-e": [{ "rounded-e": ce() }],
+      "rounded-t": [{ "rounded-t": ce() }],
+      "rounded-r": [{ "rounded-r": ce() }],
+      "rounded-b": [{ "rounded-b": ce() }],
+      "rounded-l": [{ "rounded-l": ce() }],
+      "rounded-ss": [{ "rounded-ss": ce() }],
+      "rounded-se": [{ "rounded-se": ce() }],
+      "rounded-ee": [{ "rounded-ee": ce() }],
+      "rounded-es": [{ "rounded-es": ce() }],
+      "rounded-tl": [{ "rounded-tl": ce() }],
+      "rounded-tr": [{ "rounded-tr": ce() }],
+      "rounded-br": [{ "rounded-br": ce() }],
+      "rounded-bl": [{ "rounded-bl": ce() }],
+      "border-w": [{ border: N() }],
+      "border-w-x": [{ "border-x": N() }],
+      "border-w-y": [{ "border-y": N() }],
+      "border-w-s": [{ "border-s": N() }],
+      "border-w-e": [{ "border-e": N() }],
+      "border-w-bs": [{ "border-bs": N() }],
+      "border-w-be": [{ "border-be": N() }],
+      "border-w-t": [{ "border-t": N() }],
+      "border-w-r": [{ "border-r": N() }],
+      "border-w-b": [{ "border-b": N() }],
+      "border-w-l": [{ "border-l": N() }],
+      "divide-x": [{ "divide-x": N() }],
       "divide-x-reverse": ["divide-x-reverse"],
-      "divide-y": [{ "divide-y": M() }],
+      "divide-y": [{ "divide-y": N() }],
       "divide-y-reverse": ["divide-y-reverse"],
       "border-style": [{ border: [
-        ...N(),
+        ...le(),
         "hidden",
         "none"
       ] }],
       "divide-style": [{ divide: [
-        ...N(),
+        ...le(),
         "hidden",
         "none"
       ] }],
-      "border-color": [{ border: A() }],
-      "border-color-x": [{ "border-x": A() }],
-      "border-color-y": [{ "border-y": A() }],
-      "border-color-s": [{ "border-s": A() }],
-      "border-color-e": [{ "border-e": A() }],
-      "border-color-bs": [{ "border-bs": A() }],
-      "border-color-be": [{ "border-be": A() }],
-      "border-color-t": [{ "border-t": A() }],
-      "border-color-r": [{ "border-r": A() }],
-      "border-color-b": [{ "border-b": A() }],
-      "border-color-l": [{ "border-l": A() }],
-      "divide-color": [{ divide: A() }],
+      "border-color": [{ border: j() }],
+      "border-color-x": [{ "border-x": j() }],
+      "border-color-y": [{ "border-y": j() }],
+      "border-color-s": [{ "border-s": j() }],
+      "border-color-e": [{ "border-e": j() }],
+      "border-color-bs": [{ "border-bs": j() }],
+      "border-color-be": [{ "border-be": j() }],
+      "border-color-t": [{ "border-t": j() }],
+      "border-color-r": [{ "border-r": j() }],
+      "border-color-b": [{ "border-b": j() }],
+      "border-color-l": [{ "border-l": j() }],
+      "divide-color": [{ divide: j() }],
       "outline-style": [{ outline: [
-        ...N(),
+        ...le(),
         "none",
         "hidden"
       ] }],
@@ -9723,7 +9723,7 @@ var Me = (e, t) => {
         Bt,
         Nt
       ] }],
-      "outline-color": [{ outline: A() }],
+      "outline-color": [{ outline: j() }],
       shadow: [{ shadow: [
         "",
         "none",
@@ -9731,28 +9731,28 @@ var Me = (e, t) => {
         Gt,
         zt
       ] }],
-      "shadow-color": [{ shadow: A() }],
+      "shadow-color": [{ shadow: j() }],
       "inset-shadow": [{ "inset-shadow": [
         "none",
         d,
         Gt,
         zt
       ] }],
-      "inset-shadow-color": [{ "inset-shadow": A() }],
-      "ring-w": [{ ring: M() }],
+      "inset-shadow-color": [{ "inset-shadow": j() }],
+      "ring-w": [{ ring: N() }],
       "ring-w-inset": ["ring-inset"],
-      "ring-color": [{ ring: A() }],
+      "ring-color": [{ ring: j() }],
       "ring-offset-w": [{ "ring-offset": [xt, Nt] }],
-      "ring-offset-color": [{ "ring-offset": A() }],
-      "inset-ring-w": [{ "inset-ring": M() }],
-      "inset-ring-color": [{ "inset-ring": A() }],
+      "ring-offset-color": [{ "ring-offset": j() }],
+      "inset-ring-w": [{ "inset-ring": N() }],
+      "inset-ring-color": [{ "inset-ring": j() }],
       "text-shadow": [{ "text-shadow": [
         "none",
         f,
         Gt,
         zt
       ] }],
-      "text-shadow-color": [{ "text-shadow": A() }],
+      "text-shadow-color": [{ "text-shadow": j() }],
       opacity: [{ opacity: [
         xt,
         F,
@@ -9781,37 +9781,37 @@ var Me = (e, t) => {
       "mask-image-linear-pos": [{ "mask-linear": [xt] }],
       "mask-image-linear-from-pos": [{ "mask-linear-from": de() }],
       "mask-image-linear-to-pos": [{ "mask-linear-to": de() }],
-      "mask-image-linear-from-color": [{ "mask-linear-from": A() }],
-      "mask-image-linear-to-color": [{ "mask-linear-to": A() }],
+      "mask-image-linear-from-color": [{ "mask-linear-from": j() }],
+      "mask-image-linear-to-color": [{ "mask-linear-to": j() }],
       "mask-image-t-from-pos": [{ "mask-t-from": de() }],
       "mask-image-t-to-pos": [{ "mask-t-to": de() }],
-      "mask-image-t-from-color": [{ "mask-t-from": A() }],
-      "mask-image-t-to-color": [{ "mask-t-to": A() }],
+      "mask-image-t-from-color": [{ "mask-t-from": j() }],
+      "mask-image-t-to-color": [{ "mask-t-to": j() }],
       "mask-image-r-from-pos": [{ "mask-r-from": de() }],
       "mask-image-r-to-pos": [{ "mask-r-to": de() }],
-      "mask-image-r-from-color": [{ "mask-r-from": A() }],
-      "mask-image-r-to-color": [{ "mask-r-to": A() }],
+      "mask-image-r-from-color": [{ "mask-r-from": j() }],
+      "mask-image-r-to-color": [{ "mask-r-to": j() }],
       "mask-image-b-from-pos": [{ "mask-b-from": de() }],
       "mask-image-b-to-pos": [{ "mask-b-to": de() }],
-      "mask-image-b-from-color": [{ "mask-b-from": A() }],
-      "mask-image-b-to-color": [{ "mask-b-to": A() }],
+      "mask-image-b-from-color": [{ "mask-b-from": j() }],
+      "mask-image-b-to-color": [{ "mask-b-to": j() }],
       "mask-image-l-from-pos": [{ "mask-l-from": de() }],
       "mask-image-l-to-pos": [{ "mask-l-to": de() }],
-      "mask-image-l-from-color": [{ "mask-l-from": A() }],
-      "mask-image-l-to-color": [{ "mask-l-to": A() }],
+      "mask-image-l-from-color": [{ "mask-l-from": j() }],
+      "mask-image-l-to-color": [{ "mask-l-to": j() }],
       "mask-image-x-from-pos": [{ "mask-x-from": de() }],
       "mask-image-x-to-pos": [{ "mask-x-to": de() }],
-      "mask-image-x-from-color": [{ "mask-x-from": A() }],
-      "mask-image-x-to-color": [{ "mask-x-to": A() }],
+      "mask-image-x-from-color": [{ "mask-x-from": j() }],
+      "mask-image-x-to-color": [{ "mask-x-to": j() }],
       "mask-image-y-from-pos": [{ "mask-y-from": de() }],
       "mask-image-y-to-pos": [{ "mask-y-to": de() }],
-      "mask-image-y-from-color": [{ "mask-y-from": A() }],
-      "mask-image-y-to-color": [{ "mask-y-to": A() }],
+      "mask-image-y-from-color": [{ "mask-y-from": j() }],
+      "mask-image-y-to-color": [{ "mask-y-to": j() }],
       "mask-image-radial": [{ "mask-radial": [F, P] }],
       "mask-image-radial-from-pos": [{ "mask-radial-from": de() }],
       "mask-image-radial-to-pos": [{ "mask-radial-to": de() }],
-      "mask-image-radial-from-color": [{ "mask-radial-from": A() }],
-      "mask-image-radial-to-color": [{ "mask-radial-to": A() }],
+      "mask-image-radial-from-color": [{ "mask-radial-from": j() }],
+      "mask-image-radial-to-color": [{ "mask-radial-to": j() }],
       "mask-image-radial-shape": [{ "mask-radial": ["circle", "ellipse"] }],
       "mask-image-radial-size": [{ "mask-radial": [{
         closest: ["side", "corner"],
@@ -9821,8 +9821,8 @@ var Me = (e, t) => {
       "mask-image-conic-pos": [{ "mask-conic": [xt] }],
       "mask-image-conic-from-pos": [{ "mask-conic-from": de() }],
       "mask-image-conic-to-pos": [{ "mask-conic-to": de() }],
-      "mask-image-conic-from-color": [{ "mask-conic-from": A() }],
-      "mask-image-conic-to-color": [{ "mask-conic-to": A() }],
+      "mask-image-conic-from-color": [{ "mask-conic-from": j() }],
+      "mask-image-conic-to-color": [{ "mask-conic-to": j() }],
       "mask-mode": [{ mask: [
         "alpha",
         "luminance",
@@ -9836,9 +9836,9 @@ var Me = (e, t) => {
         "stroke",
         "view"
       ] }],
-      "mask-position": [{ mask: j() }],
-      "mask-repeat": [{ mask: oe() }],
-      "mask-size": [{ mask: se() }],
+      "mask-position": [{ mask: M() }],
+      "mask-repeat": [{ mask: ae() }],
+      "mask-size": [{ mask: oe() }],
       "mask-type": [{ "mask-type": ["alpha", "luminance"] }],
       "mask-image": [{ mask: [
         "none",
@@ -9869,7 +9869,7 @@ var Me = (e, t) => {
         Gt,
         zt
       ] }],
-      "drop-shadow-color": [{ "drop-shadow": A() }],
+      "drop-shadow-color": [{ "drop-shadow": j() }],
       grayscale: [{ grayscale: [
         "",
         xt,
@@ -10029,9 +10029,9 @@ var Me = (e, t) => {
         F,
         P
       ] }],
-      accent: [{ accent: A() }],
+      accent: [{ accent: j() }],
       appearance: [{ appearance: ["none", "auto"] }],
-      "caret-color": [{ caret: A() }],
+      "caret-color": [{ caret: j() }],
       "color-scheme": [{ scheme: [
         "normal",
         "dark",
@@ -10089,8 +10089,8 @@ var Me = (e, t) => {
         "x"
       ] }],
       "scroll-behavior": [{ scroll: ["auto", "smooth"] }],
-      "scrollbar-thumb-color": [{ "scrollbar-thumb": A() }],
-      "scrollbar-track-color": [{ "scrollbar-track": A() }],
+      "scrollbar-thumb-color": [{ "scrollbar-thumb": j() }],
+      "scrollbar-track-color": [{ "scrollbar-track": j() }],
       "scrollbar-gutter": [{ "scrollbar-gutter": [
         "auto",
         "stable",
@@ -10167,14 +10167,14 @@ var Me = (e, t) => {
         F,
         P
       ] }],
-      fill: [{ fill: ["none", ...A()] }],
+      fill: [{ fill: ["none", ...j()] }],
       "stroke-w": [{ stroke: [
         xt,
         Bt,
         Nt,
         Pt
       ] }],
-      stroke: [{ stroke: ["none", ...A()] }],
+      stroke: [{ stroke: ["none", ...j()] }],
       "forced-color-adjust": [{ "forced-color-adjust": ["auto", "none"] }]
     },
     conflictingClassGroups: {
@@ -10564,7 +10564,7 @@ function An(e) {
   return !e || typeof e != "object" || Array.isArray(e) ? null : e;
 }
 async function jn(e, t, n = {}) {
-  let r = wn(e, t), i = t.principal === "staff", a = i && Cn(t) && n.route === "internal-soc" ? Tn(e, t) : r, o = await kn("/v1/tenant/deployment-features", r, null), s = typeof o == "object" && !!o && o.connectors === !0, c = typeof o == "object" && !!o && o.waf_posture === !0, l = typeof o == "object" && !!o && o.external_discovery === !0, [u, d, f, p, m, h, g, _, v, y, b, x, S, C, w, T, E, D, O, k, ee, te, ne, re, ie, ae, A, j, oe, se, ce, le, M, N, ue, de, fe, pe, me, he, ge] = await Promise.all([
+  let r = wn(e, t), i = t.principal === "staff", a = i && Cn(t) && n.route === "internal-soc" ? Tn(e, t) : r, o = await kn("/v1/tenant/deployment-features", r, null), s = typeof o == "object" && !!o && o.connectors === !0, c = typeof o == "object" && !!o && o.waf_posture === !0, l = typeof o == "object" && !!o && o.external_discovery === !0, [u, d, f, p, m, h, g, _, v, y, b, x, S, C, w, T, E, D, O, k, ee, te, A, ne, re, ie, j, M, ae, oe, se, ce, N, le, ue, de, fe, pe, me, he, ge] = await Promise.all([
     kn("/v1/state", a, null),
     kn("/v1/tenants/current", r, null),
     kn("/v1/target-groups", r, { items: [] }),
@@ -10635,18 +10635,18 @@ async function jn(e, t, n = {}) {
     wafAssets: sn(k),
     wafCoverage: An(ee),
     wafCoverageSummary: An(te),
-    wafRiskRoadmap: An(ne),
-    wafValidations: sn(re),
-    wafDriftEvents: sn(ie),
-    wafExceptions: sn(ae),
-    wafValidationPlans: sn(A),
-    wafRetests: sn(j),
-    wafActionItems: sn(oe),
-    cvePipeline: sn(se),
-    supplyChainRisks: sn(ce),
-    discoveryEntities: sn(le),
-    discoveryCandidates: sn(M),
-    discoveryInbox: sn(N),
+    wafRiskRoadmap: An(A),
+    wafValidations: sn(ne),
+    wafDriftEvents: sn(re),
+    wafExceptions: sn(ie),
+    wafValidationPlans: sn(j),
+    wafRetests: sn(M),
+    wafActionItems: sn(ae),
+    cvePipeline: sn(oe),
+    supplyChainRisks: sn(se),
+    discoveryEntities: sn(ce),
+    discoveryCandidates: sn(N),
+    discoveryInbox: sn(le),
     discoverySummary: An(ue),
     subscriptionSummary: An(de),
     internalOverview: An(fe),
@@ -10718,7 +10718,7 @@ var Mn = {
     label: "Dashboard",
     group: "overview",
     description: "Readiness score, coverage, vectors, findings, and SOC status.",
-    icon: M
+    icon: N
   },
   {
     id: "environments",
@@ -10753,7 +10753,7 @@ var Mn = {
     label: "Test policies",
     group: "validation",
     description: "Cadence, expected verdicts, target bindings, safe windows, and high-scale policy gating.",
-    icon: ae
+    icon: ie
   },
   {
     id: "runs",
@@ -10774,7 +10774,7 @@ var Mn = {
     label: "Reports",
     group: "governance",
     description: "Executive, technical, SOC, audit, release, and WAF report builders.",
-    icon: oe
+    icon: ae
   },
   {
     id: "integrations",
@@ -10795,28 +10795,28 @@ var Mn = {
     label: "Audit log",
     group: "governance",
     description: "Tenant actions, security-relevant changes, and custody chain records.",
-    icon: ae
+    icon: ie
   },
   {
     id: "settings",
     label: "Settings",
     group: "governance",
     description: "Tenant profile, roles, tokens, retention, SSO, and safe defaults.",
-    icon: le
+    icon: ce
   },
   {
     id: "support",
     label: "Support",
     group: "governance",
     description: "Support readiness, escalation paths, runbook references, and non-production on-call posture.",
-    icon: N
+    icon: le
   },
   {
     id: "subscription",
     label: "Billing",
     group: "governance",
     description: "Plan, entitlements, limits, billing state, contract references, and effective dates.",
-    icon: A
+    icon: j
   },
   {
     id: "admin",
@@ -10830,7 +10830,7 @@ var Mn = {
     label: "SOC console",
     group: "staff",
     description: "Dedicated staff SOC execution plane with kill switch, Go/No-Go checklist, provider contacts, and timeline.",
-    icon: se
+    icon: oe
   }
 ], Fn = [
   {
@@ -10873,7 +10873,7 @@ var Mn = {
     label: "Report detail",
     group: "governance",
     description: "Report kind, custody preview, export formats, and digest verification for one generated report.",
-    icon: oe
+    icon: ae
   },
   {
     id: "tenant-detail",
@@ -11384,7 +11384,7 @@ function Qn({ label: e, name: t, value: n, options: r, onChange: i, className: a
           children: [/* @__PURE__ */ (0, R.jsxs)("span", {
             className: "select-copy",
             children: [/* @__PURE__ */ (0, R.jsx)("strong", { children: m?.label }), m?.description ? /* @__PURE__ */ (0, R.jsx)("small", { children: m.description }) : null]
-          }), /* @__PURE__ */ (0, R.jsx)(re, { size: 16 })]
+          }), /* @__PURE__ */ (0, R.jsx)(ne, { size: 16 })]
         }),
         /* @__PURE__ */ (0, R.jsx)("span", {
           id: p,
@@ -11399,7 +11399,7 @@ function Qn({ label: e, name: t, value: n, options: r, onChange: i, className: a
             className: an("select-option", e.value === n && "active"),
             onClick: () => g(e.value),
             onKeyDown: (n) => S(n, e.value, t),
-            children: [/* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)("strong", { children: e.label }), e.description ? /* @__PURE__ */ (0, R.jsx)("small", { children: e.description }) : null] }), /* @__PURE__ */ (0, R.jsx)(ne, {
+            children: [/* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)("strong", { children: e.label }), e.description ? /* @__PURE__ */ (0, R.jsx)("small", { children: e.description }) : null] }), /* @__PURE__ */ (0, R.jsx)(A, {
               size: 14,
               "aria-hidden": "true"
             })]
@@ -11998,9 +11998,9 @@ function xr({ config: e }) {
               id: "trust",
               "aria-label": "Platform trust commitments",
               children: [
-                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(ne, { size: 16 }), "No cloud credentials required"] }),
-                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(ne, { size: 16 }), "Low-volume, bounded probes"] }),
-                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(ne, { size: 16 }), "SOC-governed high-scale"] }),
+                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(A, { size: 16 }), "No cloud credentials required"] }),
+                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(A, { size: 16 }), "Low-volume, bounded probes"] }),
+                /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(A, { size: 16 }), "SOC-governed high-scale"] }),
                 /* @__PURE__ */ (0, R.jsxs)("span", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 16 }), "Evidence-backed verdicts"] })
               ]
             })
@@ -12204,7 +12204,7 @@ function Sr({ config: e }) {
           children: [
             /* @__PURE__ */ (0, R.jsxs)("li", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 16 }), " Evidence-backed verdicts tied to observed probe data"] }),
             /* @__PURE__ */ (0, R.jsxs)("li", { children: [/* @__PURE__ */ (0, R.jsx)(de, { size: 16 }), " No default cloud credentials required"] }),
-            /* @__PURE__ */ (0, R.jsxs)("li", { children: [/* @__PURE__ */ (0, R.jsx)(j, { size: 16 }), " Audit-ready exports and custody references"] })
+            /* @__PURE__ */ (0, R.jsxs)("li", { children: [/* @__PURE__ */ (0, R.jsx)(M, { size: 16 }), " Audit-ready exports and custody references"] })
           ]
         })
       ] }),
@@ -12453,7 +12453,7 @@ function Mr({ config: e }) {
           children: [
             /* @__PURE__ */ (0, R.jsxs)("div", {
               className: "callout info",
-              children: [/* @__PURE__ */ (0, R.jsx)(ie, {
+              children: [/* @__PURE__ */ (0, R.jsx)(re, {
                 size: 18,
                 "aria-hidden": "true"
               }), /* @__PURE__ */ (0, R.jsx)("p", {
@@ -12733,7 +12733,7 @@ function Nr() {
             children: [
               /* @__PURE__ */ (0, R.jsxs)("div", {
                 className: "callout info",
-                children: [/* @__PURE__ */ (0, R.jsx)(ie, {
+                children: [/* @__PURE__ */ (0, R.jsx)(re, {
                   size: 18,
                   "aria-hidden": "true"
                 }), /* @__PURE__ */ (0, R.jsx)("p", {
@@ -16060,7 +16060,7 @@ function ho({ groups: e, selectedIds: t, onChange: n, disabled: r = !1, label: i
               })]
             }, r);
           })
-        }), /* @__PURE__ */ (0, R.jsx)(re, {
+        }), /* @__PURE__ */ (0, R.jsx)(ne, {
           className: "tg-picker-chevron",
           size: 12,
           "aria-hidden": "true"
@@ -16458,7 +16458,7 @@ function ts() {
     className: "rule-grid",
     children: zn.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", {
       className: "rule",
-      children: [/* @__PURE__ */ (0, R.jsx)(ie, { size: 17 }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("strong", { children: e.title }), /* @__PURE__ */ (0, R.jsx)("p", { children: e.body })] })]
+      children: [/* @__PURE__ */ (0, R.jsx)(re, { size: 17 }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("strong", { children: e.title }), /* @__PURE__ */ (0, R.jsx)("p", { children: e.body })] })]
     }, e.title))
   })] });
 }
@@ -16792,7 +16792,7 @@ function ms({ data: e }) {
             }) : null
           ]
         }) : /* @__PURE__ */ (0, R.jsx)(q, {
-          icon: ie,
+          icon: re,
           title: "No urgent setup steps.",
           body: "Keep running safe validations and triage new findings as evidence arrives.",
           actionLabel: "Open test runs",
@@ -16803,7 +16803,7 @@ function ms({ data: e }) {
           children: /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Weighted factors" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "No factor can pass without supporting evidence. Heatmap, aging findings, and the evidence feed live on the Risk Trends and Evidence Feed tabs." })] }), /* @__PURE__ */ (0, R.jsx)(K, {
             className: "factor-list",
             children: s.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-              icon: j,
+              icon: M,
               title: "No readiness factors returned.",
               body: "Factors appear after the platform publishes evidence-backed scoring inputs.",
               actionLabel: "Open target groups",
@@ -16940,20 +16940,39 @@ function ms({ data: e }) {
   });
 }
 function hs({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, C.useState)(() => Y(e.targetGroups[0] ?? {}, ["id"], "")), [o, s] = (0, C.useState)("fqdn"), [c, l] = (0, C.useState)(() => Io("environment_id")), [u, d] = (0, C.useState)(!1), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)(""), v = [...new Set(e.targetGroups.map((e) => Y(e, ["environment_id"], "")).filter(Boolean))], y = e.targetGroups.reduce((e, t) => e + jo(t, ["target_count"]), 0), b = c ? e.targetGroups.filter((e) => Y(e, ["environment_id"], "") === c) : e.targetGroups, x = Y(e.targetGroups.find((e) => Y(e, ["id"], "") === i) ?? e.targetGroups[0] ?? null ?? {}, ["id"], i);
+  let [i, a] = (0, C.useState)(() => Y(e.targetGroups[0] ?? {}, ["id"], "")), [o, s] = (0, C.useState)("fqdn"), [c, l] = (0, C.useState)(() => Io("environment_id")), [u, d] = (0, C.useState)(!1), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)(""), [v, y] = (0, C.useState)([]), [b, x] = (0, C.useState)(""), S = [...new Set(e.targetGroups.map((e) => Y(e, ["environment_id"], "")).filter(Boolean))], w = e.targetGroups.reduce((e, t) => e + jo(t, ["target_count"]), 0), T = c ? e.targetGroups.filter((e) => Y(e, ["environment_id"], "") === c) : e.targetGroups, E = Y(e.targetGroups.find((e) => Y(e, ["id"], "") === i) ?? e.targetGroups[0] ?? null ?? {}, ["id"], i);
   (0, C.useEffect)(() => {
     let e = () => l(Io("environment_id"));
     return window.addEventListener("hashchange", e), () => window.removeEventListener("hashchange", e);
   }, []), (0, C.useEffect)(() => {
-    let t = Y(b[0] ?? e.targetGroups[0] ?? {}, ["id"], "");
-    !i && t && a(t), i && b.length > 0 && !b.some((e) => Y(e, ["id"], "") === i) && a(Y(b[0], ["id"], ""));
+    let e = !1;
+    return (async () => {
+      try {
+        let r = await L(t, n, "/v1/environments"), i = Array.isArray(r) ? r : Array.isArray(r?.items) ? r.items : [];
+        e || y(i);
+      } catch {
+        e || y([]);
+      }
+    })(), () => {
+      e = !0;
+    };
+  }, [t, n]);
+  let D = v.map((e) => ({
+    value: Y(e, ["id"], ""),
+    label: Y(e, ["name"], Y(e, ["id"], "")) || Y(e, ["id"], "")
+  })).filter((e) => e.value);
+  (0, C.useEffect)(() => {
+    D.length !== 0 && (!b || !D.some((e) => e.value === b)) && x(D[0].value);
+  }, [D, b]), (0, C.useEffect)(() => {
+    let t = Y(T[0] ?? e.targetGroups[0] ?? {}, ["id"], "");
+    !i && t && a(t), i && T.length > 0 && !T.some((e) => Y(e, ["id"], "") === i) && a(Y(T[0], ["id"], ""));
   }, [
     e.targetGroups,
-    b,
+    T,
     i
   ]);
-  let [S, w] = (0, C.useState)(!1), T = new Map(ss(e).map((e) => [e.groupId, e]));
-  function E(e) {
+  let [O, k] = (0, C.useState)(!1), ee = new Map(ss(e).map((e) => [e.groupId, e]));
+  function te(e) {
     let t = e.verdict;
     return typeof t == "string" && t ? t : t && typeof t == "object" && !Array.isArray(t) ? Y(t, [
       "verdict",
@@ -16961,11 +16980,11 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       "result"
     ], "") : Y(e, ["verdict"], "");
   }
-  function D(t) {
+  function A(t) {
     let n = [...e.runs].filter((e) => Y(e, ["target_group_id"]) === t).filter((e) => ["completed", "verdicted"].includes(Y(e, ["status"]))).sort((e, t) => String(t.started_at ?? t.created_at ?? "").localeCompare(String(e.started_at ?? e.created_at ?? "")))[0];
-    return n ? E(n) : "";
+    return n ? te(n) : "";
   }
-  function O(e) {
+  function ne(e) {
     let t = e.trim().toLowerCase();
     return t ? [
       "pass",
@@ -16990,7 +17009,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       "manual_review"
     ].includes(t) ? "warn" : "muted" : "muted";
   }
-  function k(e) {
+  function re(e) {
     let t = e.trim().toLowerCase();
     return t ? [
       "pass",
@@ -17009,13 +17028,13 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       "manual_review"
     ].includes(t) ? "Review" : Wo(e) : "None";
   }
-  function ee(e) {
+  function ie(e) {
     return e.trim().toLowerCase() === "critical" ? "info" : "muted";
   }
-  function te(e) {
+  function j(e) {
     return e <= 0 ? "success" : e >= 2 ? "danger" : "warn";
   }
-  let ne = [
+  let M = [
     {
       key: "group",
       label: "Group",
@@ -17048,7 +17067,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
         });
         let n = t.charAt(0).toUpperCase() + t.slice(1);
         return /* @__PURE__ */ (0, R.jsx)(V, {
-          tone: ee(t),
+          tone: ie(t),
           children: n
         });
       }
@@ -17062,7 +17081,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       key: "agents",
       label: "Agents",
       render: (e) => {
-        let t = Y(e, ["id"], ""), n = T.get(t), r = n?.onlineAgents ?? 0, i = n?.boundAgents ?? 0;
+        let t = Y(e, ["id"], ""), n = ee.get(t), r = n?.onlineAgents ?? 0, i = n?.boundAgents ?? 0;
         return /* @__PURE__ */ (0, R.jsx)("span", {
           className: `mono${i === 0 ? " muted" : ""}`,
           title: i === 0 ? "No agents bound to this group yet" : void 0,
@@ -17085,12 +17104,12 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       key: "open",
       label: "Open",
       render: (e) => {
-        let t = Y(e, ["id"], ""), n = T.get(t)?.openFindings ?? 0;
+        let t = Y(e, ["id"], ""), n = ee.get(t)?.openFindings ?? 0;
         return n === 0 ? /* @__PURE__ */ (0, R.jsx)(V, {
           tone: "success",
           children: "0"
         }) : /* @__PURE__ */ (0, R.jsx)(V, {
-          tone: te(n),
+          tone: j(n),
           children: on(n)
         });
       }
@@ -17099,10 +17118,10 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       key: "last_verdict",
       label: "Last verdict",
       render: (e) => {
-        let t = D(Y(e, ["id"], ""));
+        let t = A(Y(e, ["id"], ""));
         return /* @__PURE__ */ (0, R.jsx)(V, {
-          tone: O(t),
-          children: k(t)
+          tone: ne(t),
+          children: re(t)
         });
       }
     },
@@ -17135,7 +17154,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       })
     }
   ];
-  async function re(e, t, n) {
+  async function ae(e, t, n) {
     p(e), _(""), h("");
     try {
       let e = await t();
@@ -17147,18 +17166,23 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       p("");
     }
   }
-  async function ie(e) {
+  async function oe(e) {
     e.preventDefault();
     let r = e.currentTarget, i = new FormData(r), o = String(i.get("name") ?? "").trim();
     if (!o) {
       _("Target group name is required.");
       return;
     }
-    let s = await re("create-target-group", () => L(t, n, "/v1/target-groups", {
+    let s = String(i.get("environment_id") ?? "").trim(), c = (b || s).trim();
+    if (!c) {
+      _("Select an environment before creating a target group. Create one on the Environments page if none exist.");
+      return;
+    }
+    let l = await ae("create-target-group", () => L(t, n, "/v1/target-groups", {
       method: "POST",
       body: {
         name: o,
-        environment_id: String(i.get("environment_id") ?? "prod").trim() || "prod",
+        environment_id: c,
         description: String(i.get("description") ?? "").trim(),
         timezone: String(i.get("timezone") ?? "UTC").trim() || "UTC",
         safety_policy: {
@@ -17167,13 +17191,13 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
         }
       }
     }), "Target group created from declared customer scope.");
-    if (s && typeof s == "object" && "id" in s) {
-      let e = String(s.id);
+    if (l && typeof l == "object" && "id" in l) {
+      let e = String(l.id);
       a(e), r.reset();
     }
   }
-  async function ae(e) {
-    if (e.preventDefault(), !x) {
+  async function se(e) {
+    if (e.preventDefault(), !E) {
       _("Create or select a target group before adding a target.");
       return;
     }
@@ -17182,7 +17206,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       _("Target value is required.");
       return;
     }
-    await re(`add-target-${x}`, () => L(t, n, `/v1/target-groups/${x}/targets`, {
+    await ae(`add-target-${E}`, () => L(t, n, `/v1/target-groups/${E}/targets`, {
       method: "POST",
       body: {
         kind: String(i.get("kind") ?? "fqdn"),
@@ -17205,7 +17229,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
           variant: "default",
           size: "sm",
           onClick: () => {
-            w(!0), document.getElementById("tg-create-forms")?.scrollIntoView({
+            k(!0), document.getElementById("tg-create-forms")?.scrollIntoView({
               behavior: "smooth",
               block: "start"
             });
@@ -17233,13 +17257,13 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Declared target groups" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Declared business scope for validation. Archived groups are removed from this active list." })] }), /* @__PURE__ */ (0, R.jsxs)(V, {
         tone: "info",
         children: [
-          b.length,
+          T.length,
           " active",
           c ? " (filtered)" : ""
         ]
       })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-        columns: ne,
-        items: b,
+        columns: M,
+        items: T,
         getRowId: (e) => Y(e, ["id"], ""),
         getRowProps: (e) => {
           let t = Y(e, ["id"], ""), n = di("target-group-detail", t);
@@ -17275,14 +17299,14 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
           }),
           /* @__PURE__ */ (0, R.jsx)($o, {
             label: "Declared targets",
-            value: y,
+            value: w,
             sub: "Across all active groups",
             icon: me,
-            tone: y > 0 ? "info" : "muted"
+            tone: w > 0 ? "info" : "muted"
           }),
           /* @__PURE__ */ (0, R.jsx)($o, {
             label: "Environments",
-            value: v.length,
+            value: S.length,
             sub: "Derived from target-group records",
             icon: be,
             tone: "muted"
@@ -17292,24 +17316,46 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
       /* @__PURE__ */ (0, R.jsxs)("details", {
         id: "tg-create-forms",
         className: "full",
-        open: S,
-        onToggle: (e) => w(e.currentTarget.open),
+        open: O,
+        onToggle: (e) => k(e.currentTarget.open),
         children: [/* @__PURE__ */ (0, R.jsx)("summary", { children: "Create declared target group" }), /* @__PURE__ */ (0, R.jsxs)("div", {
           className: "split",
           children: [/* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Create declared target group" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Customers declare scope manually. AstraNull does not discover inventory automatically." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
             className: "product-form",
-            onSubmit: ie,
+            onSubmit: oe,
             children: [
               /* @__PURE__ */ (0, R.jsxs)("label", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, R.jsx)("input", {
                 name: "name",
                 placeholder: "Retail Checkout - Production",
                 required: !0
               })] }),
-              /* @__PURE__ */ (0, R.jsxs)("label", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Environment" }), /* @__PURE__ */ (0, R.jsx)("input", {
+              D.length > 0 ? /* @__PURE__ */ (0, R.jsx)(Qn, {
+                label: "Environment",
                 name: "environment_id",
-                placeholder: "prod",
-                defaultValue: "prod"
-              })] }),
+                value: b,
+                options: D,
+                onChange: x
+              }) : /* @__PURE__ */ (0, R.jsxs)("label", { children: [
+                /* @__PURE__ */ (0, R.jsx)("span", { children: "Environment" }),
+                /* @__PURE__ */ (0, R.jsx)("input", {
+                  name: "environment_id",
+                  placeholder: "Create an environment first",
+                  defaultValue: ""
+                }),
+                /* @__PURE__ */ (0, R.jsxs)("p", {
+                  className: "muted full",
+                  children: [
+                    "No environments exist yet. Create one on the ",
+                    /* @__PURE__ */ (0, R.jsx)(B, {
+                      href: "#environments",
+                      variant: "ghost",
+                      size: "sm",
+                      children: "Environments"
+                    }),
+                    " page, then declare a target group."
+                  ]
+                })
+              ] }),
               /* @__PURE__ */ (0, R.jsxs)("details", {
                 className: "full",
                 open: u,
@@ -17354,7 +17400,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
             ]
           }) })] }), /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Add declared target" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Add FQDN, URL, IP/port, DNS, or canary targets to the selected group." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
             className: "product-form",
-            onSubmit: ae,
+            onSubmit: se,
             children: [
               /* @__PURE__ */ (0, R.jsx)("input", {
                 type: "hidden",
@@ -17364,12 +17410,12 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
               /* @__PURE__ */ (0, R.jsx)(Qn, {
                 className: "full",
                 label: "Selected group",
-                value: x,
-                disabled: b.length === 0,
-                options: b.length === 0 ? [{
+                value: E,
+                disabled: T.length === 0,
+                options: T.length === 0 ? [{
                   value: "",
                   label: "No target groups yet"
-                }] : b.map((e) => ({
+                }] : T.map((e) => ({
                   value: Y(e, ["id"]),
                   label: Y(e, ["name", "id"])
                 })),
@@ -17391,7 +17437,7 @@ function hs({ data: e, config: t, session: n, onRefresh: r }) {
                 children: /* @__PURE__ */ (0, R.jsx)(z, {
                   type: "submit",
                   loading: f.startsWith("add-target-"),
-                  disabled: f !== "" || !x,
+                  disabled: f !== "" || !E,
                   children: "Add target"
                 })
               })
@@ -17422,14 +17468,14 @@ function gs({ route: e, data: t }) {
             label: "Release evidence",
             value: t.releaseEvidence.length,
             sub: "Metadata-only inventory",
-            icon: oe,
+            icon: ae,
             tone: "info"
           }),
           /* @__PURE__ */ (0, R.jsx)($o, {
             label: "Audit entries",
             value: on(t.audit.length),
             sub: "Security-relevant actions",
-            icon: j,
+            icon: M,
             tone: "success"
           })
         ]
@@ -17748,7 +17794,7 @@ function vs({ data: e, config: t, session: n, onRefresh: r }) {
             className: "codeblock",
             children: u.textPreview
           })] }) : /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: j,
+            icon: M,
             title: "No export selected.",
             body: "Generate or export a report to inspect custody metadata."
           })
@@ -17769,7 +17815,7 @@ function vs({ data: e, config: t, session: n, onRefresh: r }) {
             columns: _,
             items: m,
             empty: /* @__PURE__ */ (0, R.jsx)(q, {
-              icon: oe,
+              icon: ae,
               title: "No reports generated.",
               body: "Generate a report after validation activity to create a custody-ready evidence artifact."
             })
@@ -17824,7 +17870,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
   }))], S = No(b, ["privacy_settings"]) ?? {}, w = No(S, ["evidence_retention"]) ?? {}, T = jo(S, ["metadata_retention_days"], 90), E = xs(t), D = {
     principal: n.principal,
     staffRole: n.staff_role
-  }, O = n.role ?? "admin", k = Kn(O, "audit", D), ee = Kn(O, "notifications", D), te = bs, ne = [
+  }, O = n.role ?? "admin", k = Kn(O, "audit", D), ee = Kn(O, "notifications", D), te = bs, A = [
     {
       key: "name",
       label: "Token",
@@ -17862,12 +17908,12 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           size: "sm",
           variant: "danger",
           disabled: o !== "" || !!e.revoked_at,
-          onClick: () => void oe(t),
+          onClick: () => void ae(t),
           children: "Revoke"
         });
       }
     }
-  ], re = [
+  ], ne = [
     {
       key: "name",
       label: "Account",
@@ -17910,20 +17956,20 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
             size: "sm",
             variant: "secondary",
             disabled: o !== "" || !!e.revoked_at,
-            onClick: () => void ce(t),
+            onClick: () => void se(t),
             children: "Rotate"
           }), /* @__PURE__ */ (0, R.jsx)(z, {
             size: "sm",
             variant: "danger",
             disabled: o !== "" || !!e.revoked_at,
-            onClick: () => void se(t),
+            onClick: () => void oe(t),
             children: "Revoke"
           })]
         });
       }
     }
   ];
-  async function ie(e, t, n) {
+  async function re(e, t, n) {
     s(e), d(""), l("");
     try {
       let e = await t();
@@ -17935,9 +17981,9 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
       s("");
     }
   }
-  async function ae(e) {
+  async function ie(e) {
     e.preventDefault();
-    let r = e.currentTarget, i = new FormData(r), a = String(i.get("name") ?? "").trim() || "Install token", o = ys(String(i.get("expiry") ?? "1h")), s = Number(i.get("max_registrations") ?? 1), c = String(i.get("target_group_id") ?? "").trim(), l = await ie("create-bootstrap-token", () => L(t, n, "/v1/bootstrap-tokens", {
+    let r = e.currentTarget, i = new FormData(r), a = String(i.get("name") ?? "").trim() || "Install token", o = ys(String(i.get("expiry") ?? "1h")), s = Number(i.get("max_registrations") ?? 1), c = String(i.get("target_group_id") ?? "").trim(), l = await re("create-bootstrap-token", () => L(t, n, "/v1/bootstrap-tokens", {
       method: "POST",
       body: {
         name: a,
@@ -17952,9 +17998,9 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
       value: String(l.secret)
     }), r.reset());
   }
-  async function A(e) {
+  async function j(e) {
     e.preventDefault();
-    let r = e.currentTarget, i = new FormData(r), a = String(i.get("scopes") ?? "").split(",").map((e) => e.trim()).filter(Boolean), o = a.length ? a : ["tenant:read"], s = await ie("create-service-account", () => L(t, n, "/v1/service-accounts", {
+    let r = e.currentTarget, i = new FormData(r), a = String(i.get("scopes") ?? "").split(",").map((e) => e.trim()).filter(Boolean), o = a.length ? a : ["tenant:read"], s = await re("create-service-account", () => L(t, n, "/v1/service-accounts", {
       method: "POST",
       body: {
         name: String(i.get("name") ?? "").trim() || "Automation account",
@@ -17968,36 +18014,36 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
       value: String(s.secret)
     }), r.reset());
   }
+  async function ae(e) {
+    e && window.confirm("Revoke this bootstrap token? New agent registrations using it will fail.") && await re(`revoke-bootstrap-${e}`, () => L(t, n, `/v1/bootstrap-tokens/${e}/revoke`, { method: "POST" }), "Bootstrap token revoked.");
+  }
   async function oe(e) {
-    e && window.confirm("Revoke this bootstrap token? New agent registrations using it will fail.") && await ie(`revoke-bootstrap-${e}`, () => L(t, n, `/v1/bootstrap-tokens/${e}/revoke`, { method: "POST" }), "Bootstrap token revoked.");
+    e && window.confirm("Revoke this service account? API calls using its secret will stop working.") && await re(`revoke-service-${e}`, () => L(t, n, `/v1/service-accounts/${e}/revoke`, { method: "POST" }), "Service account revoked.");
   }
   async function se(e) {
-    e && window.confirm("Revoke this service account? API calls using its secret will stop working.") && await ie(`revoke-service-${e}`, () => L(t, n, `/v1/service-accounts/${e}/revoke`, { method: "POST" }), "Service account revoked.");
-  }
-  async function ce(e) {
     if (!e || !window.confirm("Rotate this service account? The current API secret will stop working immediately.")) return;
-    let r = await ie(`rotate-service-${e}`, () => L(t, n, `/v1/service-accounts/${e}/rotate`, { method: "POST" }), "Service account rotated. Copy the new API secret now; it is shown once.");
+    let r = await re(`rotate-service-${e}`, () => L(t, n, `/v1/service-accounts/${e}/rotate`, { method: "POST" }), "Service account rotated. Copy the new API secret now; it is shown once.");
     r && typeof r == "object" && "secret" in r && typeof r.secret == "string" && p({
       label: "Rotated service API secret",
       value: String(r.secret)
     });
   }
-  async function M(e) {
+  async function N(e) {
     e.preventDefault();
     let r = new FormData(e.currentTarget), i = String(r.get("name") ?? "").trim();
     if (!i) {
       d("Organization name is required.");
       return;
     }
-    await ie("save-organization", () => L(t, n, "/v1/tenants/current", {
+    await re("save-organization", () => L(t, n, "/v1/tenants/current", {
       method: "PATCH",
       body: { name: i }
     }), "Organization settings saved.");
   }
-  async function N(e) {
+  async function le(e) {
     if (e.preventDefault(), !window.confirm("Save retention settings? Shorter windows can immediately purge stored metadata.")) return;
     let r = new FormData(e.currentTarget), i = Number(r.get("metadata_retention_days") ?? 90), a = Number(r.get("report_days") ?? 365), o = Number(r.get("audit_log_days") ?? 2555), s = Number(r.get("high_scale_artifact_days") ?? 2555), c = r.get("legal_hold") === "on";
-    await ie("save-retention", () => L(t, n, "/v1/tenants/current", {
+    await re("save-retention", () => L(t, n, "/v1/tenants/current", {
       method: "PATCH",
       body: { privacy_settings: {
         metadata_retention_days: i,
@@ -18017,7 +18063,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
       d("Purpose, name, and credential value are required.");
       return;
     }
-    window.confirm("Store this integration secret? Authorized internal workflows will use the new credential.") && (await ie("create-vault-secret", () => L(t, n, "/v1/secrets", {
+    window.confirm("Store this integration secret? Authorized internal workflows will use the new credential.") && (await re("create-vault-secret", () => L(t, n, "/v1/secrets", {
       method: "POST",
       body: {
         purpose: a,
@@ -18034,7 +18080,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
       d("Select a secret and provide the replacement credential value.");
       return;
     }
-    window.confirm("Rotate this vault secret? The current credential will stop working for authorized internal workflows.") && (await ie(`rotate-vault-${a}`, () => L(t, n, `/v1/secrets/${a}/rotate`, {
+    window.confirm("Rotate this vault secret? The current credential will stop working for authorized internal workflows.") && (await re(`rotate-vault-${a}`, () => L(t, n, `/v1/secrets/${a}/rotate`, {
       method: "POST",
       body: { plaintext: o }
     }), "Secret rotated. Prior credential stops working for authorized internal workflows."), r.reset(), h(""));
@@ -18103,7 +18149,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           className: "split",
           children: [/* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Organization profile" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Organization display name and residency metadata. Privacy defaults stay metadata-only." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: b ? /* @__PURE__ */ (0, R.jsxs)("form", {
             className: "product-form",
-            onSubmit: M,
+            onSubmit: N,
             children: [
               /* @__PURE__ */ (0, R.jsxs)("label", {
                 className: "full",
@@ -18160,7 +18206,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           }),
           /* @__PURE__ */ (0, R.jsxs)(K, {
             className: "settings-list",
-            children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Tenant user invites and role changes are not self-service on this screen." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(j, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "API credentials live under Access; vault secrets under Security; audit history on the Audit page." })] })]
+            children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Tenant user invites and role changes are not self-service on this screen." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(M, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "API credentials live under Access; vault secrets under Security; audit history on the Audit page." })] })]
           }),
           n.principal === "staff" ? /* @__PURE__ */ (0, R.jsx)(K, {
             className: "row-actions",
@@ -18197,7 +18243,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           className: "split",
           children: [/* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Create bootstrap token" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Issue a short-lived one-time install secret for outbound agent registration." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
             className: "product-form",
-            onSubmit: ae,
+            onSubmit: ie,
             children: [
               /* @__PURE__ */ (0, R.jsxs)("label", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, R.jsx)("input", {
                 name: "name",
@@ -18247,7 +18293,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
             ]
           }) })] }), /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Create service account" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Create scoped API automation credentials. Secrets are returned once and list views stay redacted." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
             className: "product-form",
-            onSubmit: A,
+            onSubmit: j,
             children: [
               /* @__PURE__ */ (0, R.jsxs)("label", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, R.jsx)("input", {
                 name: "name",
@@ -18315,10 +18361,10 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           tone: "info",
           children: [e.bootstrapTokens.length, " records"]
         })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-          columns: ne,
+          columns: A,
           items: e.bootstrapTokens,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: le,
+            icon: ce,
             title: "No bootstrap tokens.",
             body: "Create a short-lived token before installing an outbound-only agent."
           })
@@ -18327,7 +18373,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           tone: "success",
           children: [e.serviceAccounts.length, " records"]
         })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-          columns: re,
+          columns: ne,
           items: e.serviceAccounts,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
             icon: Te,
@@ -18351,7 +18397,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           }),
           /* @__PURE__ */ (0, R.jsxs)(K, {
             className: "settings-list",
-            children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Production human auth defaults to `oidc-jwt` with JWKS verification; developer validation may use `dev-headers` or bundled staging login." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(le, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload." })] })]
+            children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Production human auth defaults to `oidc-jwt` with JWKS verification; developer validation may use `dev-headers` or bundled staging login." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(ce, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload." })] })]
           })
         ] }),
         /* @__PURE__ */ (0, R.jsxs)("div", {
@@ -18496,7 +18542,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
           ],
           items: e.secrets,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: le,
+            icon: ce,
             title: "No secrets stored.",
             body: "Store connector or integration credentials here before referencing them from read-only connector workflows.",
             actionLabel: "Open Integrations",
@@ -18508,7 +18554,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
         /* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Privacy and retention" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Updates metadata and evidence retention for this tenant. Shorter windows can purge stored metadata immediately." })] }),
         /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
           className: "product-form",
-          onSubmit: N,
+          onSubmit: le,
           children: [
             /* @__PURE__ */ (0, R.jsxs)("label", { children: [
               /* @__PURE__ */ (0, R.jsx)("span", { children: "Metadata retention (days)" }),
@@ -18587,7 +18633,7 @@ function Ss({ data: e, config: t, session: n, onRefresh: r }) {
         }) }),
         /* @__PURE__ */ (0, R.jsxs)(K, {
           className: "settings-list",
-          children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(j, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the API reference." })] })]
+          children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(M, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant." })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the API reference." })] })]
         })
       ] })
     ]
@@ -19013,7 +19059,7 @@ function ws({ data: e, config: t, session: n, onRefresh: r }) {
           return i === `patch-policy-${t}` || i === `archive-policy-${t}` ? { "aria-busy": !0 } : {};
         },
         empty: ga({
-          icon: ae,
+          icon: ie,
           title: "No test policies yet.",
           body: "Create a safe validation policy after declaring target groups and reviewing the safe check catalog.",
           actionLabel: "New policy",
@@ -19547,7 +19593,7 @@ function Es({ data: e, config: t, session: n, onRefresh: r }) {
         })] }), /* @__PURE__ */ (0, R.jsx)(K, {
           className: "queue-list",
           children: c.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: j,
+            icon: M,
             title: "No snapshots loaded.",
             body: "Select a connector action to load or ingest metadata snapshots."
           }) : c.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(V, {
@@ -19566,7 +19612,7 @@ function Es({ data: e, config: t, session: n, onRefresh: r }) {
           children: [/* @__PURE__ */ (0, R.jsx)(be, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Core DDoS validation still works from declared target groups without cloud credentials." })]
         }), /* @__PURE__ */ (0, R.jsxs)("div", {
           className: "callout",
-          children: [/* @__PURE__ */ (0, R.jsx)(j, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Connector credentials must be stored as encrypted secret references before provider polling." })]
+          children: [/* @__PURE__ */ (0, R.jsx)(M, { size: 18 }), /* @__PURE__ */ (0, R.jsx)("span", { children: "Connector credentials must be stored as encrypted secret references before provider polling." })]
         })]
       })] })
     ]
@@ -19580,7 +19626,7 @@ function Ds({ data: e, session: t }) {
     {
       label: "Support owner",
       value: l,
-      icon: N
+      icon: le
     },
     {
       label: "Account lifecycle",
@@ -19595,7 +19641,7 @@ function Ds({ data: e, session: t }) {
     {
       label: "Recent tenant audit records",
       value: on(jo(i ?? {}, ["audit_events"])),
-      icon: j
+      icon: M
     }
   ] : [];
   return /* @__PURE__ */ (0, R.jsxs)("div", {
@@ -19634,7 +19680,7 @@ function Ds({ data: e, session: t }) {
         children: [/* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Support readiness" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Tenant support posture from account, findings, high-scale, and audit records." })] }), /* @__PURE__ */ (0, R.jsx)(K, {
           className: "settings-list",
           children: p.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: N,
+            icon: le,
             title: "No support account record.",
             body: "Approve a signup request or attach tenant account metadata before support readiness can show live ownership."
           }) : p.map(({ label: e, value: t, icon: n }) => /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)(n, { size: 18 }), /* @__PURE__ */ (0, R.jsxs)("span", { children: [
@@ -19648,7 +19694,7 @@ function Ds({ data: e, session: t }) {
         })] }), /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Recent support evidence" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Latest tenant audit events exposed as metadata-only support context." })] }), /* @__PURE__ */ (0, R.jsx)(K, {
           className: "queue-list",
           children: o.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: j,
+            icon: M,
             title: "No recent support evidence.",
             body: "Tenant audit entries will appear here after support-relevant actions are recorded."
           }) : o.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", {
@@ -19889,7 +19935,7 @@ function Ms({ data: e }) {
       }),
       ee,
       /* @__PURE__ */ (0, R.jsx)(q, {
-        icon: N,
+        icon: le,
         title: "No subscription configured for this tenant.",
         body: "Limits, entitlements, and billing metadata stay hidden until staff provisioning completes. Contact AstraNull support for provisioning or billing assistance.",
         actionLabel: "Contact support",
@@ -19934,7 +19980,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     id: e.id,
     label: e.label
   })), O = t.internalOverview, k = jo(O ?? {}, ["pending_signups"]) + jo(O ?? {}, ["pending_approval_requests"]), ee = jo(O ?? {}, ["tenant_count"], t.internalTenants.length), te = jo(O ?? {}, ["high_scale_reviews"]);
-  async function ne(e, t, n) {
+  async function A(e, t, n) {
     o(e), u(""), c("");
     try {
       let e = await t();
@@ -19946,23 +19992,23 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       o("");
     }
   }
-  async function re(e) {
-    window.confirm("Approve this signup request? A tenant account will be provisioned.") && await ne(`approve-signup-${e}`, () => L(n, r, `/internal/admin/signup-requests/${e}/approve`, {
+  async function ne(e) {
+    window.confirm("Approve this signup request? A tenant account will be provisioned.") && await A(`approve-signup-${e}`, () => L(n, r, `/internal/admin/signup-requests/${e}/approve`, {
       method: "POST",
       body: { reason: "Approved from React staff console." }
     }), "Signup request approved and tenant provisioned.");
   }
-  async function ie(e) {
-    window.confirm("Reject this signup request? No tenant will be provisioned for this applicant.") && await ne(`reject-signup-${e}`, () => L(n, r, `/internal/admin/signup-requests/${e}/reject`, {
+  async function re(e) {
+    window.confirm("Reject this signup request? No tenant will be provisioned for this applicant.") && await A(`reject-signup-${e}`, () => L(n, r, `/internal/admin/signup-requests/${e}/reject`, {
       method: "POST",
       body: { reason: "Rejected from React staff console." }
     }), "Signup request rejected.");
   }
-  async function A(e, t) {
+  async function j(e, t) {
     if (t === "approve") {
       if (!window.confirm("Approve this internal approval request? The requested action will proceed.")) return;
     } else if (!window.confirm("Reject this internal approval request? The requested action will not proceed.")) return;
-    await ne(`approval-${e}-${t}`, () => L(n, r, `/internal/admin/approval-requests/${e}/decision`, {
+    await A(`approval-${e}-${t}`, () => L(n, r, `/internal/admin/approval-requests/${e}/decision`, {
       method: "POST",
       body: {
         decision: t,
@@ -19990,7 +20036,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     w,
     t.internalTenants
   ]);
-  async function oe(e) {
+  async function ae(e) {
     e.preventDefault();
     let t = new FormData(e.currentTarget), i = String(t.get("feature") ?? "").trim(), a = String(t.get("enabled") ?? "true") === "true", o = String(t.get("reason") ?? "").trim();
     if (!d || !i) {
@@ -20001,7 +20047,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     if (a) {
       if (!window.confirm(`Grant the ${s} entitlement for this tenant?`)) return;
     } else if (!window.confirm(`Revoke the ${s} entitlement? The feature will be disabled for this tenant.`)) return;
-    await ne(`entitlement-${d}-${i}`, () => L(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}/entitlements`, {
+    await A(`entitlement-${d}-${i}`, () => L(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}/entitlements`, {
       method: "POST",
       body: {
         feature: i,
@@ -20010,7 +20056,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       }
     }), `${i} entitlement ${a ? "granted" : "revoked"} for ${d}.`);
   }
-  let se = No(_, ["effective_entitlements"]) ?? No(_, ["subscription", "effective_entitlements"]);
+  let oe = No(_, ["effective_entitlements"]) ?? No(_, ["subscription", "effective_entitlements"]);
   return /* @__PURE__ */ (0, R.jsxs)("div", {
     className: "content",
     children: [
@@ -20103,14 +20149,14 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
                       variant: "secondary",
                       loading: a === `approve-signup-${t}`,
                       disabled: i,
-                      onClick: () => void re(t),
+                      onClick: () => void ne(t),
                       children: "Approve"
                     }), /* @__PURE__ */ (0, R.jsx)(z, {
                       size: "sm",
                       variant: "danger",
                       loading: a === `reject-signup-${t}`,
                       disabled: i,
-                      onClick: () => void ie(t),
+                      onClick: () => void re(t),
                       children: "Reject"
                     })]
                   });
@@ -20119,7 +20165,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             ],
             items: t.internalSignupRequests,
             empty: ga({
-              icon: ae,
+              icon: ie,
               title: "No signup requests.",
               body: "Reviewed account intake records will appear here after customers submit requests."
             })
@@ -20216,14 +20262,14 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
                       variant: "secondary",
                       loading: a === `approval-${t}-approve`,
                       disabled: i,
-                      onClick: () => void A(t, "approve"),
+                      onClick: () => void j(t, "approve"),
                       children: "Approve"
                     }), /* @__PURE__ */ (0, R.jsx)(z, {
                       size: "sm",
                       variant: "danger",
                       loading: a === `approval-${t}-reject`,
                       disabled: i,
-                      onClick: () => void A(t, "reject"),
+                      onClick: () => void j(t, "reject"),
                       children: "Reject"
                     })]
                   });
@@ -20265,7 +20311,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             ],
             items: t.internalAudit,
             empty: ga({
-              icon: j,
+              icon: M,
               title: "No internal audit events.",
               body: "Staff decisions and support actions will be listed after they are recorded."
             })
@@ -20276,7 +20322,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           onSubmit: (e) => {
             e.preventDefault();
             let t = String(new FormData(e.currentTarget).get("support_owner") ?? "").trim();
-            !d || !t || window.confirm(`Assign support owner "${t}" for tenant ${d}?`) && ne(`support-owner-${d}`, () => L(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}`, {
+            !d || !t || window.confirm(`Assign support owner "${t}" for tenant ${d}?`) && A(`support-owner-${d}`, () => L(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}`, {
               method: "PATCH",
               body: {
                 support_owner: t,
@@ -20319,11 +20365,11 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
               options: b,
               onChange: f
             }),
-            se ? /* @__PURE__ */ (0, R.jsx)("div", {
+            oe ? /* @__PURE__ */ (0, R.jsx)("div", {
               className: "kv-list",
               children: y.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: ks[e] ?? e }), /* @__PURE__ */ (0, R.jsx)(V, {
-                tone: se[e] === !0 ? "success" : "muted",
-                children: se[e] === !0 ? "enabled" : "disabled"
+                tone: oe[e] === !0 ? "success" : "muted",
+                children: oe[e] === !0 ? "enabled" : "disabled"
               })] }, e))
             }) : /* @__PURE__ */ (0, R.jsx)("p", {
               className: "muted",
@@ -20331,7 +20377,7 @@ function Ns({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             }),
             /* @__PURE__ */ (0, R.jsxs)("form", {
               className: "product-form",
-              onSubmit: oe,
+              onSubmit: ae,
               children: [
                 /* @__PURE__ */ (0, R.jsx)(Qn, {
                   label: "Feature",
@@ -20399,7 +20445,7 @@ function Fs(e) {
   return X(e, ["eligibility"], Ps(e) === "unverified" ? "not_eligible" : "eligible");
 }
 function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
-  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(null), [g, _] = (0, C.useState)(null), [v, y] = (0, C.useState)(null), [b, x] = (0, C.useState)(!0), [S, w] = (0, C.useState)([]), [T, E] = (0, C.useState)(null), [D, k] = (0, C.useState)(null), [ee, ne] = (0, C.useState)([]), [re, ie] = (0, C.useState)(null), [ae, A] = (0, C.useState)(/* @__PURE__ */ new Set()), [j, oe] = (0, C.useState)(!1), se = Array.isArray(e.targets) ? e.targets : [], ce = Array.isArray(e.runs_recent) ? e.runs_recent : [], le = Array.isArray(e.findings_on_group) ? e.findings_on_group : [], M = e.meta && typeof e.meta == "object" && !Array.isArray(e.meta) ? e.meta : null, N = String(e.target_count ?? se.length), ue = X(e, ["loa_state", "loa_status"], X(e.loa, ["state"], "required")), de = ue.toLowerCase() === "signed", fe = Array.isArray(v?.steps) ? v.steps : [];
+  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(null), [g, _] = (0, C.useState)(null), [v, y] = (0, C.useState)(null), [b, x] = (0, C.useState)(!0), [S, w] = (0, C.useState)([]), [T, E] = (0, C.useState)(null), [D, k] = (0, C.useState)(null), [ee, A] = (0, C.useState)([]), [ne, re] = (0, C.useState)(null), [ie, j] = (0, C.useState)(/* @__PURE__ */ new Set()), [M, ae] = (0, C.useState)(!1), oe = Array.isArray(e.targets) ? e.targets : [], se = Array.isArray(e.runs_recent) ? e.runs_recent : [], ce = Array.isArray(e.findings_on_group) ? e.findings_on_group : [], N = e.meta && typeof e.meta == "object" && !Array.isArray(e.meta) ? e.meta : null, le = String(e.target_count ?? oe.length), ue = X(e, ["loa_state", "loa_status"], X(e.loa, ["state"], "required")), de = ue.toLowerCase() === "signed", fe = Array.isArray(v?.steps) ? v.steps : [];
   (0, C.useEffect)(() => {
     let e = !1;
     return x(!0), L(r, i, `/v1/target-groups/${encodeURIComponent(t)}/verification-ladder`).then((t) => {
@@ -20460,16 +20506,16 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     k(e), l(`inventory-${e}`);
     try {
       let t = await L(r, i, `/v1/connectors/${encodeURIComponent(e)}/inventory`);
-      ne(Array.isArray(t.items) ? t.items : []), ie(t.meta && typeof t.meta == "object" ? t.meta : null), A(/* @__PURE__ */ new Set());
+      A(Array.isArray(t.items) ? t.items : []), re(t.meta && typeof t.meta == "object" ? t.meta : null), j(/* @__PURE__ */ new Set());
     } catch (e) {
-      p(e instanceof Error ? e.message : "Inventory request failed."), ne([]), ie({ empty_reason: e instanceof Error ? e.message : "Inventory request failed." });
+      p(e instanceof Error ? e.message : "Inventory request failed."), A([]), re({ empty_reason: e instanceof Error ? e.message : "Inventory request failed." });
     } finally {
       l("");
     }
   }
   async function _e() {
-    !D || ae.size === 0 || await pe(`import-${D}`, async () => {
-      for (let e of ae) {
+    !D || ie.size === 0 || await pe(`import-${D}`, async () => {
+      for (let e of ie) {
         let n = ee.find((t) => X(t, ["id", "value"], "") === e);
         n && await L(r, i, `/v1/target-groups/${encodeURIComponent(t)}/targets`, {
           method: "POST",
@@ -20480,7 +20526,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           }
         });
       }
-      k(null), ne([]), A(/* @__PURE__ */ new Set());
+      k(null), A([]), j(/* @__PURE__ */ new Set());
     }, "Selected inventory rows imported.");
   }
   async function ve(e, t) {
@@ -20510,7 +20556,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           signer_title: String(n.get("signer_title") ?? "").trim(),
           signed_date: String(n.get("signed_date") ?? "").trim()
         }
-      }), oe(!1);
+      }), ae(!1);
     }, "LOA signed and recorded in custody ledger.");
   }
   return /* @__PURE__ */ (0, R.jsxs)("div", {
@@ -20617,7 +20663,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               children: "Total targets"
             }), /* @__PURE__ */ (0, R.jsx)("div", {
               className: "kpi-value",
-              children: N
+              children: le
             })]
           }),
           /* @__PURE__ */ (0, R.jsxs)("div", {
@@ -20656,7 +20702,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             className: "callout-actions",
             children: de ? null : /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [/* @__PURE__ */ (0, R.jsx)(z, {
               className: "btn btn-primary btn-sm",
-              onClick: () => oe(!0),
+              onClick: () => ae(!0),
               children: "Open target group and sign LOA"
             }), /* @__PURE__ */ (0, R.jsx)(z, {
               className: "btn btn-ghost btn-sm",
@@ -20854,11 +20900,11 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }
           }
         ],
-        items: se,
+        items: oe,
         className: "tg-targets-table",
         empty: yo({
           icon: Ce,
-          meta: M ? { empty_reason: X(M, ["targets_empty_reason"], "") } : null
+          meta: N ? { empty_reason: X(N, ["targets_empty_reason"], "") } : null
         })
       }) })] }),
       /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsx)(U, { children: /* @__PURE__ */ (0, R.jsx)(W, { children: "Findings on this group" }) }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
@@ -20900,10 +20946,10 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             render: (e) => X(e, ["status"], "open")
           }
         ],
-        items: le,
+        items: ce,
         empty: yo({
           icon: we,
-          meta: M ? { empty_reason: X(M, ["findings_empty_reason"], "") } : null
+          meta: N ? { empty_reason: X(N, ["findings_empty_reason"], "") } : null
         })
       }) })] }),
       /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsx)(U, { children: /* @__PURE__ */ (0, R.jsx)(W, { children: "Recent runs" }) }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
@@ -20944,10 +20990,10 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             render: (e) => X(e, ["agent_id"], "—")
           }
         ],
-        items: ce,
+        items: se,
         empty: yo({
           icon: O,
-          meta: M ? { empty_reason: X(M, ["runs_empty_reason"], "") } : null,
+          meta: N ? { empty_reason: X(N, ["runs_empty_reason"], "") } : null,
           actionHref: "#runs",
           actionLabel: "Open test runs"
         })
@@ -20976,9 +21022,9 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                     let t = X(e, ["id", "value"], "");
                     return /* @__PURE__ */ (0, R.jsx)("input", {
                       type: "checkbox",
-                      checked: ae.has(t),
+                      checked: ie.has(t),
                       onChange: (e) => {
-                        A((n) => {
+                        j((n) => {
                           let r = new Set(n);
                           return e.target.checked ? r.add(t) : r.delete(t), r;
                         });
@@ -21000,13 +21046,13 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               items: ee,
               empty: yo({
                 icon: te,
-                meta: re
+                meta: ne
               })
             }), /* @__PURE__ */ (0, R.jsx)("div", {
               className: "row-actions",
               children: /* @__PURE__ */ (0, R.jsx)(z, {
                 className: "btn btn-primary btn-sm",
-                disabled: ae.size === 0 || c !== "",
+                disabled: ie.size === 0 || c !== "",
                 loading: c.startsWith("import-"),
                 onClick: () => void _e(),
                 children: "Import selected"
@@ -21015,7 +21061,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           })]
         })
       }) : null,
-      j ? /* @__PURE__ */ (0, R.jsx)("div", {
+      M ? /* @__PURE__ */ (0, R.jsx)("div", {
         className: "modal-overlay",
         role: "dialog",
         "aria-modal": "true",
@@ -21025,7 +21071,7 @@ function Is({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             className: "modal-head",
             children: [/* @__PURE__ */ (0, R.jsxs)("h3", { children: ["Sign LOA · ", X(e, ["name"], t)] }), /* @__PURE__ */ (0, R.jsx)(z, {
               className: "btn btn-ghost btn-sm",
-              onClick: () => oe(!1),
+              onClick: () => ae(!1),
               children: "Close"
             })]
           }), /* @__PURE__ */ (0, R.jsxs)("form", {
@@ -21439,7 +21485,7 @@ function Hs({ entityId: e, config: t, session: n, onRefresh: r }) {
         ],
         items: i.checks_applied,
         empty: yo({
-          icon: j,
+          icon: M,
           meta: i.sectionMeta?.checks
         })
       }) })] }),
@@ -21994,7 +22040,7 @@ function Js({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           children: "No artifacts in bundle."
         })
       }) : /* @__PURE__ */ (0, R.jsx)(q, {
-        icon: j,
+        icon: M,
         title: "No evidence artifacts.",
         body: qs(m?.meta, ["empty_reason"], m?.error ?? "Evidence bundle not returned for this finding.")
       }) })] }),
@@ -22507,7 +22553,7 @@ function Fc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Verdict recorded",
       at: Ys(e, ["verdict", "finalized_at"], "") || e.completed_at
     }
-  ].filter((e) => e.at), ne = Dc("run-detail", e, t, { checks: n.checks }), re = ic(Zs(e, ["targets"]), Z(e, ["target_id"], "")), ie = n.targetGroups.find((t) => Z(t, ["id"], "") === Z(e, ["target_group_id"], "")), A = re === Z(e, ["target_id"], "") ? ic(Zs(ie, ["targets"]), Z(e, ["target_id"], "")) : re;
+  ].filter((e) => e.at), A = Dc("run-detail", e, t, { checks: n.checks }), ne = ic(Zs(e, ["targets"]), Z(e, ["target_id"], "")), re = n.targetGroups.find((t) => Z(t, ["id"], "") === Z(e, ["target_group_id"], "")), j = ne === Z(e, ["target_id"], "") ? ic(Zs(re, ["targets"]), Z(e, ["target_id"], "")) : ne;
   return /* @__PURE__ */ (0, R.jsxs)("div", {
     className: "content",
     children: [
@@ -22519,7 +22565,7 @@ function Fc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         }), /* @__PURE__ */ (0, R.jsx)(kc, {
           route: "run-detail",
           entityId: t,
-          title: ne
+          title: A
         })] })
       }),
       s ? /* @__PURE__ */ (0, R.jsx)(jc, { label: "Loading run detail…" }) : null,
@@ -22569,7 +22615,7 @@ function Fc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 route: "target-group-detail",
                 id: Z(e, ["target_group_id"], "")
               })] }),
-              /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: A })] }),
+              /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: j })] }),
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Vector" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(e, ["vector_family"], "—") })] }),
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Safety" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(e, ["safety_class"], "—") })] })
             ]
@@ -22648,7 +22694,7 @@ function Fc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           events: o
         }), /* @__PURE__ */ (0, R.jsx)(ti, { detail: e })] })] }) : null,
         l === "evidence" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Evidence" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Custody-ready artifacts generated by this run." })] }), /* @__PURE__ */ (0, R.jsxs)(K, { children: [x.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-          icon: j,
+          icon: M,
           title: "No linked evidence yet.",
           body: "Custody records are generated when this run publishes verdict evidence.",
           actionLabel: "Open evidence vault",
@@ -22677,7 +22723,7 @@ function Fc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           })
         }) : null] })] }) : null,
         l === "events" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Raw events" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Sanitized event envelope review for this run." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: o.length === 0 ? /* @__PURE__ */ (0, R.jsx)(q, {
-          icon: ae,
+          icon: ie,
           title: "No raw events yet.",
           body: "Sanitized event envelopes appear as the run lifecycle progresses."
         }) : /* @__PURE__ */ (0, R.jsx)("div", {
@@ -22705,10 +22751,10 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
   (0, C.useEffect)(() => {
     x(t);
   }, [t]);
-  let D = b, O = Qs(D, ["tenant"]) ?? D, k = Qs(D, ["account"]), ee = Qs(D, ["subscription"]) ?? g, te = Zs(D, ["users"]), ne = Qs(D, ["signup_request"]), re = Zs(D, ["recent_tenant_audit"]), ie = n.internalApprovalRequests.filter((t) => Z(t, ["tenant_id"], "") === e), A = Z(k, ["lifecycle_state"], "active"), oe = La("tenant-detail").map((e) => ({
+  let D = b, O = Qs(D, ["tenant"]) ?? D, k = Qs(D, ["account"]), ee = Qs(D, ["subscription"]) ?? g, te = Zs(D, ["users"]), A = Qs(D, ["signup_request"]), ne = Zs(D, ["recent_tenant_audit"]), re = n.internalApprovalRequests.filter((t) => Z(t, ["tenant_id"], "") === e), j = Z(k, ["lifecycle_state"], "active"), ae = La("tenant-detail").map((e) => ({
     id: e.id,
     label: e.label
-  })), se = Qs(ee, ["effective_entitlements"]) ?? Qs(g, ["effective_entitlements"]);
+  })), oe = Qs(ee, ["effective_entitlements"]) ?? Qs(g, ["effective_entitlements"]);
   (0, C.useEffect)(() => {
     if (!e || i.principal !== "staff") {
       _(null), y("");
@@ -22728,15 +22774,15 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
     e,
     D
   ]);
-  async function ce() {
+  async function se() {
     let [t, n] = await Promise.all([L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`), L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/subscription`).catch(() => null)]);
     x(t), n && _(n);
   }
-  async function le(e, t, n) {
+  async function ce(e, t, n) {
     d(e), h(""), p("");
     try {
       let e = await t();
-      return p(n), await ce(), await a(), e;
+      return p(n), await se(), await a(), e;
     } catch (e) {
       let t = e.payload;
       return h(t?.message ?? t?.error ?? (e instanceof Error ? e.message : "Staff action failed.")), null;
@@ -22744,9 +22790,9 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
       d("");
     }
   }
-  async function M(t) {
+  async function N(t) {
     let n = t === "suspended" ? "Suspend this tenant? Users will lose access until it is reactivated." : "Activate this tenant? Users will regain access to this tenant.";
-    window.confirm(n) && await le(`lifecycle-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`, {
+    window.confirm(n) && await ce(`lifecycle-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`, {
       method: "PATCH",
       body: {
         lifecycle_state: t,
@@ -22754,10 +22800,10 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
       }
     }), `Tenant lifecycle updated to ${t}.`);
   }
-  async function N(t) {
+  async function le(t) {
     t.preventDefault();
     let n = String(new FormData(t.currentTarget).get("support_owner") ?? "").trim();
-    n && await le(`support-owner-${e}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`, {
+    n && await ce(`support-owner-${e}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}`, {
       method: "PATCH",
       body: {
         support_owner: n,
@@ -22768,7 +22814,7 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
   async function ue(t) {
     t.preventDefault();
     let n = new FormData(t.currentTarget), a = String(n.get("feature") ?? "").trim(), o = String(n.get("enabled") ?? "true") === "true", s = String(n.get("reason") ?? "").trim();
-    a && window.confirm(`${o ? "Grant" : "Revoke"} entitlement "${a}" for this tenant? This changes product access immediately.`) && await le(`entitlement-${e}-${a}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/entitlements`, {
+    a && window.confirm(`${o ? "Grant" : "Revoke"} entitlement "${a}" for this tenant? This changes product access immediately.`) && await ce(`entitlement-${e}-${a}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/entitlements`, {
       method: "POST",
       body: {
         feature: a,
@@ -22778,13 +22824,13 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
     }), `${a} entitlement ${o ? "granted" : "revoked"}.`);
   }
   async function de(t) {
-    await le(`resend-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/users/${encodeURIComponent(t)}/resend-invite`, {
+    await ce(`resend-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/users/${encodeURIComponent(t)}/resend-invite`, {
       method: "POST",
       body: {}
     }), "Invite resend recorded.");
   }
   async function fe(t) {
-    window.confirm("Disable this user? They will lose access to this tenant until re-enabled by staff.") && await le(`disable-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/users/${encodeURIComponent(t)}/disable`, {
+    window.confirm("Disable this user? They will lose access to this tenant until re-enabled by staff.") && await ce(`disable-${e}-${t}`, () => L(r, i, `/internal/admin/tenants/${encodeURIComponent(e)}/users/${encodeURIComponent(t)}/disable`, {
       method: "POST",
       body: { reason: "Disabled from tenant detail." }
     }), "User disabled.");
@@ -22802,24 +22848,24 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           variant: "secondary",
           href: "#admin",
           children: "Staff admin"
-        }), A === "active" ? /* @__PURE__ */ (0, R.jsx)(z, {
+        }), j === "active" ? /* @__PURE__ */ (0, R.jsx)(z, {
           size: "sm",
           variant: "danger",
           disabled: u !== "",
-          onClick: () => void M("suspended"),
+          onClick: () => void N("suspended"),
           children: "Suspend"
         }) : /* @__PURE__ */ (0, R.jsx)(z, {
           size: "sm",
           variant: "secondary",
           disabled: u !== "",
-          onClick: () => void M("active"),
+          onClick: () => void N("active"),
           children: "Activate"
         })] })
       }),
       /* @__PURE__ */ (0, R.jsxs)(es, { children: [
         /* @__PURE__ */ (0, R.jsx)(Sc, {
-          value: A,
-          tone: xc(A)
+          value: j,
+          tone: xc(j)
         }),
         " · plan ",
         Z(ee, ["plan_id"], "—"),
@@ -22833,7 +22879,7 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
         " ",
         /* @__PURE__ */ (0, R.jsx)("span", {
           className: "tabular-nums",
-          children: re.length
+          children: ne.length
         }),
         " recent audit events"
       ] }),
@@ -22845,7 +22891,7 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
       o ? null : /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
         /* @__PURE__ */ (0, R.jsx)(li, {
           value: c,
-          options: oe,
+          options: ae,
           onChange: l,
           className: "tabs-wrap"
         }),
@@ -22854,10 +22900,10 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, R.jsx)($o, {
               label: "Lifecycle",
-              value: A,
+              value: j,
               sub: "Account state from staff tenant administration",
               icon: be,
-              tone: A === "active" ? "success" : "warn"
+              tone: j === "active" ? "success" : "warn"
             }),
             /* @__PURE__ */ (0, R.jsx)($o, {
               label: "Users",
@@ -22868,16 +22914,16 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
             }),
             /* @__PURE__ */ (0, R.jsx)($o, {
               label: "Approvals",
-              value: ie.length,
+              value: re.length,
               sub: "Internal requests for this tenant",
-              icon: ae,
-              tone: ie.length > 0 ? "warn" : "muted"
+              icon: ie,
+              tone: re.length > 0 ? "warn" : "muted"
             }),
             /* @__PURE__ */ (0, R.jsx)($o, {
               label: "Audit events",
-              value: re.length,
+              value: ne.length,
               sub: "Recent tenant-scoped audit entries",
-              icon: j,
+              icon: M,
               tone: "muted"
             })
           ]
@@ -22887,8 +22933,8 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
             className: "kv-list",
             children: [
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Lifecycle" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
-                value: A,
-                tone: xc(A)
+                value: j,
+                tone: xc(j)
               })] }),
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Plan" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(ee, ["plan_id"], "—") })] }),
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Subscription status" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
@@ -22911,22 +22957,22 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
                 tone: bc(Z(ee, ["status"], ""))
               })] }),
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Effective from" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: I(ee?.effective_from ?? ee?.created_at) })] }),
-              se ? Ic.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: ac[e] ?? e }), /* @__PURE__ */ (0, R.jsx)("strong", { children: se[e] === !0 ? "enabled" : "disabled" })] }, e)) : /* @__PURE__ */ (0, R.jsx)("p", {
+              oe ? Ic.map((e) => /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: ac[e] ?? e }), /* @__PURE__ */ (0, R.jsx)("strong", { children: oe[e] === !0 ? "enabled" : "disabled" })] }, e)) : /* @__PURE__ */ (0, R.jsx)("p", {
                 className: "muted",
                 children: "Subscription entitlements appear when the subscription record is available."
               })
             ]
           })] })]
         })] }) : null,
-        c === "provisioning" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Provisioning signup" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Signup request that created this tenant, if recorded." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: ne ? /* @__PURE__ */ (0, R.jsxs)("div", {
+        c === "provisioning" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Provisioning signup" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Signup request that created this tenant, if recorded." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: A ? /* @__PURE__ */ (0, R.jsxs)("div", {
           className: "kv-list",
-          children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Request ID" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: /* @__PURE__ */ (0, R.jsx)("code", { children: Z(ne, ["id"]) }) })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
-            value: Z(ne, ["state"]),
-            tone: gc(Z(ne, ["state"])),
+          children: [/* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Request ID" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: /* @__PURE__ */ (0, R.jsx)("code", { children: Z(A, ["id"]) }) })] }), /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
+            value: Z(A, ["state"]),
+            tone: gc(Z(A, ["state"])),
             fallback: "recorded"
           })] })]
         }) : /* @__PURE__ */ (0, R.jsx)(q, {
-          icon: ae,
+          icon: ie,
           title: "No linked signup request.",
           body: "Tenants provisioned outside the signup queue may not have a signup_request reference.",
           actionLabel: "Open staff admin",
@@ -22987,7 +23033,7 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           })
         }) })] }), /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Support owner" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Assign the customer support owner for this tenant." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsxs)("form", {
           className: "product-form",
-          onSubmit: N,
+          onSubmit: le,
           children: [/* @__PURE__ */ (0, R.jsxs)("label", {
             className: "full",
             children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Support owner" }), /* @__PURE__ */ (0, R.jsx)("input", {
@@ -23075,7 +23121,7 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               render: (e) => I(e.created_at)
             }
           ],
-          items: ie,
+          items: re,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
             icon: be,
             title: "No approval requests.",
@@ -23107,9 +23153,9 @@ function Lc({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               render: (e) => I(e.created_at)
             }
           ],
-          items: re,
+          items: ne,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: j,
+            icon: M,
             title: "No audit events yet.",
             body: "Tenant security-relevant actions appear after staff or customer mutations are recorded."
           })
@@ -23122,7 +23168,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   let [c, l] = (0, C.useState)("overview"), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)(!1), [v, y] = (0, C.useState)(null), [b, x] = (0, C.useState)(!1), S = La("agent-detail").map((e) => ({
     id: e.id,
     label: e.label
-  })), w = Z(e, ["target_group_id"], ""), T = Qs(e, ["probe_endpoint"]), E = Z(e, ["probe_endpoint_status"], ""), D = Z(e, ["probe_endpoint_error"], ""), k = T ? Ys(T, ["declared_fqdn"], "") : "", ee = T ? Ys(T, ["declared_ip"], "") : "", ne = !!(E || D || T), re = Array.isArray(v?.reviews) ? v.reviews.find((e) => Z(e, ["target_group_id"], "") === w) : null, ie = Ri(n.audit, t), A = [
+  })), w = Z(e, ["target_group_id"], ""), T = Qs(e, ["probe_endpoint"]), E = Z(e, ["probe_endpoint_status"], ""), D = Z(e, ["probe_endpoint_error"], ""), k = T ? Ys(T, ["declared_fqdn"], "") : "", ee = T ? Ys(T, ["declared_ip"], "") : "", A = !!(E || D || T), ne = Array.isArray(v?.reviews) ? v.reviews.find((e) => Z(e, ["target_group_id"], "") === w) : null, re = Ri(n.audit, t), j = [
     {
       key: "action",
       label: "Action",
@@ -23162,7 +23208,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     i,
     w
   ]);
-  async function j() {
+  async function M() {
     if (!(!t || Z(e, ["status"]) === "revoked")) {
       d(`revoke-${t}`), h(""), p("");
       try {
@@ -23175,7 +23221,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }
     }
   }
-  async function oe() {
+  async function ae() {
     if (!w) {
       h("Bind this agent to a target group before running a placement test.");
       return;
@@ -23300,8 +23346,8 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             agentId: t,
             targetGroupId: w,
             runs: n.runs,
-            placementReview: re ?? null,
-            onRunPlacement: () => void oe(),
+            placementReview: ne ?? null,
+            onRunPlacement: () => void ae(),
             running: u === `placement-${t}`,
             busy: u !== ""
           }),
@@ -23321,7 +23367,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Last heartbeat" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: I(e.last_heartbeat_at ?? e.updated_at) })] }),
                 /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Version" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(e, ["version"], "unknown") })] }),
                 /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Gateway fingerprint" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: /* @__PURE__ */ (0, R.jsx)("code", { children: Z(e, ["fingerprint"], "not registered") }) })] }),
-                ne ? /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
+                A ? /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
                   /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Probe endpoint status" }), E ? /* @__PURE__ */ (0, R.jsx)(V, {
                     tone: $s(E),
                     children: ec(E)
@@ -23367,7 +23413,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             confirmLabel: "Revoke agent",
             busy: u === `revoke-${t}`,
             onCancel: () => _(!1),
-            onConfirm: () => void j()
+            onConfirm: () => void M()
           })
         ] }) : null,
         c === "health" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Health signals" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Heartbeat freshness derived from agent record timestamps." })] }), /* @__PURE__ */ (0, R.jsxs)(K, {
@@ -23381,7 +23427,7 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               fallback: "unknown"
             })] }),
             /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Version" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(e, ["version"], "unknown") })] }),
-            ne ? /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
+            A ? /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
               /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Probe endpoint status" }), E ? /* @__PURE__ */ (0, R.jsx)(V, {
                 tone: $s(E),
                 children: ec(E)
@@ -23404,22 +23450,22 @@ function Rc({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               id: w
             }) : /* @__PURE__ */ (0, R.jsx)("strong", { children: "unbound" })] }),
             /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Placement status" }), /* @__PURE__ */ (0, R.jsx)("span", {
-              title: Ei(Z(re, ["status"], "")) || void 0,
+              title: Ei(Z(ne, ["status"], "")) || void 0,
               children: /* @__PURE__ */ (0, R.jsx)(Sc, {
-                value: Ti(Z(re, ["status"], "unknown")),
-                tone: hc(Z(re, ["status"], "unknown")),
+                value: Ti(Z(ne, ["status"], "unknown")),
+                tone: hc(Z(ne, ["status"], "unknown")),
                 fallback: "unknown"
               })
             })] }),
-            /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Observation mode" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(re, ["observation_mode"], "—") })] }),
-            /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Summary" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(re, ["summary"], Ys(v, ["summary", "summary"], "Awaiting baseline traffic evidence.")) })] })
+            /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Observation mode" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(ne, ["observation_mode"], "—") })] }),
+            /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Summary" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: Z(ne, ["summary"], Ys(v, ["summary", "summary"], "Awaiting baseline traffic evidence.")) })] })
           ]
         })] }) : null,
         c === "audit" ? /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Audit trail" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Metadata-only lifecycle events for this agent." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-          columns: A,
-          items: ie,
+          columns: j,
+          items: re,
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: ae,
+            icon: ie,
             title: "No audit events for this agent yet.",
             body: "Registration, heartbeat, revoke, and update actions appear after lifecycle activity."
           })
@@ -23527,7 +23573,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
       })]
     });
   }
-  let ne = Z(e, ["state"], ""), re = Ys(e, ["authorization_pack_status", "overall"], "") === "accepted";
+  let A = Z(e, ["state"], ""), ne = Ys(e, ["authorization_pack_status", "overall"], "") === "accepted";
   return /* @__PURE__ */ (0, R.jsxs)("div", {
     className: "content",
     children: [
@@ -23551,8 +23597,8 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
         className: "kv-list",
         children: [
           /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
-            value: ne,
-            tone: _c(ne)
+            value: A,
+            tone: _c(A)
           })] }),
           /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Pack" }), /* @__PURE__ */ (0, R.jsx)(Sc, {
             value: Z(w ?? {}, ["overall"], "missing"),
@@ -23562,7 +23608,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
           /* @__PURE__ */ (0, R.jsxs)("div", {
             className: "row-actions",
             children: [
-              ["submitted", "under_review"].includes(ne) && re ? /* @__PURE__ */ (0, R.jsx)(z, {
+              ["submitted", "under_review"].includes(A) && ne ? /* @__PURE__ */ (0, R.jsx)(z, {
                 size: "sm",
                 variant: "secondary",
                 loading: s === `approve-${t}`,
@@ -23570,7 +23616,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
                 onClick: () => void D("approve"),
                 children: "Approve"
               }) : null,
-              ne === "approved" ? /* @__PURE__ */ (0, R.jsx)(z, {
+              A === "approved" ? /* @__PURE__ */ (0, R.jsx)(z, {
                 size: "sm",
                 variant: "secondary",
                 loading: s === `schedule-${t}`,
@@ -23578,7 +23624,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
                 onClick: () => void D("schedule", Na()),
                 children: "Schedule"
               }) : null,
-              ne === "scheduled" ? /* @__PURE__ */ (0, R.jsx)(z, {
+              A === "scheduled" ? /* @__PURE__ */ (0, R.jsx)(z, {
                 size: "sm",
                 variant: "default",
                 loading: s === `start-${t}`,
@@ -23586,7 +23632,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
                 onClick: () => void D("start"),
                 children: "Start"
               }) : null,
-              ne === "running" ? /* @__PURE__ */ (0, R.jsx)(z, {
+              A === "running" ? /* @__PURE__ */ (0, R.jsx)(z, {
                 size: "sm",
                 variant: "danger",
                 loading: s === `stop-${t}`,
@@ -23594,7 +23640,7 @@ function zc({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
                 onClick: () => void D("stop"),
                 children: "Stop"
               }) : null,
-              ne === "stopped" ? /* @__PURE__ */ (0, R.jsx)(z, {
+              A === "stopped" ? /* @__PURE__ */ (0, R.jsx)(z, {
                 size: "sm",
                 variant: "secondary",
                 loading: s === `close-${t}`,
@@ -24151,7 +24197,7 @@ function Vc({ data: e, config: t, session: n, onRefresh: r }) {
       route: "report-detail",
       eyebrow: "Report detail"
     }), /* @__PURE__ */ (0, R.jsx)(q, {
-      icon: oe,
+      icon: ae,
       title: "No report selected.",
       body: "Open a report from the Reports list with ?id= or use the Detail link on #reports.",
       actionLabel: "Open Reports",
@@ -24174,7 +24220,7 @@ function Vc({ data: e, config: t, session: n, onRefresh: r }) {
       route: "report-detail",
       eyebrow: "Report detail"
     }), /* @__PURE__ */ (0, R.jsx)(q, {
-      icon: oe,
+      icon: ae,
       title: "Report not found.",
       body: _.error || "The requested report is missing or outside this tenant scope.",
       actionLabel: "Open Reports",
@@ -24219,7 +24265,7 @@ function Vc({ data: e, config: t, session: n, onRefresh: r }) {
           children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Custody preview" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "JSON export digest metadata verified against custody manifests." })] }), /* @__PURE__ */ (0, R.jsx)(K, {
             className: u?.contentSha256 || u?.textPreview ? "kv-list" : "",
             children: !u && !f ? /* @__PURE__ */ (0, R.jsx)(q, {
-              icon: j,
+              icon: M,
               title: "Custody preview unavailable.",
               body: "Export JSON to inspect custody metadata for this report."
             }) : u?.contentSha256 ? /* @__PURE__ */ (0, R.jsxs)(R.Fragment, { children: [
@@ -25662,7 +25708,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Summary",
       render: (e) => Q(e, ["summary"], "—")
     }
-  ], ne = [
+  ], A = [
     {
       key: "id",
       label: "ID",
@@ -25730,13 +25776,13 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
               "name",
               "id"
             ], t)}`,
-            onClick: () => void ce(t),
+            onClick: () => void se(t),
             children: "Revoke"
           })]
         });
       }
     }
-  ], re = [
+  ], ne = [
     {
       key: "name",
       label: "Agent",
@@ -25774,7 +25820,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Gateway fingerprint",
       render: (e) => /* @__PURE__ */ (0, R.jsx)("code", { children: Q(e, ["fingerprint"], "not registered") })
     }
-  ], ie = [
+  ], re = [
     {
       key: "name",
       label: "Agent",
@@ -25799,7 +25845,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Target group",
       render: (e) => Q(e, ["target_group_id"], "unbound")
     }
-  ], A = [
+  ], j = [
     {
       key: "version",
       label: "Version",
@@ -25839,7 +25885,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
           loading: i === `rollback-${t}`,
           disabled: i !== "",
           "aria-label": `Request rollback for release ${Q(e, ["version"], t)}`,
-          onClick: () => void M(t),
+          onClick: () => void N(t),
           children: "Request rollback"
         }) : /* @__PURE__ */ (0, R.jsx)("span", {
           className: "muted",
@@ -25847,7 +25893,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
         });
       }
     }
-  ], j = [
+  ], M = [
     {
       key: "name",
       label: "Name",
@@ -25885,7 +25931,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
           loading: i === `trust-revoke-${t}`,
           disabled: i !== "",
           "aria-label": `Revoke trust key ${Q(e, ["name"], t)}`,
-          onClick: () => void N(t),
+          onClick: () => void le(t),
           children: "Revoke"
         }) : /* @__PURE__ */ (0, R.jsx)("span", {
           className: "muted",
@@ -25893,7 +25939,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
         });
       }
     }
-  ], oe = [
+  ], ae = [
     {
       key: "action",
       label: "Action",
@@ -25954,7 +26000,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
     t,
     n
   ]);
-  async function se() {
+  async function oe() {
     let e = {
       name: "agent-install",
       expires_in_minutes: 60,
@@ -25967,16 +26013,16 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
     }), "Bootstrap token created. Copy the one-time secret now.", r), u = Q(c, ["secret"], kl(c, ["token", "secret"], ""));
     u && d(u);
   }
-  async function ce(e) {
+  async function se(e) {
     e && window.confirm("Revoke this agent's credentials? It will stop reporting until re-registered.") && await Yl(a, l, s, `revoke-${e}`, () => L(t, n, `/v1/agents/${e}/revoke`, { method: "POST" }), "Agent revoked. Heartbeat and jobs will be rejected.", r);
   }
-  async function M(e) {
+  async function N(e) {
     e && window.confirm("Request rollback for this agent release? Eligible agents will move to the previous signed version.") && await Yl(a, l, s, `rollback-${e}`, () => L(t, n, `/v1/agent-updates/${e}/rollback`, { method: "POST" }), "Rollback requested for eligible agents.", async () => {
       let e = await L(t, n, "/v1/agent-updates");
       _(Array.isArray(e.items) ? e.items : []), await r();
     });
   }
-  async function N(e) {
+  async function le(e) {
     e && window.confirm("Revoke this agent update trust key? Agents will reject updates signed with it.") && await Yl(a, l, s, `trust-revoke-${e}`, () => L(t, n, `/v1/agent-update-trust-keys/${e}/revoke`, { method: "POST" }), "Trust key revoked.", async () => {
       let e = await L(t, n, "/v1/agent-update-trust-keys");
       y(Array.isArray(e.items) ? e.items : []), await r();
@@ -26037,7 +26083,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
             rows: 3,
             label: "Refreshing agent fleet"
           }) : null, b ? null : /* @__PURE__ */ (0, R.jsx)(J, {
-            columns: ne,
+            columns: A,
             items: e.agents,
             getRowProps: (e) => {
               let t = Q(e, ["id"], "");
@@ -26069,7 +26115,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
         })] }), /* @__PURE__ */ (0, R.jsx)(qc, {
           data: e,
           tokenSecret: u,
-          onCreateToken: () => void se(),
+          onCreateToken: () => void oe(),
           createBusy: i === "create-bootstrap-token",
           actionsDisabled: i !== ""
         })]
@@ -26081,7 +26127,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
             rows: 3,
             label: "Loading agent health"
           }) : null, b ? null : /* @__PURE__ */ (0, R.jsx)(J, {
-            columns: re,
+            columns: ne,
             items: e.agents,
             empty: /* @__PURE__ */ (0, R.jsx)(q, {
               icon: O,
@@ -26117,7 +26163,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
             }) : null
           ] })] }),
           /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Agent capabilities" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Observation modes reported on registration and each heartbeat." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-            columns: ie,
+            columns: re,
             items: e.agents,
             empty: /* @__PURE__ */ (0, R.jsx)(q, {
               icon: ue,
@@ -26126,10 +26172,10 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
             })
           }) })] }),
           /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Agent audit trail" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Metadata-only lifecycle events for agent registration, heartbeat, revoke, and updates—not host operational logs." })] }), /* @__PURE__ */ (0, R.jsx)(K, { children: /* @__PURE__ */ (0, R.jsx)(J, {
-            columns: oe,
+            columns: ae,
             items: k,
             empty: /* @__PURE__ */ (0, R.jsx)(q, {
-              icon: ae,
+              icon: ie,
               title: "No agent audit events yet.",
               body: "Registration, heartbeat, revoke, and update actions appear here after agents connect."
             })
@@ -26140,7 +26186,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
               rows: 3,
               label: "Loading agent releases"
             }) : null, b ? null : /* @__PURE__ */ (0, R.jsx)(J, {
-              columns: A,
+              columns: j,
               items: g,
               empty: /* @__PURE__ */ (0, R.jsx)(q, {
                 icon: te,
@@ -26155,10 +26201,10 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
                   label: "Loading trust keys"
                 }) : null,
                 b ? null : /* @__PURE__ */ (0, R.jsx)(J, {
-                  columns: j,
+                  columns: M,
                   items: v,
                   empty: /* @__PURE__ */ (0, R.jsx)(q, {
-                    icon: le,
+                    icon: ce,
                     title: "No trust keys registered.",
                     body: "Add the public key from your agent update signing ceremony."
                   })
@@ -26200,7 +26246,7 @@ function Xl({ data: e, config: t, session: n, onRefresh: r }) {
   });
 }
 function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
-  let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)("recommended"), [p, m] = (0, C.useState)("all"), [h, g] = (0, C.useState)("open"), [_, v] = (0, C.useState)(""), [y, b] = (0, C.useState)(!1), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(null), [E, D] = (0, C.useState)(() => t.evidence.length > 0), [k, ee] = (0, C.useState)(0), [te, ne] = (0, C.useState)(""), [re, ie] = (0, C.useState)("all"), [ae, A] = (0, C.useState)(""), [j, oe] = (0, C.useState)(!1), [se, ce] = (0, C.useState)(!1), [le, M] = (0, C.useState)(""), N = t.targetGroups[0] ?? null, de = t.checks.find((e) => Q(e, ["safety_class"]) === "safe") ?? null, fe = t.runs.filter((e) => [
+  let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)("recommended"), [p, m] = (0, C.useState)("all"), [h, g] = (0, C.useState)("open"), [_, v] = (0, C.useState)(""), [y, b] = (0, C.useState)(!1), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(null), [E, D] = (0, C.useState)(() => t.evidence.length > 0), [k, ee] = (0, C.useState)(0), [te, A] = (0, C.useState)(""), [ne, re] = (0, C.useState)("all"), [ie, j] = (0, C.useState)(""), [M, ae] = (0, C.useState)(!1), [oe, se] = (0, C.useState)(!1), [ce, N] = (0, C.useState)(""), le = t.targetGroups[0] ?? null, de = t.checks.find((e) => Q(e, ["safety_class"]) === "safe") ?? null, fe = t.runs.filter((e) => [
     "running",
     "collecting",
     "planned"
@@ -26213,34 +26259,34 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       let n = Date.parse(String(e.started_at ?? e.created_at ?? "")) || 0;
       return (Date.parse(String(t.started_at ?? t.created_at ?? "")) || 0) - n;
     });
-    return re === "all" ? e : e.filter((e) => Q(e, ["status"], "") === re);
-  }, [t.runs, re]);
+    return ne === "all" ? e : e.filter((e) => Q(e, ["status"], "") === ne);
+  }, [t.runs, ne]);
   (0, C.useEffect)(() => {
     if (e !== "runs") return;
-    let t = Q(N, ["id"], "");
+    let t = Q(le, ["id"], "");
     if (!t) {
-      A(""), oe(!1);
+      j(""), ae(!1);
       return;
     }
     let i = !1;
-    return oe(!0), L(n, r, `/v1/target-groups/${t}`).then((e) => {
+    return ae(!0), L(n, r, `/v1/target-groups/${t}`).then((e) => {
       if (i) return;
       let t = (Array.isArray(e.targets) ? e.targets : [])[0], n = t ? `${Q(t, [
         "value",
         "hostname",
         "id"
       ])} (${Q(t, ["id"])})` : "";
-      A(n);
+      j(n);
     }).catch(() => {
-      i || A("");
+      i || j("");
     }).finally(() => {
-      i || oe(!1);
+      i || ae(!1);
     }), () => {
       i = !0;
     };
   }, [
     e,
-    N,
+    le,
     n,
     r
   ]), (0, C.useEffect)(() => {
@@ -26257,7 +26303,7 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     i
   ]);
   async function _e(e) {
-    let a = Q(N, ["id"], ""), s = e ?? Q(de ?? {}, ["check_id"], "");
+    let a = Q(le, ["id"], ""), s = e ?? Q(de ?? {}, ["check_id"], "");
     if (!a || !s) {
       u("Declare a target group and safe check before starting a run.");
       return;
@@ -26271,7 +26317,7 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       u("Add at least one target to the declared group before starting a run.");
       return;
     }
-    let m = Q(N, ["name", "id"], a), h = Wl(t.checks, s);
+    let m = Q(le, ["name", "id"], a), h = Wl(t.checks, s);
     window.confirm(`Start a safe validation run?\n\nTarget group: ${m}\nTarget: ${p}\nCheck: ${h}`) && await Yl(o, u, c, "start-safe-run", () => L(n, r, "/v1/test-runs", {
       method: "POST",
       body: {
@@ -26282,15 +26328,15 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     }), "Safe validation run started.", i);
   }
   async function ve(e) {
-    e && M(e);
+    e && N(e);
   }
   async function ye() {
-    let e = le;
+    let e = ce;
     if (e) {
       o(`cancel-${e}`), u(""), c("");
       try {
         let t = await L(n, r, `/v1/test-runs/${e}/cancel`, { method: "POST" });
-        c(va("Run cancelled.", t)), M(""), await i();
+        c(va("Run cancelled.", t)), N(""), await i();
       } catch (e) {
         let t = e.payload;
         u(t?.message ?? t?.error ?? (e instanceof Error ? e.message : "Cancel run failed."));
@@ -26597,7 +26643,7 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           });
         }
       }
-    ], f = !!(N && de && ae), p = N ? de ? ae ? "" : "Add at least one target to the first target group." : "No customer-runnable check in catalog." : "Declare a target group first.";
+    ], f = !!(le && de && ie), p = le ? de ? ie ? "" : "Add at least one target to the first target group." : "No customer-runnable check in catalog." : "Declare a target group first.";
     return /* @__PURE__ */ (0, R.jsxs)("div", {
       className: "content",
       children: [
@@ -26605,7 +26651,7 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           route: "runs",
           actions: /* @__PURE__ */ (0, R.jsx)(gl, {
             onRefresh: () => void i(),
-            onRequestSoc: () => ce(!0),
+            onRequestSoc: () => se(!0),
             onStartSafeRun: () => void _e(),
             refreshBusy: a === "refresh-runs",
             safeRunBusy: a === "start-safe-run",
@@ -26621,8 +26667,8 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           onError: u,
           busy: a,
           setBusy: o,
-          requestFormOpen: se,
-          onRequestFormOpenChange: ce
+          requestFormOpen: oe,
+          onRequestFormOpenChange: se
         }),
         fe.length > 0 ? /* @__PURE__ */ (0, R.jsxs)("div", {
           className: "form-banner info",
@@ -26643,12 +26689,12 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             /* @__PURE__ */ (0, R.jsxs)("div", {
               className: "kv-list kv-list--compact",
               children: [
-                /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target group" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: N ? Q(N, ["name", "id"]) : "—" })] }),
-                /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target" }), j ? /* @__PURE__ */ (0, R.jsx)("span", {
+                /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target group" }), /* @__PURE__ */ (0, R.jsx)("strong", { children: le ? Q(le, ["name", "id"]) : "—" })] }),
+                /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Target" }), M ? /* @__PURE__ */ (0, R.jsx)("span", {
                   className: "skeleton skeleton-text",
                   "aria-busy": "true",
                   "aria-label": "Loading target preview"
-                }) : /* @__PURE__ */ (0, R.jsx)("strong", { children: ae || "—" })] }),
+                }) : /* @__PURE__ */ (0, R.jsx)("strong", { children: ie || "—" })] }),
                 /* @__PURE__ */ (0, R.jsxs)("div", { children: [/* @__PURE__ */ (0, R.jsx)("span", { children: "Check" }), de ? /* @__PURE__ */ (0, R.jsxs)("div", {
                   className: "stack-tight",
                   children: [/* @__PURE__ */ (0, R.jsx)(B, {
@@ -26675,9 +26721,9 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           ]
         })] }),
         /* @__PURE__ */ (0, R.jsxs)(H, { children: [/* @__PURE__ */ (0, R.jsxs)(U, { children: [/* @__PURE__ */ (0, R.jsx)(W, { children: "Test runs" }), /* @__PURE__ */ (0, R.jsx)(G, { children: "Live safe-validation runs with probe results, agent observations, and verdicts. Open a run for detail, or cancel or finalize in flight." })] }), /* @__PURE__ */ (0, R.jsxs)(K, { children: [/* @__PURE__ */ (0, R.jsx)(li, {
-          value: re,
+          value: ne,
           options: e,
-          onChange: ie,
+          onChange: re,
           className: "tabs-wrap"
         }), /* @__PURE__ */ (0, R.jsx)(J, {
           columns: d,
@@ -26691,12 +26737,12 @@ function Zl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           })
         })] })] }),
         /* @__PURE__ */ (0, R.jsx)(ya, {
-          open: !!le,
-          title: `Cancel run ${le}`,
+          open: !!ce,
+          title: `Cancel run ${ce}`,
           description: /* @__PURE__ */ (0, R.jsx)("p", { children: "Are you sure? This stops probe jobs immediately and writes an audit entry." }),
           confirmLabel: "Cancel run",
-          busy: a === `cancel-${le}`,
-          onCancel: () => M(""),
+          busy: a === `cancel-${ce}`,
+          onCancel: () => N(""),
           onConfirm: () => void ye()
         })
       ]
@@ -27001,7 +27047,7 @@ function gu({ data: e, config: t, session: n, onRefresh: r }) {
             label: "Delivered",
             value: b,
             sub: "successful deliveries",
-            icon: ie,
+            icon: re,
             tone: "success"
           }),
           /* @__PURE__ */ (0, R.jsx)($o, {
@@ -27066,7 +27112,7 @@ function gu({ data: e, config: t, session: n, onRefresh: r }) {
             }) : null,
             f ? /* @__PURE__ */ (0, R.jsxs)("div", {
               className: "callout info full",
-              children: [/* @__PURE__ */ (0, R.jsx)(ce, {
+              children: [/* @__PURE__ */ (0, R.jsx)(se, {
                 size: 18,
                 "aria-hidden": "true"
               }), /* @__PURE__ */ (0, R.jsx)("span", { children: f })]
@@ -27135,7 +27181,7 @@ function gu({ data: e, config: t, session: n, onRefresh: r }) {
           columns: T,
           items: e.notificationEvents.slice().reverse(),
           empty: /* @__PURE__ */ (0, R.jsx)(q, {
-            icon: ae,
+            icon: ie,
             title: "No notification events.",
             body: "Events appear after configured triggers fire."
           })
@@ -27341,7 +27387,7 @@ function _u({ data: e, session: t }) {
         getRowId: (e) => iu(e),
         getRowProps: (e) => ({ onClick: () => d(iu(e)) }),
         empty: /* @__PURE__ */ (0, R.jsx)(q, {
-          icon: ae,
+          icon: ie,
           title: "No audit entries.",
           body: "Security-relevant actions will appear here after workflow activity."
         })
@@ -27404,7 +27450,7 @@ function _u({ data: e, session: t }) {
         ]
       })] }) : null
     ] }) : /* @__PURE__ */ (0, R.jsx)(q, {
-      icon: ae,
+      icon: ie,
       title: "Audit access required.",
       body: "Switch to owner, admin, SOC, or auditor role to read the tenant audit log."
     })]
@@ -27649,7 +27695,7 @@ function vu({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
           className: "callout info",
           role: "status",
           "aria-live": "polite",
-          children: [/* @__PURE__ */ (0, R.jsx)(ie, {
+          children: [/* @__PURE__ */ (0, R.jsx)(re, {
             size: 18,
             "aria-hidden": "true"
           }), /* @__PURE__ */ (0, R.jsx)("span", { children: h || "Action completed successfully." })]

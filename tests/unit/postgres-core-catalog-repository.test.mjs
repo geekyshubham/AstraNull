@@ -524,6 +524,10 @@ describe('postgres core catalog repository', () => {
 
   it('createTargetGroup inserts tenant-scoped row with normalized policy', async () => {
     const pool = createRecordingPool((text, params) => {
+      if (text.startsWith('SELECT id FROM environments')) {
+        assertUsesTenantPredicate(text, params, CTX.tenantId);
+        return { rows: [{ id: params[1] }] };
+      }
       if (text.startsWith('INSERT INTO target_groups')) {
         assertUsesTenantPredicate(text, params, CTX.tenantId);
         assertNoInterpolatedValue(text, 'tg_new');
@@ -549,11 +553,34 @@ describe('postgres core catalog repository', () => {
     const repo = createCoreCatalogRepository(pool);
     const group = await repo.createTargetGroup(
       CTX,
-      { name: 'Origin', safety_policy: { max_runs_per_hour: 10 } },
+      { name: 'Origin', environment_id: 'env_demo', safety_policy: { max_runs_per_hour: 10 } },
       { id: 'tg_new', now: FIXED_NOW },
     );
     assert.equal(group.id, 'tg_new');
     assert.equal(group.safety_policy.max_runs_per_hour, 10);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('createTargetGroup returns invalid_environment error when environment is missing for tenant', async () => {
+    const pool = createRecordingPool((text) => {
+      if (text.startsWith('SELECT id FROM environments')) {
+        return { rows: [] };
+      }
+      if (text.startsWith('INSERT INTO target_groups')) {
+        throw new Error('INSERT should not run when environment is missing');
+      }
+      return { rows: [] };
+    });
+    const repo = createCoreCatalogRepository(pool);
+    const result = await repo.createTargetGroup(
+      CTX,
+      { name: 'Origin', environment_id: 'prod' },
+      { id: 'tg_new', now: FIXED_NOW },
+    );
+    assert.equal(result.error, 'invalid_environment');
+    assert.equal(result.status, 400);
+    assert.equal(result.field, 'environment_id');
+    assert.match(result.message, /prod/);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 

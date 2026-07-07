@@ -1713,7 +1713,9 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'target_group:write');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    return json(res, 201, await serviceDeps.targetGroups.createTargetGroup(ctx, body));
+    const created = await serviceDeps.targetGroups.createTargetGroup(ctx, body);
+    if (created && created.error) return json(res, created.status ?? 400, created);
+    return json(res, 201, created);
   }
   const tgMatch = path.match(/^\/v1\/target-groups\/([^/]+)$/);
   if (tgMatch && method === 'GET') {

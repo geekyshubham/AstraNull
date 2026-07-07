@@ -329,8 +329,10 @@ export function createCoreCatalogRepository(pool) {
     async createTargetGroup(ctx, body, options = {}) {
       const id = options.id ?? newId('tg');
       const now = options.now ?? new Date().toISOString();
+      const rawEnvironmentId =
+        typeof body.environment_id === 'string' ? body.environment_id.trim() : body.environment_id;
       const record = {
-        environment_id: body.environment_id ?? 'env_demo',
+        environment_id: rawEnvironmentId || 'env_demo',
         name: body.name ?? 'New target group',
         description: body.description ?? '',
         expected_behavior_default: body.expected_behavior_default ?? null,
@@ -340,6 +342,21 @@ export function createCoreCatalogRepository(pool) {
       };
 
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        // The (tenant_id, environment_id) FK requires the environment to exist for this tenant.
+        // Validate up front so callers get an actionable 400 instead of a raw FK 500.
+        const envCheck = await client.query(
+          `SELECT id FROM environments WHERE tenant_id = $1 AND id = $2`,
+          [ctx.tenantId, record.environment_id],
+        );
+        if (!envCheck.rows[0]) {
+          return {
+            error: 'invalid_environment',
+            status: 400,
+            message: `Environment "${record.environment_id}" does not exist for this tenant. Create the environment first, then declare the target group.`,
+            field: 'environment_id',
+          };
+        }
+
         const { rows } = await client.query(
           `INSERT INTO target_groups (
              id, tenant_id, environment_id, name, description, expected_behavior_default,

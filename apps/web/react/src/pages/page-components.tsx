@@ -1310,6 +1310,8 @@ export function TargetGroupsPage({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [tenantEnvironments, setTenantEnvironments] = useState<DataItem[]>([]);
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
   const environments = [...new Set(data.targetGroups.map((group) => getString(group, ['environment_id'], '')).filter(Boolean))];
   const declaredTargetTotal = data.targetGroups.reduce((sum, group) => sum + getNumber(group, ['target_count']), 0);
   const filteredGroups = environmentFilter
@@ -1323,6 +1325,36 @@ export function TargetGroupsPage({
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await requestJson(config, session, '/v1/environments') as { items?: DataItem[] } | DataItem[];
+        const items = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.items) ? response.items : [];
+        if (!cancelled) setTenantEnvironments(items);
+      } catch {
+        if (!cancelled) setTenantEnvironments([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [config, session]);
+
+  const environmentSelectOptions: SelectOption[] = tenantEnvironments
+    .map((env) => ({
+      value: getString(env, ['id'], ''),
+      label: getString(env, ['name'], getString(env, ['id'], '')) || getString(env, ['id'], '')
+    }))
+    .filter((option) => option.value);
+
+  useEffect(() => {
+    if (environmentSelectOptions.length === 0) return;
+    if (!selectedEnvironmentId || !environmentSelectOptions.some((option) => option.value === selectedEnvironmentId)) {
+      setSelectedEnvironmentId(environmentSelectOptions[0].value);
+    }
+  }, [environmentSelectOptions, selectedEnvironmentId]);
 
   useEffect(() => {
     const firstId = getString(filteredGroups[0] ?? data.targetGroups[0] ?? {}, ['id'], '');
@@ -1503,11 +1535,17 @@ export function TargetGroupsPage({
       setError('Target group name is required.');
       return;
     }
+    const formEnvironmentId = String(form.get('environment_id') ?? '').trim();
+    const environmentId = (selectedEnvironmentId || formEnvironmentId).trim();
+    if (!environmentId) {
+      setError('Select an environment before creating a target group. Create one on the Environments page if none exist.');
+      return;
+    }
     const created = await runTargetAction('create-target-group', () => requestJson(config, session, '/v1/target-groups', {
       method: 'POST',
       body: {
         name,
-        environment_id: String(form.get('environment_id') ?? 'prod').trim() || 'prod',
+        environment_id: environmentId,
         description: String(form.get('description') ?? '').trim(),
         timezone: String(form.get('timezone') ?? 'UTC').trim() || 'UTC',
         safety_policy: {
@@ -1641,10 +1679,21 @@ export function TargetGroupsPage({
                   <span>Name</span>
                   <input name="name" placeholder="Retail Checkout - Production" required />
                 </label>
-                <label>
-                  <span>Environment</span>
-                  <input name="environment_id" placeholder="prod" defaultValue="prod" />
-                </label>
+                {environmentSelectOptions.length > 0 ? (
+                  <Select
+                    label="Environment"
+                    name="environment_id"
+                    value={selectedEnvironmentId}
+                    options={environmentSelectOptions}
+                    onChange={setSelectedEnvironmentId}
+                  />
+                ) : (
+                  <label>
+                    <span>Environment</span>
+                    <input name="environment_id" placeholder="Create an environment first" defaultValue="" />
+                    <p className="muted full">No environments exist yet. Create one on the <AnchorButton href="#environments" variant="ghost" size="sm">Environments</AnchorButton> page, then declare a target group.</p>
+                  </label>
+                )}
                 <details className="full" open={showCreateMoreOptions} onToggle={(event) => setShowCreateMoreOptions((event.currentTarget as HTMLDetailsElement).open)}>
                   <summary>More options</summary>
                   <label className="full">
