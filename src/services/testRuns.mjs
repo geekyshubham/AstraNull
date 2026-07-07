@@ -13,7 +13,7 @@ import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { enqueueAgentJob } from './agents.mjs';
-import { correlateExternalOnlyVerdict, correlateVerdict, withinCorrelationWindow } from './correlation.mjs';
+import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVerdict, withinCorrelationWindow } from './correlation.mjs';
 import { upsertFindingFromVerdict } from './findings.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
@@ -586,15 +586,24 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     });
     run.status = 'collecting';
     run.probe_external_result = probe.external_result;
+
+    if (isOpsReadinessProbeKind(check)) {
+      // Ops-readiness runs execute inline with no agent and no external worker job.
+      // Finalize to an honest verdict immediately so customer-runnable ops checks
+      // never hang in 'collecting'.
+      finalizeOpsReadinessVerdict(run, probe);
+    }
   }
 
-  const boundAgents = getStore().agents.filter(
-    (a) =>
-      a.tenant_id === ctx.tenantId &&
-      a.status === 'online' &&
-      a.last_token_validation_status !== 'invalid' &&
-      (a.target_group_id === targetGroupId || !a.target_group_id),
-  );
+  const boundAgents = isOpsReadinessProbeKind(check)
+    ? []
+    : getStore().agents.filter(
+      (a) =>
+        a.tenant_id === ctx.tenantId &&
+        a.status === 'online' &&
+        a.last_token_validation_status !== 'invalid' &&
+        (a.target_group_id === targetGroupId || !a.target_group_id),
+    );
 
   for (const agent of boundAgents) {
     enqueueAgentJob({
@@ -839,6 +848,64 @@ function finalizeNoObservation(run) {
   });
   const agent = boundOnlineAgentForRun(run);
   return finalizeVerdictIfReady(run, agent, { agentObserved: false, finalizedWithoutObservation: true });
+}
+
+function finalizeOpsReadinessVerdict(run, probe) {
+  const store = getStore();
+  const existing = store.verdicts.find((v) => v.test_run_id === run.id);
+  if (existing) return existing;
+
+  const result = correlateOpsReadinessVerdict({
+    externalResult: probe.external_result,
+    opsValidationOk: probe.metadata?.ops_validation_ok,
+  });
+
+  const evidenceIds = store.events
+    .filter((e) => e.test_run_id === run.id)
+    .map((e) => e.id);
+
+  const placement_confidence = computePlacementConfidence(store, run, {
+    agentObserved: false,
+    finalizedWithoutObservation: true,
+    agent: null,
+  });
+
+  const verdict = {
+    id: newId('evidence'),
+    tenant_id: run.tenant_id,
+    test_run_id: run.id,
+    target_id: run.target_id,
+    check_id: run.check_id,
+    verdict: result.verdict,
+    confidence: result.confidence,
+    placement_confidence,
+    explanation: result.explanation,
+    evidence_ids: evidenceIds,
+    severity: result.severity,
+    created_at: new Date().toISOString(),
+  };
+  store.verdicts.push(verdict);
+  run.status = 'verdicted';
+  run.completed_at = new Date().toISOString();
+
+  audit({
+    tenant_id: run.tenant_id,
+    actor_user_id: 'system',
+    actor_role: 'system',
+    action: 'verdict.published',
+    resource_type: 'test_run',
+    resource_id: run.id,
+    metadata: {
+      verdict: verdict.verdict,
+      confidence: verdict.confidence,
+      placement_confidence_level: placement_confidence.level,
+      placement_confidence_status: placement_confidence.status,
+      ops_readiness: true,
+    },
+  });
+
+  computeReadiness(run.tenant_id);
+  return verdict;
 }
 
 function finalizeVerdictIfReady(run, agent, options = {}) {

@@ -10,6 +10,7 @@ import {
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { getTestRun, startTestRun } from '../../src/services/testRuns.mjs';
 
 const SUPPORT_EVIDENCE = {
   readiness_id: 'support_readiness_2026_07_02_staging',
@@ -220,5 +221,67 @@ describe('ops readiness validation — Postgres injected data path', () => {
     assert.equal(probe.external_result, 'connected');
     assert.deepEqual(probe.metadata.readiness_signals, ['kill_switch_state']);
     assert.equal(probe.metadata.kill_switch_activated ?? false, false);
+  });
+});
+
+describe('ops readiness dev-service startTestRun immediate finalization', () => {
+  const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+
+  it('finalizes to protected verdicted immediately with no finding when evidence is accepted', () => {
+    freshStore();
+    getStore().productionReleaseEvidence.push({
+      id: 'evidence_support',
+      tenant_id: 'ten_demo',
+      kind: 'support_readiness',
+      status: 'accepted',
+      evidence: SUPPORT_EVIDENCE,
+      created_at: '2026-07-02T12:00:00.000Z',
+    });
+
+    const result = startTestRun(ctx, {
+      check_id: 'ops.runbook_contact_validation.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+
+    assert.ok(result.run);
+    assert.equal(result.run.status, 'verdicted');
+    assert.notEqual(result.run.status, 'collecting');
+    assert.equal(result.jobs_dispatched, 0);
+
+    const verdict = getStore().verdicts.find((v) => v.test_run_id === result.run.id);
+    assert.ok(verdict);
+    assert.equal(verdict.verdict, 'protected');
+    assert.equal(verdict.confidence, 'high');
+
+    // No finding for a control-plane ops check.
+    assert.equal(getStore().findings.length, 0);
+    // No run remains in collecting.
+    assert.equal(getStore().testRuns.some((r) => r.status === 'collecting'), false);
+
+    const detail = getTestRun(ctx, result.run.id);
+    assert.equal(detail.status, 'verdicted');
+    assert.equal(detail.verdict.verdict, 'protected');
+  });
+
+  it('finalizes to inconclusive verdicted immediately when no operational evidence exists', () => {
+    freshStore();
+
+    const result = startTestRun(ctx, {
+      check_id: 'ops.runbook_contact_validation.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+
+    assert.ok(result.run);
+    assert.equal(result.run.status, 'verdicted');
+    assert.notEqual(result.run.status, 'collecting');
+
+    const verdict = getStore().verdicts.find((v) => v.test_run_id === result.run.id);
+    assert.ok(verdict);
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(verdict.confidence, 'low');
+    assert.equal(getStore().findings.length, 0);
+    assert.equal(getStore().testRuns.some((r) => r.status === 'collecting'), false);
   });
 });

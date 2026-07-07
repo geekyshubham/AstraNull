@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { correlateExternalOnlyVerdict, correlateVerdict } from '../../src/services/correlation.mjs';
+import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVerdict } from '../../src/services/correlation.mjs';
 
 describe('correlation truth table', () => {
   it('protected when blocked and not observed', () => {
@@ -78,5 +78,35 @@ describe('correlateExternalOnlyVerdict', () => {
     });
     assert.equal(r.verdict, 'inconclusive');
     assert.equal(r.confidence, 'external_only');
+  });
+});
+
+describe('correlateOpsReadinessVerdict', () => {
+  it('protected/high when ops_validation_ok is true', () => {
+    const r = correlateOpsReadinessVerdict({ externalResult: 'connected', opsValidationOk: true });
+    assert.equal(r.verdict, 'protected');
+    assert.equal(r.confidence, 'high');
+    assert.equal(r.createsFinding, false);
+    assert.match(r.explanation, /control-plane self-check/);
+  });
+
+  it('protected when ops_validation_ok is true even without connected external result', () => {
+    const r = correlateOpsReadinessVerdict({ externalResult: undefined, opsValidationOk: true });
+    assert.equal(r.verdict, 'protected');
+    assert.equal(r.createsFinding, false);
+  });
+
+  it('inconclusive/low when ops_validation_ok is false', () => {
+    const r = correlateOpsReadinessVerdict({ externalResult: 'error', opsValidationOk: false });
+    assert.equal(r.verdict, 'inconclusive');
+    assert.equal(r.confidence, 'low');
+    assert.equal(r.createsFinding, false);
+    assert.match(r.explanation, /could not be validated/);
+  });
+
+  it('inconclusive when connected but ops_validation_ok is not true (never creates a finding)', () => {
+    const r = correlateOpsReadinessVerdict({ externalResult: 'connected', opsValidationOk: false });
+    assert.equal(r.verdict, 'inconclusive');
+    assert.equal(r.createsFinding, false);
   });
 });

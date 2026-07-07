@@ -20,6 +20,7 @@ import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import {
   correlateExternalOnlyVerdict,
+  correlateOpsReadinessVerdict,
   correlateVerdict,
   withinCorrelationWindow,
 } from '../../services/correlation.mjs';
@@ -445,6 +446,64 @@ export function createPostgresValidationServices(repositories, options = {}) {
     return findingRow;
   }
 
+  async function finalizeOpsReadinessVerdict(ctx, run, probe) {
+    const existingVerdict = await validationEvidence.getVerdictForRun(ctx, run.id);
+    if (existingVerdict) return existingVerdict;
+
+    const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
+    const result = correlateOpsReadinessVerdict({
+      externalResult: probe.external_result,
+      opsValidationOk: probe.metadata?.ops_validation_ok,
+    });
+
+    const evidenceIds = events.map((e) => e.id);
+    const placementStore = { agents: [], testRuns: [run] };
+    const placement_confidence = computePlacementConfidence(placementStore, run, {
+      agentObserved: false,
+      finalizedWithoutObservation: true,
+      agent: null,
+    });
+
+    const nowIso = nowFn().toISOString();
+    const verdictRecord = {
+      id: newId('evidence'),
+      test_run_id: run.id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      verdict: result.verdict,
+      confidence: result.confidence,
+      placement_confidence,
+      explanation: result.explanation,
+      evidence_ids: evidenceIds,
+      severity: result.severity,
+      created_at: nowIso,
+    };
+    const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+
+    await validationEvidence.updateTestRun(ctx, run.id, {
+      status: 'verdicted',
+      completed_at: nowIso,
+    });
+    run.status = 'verdicted';
+    run.completed_at = nowIso;
+
+    await appendAudit(
+      { tenantId: run.tenant_id, userId: 'system', role: 'system' },
+      'verdict.published',
+      'test_run',
+      run.id,
+      {
+        verdict: verdict.verdict,
+        confidence: verdict.confidence,
+        placement_confidence_level: placement_confidence.level,
+        placement_confidence_status: placement_confidence.status,
+        ops_readiness: true,
+      },
+    );
+
+    return verdict;
+  }
+
   async function finalizeVerdictIfReady(ctx, run, agents, options = {}) {
     const existingVerdict = await validationEvidence.getVerdictForRun(ctx, run.id);
     if (existingVerdict) return existingVerdict;
@@ -833,11 +892,21 @@ export function createPostgresValidationServices(repositories, options = {}) {
           probe_external_result: probe.external_result,
           correlation: { nonce_hash: probe.nonce_hash, window_ms: 120000 },
         });
+
+        if (isOpsReadinessProbeKind(check)) {
+          // Ops-readiness runs execute inline with no agent and no external worker
+          // job. Finalize to an honest verdict immediately so customer-runnable ops
+          // checks never hang in 'collecting'.
+          await finalizeOpsReadinessVerdict(ctx, run, probe);
+          run = (await validationEvidence.getTestRun(ctx, runId)) ?? run;
+        }
       }
 
-      const boundAgents = onlineAgents.filter(
-        (a) => a.target_group_id === targetGroupId || !a.target_group_id,
-      );
+      const boundAgents = isOpsReadinessProbeKind(check)
+        ? []
+        : onlineAgents.filter(
+          (a) => a.target_group_id === targetGroupId || !a.target_group_id,
+        );
       for (const agent of boundAgents) {
         await agentControl.createAgentJob({
           id: newId('job'),

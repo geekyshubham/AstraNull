@@ -130,6 +130,33 @@ export function correlateExternalOnlyVerdict({ externalResult, expectedBehavior 
   };
 }
 
+/**
+ * Ops-readiness verdict — control-plane self-check with no agent/external target traffic.
+ * Reuses the existing verdict vocabulary ('protected' / 'inconclusive') the UI handles.
+ * Never creates a customer target finding.
+ *
+ * @param {{ externalResult?: string, opsValidationOk?: boolean }} params
+ */
+export function correlateOpsReadinessVerdict({ externalResult, opsValidationOk } = {}) {
+  const validated =
+    opsValidationOk === true || (externalResult === 'connected' && opsValidationOk === true);
+  if (validated) {
+    return {
+      verdict: 'protected',
+      confidence: 'high',
+      createsFinding: false,
+      explanation: 'Operational readiness control validated by control-plane self-check.',
+    };
+  }
+  return {
+    verdict: 'inconclusive',
+    confidence: 'low',
+    createsFinding: false,
+    explanation:
+      'Operational readiness could not be validated (no recorded operational evidence).',
+  };
+}
+
 export function withinCorrelationWindow(probeTs, obsTs, windowMs = 120_000) {
   const a = new Date(probeTs).getTime();
   const b = new Date(obsTs).getTime();

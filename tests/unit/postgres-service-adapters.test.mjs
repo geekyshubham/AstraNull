@@ -7157,6 +7157,7 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
   function opsRepositories(releaseLedger, overrides = {}) {
     const group = baseStartTargetGroup();
     let createdRun;
+    const verdictWrites = [];
     const { repositories, validationCalls } = createRecordingValidationRepositories({
       getTargetGroup: async (c, id) => (id === 'tg_1' ? group : null),
       listAgents: async () => [],
@@ -7167,12 +7168,21 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
       updateTestRun: async (c, id, patch) => ({ ...createdRun, id, ...patch }),
       appendEvent: async (c, event) => event,
       appendEvidence: async () => ({ id: 'ev_ops' }),
+      getVerdictForRun: async () => null,
+      createVerdictIfAbsent: async (c, record) => {
+        const verdict = { ...record, id: 'ver_ops' };
+        verdictWrites.push(verdict);
+        return verdict;
+      },
+      upsertOpenFindingFromVerdict: async () => {
+        throw new Error('ops-readiness must not create a finding');
+      },
       ...overrides,
     });
     repositories.productionReleaseEvidence = {
       listProductionReleaseEvidence: async () => releaseLedger,
     };
-    return { repositories, validationCalls };
+    return { repositories, validationCalls, verdictWrites };
   }
 
   it('reports connected when accepted support_readiness evidence exists (no dev store)', async () => {
@@ -7215,5 +7225,61 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
     assert.ok(probeEvent);
     assert.equal(probeEvent.args[1].metadata.external_result, 'error');
     assert.equal(probeEvent.args[1].metadata.ops_validation_ok, false);
+  });
+
+  it('finalizes ops-readiness to protected verdicted immediately with no finding', async () => {
+    const { repositories, validationCalls, verdictWrites } = opsRepositories([
+      {
+        id: 'evd_1',
+        tenant_id: 'ten_demo',
+        kind: 'support_readiness',
+        status: 'accepted',
+        evidence: SUPPORT_READINESS_EVIDENCE,
+        created_at: '2026-06-01T00:00:00.000Z',
+      },
+    ]);
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+    const result = await testRuns.startTestRun(ctx, {
+      check_id: 'ops.runbook_contact_validation.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+
+    assert.equal(result.run.status, 'verdicted');
+    assert.notEqual(result.run.status, 'collecting');
+    assert.equal(result.jobs_dispatched, 0);
+    assert.equal(verdictWrites.length, 1);
+    assert.equal(verdictWrites[0].verdict, 'protected');
+    assert.equal(verdictWrites[0].confidence, 'high');
+    // No agent jobs and no finding for an ops-readiness control-plane check.
+    assert.equal(
+      validationCalls.some((c) => c.method === 'agentControl.createAgentJob'),
+      false,
+    );
+    assert.equal(
+      validationCalls.some((c) => c.method === 'upsertOpenFindingFromVerdict'),
+      false,
+    );
+    // Test run is persisted as verdicted, never left collecting.
+    const verdictedUpdate = validationCalls.find(
+      (c) => c.method === 'updateTestRun' && c.args[2]?.status === 'verdicted',
+    );
+    assert.ok(verdictedUpdate);
+  });
+
+  it('finalizes ops-readiness to inconclusive verdicted when no evidence exists', async () => {
+    const { repositories, verdictWrites } = opsRepositories([]);
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+    const result = await testRuns.startTestRun(ctx, {
+      check_id: 'ops.runbook_contact_validation.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+
+    assert.equal(result.run.status, 'verdicted');
+    assert.notEqual(result.run.status, 'collecting');
+    assert.equal(verdictWrites.length, 1);
+    assert.equal(verdictWrites[0].verdict, 'inconclusive');
+    assert.equal(verdictWrites[0].confidence, 'low');
   });
 });
