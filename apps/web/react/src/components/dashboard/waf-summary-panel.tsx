@@ -20,6 +20,69 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function WafKpi({
+  label,
+  value,
+  note,
+  noteWarn = false,
+  unit,
+}: {
+  label: string;
+  value: string | number;
+  note: string;
+  noteWarn?: boolean;
+  unit?: string;
+}) {
+  return (
+    <div className="dw-kpi">
+      <div className="dw-label">{label}</div>
+      <div className="dw-value">
+        {value}
+        {unit ? <span className="dw-unit">{unit}</span> : null}
+      </div>
+      <div
+        className={`dw-note${noteWarn ? ' dw-note--warn' : ''}`}
+        style={noteWarn ? { color: 'var(--warn)' } : undefined}
+      >
+        {note}
+      </div>
+    </div>
+  );
+}
+
+function VendorCoverageRow({
+  vendor,
+  pct,
+  passPct,
+  warnPct,
+  failPct,
+  total,
+}: {
+  vendor: string;
+  pct: number;
+  passPct: number;
+  warnPct: number;
+  failPct: number;
+  total: number;
+}) {
+  return (
+    <div className="dw-vendor-row">
+      <div className="dw-vendor-label mono">{vendor}</div>
+      <div
+        className="dw-vendor-bar"
+        role="img"
+        aria-label={`${vendor}: ${pct}% protected across ${total} assets`}
+        title={`${pct}% protected across ${total} assets`}
+      >
+        {passPct > 0 ? <span className="seg pass" style={{ width: `${passPct}%` }} /> : null}
+        {warnPct > 0 ? <span className="seg warn" style={{ width: `${warnPct}%` }} /> : null}
+        {failPct > 0 ? <span className="seg fail" style={{ width: `${failPct}%` }} /> : null}
+      </div>
+      <div className="dw-vendor-pct mono">{pct}%</div>
+    </div>
+  );
+}
+
 function vendorRows(summary: DataItem | null) {
   const byVendor = summary?.by_vendor;
   if (!byVendor || typeof byVendor !== 'object' || Array.isArray(byVendor)) return [];
@@ -69,50 +132,34 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
     );
   }
 
+  const connectorNote = connectorsDegraded > 0 || connectorsDisabled > 0
+    ? `${connectorsDegraded} degraded · ${connectorsDisabled} disabled`
+    : 'healthy';
+
   return (
     <div className="dash-waf-grid">
       <div className="dash-waf-kpis">
-        <div className="dw-kpi">
-          <div className="dw-label">Protected</div>
-          <div className="dw-value">{protectedCount}</div>
-          <div className="dw-note">from WAF coverage summary API</div>
-        </div>
-        <div className="dw-kpi">
-          <div className="dw-label">Underprotected</div>
-          <div className="dw-value">{underprotected}</div>
-          <div className={`dw-note${underprotected > 0 ? ' dw-note--warn' : ''}`}>drift and policy exceptions</div>
-        </div>
-        <div className="dw-kpi">
-          <div className="dw-label">Coverage</div>
-          <div className="dw-value">
-            {coveragePct ?? '—'}{coveragePct !== null ? <span className="dw-unit">%</span> : null}
-          </div>
-          <div className="dw-note">weighted by critical target groups</div>
-        </div>
-        <div className="dw-kpi">
-          <div className="dw-label">Connectors</div>
-          <div className="dw-value">{connectorsActive}</div>
-          <div className="dw-note">
-            {connectorsDegraded > 0 || connectorsDisabled > 0
-              ? `${connectorsDegraded} degraded · ${connectorsDisabled} disabled`
-              : 'healthy'}
-          </div>
-        </div>
+        <WafKpi label="Protected" value={protectedCount} note="from WAF coverage summary API" />
+        <WafKpi
+          label="Underprotected"
+          value={underprotected}
+          note="drift and policy exceptions"
+          noteWarn={underprotected > 0}
+        />
+        <WafKpi
+          label="Coverage"
+          value={coveragePct ?? '—'}
+          unit={coveragePct !== null ? '%' : undefined}
+          note="weighted by critical target groups"
+        />
+        <WafKpi label="Connectors" value={connectorsActive} note={connectorNote} />
       </div>
       <div className="dash-waf-vendors">
         <div className="dw-vendor-head">Coverage by vendor</div>
         {vendors.length === 0 ? (
           <p className="muted small">No vendor breakdown returned by coverage summary API.</p>
         ) : vendors.map((row) => (
-          <div className="dw-vendor-row" key={row.vendor}>
-            <div className="dw-vendor-label mono">{row.vendor}</div>
-            <div className="dw-vendor-bar" title={`${row.pct}% protected across ${row.total} assets`}>
-              {row.passPct > 0 ? <span className="seg pass" style={{ width: `${row.passPct}%` }} /> : null}
-              {row.warnPct > 0 ? <span className="seg warn" style={{ width: `${row.warnPct}%` }} /> : null}
-              {row.failPct > 0 ? <span className="seg fail" style={{ width: `${row.failPct}%` }} /> : null}
-            </div>
-            <div className="dw-vendor-pct mono">{row.pct}%</div>
-          </div>
+          <VendorCoverageRow key={row.vendor} {...row} />
         ))}
       </div>
     </div>

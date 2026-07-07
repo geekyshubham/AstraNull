@@ -9,7 +9,7 @@ const families = [
   { label: 'L3/L4', keys: ['l3_l4', 'l3/l4', 'layer_3_4'] },
   { label: 'DNS', keys: ['dns'] },
   { label: 'L7/API', keys: ['l7_api', 'l7/api', 'application', 'api'] },
-  { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] }
+  { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] },
 ];
 
 type VectorHeatmapProps = {
@@ -45,7 +45,7 @@ function checkMatchesFamily(check: Record<string, unknown>, family: { keys: stri
     stringValue(check, 'vector_family'),
     stringValue(check, 'category'),
     stringValue(check, 'name'),
-    stringValue(check, 'check_id')
+    stringValue(check, 'check_id'),
   ].join(' ');
   return family.keys.some((key) => haystack.includes(key));
 }
@@ -64,7 +64,7 @@ function familyCoverage({
   groupId,
   testPolicies,
   runs,
-  evidence
+  evidence,
 }: {
   checkIds: Set<string>;
   groupId: string;
@@ -72,7 +72,6 @@ function familyCoverage({
   runs: Record<string, unknown>[];
   evidence: Record<string, unknown>[];
 }): FamilyCoverage {
-  // No declared group or no checks mapped to this vector family: nothing real to score.
   if (!groupId || checkIds.size === 0) {
     return { status: 'no-data', policyCount: 0, runCount: 0, evidenceCount: 0 };
   }
@@ -91,7 +90,7 @@ const COVERAGE_TONE: Record<FamilyCoverageStatus, string> = {
   run: 'warn',
   policy: 'warn',
   none: 'danger',
-  'no-data': 'muted'
+  'no-data': 'muted',
 };
 
 const COVERAGE_LABEL: Record<FamilyCoverageStatus, string> = {
@@ -99,7 +98,31 @@ const COVERAGE_LABEL: Record<FamilyCoverageStatus, string> = {
   run: 'Run',
   policy: 'Policy',
   none: 'No record',
-  'no-data': 'No data'
+  'no-data': 'No data',
+};
+
+const HEATMAP_CELL_STYLE: Record<FamilyCoverageStatus, CSSProperties> = {
+  evidence: {
+    background: 'color-mix(in oklab, var(--success), transparent 90%)',
+    color: 'var(--success)',
+  },
+  run: {
+    background: 'color-mix(in oklab, var(--warn), transparent 90%)',
+    color: 'var(--warn)',
+  },
+  policy: {
+    background: 'color-mix(in oklab, var(--warn), transparent 90%)',
+    color: 'var(--warn)',
+  },
+  none: {
+    background: 'color-mix(in oklab, var(--danger), transparent 91%)',
+    color: 'var(--danger)',
+  },
+  'no-data': {
+    border: '1px solid var(--border)',
+    background: 'color-mix(in oklab, var(--fg), transparent 94%)',
+    color: 'var(--fg-2)',
+  },
 };
 
 function coverageTitle(coverage: FamilyCoverage) {
@@ -107,6 +130,30 @@ function coverageTitle(coverage: FamilyCoverage) {
     return 'No checks mapped to this vector family for this target group.';
   }
   return `${coverage.evidenceCount} evidence · ${coverage.runCount} runs · ${coverage.policyCount} policies`;
+}
+
+function HeatmapCell({ coverage }: { coverage: FamilyCoverage }) {
+  const tone = COVERAGE_TONE[coverage.status];
+  return (
+    <span
+      className={`heatmap-cell heatmap-${tone}`}
+      style={HEATMAP_CELL_STYLE[coverage.status]}
+      title={coverageTitle(coverage)}
+    >
+      {COVERAGE_LABEL[coverage.status]}
+    </span>
+  );
+}
+
+function HeatmapLegend() {
+  return (
+    <div className="heatmap-legend">
+      <Badge tone="success">Evidence</Badge>
+      <Badge tone="warn">Policy/run</Badge>
+      <Badge tone="danger">No record</Badge>
+      <Badge tone="muted">No data</Badge>
+    </div>
+  );
 }
 
 export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, evidence }: VectorHeatmapProps) {
@@ -129,13 +176,13 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
       <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
         <span className="heatmap-head">Target group</span>
         {families.map((family) => (
-          <span className="heatmap-head" key={family.label}>{family.label}</span>
+          <span className="heatmap-head" key={family.label}>
+            {family.label}
+          </span>
         ))}
         {groups.map((group, groupIndex) => (
           <Fragment key={String(group.id ?? groupIndex)}>
-            <strong className="heatmap-name">
-              {String(group.name ?? group.id ?? 'Declared group')}
-            </strong>
+            <strong className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</strong>
             {families.map((family) => {
               const groupId = String(group.id ?? '');
               const familyCheckIds = new Set(
@@ -144,23 +191,13 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
                   .map((check) => String(check.check_id ?? check.id ?? ''))
                   .filter(Boolean)
               );
-              const score = familyCoverage({ checkIds: familyCheckIds, groupId, testPolicies, runs, evidence });
-              const tone = COVERAGE_TONE[score.status];
-              return (
-                <span key={`${groupIndex}-${family.label}`} className={`heatmap-cell heatmap-${tone}`} title={coverageTitle(score)}>
-                  {COVERAGE_LABEL[score.status]}
-                </span>
-              );
+              const coverage = familyCoverage({ checkIds: familyCheckIds, groupId, testPolicies, runs, evidence });
+              return <HeatmapCell key={`${groupIndex}-${family.label}`} coverage={coverage} />;
             })}
           </Fragment>
         ))}
       </div>
-      <div className="heatmap-legend">
-        <Badge tone="success">Evidence</Badge>
-        <Badge tone="warn">Policy/run</Badge>
-        <Badge tone="danger">No record</Badge>
-        <Badge tone="muted">No data</Badge>
-      </div>
+      <HeatmapLegend />
     </div>
   );
 }

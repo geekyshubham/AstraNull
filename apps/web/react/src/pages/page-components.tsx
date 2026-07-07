@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentPropsWithoutRef, type FormEvent, type ReactNode } from 'react';
 import {
   Activity,
   Bot,
@@ -293,8 +293,8 @@ export function MetricCard({
   const cornerBadge = showStatusBadge ?? (tone === 'warn' || tone === 'danger');
   return (
     <Card className={cornerBadge ? 'metric-card' : 'metric-card plain-metric'}>
-      <div className="metric-icon">
-        <Icon size={18} />
+      <div className="metric-icon" aria-hidden>
+        <Icon size={18} aria-hidden />
       </div>
       <div>
         <span>{label}</span>
@@ -313,6 +313,101 @@ export function PageContextSummary({ children }: { children: ReactNode }) {
   return <p className="page-context-summary">{children}</p>;
 }
 
+type LucideIcon = typeof Activity;
+
+function KpiCell({
+  label,
+  value,
+  delta,
+  deltaVariant
+}: {
+  label: string;
+  value: ReactNode;
+  delta: ReactNode;
+  deltaVariant?: 'up' | 'down';
+}) {
+  const deltaClassName = deltaVariant ? `kpi-delta ${deltaVariant}` : 'kpi-delta';
+  return (
+    <div className="kpi-cell">
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value">{value}</div>
+      <div className={deltaClassName}>{delta}</div>
+    </div>
+  );
+}
+
+function PanelCardHeader({
+  title,
+  description,
+  trailing
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  trailing?: ReactNode;
+}) {
+  const headings = (
+    <>
+      <CardTitle>{title}</CardTitle>
+      {description ? <CardDescription>{description}</CardDescription> : null}
+    </>
+  );
+  if (!trailing) {
+    return <CardHeader>{headings}</CardHeader>;
+  }
+  return (
+    <CardHeader>
+      <div>{headings}</div>
+      {trailing}
+    </CardHeader>
+  );
+}
+
+function SettingsNote({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+  return (
+    <div>
+      <Icon size={18} aria-hidden />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function CalloutNote({
+  icon: Icon,
+  tone,
+  children
+}: {
+  icon: LucideIcon;
+  tone?: 'info' | 'warn';
+  children: ReactNode;
+}) {
+  return (
+    <div className={tone ? `callout ${tone}` : 'callout'}>
+      <Icon size={18} aria-hidden />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function FormNumberField({
+  label,
+  name,
+  hint,
+  type = 'number',
+  ...inputProps
+}: {
+  label: string;
+  name: string;
+  hint: string;
+} & ComponentPropsWithoutRef<'input'>) {
+  return (
+    <label>
+      <span>{label}</span>
+      <input name={name} type={type} {...inputProps} />
+      <span className="muted">{hint}</span>
+    </label>
+  );
+}
+
 export function DefensiveRulesPanel() {
   return (
     <Card>
@@ -323,7 +418,7 @@ export function DefensiveRulesPanel() {
       <CardContent className="rule-grid">
         {DEFENSIVE_RULES.map((rule) => (
           <div className="rule" key={rule.title}>
-            <CheckCircle2 size={17} />
+            <CheckCircle2 size={17} aria-hidden />
             <div>
               <strong>{rule.title}</strong>
               <p>{rule.body}</p>
@@ -608,41 +703,44 @@ export function DashboardPage({ data }: { data: PortalData }) {
         ) : (
         <>
           <div className="kpi-row">
-            <div className="kpi-cell">
-              <div className="kpi-label">Readiness</div>
-              <div className="kpi-value">
-                {score ?? '—'}
-                {score !== null ? <span className="unit">/100</span> : null}
-              </div>
-              <div className={`kpi-delta${readinessDelta !== null && readinessDelta !== 0 ? (readinessDelta > 0 ? ' up' : ' down') : ''}`}>
-                {readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : '—'}
-              </div>
-            </div>
-            <div className="kpi-cell">
-              <div className="kpi-label">Coverage</div>
-              <div className="kpi-value">
-                {coveragePercent}
-                <span className="unit">%</span>
-              </div>
-              <div className="kpi-delta">{formatNumber(metrics.targetGroups)} targets</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="kpi-label">Open findings</div>
-              <div className="kpi-value">{metrics.openFindings}</div>
-              <div className="kpi-delta">{openFindingsAtS2} at S2</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="kpi-label">Agents healthy</div>
-              <div className="kpi-value">{`${agentsOnline}/${agentsTotalDisplay || agentsOnline}`}</div>
-              <div className="kpi-delta">all heartbeats ≤ 30s</div>
-            </div>
-            <div className="kpi-cell">
-              <div className="kpi-label">Last safe run</div>
-              <div className="kpi-value">{lastSafeRunValue}</div>
-              <div className="kpi-delta">
-                {lastRun ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount} checks` : 'No runs yet'}
-              </div>
-            </div>
+            <KpiCell
+              label="Readiness"
+              value={
+                <>
+                  {score ?? '—'}
+                  {score !== null ? <span className="unit">/100</span> : null}
+                </>
+              }
+              delta={readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : '—'}
+              deltaVariant={
+                readinessDelta !== null && readinessDelta !== 0
+                  ? readinessDelta > 0
+                    ? 'up'
+                    : 'down'
+                  : undefined
+              }
+            />
+            <KpiCell
+              label="Coverage"
+              value={
+                <>
+                  {coveragePercent}
+                  <span className="unit">%</span>
+                </>
+              }
+              delta={`${formatNumber(metrics.targetGroups)} targets`}
+            />
+            <KpiCell label="Open findings" value={metrics.openFindings} delta={`${openFindingsAtS2} at S2`} />
+            <KpiCell
+              label="Agents healthy"
+              value={`${agentsOnline}/${agentsTotalDisplay || agentsOnline}`}
+              delta="all heartbeats ≤ 30s"
+            />
+            <KpiCell
+              label="Last safe run"
+              value={lastSafeRunValue}
+              delta={lastRun ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount} checks` : 'No runs yet'}
+            />
           </div>
 
           <div className="dash-grid">
@@ -1150,7 +1248,7 @@ export function OnboardingPage({
               <div className="step-grid">
                 {steps.filter(([, complete]) => complete).map(([label]) => (
                   <div className="step-card done" key={label}>
-                    <span><CheckCircle2 size={16} /></span>
+                    <span aria-hidden><CheckCircle2 size={16} aria-hidden /></span>
                     <strong>{label}</strong>
                     <p>Complete</p>
                   </div>
@@ -1282,9 +1380,9 @@ export function OnboardingPage({
             </>
           )}
           <div className="callout-list">
-            <div className="callout info"><RadioTower size={18} /><span>Install where the agent can observe target traffic.</span></div>
-            <div className="callout warn"><Clock3 size={18} /><span>Run a safe canary before relying on verdicts.</span></div>
-            <div className="callout"><FileCheck2 size={18} /><span>Evidence vault records the placement signal.</span></div>
+            <CalloutNote icon={RadioTower} tone="info">Install where the agent can observe target traffic.</CalloutNote>
+            <CalloutNote icon={Clock3} tone="warn">Run a safe canary before relying on verdicts.</CalloutNote>
+            <CalloutNote icon={FileCheck2}>Evidence vault records the placement signal.</CalloutNote>
           </div>
         </CardContent>
       </Card>
@@ -1614,13 +1712,11 @@ export function TargetGroupsPage({
         </div>
       ) : null}
       <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Declared target groups</CardTitle>
-            <CardDescription>Declared business scope for validation. Archived groups are removed from this active list.</CardDescription>
-          </div>
-          <Badge tone="info">{filteredGroups.length} active{environmentFilter ? ' (filtered)' : ''}</Badge>
-        </CardHeader>
+        <PanelCardHeader
+          title="Declared target groups"
+          description="Declared business scope for validation. Archived groups are removed from this active list."
+          trailing={<Badge tone="info">{filteredGroups.length} active{environmentFilter ? ' (filtered)' : ''}</Badge>}
+        />
         <CardContent>
           <DataTable
             columns={groupColumns}
@@ -2162,13 +2258,11 @@ export function ReportsPage({
         </Card>
       </div>
       <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Generated reports</CardTitle>
-            <CardDescription>Each row can be re-exported as JSON, Markdown, or HTML with custody audit metadata.</CardDescription>
-          </div>
-          <Badge tone="info">{reports.length} records</Badge>
-        </CardHeader>
+        <PanelCardHeader
+          title="Generated reports"
+          description="Each row can be re-exported as JSON, Markdown, or HTML with custody audit metadata."
+          trailing={<Badge tone="info">{reports.length} records</Badge>}
+        />
         <CardContent className="stack-tight" aria-busy={busy.startsWith('export-') || busy === 'create-report' || undefined}>
           <p className="table-caption muted">
             {latestReport
@@ -2511,29 +2605,29 @@ export function SettingsPage({
       )}
       {oneTimeSecret && (
         <Card className="secret-card">
-          <CardHeader>
-            <div>
-              <CardTitle>{oneTimeSecret.label}</CardTitle>
-              <CardDescription>This value is shown once. It is not returned by list APIs and will not be visible after refresh.</CardDescription>
-            </div>
-            <div className="row-actions">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  void navigator.clipboard.writeText(oneTimeSecret.value).then(() => {
-                    setMessage('Secret copied to clipboard.');
-                    setError('');
-                  }).catch(() => {
-                    setError('Clipboard copy failed. Select the secret manually.');
-                  });
-                }}
-              >
-                Copy secret
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setOneTimeSecret(null)}>Dismiss</Button>
-            </div>
-          </CardHeader>
+          <PanelCardHeader
+            title={oneTimeSecret.label}
+            description="This value is shown once. It is not returned by list APIs and will not be visible after refresh."
+            trailing={
+              <div className="row-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(oneTimeSecret.value).then(() => {
+                      setMessage('Secret copied to clipboard.');
+                      setError('');
+                    }).catch(() => {
+                      setError('Clipboard copy failed. Select the secret manually.');
+                    });
+                  }}
+                >
+                  Copy secret
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setOneTimeSecret(null)}>Dismiss</Button>
+              </div>
+            }
+          />
           <CardContent>
             <pre className="codeblock">{oneTimeSecret.value}</pre>
           </CardContent>
@@ -2604,8 +2698,8 @@ export function SettingsPage({
             <div><span>Auth mode</span><strong>{config.authMode}</strong></div>
           </CardContent>
           <CardContent className="settings-list">
-            <div><ShieldCheck size={18} /><span>Tenant user invites and role changes are not self-service on this screen.</span></div>
-            <div><FileCheck2 size={18} /><span>API credentials live under Access; vault secrets under Security; audit history on the Audit page.</span></div>
+            <SettingsNote icon={ShieldCheck}>Tenant user invites and role changes are not self-service on this screen.</SettingsNote>
+            <SettingsNote icon={FileCheck2}>API credentials live under Access; vault secrets under Security; audit history on the Audit page.</SettingsNote>
           </CardContent>
           {session.principal === 'staff' ? (
             <CardContent className="row-actions">
@@ -2615,13 +2709,11 @@ export function SettingsPage({
         </Card>
         {canReadAudit ? (
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Tenant audit log</CardTitle>
-                <CardDescription>Immutable security-relevant history lives on the Audit page — Settings does not duplicate that log.</CardDescription>
-              </div>
-              <AnchorButton href="#audit" variant="secondary" size="sm">Open audit log</AnchorButton>
-            </CardHeader>
+            <PanelCardHeader
+              title="Tenant audit log"
+              description="Immutable security-relevant history lives on the Audit page — Settings does not duplicate that log."
+              trailing={<AnchorButton href="#audit" variant="secondary" size="sm">Open audit log</AnchorButton>}
+            />
             <CardContent className="row-actions">
               {canReadNotifications ? <AnchorButton href="#notifications" variant="ghost" size="sm">Notification rules</AnchorButton> : null}
               <AnchorButton href="#integrations" variant="ghost" size="sm">Integrations</AnchorButton>
@@ -2713,13 +2805,11 @@ export function SettingsPage({
             </Card>
           </div>
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Bootstrap tokens</CardTitle>
-                <CardDescription>Install tokens are redacted after creation and can be revoked immediately.</CardDescription>
-              </div>
-              <Badge tone="info">{data.bootstrapTokens.length} records</Badge>
-            </CardHeader>
+            <PanelCardHeader
+              title="Bootstrap tokens"
+              description="Install tokens are redacted after creation and can be revoked immediately."
+              trailing={<Badge tone="info">{data.bootstrapTokens.length} records</Badge>}
+            />
             <CardContent>
               <DataTable
                 columns={tokenColumns}
@@ -2729,13 +2819,11 @@ export function SettingsPage({
             </CardContent>
           </Card>
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Service accounts</CardTitle>
-                <CardDescription>Automation credentials are scoped, auditable, rotatable, and redacted after creation.</CardDescription>
-              </div>
-              <Badge tone="success">{data.serviceAccounts.length} records</Badge>
-            </CardHeader>
+            <PanelCardHeader
+              title="Service accounts"
+              description="Automation credentials are scoped, auditable, rotatable, and redacted after creation."
+              trailing={<Badge tone="success">{data.serviceAccounts.length} records</Badge>}
+            />
             <CardContent>
               <DataTable
                 columns={serviceAccountColumns}
@@ -2762,8 +2850,8 @@ export function SettingsPage({
               <div><span>Login URL</span><strong>{config.loginUrl}</strong></div>
             </CardContent>
             <CardContent className="settings-list">
-              <div><ShieldCheck size={18} /><span>Production human auth defaults to `oidc-jwt` with JWKS verification; developer validation may use `dev-headers` or bundled staging login.</span></div>
-              <div><KeyRound size={18} /><span>Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload.</span></div>
+              <SettingsNote icon={ShieldCheck}>Production human auth defaults to `oidc-jwt` with JWKS verification; developer validation may use `dev-headers` or bundled staging login.</SettingsNote>
+              <SettingsNote icon={KeyRound}>Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload.</SettingsNote>
             </CardContent>
           </Card>
           <div className="split">
@@ -2827,13 +2915,11 @@ export function SettingsPage({
             </Card>
           </div>
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Secret vault inventory</CardTitle>
-                <CardDescription>Stored secret metadata only — no plaintext, ciphertext, or auth tags.</CardDescription>
-              </div>
-              <Badge tone="info">{data.secrets.length} records</Badge>
-            </CardHeader>
+            <PanelCardHeader
+              title="Secret vault inventory"
+              description="Stored secret metadata only — no plaintext, ciphertext, or auth tags."
+              trailing={<Badge tone="info">{data.secrets.length} records</Badge>}
+            />
             <CardContent>
               <DataTable
                 columns={secretColumns}
@@ -2853,26 +2939,38 @@ export function SettingsPage({
           </CardHeader>
           <CardContent>
             <form className="product-form" onSubmit={handleSaveRetention}>
-              <label>
-                <span>Metadata retention (days)</span>
-                <input name="metadata_retention_days" type="number" min="1" max="3650" defaultValue={metadataRetentionDays} />
-                <span className="muted">Recommended default: 90 days — events, vault metadata, and notification history.</span>
-              </label>
-              <label>
-                <span>Report archive (days)</span>
-                <input name="report_days" type="number" min="30" max="3650" defaultValue={getNumber(evidenceRetention, ['report_days'], 365)} />
-                <span className="muted">Recommended default: 365 days — generated readiness report artifacts.</span>
-              </label>
-              <label>
-                <span>Audit log retention (days)</span>
-                <input name="audit_log_days" type="number" min="365" max="3650" defaultValue={getNumber(evidenceRetention, ['audit_log_days'], 2555)} />
-                <span className="muted">Recommended default: 2555 days (~7 years) — security audit trail.</span>
-              </label>
-              <label>
-                <span>High-scale artifact retention (days)</span>
-                <input name="high_scale_artifact_days" type="number" min="365" max="3650" defaultValue={getNumber(evidenceRetention, ['high_scale_artifact_days'], 2555)} />
-                <span className="muted">Recommended default: 2555 days — SOC authorization packs and artifacts.</span>
-              </label>
+              <FormNumberField
+                label="Metadata retention (days)"
+                name="metadata_retention_days"
+                min={1}
+                max={3650}
+                defaultValue={metadataRetentionDays}
+                hint="Recommended default: 90 days — events, vault metadata, and notification history."
+              />
+              <FormNumberField
+                label="Report archive (days)"
+                name="report_days"
+                min={30}
+                max={3650}
+                defaultValue={getNumber(evidenceRetention, ['report_days'], 365)}
+                hint="Recommended default: 365 days — generated readiness report artifacts."
+              />
+              <FormNumberField
+                label="Audit log retention (days)"
+                name="audit_log_days"
+                min={365}
+                max={3650}
+                defaultValue={getNumber(evidenceRetention, ['audit_log_days'], 2555)}
+                hint="Recommended default: 2555 days (~7 years) — security audit trail."
+              />
+              <FormNumberField
+                label="High-scale artifact retention (days)"
+                name="high_scale_artifact_days"
+                min={365}
+                max={3650}
+                defaultValue={getNumber(evidenceRetention, ['high_scale_artifact_days'], 2555)}
+                hint="Recommended default: 2555 days — SOC authorization packs and artifacts."
+              />
               <label className="check-row full">
                 <input name="legal_hold" type="checkbox" defaultChecked={Boolean(evidenceRetention.legal_hold)} />
                 <span>Legal hold — block metadata deletions while legal hold is active (read-only boundary for production legal workflows).</span>
@@ -2883,8 +2981,8 @@ export function SettingsPage({
             </form>
           </CardContent>
           <CardContent className="settings-list">
-            <div><FileCheck2 size={18} /><span>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</span></div>
-            <div><ShieldCheck size={18} /><span>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the API reference.</span></div>
+            <SettingsNote icon={FileCheck2}>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</SettingsNote>
+            <SettingsNote icon={ShieldCheck}>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the API reference.</SettingsNote>
           </CardContent>
         </Card>
       )}
@@ -2984,15 +3082,11 @@ export function EnvironmentsPage({ data }: { data: PortalData }) {
     <div className="content">
       <PageHeader route="environments" />
       <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Declared environments</CardTitle>
-            <CardDescription>
-              Environment IDs from declared target groups with validation evidence, agent placement, and open findings.
-            </CardDescription>
-          </div>
-          {rows.length > 0 ? <Badge tone="info">{rows.length} environments</Badge> : null}
-        </CardHeader>
+        <PanelCardHeader
+          title="Declared environments"
+          description="Environment IDs from declared target groups with validation evidence, agent placement, and open findings."
+          trailing={rows.length > 0 ? <Badge tone="info">{rows.length} environments</Badge> : undefined}
+        />
         <CardContent>
           <DataTable
             columns={environmentColumns}
@@ -3239,19 +3333,19 @@ export function PolicyPage({
         <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
       )}
       <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>Safe validation policies</CardTitle>
-            <CardDescription>
+        <PanelCardHeader
+          title="Safe validation policies"
+          description={
+            <>
               Scheduled bindings between declared target groups and customer-runnable safe checks.
               {' '}
               <span className="muted small">
                 {data.testPolicies.length} active · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
               </span>
-            </CardDescription>
-          </div>
-          {data.testPolicies.length > 0 ? <Badge tone="info">{data.testPolicies.length} active</Badge> : null}
-        </CardHeader>
+            </>
+          }
+          trailing={data.testPolicies.length > 0 ? <Badge tone="info">{data.testPolicies.length} active</Badge> : undefined}
+        />
         <CardContent>
           <DataTable
             columns={policyColumns}
@@ -3568,8 +3662,8 @@ export function IntegrationPage({
             <CardDescription>Connectors and WAF posture enrichment are disabled for this tenant. Contact support to enable read-only connector features.</CardDescription>
           </CardHeader>
           <CardContent className="callout-list">
-            <div className="callout info"><ShieldCheck size={18} /><span>Core DDoS validation still works from declared target groups without cloud credentials.</span></div>
-            <div className="callout"><FileCheck2 size={18} /><span>Connector credentials must be stored as encrypted secret references before provider polling.</span></div>
+            <CalloutNote icon={ShieldCheck} tone="info">Core DDoS validation still works from declared target groups without cloud credentials.</CalloutNote>
+            <CalloutNote icon={FileCheck2}>Connector credentials must be stored as encrypted secret references before provider polling.</CalloutNote>
           </CardContent>
         </Card>
       ) : (
@@ -3580,13 +3674,11 @@ export function IntegrationPage({
             </div>
           )}
           <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Configured connectors</CardTitle>
-                <CardDescription>Validate, poll, and disable connectors — plaintext credentials are never rendered.</CardDescription>
-              </div>
-              <Badge tone="info">{data.connectors.length} total</Badge>
-            </CardHeader>
+            <PanelCardHeader
+              title="Configured connectors"
+              description="Validate, poll, and disable connectors — plaintext credentials are never rendered."
+              trailing={<Badge tone="info">{data.connectors.length} total</Badge>}
+            />
             <CardContent>
               <DataTable
                 columns={connectorColumns}
@@ -3719,13 +3811,11 @@ export function IntegrationPage({
           <details>
             <summary>Connector snapshots ({snapshots.length} loaded)</summary>
             <Card>
-              <CardHeader>
-                <div>
-                  <CardTitle>Connector snapshots</CardTitle>
-                  <CardDescription>Snapshots come from backend poll results or manual metadata ingest.</CardDescription>
-                </div>
-                <Badge tone="muted">{snapshots.length} loaded</Badge>
-              </CardHeader>
+              <PanelCardHeader
+                title="Connector snapshots"
+                description="Snapshots come from backend poll results or manual metadata ingest."
+                trailing={<Badge tone="muted">{snapshots.length} loaded</Badge>}
+              />
               <CardContent className="queue-list">
                 {snapshots.length === 0 ? (
                   <EmptyState icon={FileCheck2} title="No snapshots loaded." body="Select a connector action to load or ingest metadata snapshots." />
@@ -3793,7 +3883,7 @@ export function SupportPage({ data, session }: { data: PortalData; session: Sess
               <EmptyState icon={LifeBuoy} title="No support account record." body="Approve a signup request or attach tenant account metadata before support readiness can show live ownership." />
             ) : supportRows.map(({ label, value, icon: RowIcon }) => (
               <div key={label}>
-                <RowIcon size={18} />
+                <RowIcon size={18} aria-hidden />
                 <span>
                   <strong>{label}</strong>
                   {' — '}

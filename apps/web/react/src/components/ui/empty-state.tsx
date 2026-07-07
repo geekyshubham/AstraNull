@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
+import { useId } from 'react';
 import { cn } from '../../lib/utils';
 import { AnchorButton, Button } from './button';
 
@@ -14,6 +15,32 @@ type EmptyStateProps = {
   variant?: EmptyStateVariant;
 };
 
+function EmptyStateAction({
+  actionLabel,
+  actionHref,
+  onAction
+}: {
+  actionLabel: string;
+  actionHref?: string;
+  onAction?: () => void;
+}) {
+  if (actionHref) {
+    return (
+      <AnchorButton href={actionHref} variant="secondary">
+        {actionLabel}
+      </AnchorButton>
+    );
+  }
+  if (onAction) {
+    return (
+      <Button type="button" variant="secondary" onClick={onAction}>
+        {actionLabel}
+      </Button>
+    );
+  }
+  return null;
+}
+
 export function EmptyState({
   icon: Icon,
   title,
@@ -23,27 +50,24 @@ export function EmptyState({
   onAction,
   variant = 'default'
 }: EmptyStateProps) {
-  const showHrefAction = Boolean(actionLabel && actionHref);
-  const showClickAction = Boolean(actionLabel && onAction && !actionHref);
+  const titleId = useId();
+  const showAction = Boolean(actionLabel && (actionHref || onAction));
 
   return (
-    <div className={cn('empty-state', variant === 'skeleton' && 'empty-state-skeleton')}>
+    <div
+      className={cn('empty-state', variant === 'skeleton' && 'empty-state-skeleton')}
+      role="region"
+      aria-labelledby={titleId}
+    >
       {variant === 'skeleton' ? (
         <div className="skeleton empty-state-visual" aria-hidden="true" />
       ) : (
-        <Icon className="empty-icon" size={36} />
+        <Icon className="empty-icon" size={36} aria-hidden="true" />
       )}
-      <h2>{title}</h2>
+      <h2 id={titleId}>{title}</h2>
       <p>{body}</p>
-      {showClickAction ? (
-        <Button type="button" variant="secondary" onClick={onAction}>
-          {actionLabel}
-        </Button>
-      ) : null}
-      {showHrefAction ? (
-        <AnchorButton href={actionHref} variant="secondary">
-          {actionLabel}
-        </AnchorButton>
+      {showAction ? (
+        <EmptyStateAction actionLabel={actionLabel!} actionHref={actionHref} onAction={onAction} />
       ) : null}
     </div>
   );

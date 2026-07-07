@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Activity } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
@@ -7,7 +7,8 @@ import {
   buildHeartbeatTraceFromAudit,
   computeCadenceP50,
   formatRelativeAge,
-  resolveInstallNonceStatus
+  resolveInstallNonceStatus,
+  type HeartbeatTraceSegment
 } from '../../lib/agent-heartbeat';
 import { agentHeartbeatFreshness } from '../../lib/agent-helpers';
 import type { DataItem } from '../../lib/types';
@@ -20,6 +21,63 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
   return fallback;
+}
+
+function nonceValueStyle(label: string): CSSProperties | undefined {
+  if (label === 'match') return { color: 'var(--success)' };
+  if (label === 'pending') return { color: 'var(--warn)' };
+  return undefined;
+}
+
+function heartbeatDotClass(tone: HeartbeatTraceSegment['tone']) {
+  if (tone === 'slow') return 'hb-dot is-slow';
+  if (tone === 'now') return 'hb-dot is-now';
+  if (tone === 'ok') return 'hb-dot is-ok';
+  return 'hb-dot';
+}
+
+function heartbeatDotStyle(tone: HeartbeatTraceSegment['tone']): CSSProperties | undefined {
+  if (tone !== 'miss') return undefined;
+  return {
+    background: 'color-mix(in oklab, var(--danger), transparent 35%)',
+    borderColor: 'color-mix(in oklab, var(--danger), transparent 45%)'
+  };
+}
+
+function HbMetricCell({
+  label,
+  value,
+  note,
+  valueTitle,
+  valueStyle
+}: {
+  label: string;
+  value: ReactNode;
+  note?: string;
+  valueTitle?: string;
+  valueStyle?: CSSProperties;
+}) {
+  return (
+    <div className="hb-cell">
+      <div className="hb-label">{label}</div>
+      <div className="hb-value mono" title={valueTitle} style={valueStyle}>
+        {value}
+      </div>
+      {note ? <div className="hb-note muted">{note}</div> : null}
+    </div>
+  );
+}
+
+function HeartbeatTraceDot({ segment }: { segment: HeartbeatTraceSegment }) {
+  return (
+    <span
+      className={heartbeatDotClass(segment.tone)}
+      style={heartbeatDotStyle(segment.tone)}
+      title={segment.title}
+      role="img"
+      aria-label={segment.title}
+    />
+  );
 }
 
 export function AgentHeartbeatPanel({
@@ -56,38 +114,48 @@ export function AgentHeartbeatPanel({
         </div>
         <div className="row-actions">
           <VerifyChip state={verified ? 'agent_verified' : 'awaiting_heartbeat'} provenance={provenance} />
-          <Button size="sm" variant="ghost" loading={refreshing} onClick={() => {
-            setNowMs(Date.now());
-            onRefresh();
-          }}>Refresh</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            loading={refreshing}
+            aria-label="Refresh heartbeat trace"
+            onClick={() => {
+              setNowMs(Date.now());
+              onRefresh();
+            }}
+          >
+            Refresh
+          </Button>
         </div>
       </CardHeader>
       <CardContent className="stack-tight">
         <div className="hb-grid">
-          <div className="hb-cell">
-            <div className="hb-label">First heartbeat</div>
-            <div className="hb-value mono">{formatRelativeAge(getString(agent, ['created_at'], ''), nowMs)}</div>
-            <div className="hb-note muted">install completed</div>
-          </div>
-          <div className="hb-cell">
-            <div className="hb-label">Last heartbeat</div>
-            <div className="hb-value mono">{agentHeartbeatFreshness(agent, nowMs)}</div>
-            <div className="hb-note muted">{formatDate(agent.last_heartbeat_at)}</div>
-          </div>
-          <div className="hb-cell">
-            <div className="hb-label">Cadence (p50)</div>
-            <div className="hb-value mono">
-              {cadence ? `${(cadence.p50Ms / 1000).toFixed(1)}s ± ${(cadence.spreadMs / 1000).toFixed(1)}s` : '—'}
-            </div>
-            <div className="hb-note muted">{segments.length > 0 ? `from ${segments.length} audit heartbeats` : 'awaiting trace'}</div>
-          </div>
-          <div className="hb-cell">
-            <div className="hb-label">Install nonce</div>
-            <div className="hb-value mono" style={{ color: nonce.label === 'match' ? 'var(--success)' : undefined }} title={nonce.provenance}>
-              {nonce.label}
-            </div>
-            <div className="hb-note muted">correlated with bootstrap</div>
-          </div>
+          <HbMetricCell
+            label="First heartbeat"
+            value={formatRelativeAge(getString(agent, ['created_at'], ''), nowMs)}
+            note="install completed"
+          />
+          <HbMetricCell
+            label="Last heartbeat"
+            value={agentHeartbeatFreshness(agent, nowMs)}
+            note={formatDate(agent.last_heartbeat_at)}
+          />
+          <HbMetricCell
+            label="Cadence (p50)"
+            value={
+              cadence
+                ? `${(cadence.p50Ms / 1000).toFixed(1)}s ± ${(cadence.spreadMs / 1000).toFixed(1)}s`
+                : '—'
+            }
+            note={segments.length > 0 ? `from ${segments.length} audit heartbeats` : 'awaiting trace'}
+          />
+          <HbMetricCell
+            label="Install nonce"
+            value={nonce.label}
+            note="correlated with bootstrap"
+            valueTitle={nonce.provenance}
+            valueStyle={nonceValueStyle(nonce.label)}
+          />
         </div>
         <div className="hb-trace-wrap">
           <div className="hb-trace-head">
@@ -95,15 +163,14 @@ export function AgentHeartbeatPanel({
             <span className="muted mono">newest →</span>
           </div>
           {segments.length === 0 ? (
-            <p className="muted" role="status"><Activity size={16} aria-hidden="true" /> No heartbeat audit segments yet. Trace fills after agent heartbeats are recorded.</p>
+            <p className="muted hb-trace-empty" role="status" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Activity size={16} aria-hidden="true" />
+              <span>No heartbeat audit segments yet. Trace fills after agent heartbeats are recorded.</span>
+            </p>
           ) : (
             <div className="hb-trace" aria-label="Heartbeat trace, last 30 pings">
               {segments.map((segment) => (
-                <span
-                  key={segment.id}
-                  className={`hb-dot${segment.tone === 'slow' ? ' is-slow' : ''}${segment.tone === 'now' ? ' is-now' : ''}${segment.tone === 'ok' ? ' is-ok' : ''}`}
-                  title={segment.title}
-                />
+                <HeartbeatTraceDot key={segment.id} segment={segment} />
               ))}
             </div>
           )}

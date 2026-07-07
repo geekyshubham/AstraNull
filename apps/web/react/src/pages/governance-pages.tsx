@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Bell, CheckCircle2, ClipboardList, Copy, FileCheck2, FileText, Info, Lock, ShieldCheck, Siren } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { Bell, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, ShieldCheck, Siren } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -237,6 +237,132 @@ function deliveryAttempts(events: DataItem[]) {
   });
 }
 
+function GovernanceFeedbackBanner({ message, error }: { message: string; error: string }) {
+  if (!message && !error) return null;
+  return (
+    <div
+      className={error ? 'form-banner error' : 'form-banner'}
+      role={error ? 'alert' : 'status'}
+      aria-live="polite"
+    >
+      {error || message}
+    </div>
+  );
+}
+
+function GovernanceInfoBanner({ children }: { children: ReactNode }) {
+  return (
+    <div className="form-banner info" role="status" aria-live="polite">
+      {children}
+    </div>
+  );
+}
+
+function DeliveryOperationPanel({
+  titleId,
+  title,
+  description,
+  children
+}: {
+  titleId: string;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="operation-panel" aria-labelledby={titleId}>
+      <div>
+        <h3 id={titleId}>{title}</h3>
+        <p>{description}</p>
+      </div>
+      <div className="row-actions">{children}</div>
+    </section>
+  );
+}
+
+function KvField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{children}</strong>
+    </div>
+  );
+}
+
+function KillSwitchReadOnlyCard({ active, reason }: { active: boolean; reason: string }) {
+  return (
+    <Card density="compact">
+      <CardHeader>
+        <CardTitle>Kill switch</CardTitle>
+        <CardDescription>Read-only tenant emergency-stop status. Activation and clearance require an SOC role.</CardDescription>
+      </CardHeader>
+      <CardContent className="kv-list">
+        <KvField label="Status">
+          <Badge tone={active ? 'danger' : 'success'}>{active ? 'Active' : 'Inactive'}</Badge>
+        </KvField>
+        <KvField label="Reason">{reason}</KvField>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ExpandableCodePanel({
+  panelId,
+  expanded,
+  onToggle,
+  toggleLabels,
+  code,
+  truncated,
+  downloadLabel,
+  onDownload
+}: {
+  panelId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  toggleLabels: { show: string; hide: string };
+  code: string;
+  truncated?: boolean;
+  downloadLabel?: string;
+  onDownload?: () => void;
+}) {
+  return (
+    <div className="full">
+      <div className="row-actions">
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={onToggle}
+        >
+          {expanded ? toggleLabels.hide : toggleLabels.show}
+        </Button>
+        {truncated && onDownload && downloadLabel ? (
+          <Button size="sm" variant="secondary" onClick={onDownload}>
+            {downloadLabel}
+          </Button>
+        ) : null}
+      </div>
+      {expanded ? (
+        <div className="stack-tight full" id={panelId}>
+          <pre className="codeblock">{code}</pre>
+          {truncated ? <Badge tone="warn">Truncated — download for full JSON</Badge> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TableQueueSkeleton({ rows = 2 }: { rows?: number }) {
+  return (
+    <div className="stack-tight" role="status" aria-live="polite" aria-label="Loading queue">
+      {Array.from({ length: rows }, (_, index) => (
+        <span key={index} className="skeleton skeleton-row" />
+      ))}
+    </div>
+  );
+}
+
 export function NotificationsPage({
   data,
   config,
@@ -380,7 +506,7 @@ export function NotificationsPage({
         <MetricCard label="Retrying" value={retryItems.length} sub="awaiting retry" icon={Bell} tone={retryItems.length > 0 ? 'warn' : 'muted'} />
         <MetricCard label="DLQ" value={dlqItems.length} sub="dead-letter queue" icon={Siren} tone={dlqItems.length > 0 ? 'danger' : 'muted'} />
       </div>
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      <GovernanceFeedbackBanner message={message} error={error} />
       {canWrite ? (
         <Card id="notifications-create-rule">
           <CardHeader>
@@ -403,8 +529,21 @@ export function NotificationsPage({
                 onChange={(value) => setRuleTrigger(value as (typeof NOTIFICATION_TRIGGERS)[number])}
                 disabled={busy !== ''}
               />
-              <label className="full"><span>Destination</span><input name="destination_preview" placeholder="https://hooks.example.invalid/notifications" aria-invalid={destinationError ? true : undefined} disabled={busy !== ''} /></label>
-              {destinationError ? <p className="form-banner error full">{destinationError}</p> : null}
+              <label className="full">
+                <span>Destination</span>
+                <input
+                  name="destination_preview"
+                  placeholder="https://hooks.example.invalid/notifications"
+                  aria-invalid={destinationError ? true : undefined}
+                  aria-describedby={destinationError ? 'notification-destination-error' : undefined}
+                  disabled={busy !== ''}
+                />
+              </label>
+              {destinationError ? (
+                <p className="form-banner error full" id="notification-destination-error" role="alert">
+                  {destinationError}
+                </p>
+              ) : null}
               {ruleDryRunPreview ? (
                 <div className="callout info full"><Info size={18} aria-hidden="true" /><span>{ruleDryRunPreview}</span></div>
               ) : null}
@@ -454,26 +593,14 @@ export function NotificationsPage({
           <CardDescription>Retry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state.</CardDescription>
         </CardHeader>
         <CardContent className="stack-tight">
-          <section className="operation-panel" aria-labelledby="notification-preview-title">
-            <div>
-              <h3 id="notification-preview-title">Preview</h3>
-              <p>Dry-run — no ledger changes</p>
-            </div>
-            <div className="row-actions">
-              <Button size="sm" variant="ghost" loading={busy === 'process-retries-preview'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-preview')} onClick={() => void processRetries(true)}>Preview due retries</Button>
-              <Button size="sm" variant="ghost" loading={busy === 'redrive-dlq-preview'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-preview')} onClick={() => void redriveDlq(true)}>Preview DLQ redrive</Button>
-            </div>
-          </section>
-          <section className="operation-panel" aria-labelledby="notification-live-title">
-            <div>
-              <h3 id="notification-live-title">Live</h3>
-              <p>Applies changes — confirmation required</p>
-            </div>
-            <div className="row-actions">
-              <Button size="sm" variant="secondary" loading={busy === 'process-retries-run'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-run')} onClick={() => void processRetries(false)}>Process due retries</Button>
-              <Button size="sm" variant="secondary" loading={busy === 'redrive-dlq-run'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-run')} onClick={() => void redriveDlq(false)}>Redrive DLQ</Button>
-            </div>
-          </section>
+          <DeliveryOperationPanel titleId="notification-preview-title" title="Preview" description="Dry-run — no ledger changes">
+            <Button size="sm" variant="ghost" loading={busy === 'process-retries-preview'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-preview')} onClick={() => void processRetries(true)}>Preview due retries</Button>
+            <Button size="sm" variant="ghost" loading={busy === 'redrive-dlq-preview'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-preview')} onClick={() => void redriveDlq(true)}>Preview DLQ redrive</Button>
+          </DeliveryOperationPanel>
+          <DeliveryOperationPanel titleId="notification-live-title" title="Live" description="Applies changes — confirmation required">
+            <Button size="sm" variant="secondary" loading={busy === 'process-retries-run'} disabled={!canWrite || (busy !== '' && busy !== 'process-retries-run')} onClick={() => void processRetries(false)}>Process due retries</Button>
+            <Button size="sm" variant="secondary" loading={busy === 'redrive-dlq-run'} disabled={!canWrite || dlqItems.length === 0 || (busy !== '' && busy !== 'redrive-dlq-run')} onClick={() => void redriveDlq(false)}>Redrive DLQ</Button>
+          </DeliveryOperationPanel>
         </CardContent>
       </Card>
     </div>
@@ -585,17 +712,30 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
             <CardHeader>
               <CardTitle>Filters</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="product-form row-actions" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: '12px 16px' }}>
-                <label className="check-row" style={{ margin: 0 }}>
-                  <input type="checkbox" name="custody_only" checked={custodyOnly} onChange={(event) => setCustodyOnly(event.target.checked)} />
+            <CardContent className="stack-tight">
+              <div className="page-toolbar-labeled">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    name="custody_only"
+                    checked={custodyOnly}
+                    onChange={(event) => setCustodyOnly(event.target.checked)}
+                    aria-label="Custody-chain only"
+                  />
                   <span>Custody-chain only</span>
                 </label>
                 <Select label="Actor" name="audit_actor" value={actorFilter} options={actorOptions} onChange={setActorFilter} />
                 <Select label="Action" name="audit_action" value={actionFilter} options={actionOptions} onChange={setActionFilter} />
-                <label style={{ margin: 0, minWidth: 160, flex: '1 1 200px' }}>
+              </div>
+              <div className="product-form">
+                <label className="full">
                   <span>Search</span>
-                  <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="action, resource type, or id" />
+                  <input
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder="action, resource type, or id"
+                    aria-label="Search audit log by action, resource type, or id"
+                  />
                 </label>
               </div>
             </CardContent>
@@ -625,54 +765,44 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
                 <CardDescription>{getString(selectedEntry, ['action'])} · {getString(selectedEntry, ['resource_type'])}</CardDescription>
               </CardHeader>
               <CardContent className="kv-list">
-                <div><span>Actor</span><strong>{getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})</strong></div>
-                <div><span>Resource</span><strong>{getString(selectedEntry, ['resource_id'])}</strong></div>
-                <div><span>Timestamp</span><strong>{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</strong></div>
+                <KvField label="Actor">
+                  {getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})
+                </KvField>
+                <KvField label="Resource">{getString(selectedEntry, ['resource_id'])}</KvField>
+                <KvField label="Timestamp">{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</KvField>
                 {getString(selectedEntry, ['entry_hash'], '') !== '—' ? (
-                  <div><span>Entry hash</span><strong className="mono">{getString(selectedEntry, ['entry_hash'])}</strong></div>
+                  <KvField label="Entry hash">
+                    <span className="mono">{getString(selectedEntry, ['entry_hash'])}</span>
+                  </KvField>
                 ) : null}
                 {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' && !Array.isArray(selectedEntry.metadata) ? (
                   isFlatMetadataObject(selectedEntry.metadata)
                     ? Object.entries(selectedEntry.metadata).map(([key, value]) => (
-                      <div key={key}><span>{key}</span><strong>{value === null ? 'null' : String(value)}</strong></div>
+                      <KvField key={key} label={key}>{value === null ? 'null' : String(value)}</KvField>
                     ))
-                    : <div><span>Metadata</span><strong className="muted">Structured metadata — use View raw for full JSON.</strong></div>
+                    : (
+                      <KvField label="Metadata">
+                        <span className="muted">Structured metadata — use View raw for full JSON.</span>
+                      </KvField>
+                    )
                 ) : (
-                  <div><span>Metadata</span><strong>none</strong></div>
+                  <KvField label="Metadata">none</KvField>
                 )}
                 {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' ? (() => {
                   const metadataJson = JSON.stringify(selectedEntry.metadata, null, 2);
                   const metadataTruncated = metadataJson.length > 1800;
                   const downloadId = getString(selectedEntry, ['id', 'audit_id'], 'audit-entry');
                   return (
-                    <div className="full">
-                      <div className="row-actions">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          aria-expanded={showRawAuditMetadata}
-                          aria-controls="audit-raw-metadata-panel"
-                          onClick={() => setShowRawAuditMetadata((open) => !open)}
-                        >
-                          {showRawAuditMetadata ? 'Hide raw metadata' : 'View raw'}
-                        </Button>
-                        {metadataTruncated ? (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => downloadJsonFile(`audit-metadata-${downloadId}.json`, selectedEntry.metadata)}
-                          >
-                            Download full metadata
-                          </Button>
-                        ) : null}
-                      </div>
-                      {showRawAuditMetadata ? (
-                        <div className="stack-tight full" id="audit-raw-metadata-panel">
-                          <pre className="codeblock">{metadataJson.slice(0, 1800)}</pre>
-                          {metadataTruncated ? <Badge tone="warn">Truncated — download for full JSON</Badge> : null}
-                        </div>
-                      ) : null}
-                    </div>
+                    <ExpandableCodePanel
+                      panelId="audit-raw-metadata-panel"
+                      expanded={showRawAuditMetadata}
+                      onToggle={() => setShowRawAuditMetadata((open) => !open)}
+                      toggleLabels={{ show: 'View raw', hide: 'Hide raw metadata' }}
+                      code={metadataJson.slice(0, 1800)}
+                      truncated={metadataTruncated}
+                      downloadLabel="Download full metadata"
+                      onDownload={() => downloadJsonFile(`audit-metadata-${downloadId}.json`, selectedEntry.metadata)}
+                    />
                   );
                 })() : null}
               </CardContent>
@@ -781,7 +911,7 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
             {formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status'], 'unknown'), 'unknown')} · production{' '}
             {productionReadyLabel(attestation?.production_ready)}
           </PageContextSummary>
-          {clipboardNotice ? <div className="form-banner info" role="status" aria-live="polite">{clipboardNotice}</div> : null}
+          {clipboardNotice ? <GovernanceInfoBanner>{clipboardNotice}</GovernanceInfoBanner> : null}
           <Card>
             <CardHeader>
               <CardTitle>Gap ledger</CardTitle>
@@ -843,10 +973,14 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
                 <CardDescription>Latest staging readiness attestation snapshot for this tenant.</CardDescription>
               </CardHeader>
               <CardContent className="kv-list">
-                <div><span>Signoff status</span><strong><Badge tone="info">{formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status']), '—')}</Badge></strong></div>
-                <div><span>Production ready</span><strong><Badge tone={productionReadyBadgeTone(attestation.production_ready)}>{productionReadyLabel(attestation.production_ready)}</Badge></strong></div>
-                <div><span>Profile</span><strong>{getNestedString(attestation, ['profile'], 'full')}</strong></div>
-                <div><span>Checked at</span><strong>{formatDate(attestation.checked_at ?? attestation.created_at)}</strong></div>
+                <KvField label="Signoff status">
+                  <Badge tone="info">{formatGovernanceStatusLabel(getNestedString(attestation, ['signoff_status']), '—')}</Badge>
+                </KvField>
+                <KvField label="Production ready">
+                  <Badge tone={productionReadyBadgeTone(attestation.production_ready)}>{productionReadyLabel(attestation.production_ready)}</Badge>
+                </KvField>
+                <KvField label="Profile">{getNestedString(attestation, ['profile'], 'full')}</KvField>
+                <KvField label="Checked at">{formatDate(attestation.checked_at ?? attestation.created_at)}</KvField>
               </CardContent>
             </Card>
           )}
@@ -1024,16 +1158,10 @@ export function SocConsolePage({
             actionLabel={staffSocSurface ? 'Open staff login' : undefined}
             actionHref={staffSocSurface ? '/internal/admin/login' : undefined}
           />
-          <Card density="compact">
-            <CardHeader>
-              <CardTitle>Kill switch</CardTitle>
-              <CardDescription>Read-only tenant emergency-stop status. Activation and clearance require an SOC role.</CardDescription>
-            </CardHeader>
-            <CardContent className="kv-list">
-              <div><span>Status</span><strong><Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Active' : 'Inactive'}</Badge></strong></div>
-              <div><span>Reason</span><strong>{getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop')}</strong></div>
-            </CardContent>
-          </Card>
+          <KillSwitchReadOnlyCard
+            active={killSwitchActive}
+            reason={getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop')}
+          />
         </div>
       </div>
     );
@@ -1060,7 +1188,7 @@ export function SocConsolePage({
         Queue <span className="tabular-nums">{data.highScale.length}</span> governed requests ·{' '}
         <span className="tabular-nums">{data.state?.open_findings ?? data.findings.length}</span> open findings
       </PageContextSummary>
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      <GovernanceFeedbackBanner message={message} error={error} />
       <Card>
         <CardHeader>
           <CardTitle>Kill switch</CardTitle>
@@ -1081,10 +1209,7 @@ export function SocConsolePage({
             columns={requestColumns}
             items={data.highScale}
             empty={queueRefreshing ? (
-              <div className="stack-tight" role="status" aria-live="polite">
-                <span className="skeleton skeleton-row" />
-                <span className="skeleton skeleton-row" />
-              </div>
+              <TableQueueSkeleton />
             ) : (
               <EmptyState icon={ShieldCheck} title="No high-scale requests." body="Customer requests appear here after intake and authorization-pack review." />
             )}

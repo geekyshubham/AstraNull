@@ -673,6 +673,127 @@ function DetailEntityLink({
   );
 }
 
+function DetailKvField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{children}</strong>
+    </div>
+  );
+}
+
+function DetailKvHintField({ label, value, hint }: { label: string; value: ReactNode; hint: string }) {
+  return (
+    <div className="kv-stack">
+      <span>{label}</span>
+      <div className="stack-tight">
+        <strong>{value}</strong>
+        <p className="muted small">{hint}</p>
+      </div>
+    </div>
+  );
+}
+
+function DetailKvMonoField({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
+  return (
+    <DetailKvField label={label}>
+      <code className={compact ? 'small' : undefined}>{value}</code>
+    </DetailKvField>
+  );
+}
+
+function DetailCodeBlock({ label, children }: { label: string; children: string }) {
+  return (
+    <pre className="codeblock" aria-label={label}>
+      {children}
+    </pre>
+  );
+}
+
+function DetailStatusBanners({
+  loadError,
+  error,
+  message,
+  successTone = 'default',
+  mode = 'split',
+  hideMessageWhenLoadError = true,
+  children
+}: {
+  loadError?: string;
+  error?: string;
+  message?: string;
+  successTone?: 'default' | 'neutral';
+  mode?: 'split' | 'combined';
+  hideMessageWhenLoadError?: boolean;
+  children?: ReactNode;
+}) {
+  const successClass = successTone === 'neutral' ? 'form-banner neutral' : 'form-banner';
+  if (mode === 'combined') {
+    const text = error || loadError || message;
+    if (!text && !children) return null;
+    const isError = Boolean(error || loadError);
+    return (
+      <div className={isError ? 'form-banner error' : successClass} role={isError ? 'alert' : 'status'}>
+        {text}
+        {children}
+      </div>
+    );
+  }
+  const showActionBanner = Boolean(message || error) && !(hideMessageWhenLoadError && loadError);
+  return (
+    <>
+      {loadError ? (
+        <div className="form-banner error" role="alert">
+          {loadError}
+        </div>
+      ) : null}
+      {showActionBanner ? (
+        <div className={error ? 'form-banner error' : successClass} role={error ? 'alert' : 'status'}>
+          {error || message}
+          {children}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function AgentProbeEndpointKvSection({
+  hasDetails,
+  status,
+  error,
+  fqdn,
+  ip
+}: {
+  hasDetails: boolean;
+  status: string;
+  error: string;
+  fqdn: string;
+  ip: string;
+}) {
+  if (!hasDetails) return null;
+  return (
+    <>
+      <div>
+        <span>Probe endpoint status</span>
+        {status ? (
+          <Badge tone={probeEndpointStatusBadgeTone(status)}>{formatFactorLabel(status)}</Badge>
+        ) : (
+          <strong>—</strong>
+        )}
+      </div>
+      {error ? (
+        <DetailKvMonoField label="Probe endpoint error" value={error} />
+      ) : null}
+      {fqdn && fqdn !== '—' ? (
+        <DetailKvMonoField label="Declared FQDN" value={fqdn} />
+      ) : null}
+      {ip && ip !== '—' ? (
+        <DetailKvMonoField label="Declared IP" value={ip} />
+      ) : null}
+    </>
+  );
+}
+
 function useEntityDetail<T extends DataItem>(
   enabled: boolean,
   config: PortalConfig,
@@ -839,19 +960,9 @@ function RunDetailView({
 
   return (
     <div className="content">
-      <div className="page-head">
-        <div>
-          <DetailPageIntro route="run-detail" eyebrow="Test run evidence" />
-          <DetailEntityHeading route="run-detail" entityId={entityId} title={runTitle} />
-        </div>
-      </div>
+      <DetailPageHeader route="run-detail" eyebrow="Test run evidence" entityId={entityId} title={runTitle} />
       {loading ? <DetailLoadingPlaceholder label="Loading run detail…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? (
-        <div className={error ? 'form-banner error' : 'form-banner neutral'}>
-          {error || message}
-        </div>
-      ) : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} successTone="neutral" />
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -1225,11 +1336,7 @@ function TenantDetailView({
         <span className="tabular-nums">{recentAudit.length}</span> recent audit events
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading tenant detail…" /> : null}
-      {(message || error || loadError) && (
-        <div className={error || loadError ? 'form-banner error' : 'form-banner'}>
-          {error || loadError || message}
-        </div>
-      )}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} mode="combined" />
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -1652,12 +1759,7 @@ function TargetGroupDetailView({
         <MetricCard label="Last run" value={lastRun ? checkDisplayName(data.checks, getString(lastRun, ['check_id'], getString(lastRun, ['id']))) : '—'} sub={lastRun ? formatDate(lastRun.updated_at ?? lastRun.created_at) : 'No runs yet'} icon={Activity} tone="muted" />
       </div>
       {loading ? <DetailLoadingPlaceholder label="Loading target group detail…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? (
-        <div className={error ? 'form-banner error' : 'form-banner'}>
-          {error || message}
-        </div>
-      ) : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} />
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -1841,7 +1943,7 @@ function TargetGroupDetailView({
                   {dnsChallenge ? (
                     <div className="stack-tight">
                       <p className="muted small">Add this TXT record at your DNS provider, then run verification.</p>
-                      <pre className="codeblock">{`Name: ${getString(dnsChallenge, ['record_name'], '—')}\nType: TXT\nValue: ${getString(dnsChallenge, ['record_value'], '—')}`}</pre>
+                      <DetailCodeBlock label="DNS TXT ownership record">{`Name: ${getString(dnsChallenge, ['record_name'], '—')}\nType: TXT\nValue: ${getString(dnsChallenge, ['record_value'], '—')}`}</DetailCodeBlock>
                       <p className="muted small">Challenge status: <strong>{getString(dnsChallenge, ['status'], 'pending')}</strong></p>
                     </div>
                   ) : null}
@@ -2064,8 +2166,7 @@ function AgentDetailView({
         </div>
       </div>
       {loading ? <DetailLoadingPlaceholder label="Loading agent detail…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} />
       {!loading ? (
       <>
       <div className="metric-grid four">
@@ -2108,28 +2209,14 @@ function AgentDetailView({
               <div><span>Environment</span><strong>{getString(entity, ['environment_id'], 'tenant scope')}</strong></div>
               <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at ?? entity.updated_at)}</strong></div>
               <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
-              <div><span>Gateway fingerprint</span><strong><code>{getString(entity, ['fingerprint'], 'not registered')}</code></strong></div>
-              {hasProbeEndpointDetails ? (
-                <>
-                  <div>
-                    <span>Probe endpoint status</span>
-                    {probeEndpointStatus ? (
-                      <Badge tone={probeEndpointStatusBadgeTone(probeEndpointStatus)}>{formatFactorLabel(probeEndpointStatus)}</Badge>
-                    ) : (
-                      <strong>—</strong>
-                    )}
-                  </div>
-                  {probeEndpointError ? (
-                    <div><span>Probe endpoint error</span><strong><code>{probeEndpointError}</code></strong></div>
-                  ) : null}
-                  {declaredProbeFqdn && declaredProbeFqdn !== '—' ? (
-                    <div><span>Declared FQDN</span><strong><code>{declaredProbeFqdn}</code></strong></div>
-                  ) : null}
-                  {declaredProbeIp && declaredProbeIp !== '—' ? (
-                    <div><span>Declared IP</span><strong><code>{declaredProbeIp}</code></strong></div>
-                  ) : null}
-                </>
-              ) : null}
+              <DetailKvMonoField label="Gateway fingerprint" value={getString(entity, ['fingerprint'], 'not registered')} />
+              <AgentProbeEndpointKvSection
+                hasDetails={hasProbeEndpointDetails}
+                status={probeEndpointStatus}
+                error={probeEndpointError}
+                fqdn={declaredProbeFqdn}
+                ip={declaredProbeIp}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -2169,27 +2256,13 @@ function AgentDetailView({
             <div><span>Last heartbeat</span><strong>{formatDate(entity.last_heartbeat_at)}</strong></div>
             <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /></div>
             <div><span>Version</span><strong>{getString(entity, ['version'], 'unknown')}</strong></div>
-            {hasProbeEndpointDetails ? (
-              <>
-                <div>
-                  <span>Probe endpoint status</span>
-                  {probeEndpointStatus ? (
-                    <Badge tone={probeEndpointStatusBadgeTone(probeEndpointStatus)}>{formatFactorLabel(probeEndpointStatus)}</Badge>
-                  ) : (
-                    <strong>—</strong>
-                  )}
-                </div>
-                {probeEndpointError ? (
-                  <div><span>Probe endpoint error</span><strong><code>{probeEndpointError}</code></strong></div>
-                ) : null}
-                {declaredProbeFqdn && declaredProbeFqdn !== '—' ? (
-                  <div><span>Declared FQDN</span><strong><code>{declaredProbeFqdn}</code></strong></div>
-                ) : null}
-                {declaredProbeIp && declaredProbeIp !== '—' ? (
-                  <div><span>Declared IP</span><strong><code>{declaredProbeIp}</code></strong></div>
-                ) : null}
-              </>
-            ) : null}
+            <AgentProbeEndpointKvSection
+              hasDetails={hasProbeEndpointDetails}
+              status={probeEndpointStatus}
+              error={probeEndpointError}
+              fqdn={declaredProbeFqdn}
+              ip={declaredProbeIp}
+            />
           </CardContent>
         </Card>
       ) : null}
@@ -2345,17 +2418,9 @@ function FindingDetailView({
 
   return (
     <div className="content">
-      <div className="page-head">
-        <div>
-          <DetailPageIntro route="finding-detail" eyebrow="Evidence-backed finding" />
-          <DetailEntityHeading route="finding-detail" entityId={entityId} title={title} />
-        </div>
-      </div>
+      <DetailPageHeader route="finding-detail" eyebrow="Evidence-backed finding" entityId={entityId} title={title} />
       {loading ? <DetailLoadingPlaceholder label="Loading finding detail…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? (
-        <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
-      ) : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} successTone="neutral" />
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -2382,14 +2447,12 @@ function FindingDetailView({
             </CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
-            <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
-            <div className="kv-stack">
-              <span>SLA due</span>
-              <div className="stack-tight">
-                <strong>{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong>
-                <p className="muted small">SLA window is based on severity hours from creation.</p>
-              </div>
-            </div>
+            <DetailKvField label="Assignee">{getString(entity, ['assignee'], 'unassigned')}</DetailKvField>
+            <DetailKvHintField
+              label="SLA due"
+              value={<>{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</>}
+              hint="SLA window is based on severity hours from creation."
+            />
             <div><span>Target group</span><DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} /></div>
             <div><span>Related run</span>{testRunId ? <DetailEntityLink route="run-detail" id={testRunId} label={runDisplayLabel(data.runs, testRunId)} /> : <strong>—</strong>}</div>
             <div className="row-actions">
@@ -2451,11 +2514,18 @@ function FindingDetailView({
               <div className="row-actions">
                 <Button size="sm" variant="secondary" loading={busy === `export-finding-${entityId}`} disabled={busy !== ''} onClick={() => void exportFinding()}>Export with custody</Button>
                 <label className="auth-check-row">
-                  <input type="checkbox" checked={showTechnicalExport} onChange={(event) => setShowTechnicalExport(event.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={showTechnicalExport}
+                    aria-label="Show technical export preview"
+                    onChange={(event) => setShowTechnicalExport(event.target.checked)}
+                  />
                   <span>Show technical export preview</span>
                 </label>
               </div>
-              {showTechnicalExport && exportOutput ? <pre className="codeblock">{exportOutput}</pre> : null}
+              {showTechnicalExport && exportOutput ? (
+                <DetailCodeBlock label="Finding custody export preview">{exportOutput}</DetailCodeBlock>
+              ) : null}
             </CardContent>
           </Card>
         </>
@@ -2520,13 +2590,9 @@ function EvidenceDetailView({
 
   return (
     <div className="content">
-      <div className="page-head">
-        <DetailPageIntro route="finding-detail" eyebrow="Evidence vault record" />
-        <DetailEntityHeading route="finding-detail" entityId={entityId} title={title} />
-      </div>
+      <DetailPageHeader route="finding-detail" eyebrow="Evidence vault record" entityId={entityId} title={title} />
       {loading ? <DetailLoadingPlaceholder label="Loading evidence detail…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message} />
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -2537,17 +2603,17 @@ function EvidenceDetailView({
             <CardDescription>Metadata-only vault record — no raw payloads are rendered in the UI.</CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
-            <div>
-              <span>Kind</span>
-              <strong>{getString(entity, ['label', 'kind', 'signal_type'])}</strong>
-              <p className="muted small">Probe results come from outside checks; agent rows come from outbound observers.</p>
-            </div>
-            <div>
-              <span>Source</span>
-              <strong>{getString(entity, ['source'], getNestedString(entity, ['metadata', 'vector_family'], '—'))}</strong>
-              <p className="muted small">Source identifies whether evidence was observed by probe or agent channel.</p>
-            </div>
-            <div><span>Recorded</span><strong>{formatDate(entity.created_at ?? entity.timestamp)}</strong></div>
+            <DetailKvHintField
+              label="Kind"
+              value={getString(entity, ['label', 'kind', 'signal_type'])}
+              hint="Probe results come from outside checks; agent rows come from outbound observers."
+            />
+            <DetailKvHintField
+              label="Source"
+              value={getString(entity, ['source'], getNestedString(entity, ['metadata', 'vector_family'], '—'))}
+              hint="Source identifies whether evidence was observed by probe or agent channel."
+            />
+            <DetailKvField label="Recorded">{formatDate(entity.created_at ?? entity.timestamp)}</DetailKvField>
             <div><span>Check</span>{getString(entity, ['check_id']) ? <AnchorButton size="sm" variant="ghost" href="#checks">{checkDisplayName(data.checks, getString(entity, ['check_id']))}</AnchorButton> : <strong>—</strong>}</div>
           </CardContent>
         </Card>
@@ -2556,9 +2622,9 @@ function EvidenceDetailView({
         <Card>
           <CardHeader><CardTitle>Custody digest</CardTitle><CardDescription>Metadata-only custody references — no raw payloads rendered.</CardDescription></CardHeader>
           <CardContent className="kv-list">
-            <div><span>Content digest</span><strong><code className="small">{digest}</code></strong></div>
-            <div><span>Custody record id</span><strong>{getString(entity, ['custody_id'], '—')}</strong></div>
-            <div><span>Schema version</span><strong>{getString(entity, ['schema_version'], '—')}</strong></div>
+            <DetailKvMonoField label="Content digest" value={digest} compact />
+            <DetailKvField label="Custody record id">{getString(entity, ['custody_id'], '—')}</DetailKvField>
+            <DetailKvField label="Schema version">{getString(entity, ['schema_version'], '—')}</DetailKvField>
             <div className="row-actions">
               <Button size="sm" variant="secondary" loading={busy === `export-evidence-${entityId}`} disabled={busy !== ''} onClick={() => void exportThisRecord()}>Export this record</Button>
             </div>
@@ -2701,17 +2767,13 @@ function HighScaleDetailView({
     <div className="content">
       <DetailPageHeader route="queue-detail" eyebrow="SOC-gated validation" entityId={entityId} title={title} />
       {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? (
-        <div className={error ? 'form-banner error' : 'form-banner'}>
-          {error || message}
-          {error && lastFailedUploadType ? (
-            <div className="row-actions">
-              <Button size="sm" variant="secondary" loading={busy === `upload-${lastFailedUploadType}`} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(lastFailedUploadType)}>Retry upload</Button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <DetailStatusBanners loadError={loadError} error={error} message={message}>
+        {error && lastFailedUploadType ? (
+          <div className="row-actions">
+            <Button size="sm" variant="secondary" loading={busy === `upload-${lastFailedUploadType}`} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(lastFailedUploadType)}>Retry upload</Button>
+          </div>
+        ) : null}
+      </DetailStatusBanners>
       {!loading ? (
       <>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
@@ -2975,7 +3037,7 @@ function SocRequestDetailView({
   return (
     <div className="content">
       <DetailPageHeader route="queue-detail" eyebrow="SOC execution workspace" entityId={entityId} title={title} />
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      <DetailStatusBanners error={error} message={message} hideMessageWhenLoadError={false} />
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'workspace' ? (
         <Card>
@@ -3702,11 +3764,7 @@ export function ReportDetailPage({
   return (
     <div className="content">
       <DetailPageHeader route="report-detail" eyebrow="Report detail" entityId={entityId} title={reportTitle} />
-      {(message || error || reportDetail.error) && (
-        <div className={error || reportDetail.error ? 'form-banner error' : 'form-banner'}>
-          {error || reportDetail.error || message}
-        </div>
-      )}
+      <DetailStatusBanners loadError={reportDetail.error} error={error} message={message} mode="combined" />
       {reportDetail.loading || previewLoading ? (
         <DetailLoadingPlaceholder label={reportDetail.loading ? 'Loading report detail…' : 'Loading custody preview…'} variant="layout" />
       ) : (
@@ -3736,15 +3794,15 @@ export function ReportDetailPage({
               <EmptyState icon={FileCheck2} title="Custody preview unavailable." body="Export JSON to inspect custody metadata for this report." />
             ) : preview?.contentSha256 ? (
               <>
-                <div><span>Artifact</span><strong><code className="small">{preview.artifactId}</code></strong></div>
-                <div><span>Content digest (SHA-256)</span><strong><code className="small">{preview.contentSha256}</code></strong></div>
-                <div><span>Schema</span><strong>{preview.schemaVersion}</strong></div>
+                <DetailKvMonoField label="Artifact" value={preview.artifactId ?? '—'} compact />
+                <DetailKvMonoField label="Content digest (SHA-256)" value={preview.contentSha256} compact />
+                <DetailKvField label="Schema">{preview.schemaVersion ?? '—'}</DetailKvField>
                 <div><span>Verification</span><StatusBadge value={verificationOk || 'verified'} tone={verificationOk === 'false' ? 'danger' : 'success'} fallback="verified" /></div>
               </>
             ) : preview?.textPreview ? (
               <>
                 <p className="muted">JSON custody export unavailable — showing truncated {preview.format} preview (first 900 characters).</p>
-                <pre className="codeblock">{preview.textPreview}</pre>
+                <DetailCodeBlock label="Report export preview">{preview.textPreview}</DetailCodeBlock>
               </>
             ) : null}
           </CardContent>

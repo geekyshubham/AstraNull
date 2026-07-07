@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '../ui/button';
-import { VerdictExplanationPanel } from '../runs/run-proof-panels';
+import { ExplanationField, VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
 import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
@@ -126,20 +126,16 @@ export function FindingExplanationPanel({
         <p className="muted">This finding has no linked test run; probe and agent evidence cannot be loaded.</p>
         {getString(finding, ['notes'], '') ? (
           <div className="verdict-explanation-grid">
-            <div className="verdict-explanation-item">
-              <span className="verdict-explanation-label">Conclusion</span>
-              <span className="verdict-explanation-value">{getString(finding, ['notes'])}</span>
-            </div>
+            <ExplanationField label="Conclusion" value={getString(finding, ['notes'])} fullWidth />
           </div>
         ) : null}
         {getString(finding, ['remediation_template'], '') ? (
           <div className="verdict-explanation-grid">
-            <div className="verdict-explanation-item">
-              <span className="verdict-explanation-label">Remediation</span>
-              <span className="verdict-explanation-value">
-                {resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
-              </span>
-            </div>
+            <ExplanationField
+              label="Remediation"
+              value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
+              fullWidth
+            />
           </div>
         ) : null}
       </section>

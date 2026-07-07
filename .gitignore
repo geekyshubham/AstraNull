@@ -70,3 +70,8 @@ ui-compare-tmp.mjs
 ui-responsive-tmp.mjs
 apps/web/dist/
 test-results/
+
+# Local design-skill (impeccable) live-preview tooling — not product code
+.github/hooks/
+.github/skills/
+ui-compare-proto-tmp.mjs

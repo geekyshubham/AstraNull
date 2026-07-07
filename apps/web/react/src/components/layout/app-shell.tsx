@@ -1,4 +1,4 @@
-import { Menu, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { Menu, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { clearSession } from '../../lib/api';
@@ -29,18 +29,62 @@ const roles = [
   { value: 'owner', label: 'owner', description: 'Tenant owner access' }
 ];
 
+type ShellIconButtonProps = {
+  label: string;
+  onClick: () => void;
+  className?: string;
+  variant?: 'ghost' | 'secondary';
+  children: ReactNode;
+};
+
+function ShellIconButton({ label, onClick, className, variant = 'ghost', children }: ShellIconButtonProps) {
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      size="icon"
+      className={className}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </Button>
+  );
+}
+
 function NavLink({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
   const Icon = item.icon;
   return (
-    <button type="button" className={cn('nav-item', active && 'active', active && 'is-active')} onClick={onClick} title={item.label}>
-      <Icon size={16} />
+    <button
+      type="button"
+      className={cn('nav-item', active && 'active', active && 'is-active')}
+      onClick={onClick}
+      aria-label={item.label}
+      aria-current={active ? 'page' : undefined}
+      title={item.label}
+    >
+      <Icon size={16} aria-hidden="true" focusable="false" />
       <span>{item.label}</span>
       {item.count ? <span className="nav-count">{item.count}</span> : null}
     </button>
   );
 }
 
+function ThemeToggle({ theme, onToggle }: { theme: 'light' | 'dark'; onToggle: () => void }) {
+  const isDark = theme === 'dark';
+  const label = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+  return (
+    <ShellIconButton label={label} onClick={onToggle} className="theme-toggle">
+      {isDark ? <Moon size={18} aria-hidden="true" focusable="false" /> : <Sun size={18} aria-hidden="true" focusable="false" />}
+    </ShellIconButton>
+  );
+}
+
 export function AppShell({ route, session, data, onRouteChange, onRoleChange, children }: AppShellProps) {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
+  );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -83,6 +127,21 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, ch
     window.location.href = '/login';
   }
 
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    if (next === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+    try {
+      localStorage.setItem('astranull.theme', next);
+    } catch {
+      // Best-effort preference persistence only.
+    }
+    setTheme(next);
+  }
+
   function toggleSidebarCollapsed() {
     setSidebarCollapsed((currentValue) => {
       const next = !currentValue;
@@ -95,27 +154,25 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, ch
     });
   }
 
+  const collapseLabel = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
   const CollapseIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
 
   return (
     <div className={cn('app-shell', sidebarCollapsed && 'sidebar-collapsed')}>
       <aside className={cn('sidebar', sidebarOpen && 'open')}>
-        <Button
+        <ShellIconButton
+          label={collapseLabel}
           variant="secondary"
-          size="icon"
           className="sidebar-collapse"
-          style={{ width: 40, height: 40, minWidth: 40, minHeight: 40 }}
           onClick={toggleSidebarCollapsed}
-          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          <CollapseIcon size={16} />
-        </Button>
+          <CollapseIcon size={16} aria-hidden="true" focusable="false" />
+        </ShellIconButton>
         <div className="sidebar-head">
           <Brand />
-          <Button variant="ghost" size="icon" className="sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">
-            <X size={17} />
-          </Button>
+          <ShellIconButton label="Close navigation" className="sidebar-close" onClick={() => setSidebarOpen(false)}>
+            <X size={17} aria-hidden="true" focusable="false" />
+          </ShellIconButton>
         </div>
         <nav className="nav-scroll" aria-label="Portal">
           {(Object.keys(grouped) as Array<keyof typeof NAV_GROUP_LABELS>)
@@ -143,7 +200,9 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, ch
             onChange={onRoleChange}
           />
           <div className="sidebar-foot-actions">
-            <a href="/">Public site</a>
+            <a href="/" aria-label="Public site">
+              Public site
+            </a>
             <Button type="button" variant="ghost" size="sm" onClick={logout}>
               Sign out
             </Button>
@@ -153,19 +212,22 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, ch
       <div className={cn('scrim', sidebarOpen && 'open')} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       <main className="main">
         <header className="topbar">
-          <Button variant="ghost" size="icon" className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
-            <Menu size={18} />
-          </Button>
-          <div className="crumbs">
+          <ShellIconButton label="Open navigation" className="menu-btn" onClick={() => setSidebarOpen(true)}>
+            <Menu size={18} aria-hidden="true" focusable="false" />
+          </ShellIconButton>
+          <div className="crumbs" aria-label="Breadcrumb">
             <span>{NAV_GROUP_LABELS[current.group]}</span>
-            <span className="sep">›</span>
+            <span className="sep" aria-hidden="true">
+              ›
+            </span>
             <b>{current.label}</b>
           </div>
           <div className="topbar-spacer" aria-hidden="true" />
           <label className="search">
-            <Search size={15} aria-hidden="true" />
-            <input type="search" placeholder="Search runs, findings, agents…" aria-label="Search" />
+            <Search size={15} aria-hidden="true" focusable="false" />
+            <input type="search" placeholder="Search runs, findings, agents…" aria-label="Search portal" />
           </label>
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </header>
         {children}
       </main>

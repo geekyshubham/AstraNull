@@ -69,6 +69,15 @@ function packBadgeTone(overall: string): 'success' | 'warn' | 'danger' | 'muted'
   return 'warn';
 }
 
+function SocQueueStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <span className="muted">{label}</span>
+      <strong className="tabular-nums">{value}</strong>
+    </div>
+  );
+}
+
 function stateBadgeTone(state: string): 'success' | 'warn' | 'info' | 'muted' {
   const normalized = state.trim().toLowerCase();
   if (normalized === 'scheduled') return 'info';
@@ -279,7 +288,14 @@ export function RunsSocGatePanel({
         const pack = getNestedString(item, ['authorization_pack_status', 'overall'], 'missing').toLowerCase();
         if (pack === 'missing') {
           return (
-            <Button size="sm" variant="ghost" loading={busy === `pack-${id}`} disabled={busy !== '' && busy !== `pack-${id}`} onClick={() => setPackRequestId(id)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busy === `pack-${id}`}
+              disabled={busy !== '' && busy !== `pack-${id}`}
+              aria-label={`Complete authorization pack for request ${id}`}
+              onClick={() => setPackRequestId(id)}
+            >
               Complete pack
             </Button>
           );
@@ -297,12 +313,12 @@ export function RunsSocGatePanel({
           <CardDescription>High-scale policies cannot execute directly. SOC schedules and executes under kill switch governance.</CardDescription>
         </CardHeader>
         <CardContent className="stack-tight">
-          <div className="callout callout-soc" role="note">
+          <div className="callout callout-soc" role="note" aria-labelledby="soc-gate-callout-title">
             <div className="callout-icon" aria-hidden="true">
               <Lock size={18} />
             </div>
             <div className="callout-body">
-              <div className="callout-title">SOC gates every high-scale run</div>
+              <div className="callout-title" id="soc-gate-callout-title">SOC gates every high-scale run</div>
               <p className="callout-desc">
                 Selecting an SOC-gated policy submits an approval request instead of executing.
                 The SOC accepts the authorization pack, arms the kill switch, and executes on a scheduled window.
@@ -310,10 +326,10 @@ export function RunsSocGatePanel({
               </p>
             </div>
           </div>
-          <div className="soc-queue-summary">
-            <div><span className="muted">In review</span><strong className="tabular-nums">{summary.submitted}</strong></div>
-            <div><span className="muted">Scheduled</span><strong className="tabular-nums">{summary.scheduled}</strong></div>
-            <div><span className="muted">Pack missing</span><strong className="tabular-nums">{summary.missingPack}</strong></div>
+          <div className="soc-queue-summary" aria-label="SOC queue summary">
+            <SocQueueStat label="In review" value={summary.submitted} />
+            <SocQueueStat label="Scheduled" value={summary.scheduled} />
+            <SocQueueStat label="Pack missing" value={summary.missingPack} />
           </div>
           {queueLoading ? <PortalLoadingSkeleton rows={2} /> : null}
           {queueError ? <div className="form-banner error">{queueError}</div> : null}

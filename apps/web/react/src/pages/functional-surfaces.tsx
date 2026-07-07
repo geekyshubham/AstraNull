@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Activity,
   Bot,
@@ -346,6 +346,106 @@ function TableSkeleton({ rows = 4, label = 'Loading' }: { rows?: number; label?:
       ))}
     </div>
   );
+}
+
+function MutationFeedbackBanner({
+  message,
+  error,
+  neutral = false
+}: {
+  message: string;
+  error: string;
+  neutral?: boolean;
+}) {
+  if (!message && !error) return null;
+  const className = error ? 'form-banner error' : neutral ? 'form-banner neutral' : 'form-banner';
+  return (
+    <div className={className} role={error ? 'alert' : 'status'} aria-live="polite">
+      {error || message}
+    </div>
+  );
+}
+
+function FilterFieldset({ legend, children }: { legend: string; children: ReactNode }) {
+  return (
+    <fieldset className="filter-fieldset">
+      <legend>{legend}</legend>
+      {children}
+    </fieldset>
+  );
+}
+
+type SurfaceTableCardProps<T> = {
+  title: string;
+  description: ReactNode;
+  columns: TableColumn<T>[];
+  items: T[];
+  empty: ReactNode;
+  loading?: boolean;
+  loadingLabel?: string;
+  loadingRows?: number;
+  contentClassName?: string;
+  getRowProps?: (item: T, index: number) => Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
+  getRowId?: (item: T, index: number) => string | number;
+};
+
+function SurfaceTableCard<T>({
+  title,
+  description,
+  columns,
+  items,
+  empty,
+  loading = false,
+  loadingLabel = 'Loading table',
+  loadingRows = 3,
+  contentClassName,
+  getRowProps,
+  getRowId
+}: SurfaceTableCardProps<T>) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className={contentClassName} aria-busy={loading || undefined}>
+        {loading ? (
+          <TableSkeleton rows={loadingRows} label={loadingLabel} />
+        ) : (
+          <DataTable columns={columns} items={items} empty={empty} getRowProps={getRowProps} getRowId={getRowId} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function isInteractiveTableTarget(target: EventTarget | null) {
+  return Boolean(target && (target as HTMLElement).closest('a, button'));
+}
+
+function buildDetailHashRowProps(
+  detailRoute: string,
+  id: string,
+  ariaLabel: string
+): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+  if (!id) return {};
+  const hash = `${detailRoute}?id=${encodeURIComponent(id)}`;
+  return {
+    role: 'link',
+    tabIndex: 0,
+    style: { cursor: 'pointer' },
+    'aria-label': ariaLabel,
+    onClick: (event) => {
+      if (isInteractiveTableTarget(event.target)) return;
+      window.location.hash = hash;
+    },
+    onKeyDown: (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      if (isInteractiveTableTarget(event.target)) return;
+      event.preventDefault();
+      window.location.hash = hash;
+    }
+  };
 }
 
 function formatCoverageStatusLabel(status: string) {
@@ -830,53 +930,35 @@ export function AgentsPage({
         <span className="tabular-nums">{data.agents.length}</span> agents ·{' '}
         <span className="tabular-nums">{onlineAgents}</span> online
       </PageContextSummary>
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
+      <MutationFeedbackBanner message={message} error={error} />
       <Tabs value={agentTab} options={agentTabOptions} onChange={setAgentTab} className="tabs-wrap" />
       {agentTab === 'fleet' || agentTab === 'install' ? (
         <div className="stack">
-          <Card>
-            <CardHeader>
-              <CardTitle>Installed agents</CardTitle>
-              <CardDescription>Registered outbound agents. Revoke invalidates credentials immediately.</CardDescription>
-            </CardHeader>
-            <CardContent aria-busy={auxLoading || undefined}>
-              {auxLoading ? <TableSkeleton rows={3} label="Refreshing agent fleet" /> : null}
-              {!auxLoading ? <DataTable
-                columns={fleetColumns}
-                items={data.agents}
-                getRowProps={(item) => {
-                  const id = getString(item, ['id'], '');
-                  return {
-                    role: 'link',
-                    tabIndex: 0,
-                    style: { cursor: 'pointer' },
-                    'aria-label': `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`,
-                    onClick: (event) => {
-                      if ((event.target as HTMLElement).closest('a, button')) return;
-                      if (!id) return;
-                      window.location.hash = `agent-detail?id=${encodeURIComponent(id)}`;
-                    },
-                    onKeyDown: (event) => {
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      if ((event.target as HTMLElement).closest('a, button')) return;
-                      if (!id) return;
-                      event.preventDefault();
-                      window.location.hash = `agent-detail?id=${encodeURIComponent(id)}`;
-                    }
-                  };
-                }}
-                empty={(
-                  <EmptyState
-                    icon={Bot}
-                    title="No agents have registered yet."
-                    body="Create a bootstrap token below, then install an outbound-only agent."
-                    actionLabel="Deploy an agent"
-                    onAction={() => setAgentTab('install')}
-                  />
-                )}
-              /> : null}
-            </CardContent>
-          </Card>
+          <SurfaceTableCard
+            title="Installed agents"
+            description="Registered outbound agents. Revoke invalidates credentials immediately."
+            columns={fleetColumns}
+            items={data.agents}
+            loading={auxLoading}
+            loadingLabel="Refreshing agent fleet"
+            getRowProps={(item) => {
+              const id = getString(item, ['id'], '');
+              return buildDetailHashRowProps(
+                'agent-detail',
+                id,
+                `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`
+              );
+            }}
+            empty={(
+              <EmptyState
+                icon={Bot}
+                title="No agents have registered yet."
+                body="Create a bootstrap token below, then install an outbound-only agent."
+                actionLabel="Deploy an agent"
+                onAction={() => setAgentTab('install')}
+              />
+            )}
+          />
           <AgentInstallMatrix
             data={data}
             tokenSecret={tokenSecret}
@@ -888,20 +970,15 @@ export function AgentsPage({
       ) : null}
       {agentTab === 'operations' ? (
         <div className="stack">
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent health</CardTitle>
-              <CardDescription>Heartbeat freshness and gateway trust metadata for each registered agent.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {auxLoading ? <TableSkeleton rows={3} label="Loading agent health" /> : null}
-              {!auxLoading ? <DataTable
-                columns={healthColumns}
-                items={data.agents}
-                empty={<EmptyState icon={Activity} title="No agents to monitor." body="Register an agent to see heartbeat freshness and version posture." />}
-              /> : null}
-            </CardContent>
-          </Card>
+          <SurfaceTableCard
+            title="Agent health"
+            description="Heartbeat freshness and gateway trust metadata for each registered agent."
+            columns={healthColumns}
+            items={data.agents}
+            loading={auxLoading}
+            loadingLabel="Loading agent health"
+            empty={<EmptyState icon={Activity} title="No agents to monitor." body="Register an agent to see heartbeat freshness and version posture." />}
+          />
           <Card>
             <CardHeader>
               <CardTitle>Agent coverage by target group</CardTitle>
@@ -928,60 +1005,44 @@ export function AgentsPage({
               ) : null}
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent capabilities</CardTitle>
-              <CardDescription>Observation modes reported on registration and each heartbeat.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={capabilityColumns}
-                items={data.agents}
-                empty={<EmptyState icon={ListChecks} title="No capability reports yet." body="Capabilities appear after the first agent heartbeat." />}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent audit trail</CardTitle>
-              <CardDescription>Metadata-only lifecycle events for agent registration, heartbeat, revoke, and updates—not host operational logs.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={logColumns}
-                items={agentAuditEntries}
-                empty={<EmptyState icon={ClipboardList} title="No agent audit events yet." body="Registration, heartbeat, revoke, and update actions appear here after agents connect." />}
-              />
-            </CardContent>
-          </Card>
+          <SurfaceTableCard
+            title="Agent capabilities"
+            description="Observation modes reported on registration and each heartbeat."
+            columns={capabilityColumns}
+            items={data.agents}
+            empty={<EmptyState icon={ListChecks} title="No capability reports yet." body="Capabilities appear after the first agent heartbeat." />}
+          />
+          <SurfaceTableCard
+            title="Agent audit trail"
+            description="Metadata-only lifecycle events for agent registration, heartbeat, revoke, and updates—not host operational logs."
+            columns={logColumns}
+            items={agentAuditEntries}
+            empty={<EmptyState icon={ClipboardList} title="No agent audit events yet." body="Registration, heartbeat, revoke, and update actions appear here after agents connect." />}
+          />
           <div className="split">
-            <Card>
-              <CardHeader>
-                <CardTitle>Release rollout</CardTitle>
-                <CardDescription>Tenant release rollouts. Agents pull signed updates over the outbound channel.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {auxLoading ? <TableSkeleton rows={3} label="Loading agent releases" /> : null}
-                {!auxLoading ? <DataTable
-                  columns={releaseColumns}
-                  items={updateReleases}
-                  empty={<EmptyState icon={Bot} title="No agent releases published." body="Publish signed manifests through your operator packaging workflow to roll out agent versions." />}
-                /> : null}
-              </CardContent>
-            </Card>
+            <SurfaceTableCard
+              title="Release rollout"
+              description="Tenant release rollouts. Agents pull signed updates over the outbound channel."
+              columns={releaseColumns}
+              items={updateReleases}
+              loading={auxLoading}
+              loadingLabel="Loading agent releases"
+              empty={<EmptyState icon={Bot} title="No agent releases published." body="Publish signed manifests through your operator packaging workflow to roll out agent versions." />}
+            />
             <Card>
               <CardHeader>
                 <CardTitle>Trust keys</CardTitle>
                 <CardDescription>Ed25519 signing keys that agents trust for update manifests.</CardDescription>
               </CardHeader>
-              <CardContent className="product-form">
-                {auxLoading ? <TableSkeleton rows={2} label="Loading trust keys" /> : null}
-                {!auxLoading ? <DataTable
-                  columns={trustKeyColumns}
-                  items={trustKeys}
-                  empty={<EmptyState icon={KeyRound} title="No trust keys registered." body="Add the public key from your agent update signing ceremony." />}
-                /> : null}
-                <form className="product-form" onSubmit={(event) => void handleAddTrustKey(event)}>
+              <CardContent className="product-form stack">
+                {auxLoading ? <TableSkeleton rows={2} label="Loading trust keys" /> : (
+                  <DataTable
+                    columns={trustKeyColumns}
+                    items={trustKeys}
+                    empty={<EmptyState icon={KeyRound} title="No trust keys registered." body="Add the public key from your agent update signing ceremony." />}
+                  />
+                )}
+                <form className="product-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
                   <label><span>Key name</span><input name="name" placeholder="production signing key" /></label>
                   <label className="full"><span>Public key (DER base64)</span><textarea name="public_key_der_base64" rows={3} placeholder="MCowBQYDK2VwAyEA…" required /></label>
                   <div className="form-actions full"><Button type="submit" loading={busy === 'add-trust-key'} disabled={busy !== ''}>Register trust key</Button></div>
@@ -1277,7 +1338,15 @@ export function ValidationSurfacePage({
             <div className="row-actions row-actions--spaced">
               <AnchorButton variant="secondary" href="#test-policies">Bind in policy</AnchorButton>
               {isSafe ? (
-                <Button variant="ghost" loading={busy === 'start-safe-run'} disabled={busy !== ''} onClick={() => void startSafeRun(checkId)}>Start safe run</Button>
+                <Button
+                  variant="ghost"
+                  loading={busy === 'start-safe-run'}
+                  disabled={busy !== ''}
+                  aria-label={`Start safe run for check ${checkId}`}
+                  onClick={() => void startSafeRun(checkId)}
+                >
+                  Start safe run
+                </Button>
               ) : null}
             </div>
           );
@@ -1299,39 +1368,21 @@ export function ValidationSurfacePage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <fieldset className="filter-fieldset">
-              <legend>Safety scope</legend>
+            <FilterFieldset legend="Safety scope">
               <Tabs value={checkSafetyScope} options={safetyScopeOptions} onChange={setCheckSafetyScope} className="tabs-wrap" />
-            </fieldset>
-            <fieldset className="filter-fieldset">
-              <legend>Vector family</legend>
+            </FilterFieldset>
+            <FilterFieldset legend="Vector family">
               <Tabs value={checkFilter} options={checkTabOptions} onChange={(value) => setCheckFilter(value as CheckFamilyTabId)} className="tabs-wrap" />
-            </fieldset>
+            </FilterFieldset>
             <DataTable
               columns={columns}
               items={filteredChecks}
               getRowProps={(item) => {
                 const checkId = getString(item, ['check_id'], '');
-                const latest = latestCheckVerdicts.get(checkId);
-                const runId = latest?.runId ?? '';
-                return {
-                  role: runId ? 'link' : undefined,
-                  tabIndex: runId ? 0 : undefined,
-                  style: runId ? { cursor: 'pointer' } : undefined,
-                  'aria-label': runId ? `Open latest run for ${checkId}` : undefined,
-                  onClick: (event) => {
-                    if ((event.target as HTMLElement).closest('a, button')) return;
-                    if (!runId) return;
-                    window.location.hash = `run-detail?id=${encodeURIComponent(runId)}`;
-                  },
-                  onKeyDown: (event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    if ((event.target as HTMLElement).closest('a, button')) return;
-                    if (!runId) return;
-                    event.preventDefault();
-                    window.location.hash = `run-detail?id=${encodeURIComponent(runId)}`;
-                  }
-                };
+                const runId = latestCheckVerdicts.get(checkId)?.runId ?? '';
+                return runId
+                  ? buildDetailHashRowProps('run-detail', runId, `Open latest run for ${checkId}`)
+                  : {};
               }}
               empty={checkFilter === 'custom' ? (
                 <EmptyState icon={ListChecks} title="No custom checks in catalog." body="Customer-defined safe checks bind through test policies after staff-reviewed scope declaration." actionLabel="Open test policies" actionHref="#test-policies" />
@@ -1403,8 +1454,8 @@ export function ValidationSurfacePage({
               <AnchorButton variant="secondary" href={buildDetailHref('run-detail', id)}>View run</AnchorButton>
               {cancellable ? (
                 <>
-                  <Button size="sm" variant="danger" loading={busy === `cancel-${id}`} disabled={busy !== ''} onClick={() => void cancelRun(id)}>Cancel</Button>
-                  <Button size="sm" variant="ghost" loading={busy === `finalize-${id}`} disabled={busy !== ''} onClick={() => void finalizeRun(id)}>Finalize</Button>
+                  <Button size="sm" variant="danger" loading={busy === `cancel-${id}`} disabled={busy !== ''} aria-label={`Cancel run ${id}`} onClick={() => void cancelRun(id)}>Cancel</Button>
+                  <Button size="sm" variant="ghost" loading={busy === `finalize-${id}`} disabled={busy !== ''} aria-label={`Finalize run ${id}`} onClick={() => void finalizeRun(id)}>Finalize</Button>
                 </>
               ) : null}
             </div>
@@ -1448,9 +1499,11 @@ export function ValidationSurfacePage({
           onRequestFormOpenChange={setShowSocRequestForm}
         />
         {inFlightRuns.length > 0 ? (
-          <div className="form-banner info" role="status">Runs in progress — auto-refreshing every 12s ({inFlightRuns.length} active).</div>
+          <div className="form-banner info" role="status" aria-live="polite">
+            Runs in progress — auto-refreshing every 12s ({inFlightRuns.length} active).
+          </div>
         ) : null}
-        {(message || error) && <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>}
+        <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
             <CardTitle>Start safe validation</CardTitle>
@@ -1480,7 +1533,14 @@ export function ValidationSurfacePage({
               </div>
             </div>
             {startDisabledReason ? <p className="muted">{startDisabledReason}</p> : null}
-            <Button loading={busy === 'start-safe-run'} disabled={busy !== '' || !canStartRun} onClick={() => void startSafeRun()}>Start safe run</Button>
+            <Button
+              loading={busy === 'start-safe-run'}
+              disabled={busy !== '' || !canStartRun}
+              aria-label="Start safe validation run for resolved target and check"
+              onClick={() => void startSafeRun()}
+            >
+              Start safe run
+            </Button>
           </CardContent>
         </Card>
         <Card>
@@ -1517,7 +1577,7 @@ export function ValidationSurfacePage({
     return (
       <div className="content">
         <PageHeader route="findings" />
-        {(message || error) && <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>}
+        <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
             <CardTitle>Findings</CardTitle>

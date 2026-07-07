@@ -45,6 +45,24 @@ function severityTone(severity: string) {
   return 'muted' as const;
 }
 
+function slaTextColor(slaState: string) {
+  if (slaState === 'is-danger') return 'var(--danger)';
+  if (slaState === 'is-warn') return 'var(--warn)';
+  return 'var(--meta)';
+}
+
+function Facet({ label, value }: { label: string; value: string }) {
+  return (
+    <span>
+      <span className="fc-key">{label}:</span> {value}
+    </span>
+  );
+}
+
+function FacetSep() {
+  return <span className="fc-sep" aria-hidden="true">·</span>;
+}
+
 export function FindingCard({
   finding,
   checks,
@@ -73,11 +91,14 @@ export function FindingCard({
   const openedAt = finding.created_at ?? finding.opened_at;
   const href = id ? buildDetailHref('finding-detail', id) : '#findings';
 
+  const slaState = slaClass(finding);
+
   return (
     <article
       className={`finding-card${active ? ' is-active' : ''}`}
       role="link"
       tabIndex={0}
+      aria-label={`${title}, severity ${severity}, ${state}`}
       onClick={() => onOpen?.(id)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -97,15 +118,19 @@ export function FindingCard({
           <span className="fc-state" title={`State ${state} from finding API`}>{state}</span>
         </div>
         <div className="fc-facets">
-          <span><span className="fc-key">owner:</span> {owner}</span>
-          <span className="fc-sep">·</span>
-          <span><span className="fc-key">check:</span> {checkLabel}</span>
-          <span className="fc-sep">·</span>
-          <span><span className="fc-key">group:</span> {groupLabel}</span>
-          <span className="fc-sep">·</span>
-          <span><span className="fc-key">opened:</span> {formatDate(openedAt)}</span>
+          <Facet label="owner" value={owner} />
+          <FacetSep />
+          <Facet label="check" value={checkLabel} />
+          <FacetSep />
+          <Facet label="group" value={groupLabel} />
+          <FacetSep />
+          <Facet label="opened" value={formatDate(openedAt)} />
         </div>
-        <div className={`fc-sla ${slaClass(finding)}`} title="SLA window derived from severity hours and opened timestamp">
+        <div
+          className={`fc-sla mono text-xs${slaState ? ` ${slaState}` : ''}`}
+          style={{ color: slaTextColor(slaState) }}
+          title="SLA window derived from severity hours and opened timestamp"
+        >
           {slaLabel(finding)}
         </div>
       </div>

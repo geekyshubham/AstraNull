@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, FileCheck2, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
+import { Activity, FileCheck2, Target, TriangleAlert } from 'lucide-react';
 import { populateTargetDetail } from '../lib/target-detail';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref } from '../lib/route-params';
@@ -144,7 +144,7 @@ export function TargetDetailView({
 
   return (
     <div className="content stack-tight">
-      {error ? <p className="banner banner-error" role="alert">{error}</p> : null}
+      {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       <div className="page-head">
         <div>
           <p className="eyebrow">Declared target</p>
@@ -155,7 +155,8 @@ export function TargetDetailView({
           <VerifyChip state={verificationState} provenance={provenance} />
           <Badge tone={canRun ? 'success' : 'warn'} title={`Eligibility ${eligibility} from target API`}>{eligibility}</Badge>
           <Button
-            className={`btn btn-primary btn-sm${canRun ? '' : ' is-locked'}`}
+            size="sm"
+            className={canRun ? undefined : 'is-locked'}
             disabled={!canRun || busy !== ''}
             title={canRun ? 'Start bounded checks for this target' : 'Verify to enable testing'}
             loading={busy === 'run-checks'}

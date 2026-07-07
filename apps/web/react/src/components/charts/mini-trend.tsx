@@ -5,6 +5,9 @@ type MiniTrendProps = {
   className?: string;
 };
 
+const MINI_TREND_FILL = 'color-mix(in oklab, var(--accent), transparent 88%)';
+const MINI_TREND_STROKE = 'color-mix(in oklab, var(--accent), transparent 10%)';
+
 export function MiniTrend({ points, className }: MiniTrendProps) {
   const hasTrend = points.length > 1;
 
@@ -45,8 +48,15 @@ export function MiniTrend({ points, className }: MiniTrendProps) {
       role="img"
       aria-label={trendLabel}
     >
-      <path className="mini-trend-fill" d={`${path} L 100 56 L 0 56 Z`} />
-      <path className="mini-trend-line" d={path} />
+      <path className="mini-trend-fill" d={`${path} L 100 56 L 0 56 Z`} fill={MINI_TREND_FILL} />
+      <path
+        className="mini-trend-line"
+        d={path}
+        fill="none"
+        stroke={MINI_TREND_STROKE}
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 }

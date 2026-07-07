@@ -19,12 +19,22 @@ type SelectProps = {
   disabled?: boolean;
 };
 
+function SelectOptionCopy({ label: optionLabel, description }: { label: string; description?: string }) {
+  return (
+    <span className="select-copy">
+      <strong>{optionLabel}</strong>
+      {description ? <small>{description}</small> : null}
+    </span>
+  );
+}
+
 export function Select({ label, name, value, options, onChange, className, disabled = false }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<'down' | 'up'>('down');
   const shellRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
+  const labelId = useId();
   const selected = options.find((option) => option.value === value) ?? options[0];
   const selectedIndex = Math.max(0, options.findIndex((option) => option.value === selected?.value));
 
@@ -142,7 +152,7 @@ export function Select({ label, name, value, options, onChange, className, disab
 
   return (
     <label className={cn('field', disabled && 'field-disabled', className)}>
-      <span>{label}</span>
+      <span id={labelId}>{label}</span>
       <span
         className={cn(
           'select-shell',
@@ -151,6 +161,7 @@ export function Select({ label, name, value, options, onChange, className, disab
           placement === 'up' && 'select-menu-up',
         )}
         ref={shellRef}
+        aria-disabled={disabled || undefined}
       >
         <select
           className="select-native"
@@ -171,7 +182,7 @@ export function Select({ label, name, value, options, onChange, className, disab
           ref={triggerRef}
           type="button"
           className="select-display"
-          aria-label={label}
+          aria-labelledby={labelId}
           aria-controls={listId}
           aria-expanded={open}
           aria-haspopup="listbox"
@@ -179,13 +190,10 @@ export function Select({ label, name, value, options, onChange, className, disab
           onClick={toggleOpen}
           onKeyDown={onTriggerKeyDown}
         >
-          <span className="select-copy">
-            <strong>{selected?.label}</strong>
-            {selected?.description ? <small>{selected.description}</small> : null}
-          </span>
-          <ChevronDown size={16} />
+          <SelectOptionCopy label={selected?.label ?? ''} description={selected?.description} />
+          <ChevronDown size={16} aria-hidden="true" />
         </button>
-        <span id={listId} className="select-menu" role="listbox" aria-label={label} hidden={!open || disabled}>
+        <span id={listId} className="select-menu" role="listbox" aria-labelledby={labelId} hidden={!open || disabled}>
           {options.map((option, index) => (
             <button
               type="button"
@@ -196,10 +204,7 @@ export function Select({ label, name, value, options, onChange, className, disab
               onClick={() => choose(option.value)}
               onKeyDown={(event) => onOptionKeyDown(event, option.value, index)}
             >
-              <span>
-                <strong>{option.label}</strong>
-                {option.description ? <small>{option.description}</small> : null}
-              </span>
+              <SelectOptionCopy label={option.label} description={option.description} />
               <Check size={14} aria-hidden="true" />
             </button>
           ))}

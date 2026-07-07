@@ -24,6 +24,19 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
+  return (
+    <>
+      {loadError ? <div className="form-banner error" role="alert">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>
+          {error || message}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function FindingDetailView({
   entity,
   entityId,
@@ -147,7 +160,7 @@ export function FindingDetailView({
     {
       key: 'export',
       label: '',
-      render: (item) => <Button className="btn btn-ghost btn-sm" onClick={() => void exportBundle()}>Export</Button>
+      render: (item) => <Button size="sm" variant="ghost" aria-label={`Export artifact ${getString(item, ['id', 'kind'], 'artifact')}`} onClick={() => void exportBundle()}>Export</Button>
     }
   ];
 
@@ -168,15 +181,14 @@ export function FindingDetailView({
       </div>
 
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
       <Card>
         <CardHeader>
           <CardTitle>Verdict and triage</CardTitle>
-          <CardDescription>
+          <CardDescription className="detail-status-line">
             <Badge tone="danger" title={`Severity ${getString(entity, ['severity'], 'unknown')} from finding API`}>{getString(entity, ['severity'], 'unknown')}</Badge>
-            {' · '}
+            <span className="detail-status-sep" aria-hidden="true">·</span>
             <Badge tone="warn" title={`Status ${getString(entity, ['status'], 'open')} from finding API`}>{getString(entity, ['status'], 'open')}</Badge>
           </CardDescription>
         </CardHeader>
@@ -194,10 +206,10 @@ export function FindingDetailView({
             <label><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
             <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={getString(entity, ['notes'], '')} /></label>
             <div className="row-actions">
-              <Button type="submit" className="btn btn-secondary btn-sm" loading={busy === `finding-${entityId}`}>Save triage</Button>
-              <Button className="btn btn-ghost btn-sm" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
-              <Button className="btn btn-ghost btn-sm" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
-              <Button className="btn btn-ghost btn-sm" onClick={() => void runAction('retest', async () => {
+              <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Save triage</Button>
+              <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
+              <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
+              <Button size="sm" variant="ghost" onClick={() => void runAction('retest', async () => {
                 const retest = resolveFindingRetestAction(entity);
                 if (!retest) throw new Error('Retest context missing from finding API.');
                 if (retest.kind === 'safe-run') {
@@ -242,20 +254,18 @@ export function FindingDetailView({
             </ol>
           ) : null}
           <div className="row-actions">
-            <Button className="btn btn-ghost btn-sm" onClick={() => void patchFinding({ rem_owner: remediation.remOwner }, 'Remediation owner updated.')}>Reassign owner</Button>
-            <Button className="btn btn-secondary btn-sm" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
+            <Button size="sm" variant="ghost" onClick={() => void patchFinding({ rem_owner: remediation.remOwner }, 'Remediation owner updated.')}>Reassign owner</Button>
+            <Button size="sm" variant="secondary" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <div className="row-actions" style={{ justifyContent: 'space-between', width: '100%' }}>
-            <CardTitle>Evidence bundle</CardTitle>
-            <div className="row-actions">
-              <Button className="btn btn-ghost btn-sm" loading={busy === `verify-${entityId}`} onClick={() => void verifyChain()}>Verify chain</Button>
-              <Button className="btn btn-secondary btn-sm" loading={busy === `export-${entityId}`} onClick={() => void exportBundle()}>Export bundle</Button>
-            </div>
+          <CardTitle>Evidence bundle</CardTitle>
+          <div className="row-actions">
+            <Button size="sm" variant="ghost" loading={busy === `verify-${entityId}`} onClick={() => void verifyChain()}>Verify chain</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}`} onClick={() => void exportBundle()}>Export bundle</Button>
           </div>
         </CardHeader>
         <CardContent>

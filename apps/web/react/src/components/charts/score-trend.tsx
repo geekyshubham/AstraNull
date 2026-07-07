@@ -7,6 +7,12 @@ type ScoreTrendProps = {
   tone?: 'success' | 'warn' | 'danger';
 };
 
+const TONE_STROKE = {
+  success: 'var(--success)',
+  warn: 'var(--warn)',
+  danger: 'var(--danger)',
+} as const;
+
 /**
  * Real verdict-band values. Each point on the trend reflects a run's actual
  * published verdict classification — never a synthesized/interpolated value.
@@ -44,10 +50,22 @@ function classifyRunVerdict(verdict: string): 'pass' | 'review' | 'gap' | null {
   return 'review';
 }
 
+const TREND_WIDTH = 200;
+const TREND_HEIGHT = 48;
+const TREND_PADDING = 4;
+
+function trendCoordinates(values: number[]) {
+  const maxValue = Math.max(100, ...values, 1);
+  return values.map((value, index) => {
+    const x = TREND_PADDING + (index * (TREND_WIDTH - TREND_PADDING * 2)) / Math.max(1, values.length - 1);
+    const y = TREND_HEIGHT - TREND_PADDING - (value / maxValue) * (TREND_HEIGHT - TREND_PADDING * 2);
+    return { x, y };
+  });
+}
+
 export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
   const end = Number.isFinite(currentScore) ? currentScore : 0;
 
-  // Build points ONLY from runs that carry a real, published verdict.
   const points = [...runs]
     .sort((left, right) =>
       String(left.created_at ?? left.id ?? '').localeCompare(String(right.created_at ?? right.id ?? ''))
@@ -60,8 +78,8 @@ export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
     }));
 
   const strokeTone = tone ?? scoreTone(end);
+  const strokeColor = TONE_STROKE[strokeTone];
 
-  // No verdicted runs yet — do not fabricate a curve. Show the honest state.
   if (points.length === 0) {
     return (
       <div className="score-trend score-trend--empty" role="img" aria-label="Readiness trend unavailable; no verdicted runs yet.">
@@ -72,45 +90,32 @@ export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
     );
   }
 
-  const width = 200;
-  const height = 48;
-  const padding = 4;
-  const maxValue = Math.max(100, ...points.map((point) => point.value), 1);
-  const coordinates = points
-    .map((point, index) => {
-      const x = padding + (index * (width - padding * 2)) / Math.max(1, points.length - 1);
-      const y = height - padding - (point.value / maxValue) * (height - padding * 2);
-      return `${x},${y}`;
-    })
-    .join(' ');
+  const coords = trendCoordinates(points.map((point) => point.value));
+  const polylinePoints = coords.map(({ x, y }) => `${x},${y}`).join(' ');
 
   const ariaLabel = `Readiness verdict trend across ${points.length} verdicted run${points.length === 1 ? '' : 's'}; current score ${end}`;
 
   return (
     <div className="score-trend" role="img" aria-label={ariaLabel}>
-      <svg className="score-trend-svg" viewBox={`0 0 ${width} ${height}`} width="100%" preserveAspectRatio="xMidYMid meet">
+      <svg className="score-trend-svg" viewBox={`0 0 ${TREND_WIDTH} ${TREND_HEIGHT}`} width="100%" preserveAspectRatio="xMidYMid meet">
         <polyline
           className={cn('score-trend-line', `score-trend-stroke--${strokeTone}`)}
-          points={coordinates}
+          points={polylinePoints}
           fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
+          stroke={strokeColor}
+          strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
-        {points.map((point, index) => {
-          const x = padding + (index * (width - padding * 2)) / Math.max(1, points.length - 1);
-          const y = height - padding - (point.value / maxValue) * (height - padding * 2);
-          return (
-            <circle
-              key={`${point.label}-${index}`}
-              className={cn('score-trend-point', `score-trend-stroke--${strokeTone}`)}
-              cx={x}
-              cy={y}
-              r="2.5"
-              fill="currentColor"
-            />
-          );
-        })}
+        {coords.map(({ x, y }, index) => (
+          <circle
+            key={`${points[index].label}-${index}`}
+            className={cn('score-trend-point', `score-trend-stroke--${strokeTone}`)}
+            cx={x}
+            cy={y}
+            r={2.5}
+            fill={strokeColor}
+          />
+        ))}
       </svg>
       <span className="muted score-trend-caption">
         {points.length} verdicted run{points.length === 1 ? '' : 's'} · current {end}

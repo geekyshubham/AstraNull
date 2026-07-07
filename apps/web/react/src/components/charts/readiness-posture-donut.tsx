@@ -1,18 +1,35 @@
 import { buildConicGradient, resolveReadinessPostureSegments } from '../../lib/readiness-posture';
-import type { DataItem, StatePayload } from '../../lib/types';
+import type { DataItem, ReadinessPostureSegment, StatePayload } from '../../lib/types';
 import { EmptyState } from '../ui/empty-state';
 import { Activity } from 'lucide-react';
 
 const SEGMENT_COLORS: Record<string, string> = {
   pass: 'var(--success)',
   review: 'var(--warn)',
-  gap: 'var(--danger)'
+  gap: 'var(--danger)',
 };
+
+function PostureLegendRow({ segment }: { segment: ReadinessPostureSegment }) {
+  const swatch = SEGMENT_COLORS[segment.key];
+  const title = `${segment.label} · ${segment.count} checks · ${segment.pct}%`;
+
+  return (
+    <div className="legend-row" title={title}>
+      <span className="ld" style={{ background: swatch }} aria-hidden="true" />
+      <span className="lg-label">{segment.label}</span>
+      <span className="lg-bar-wrap" style={{ background: 'color-mix(in oklab, var(--fg), transparent 92%)' }}>
+        <span className="lg-bar" style={{ width: `${segment.pct}%`, background: swatch }} />
+      </span>
+      <span className="lg-pct">{segment.pct}%</span>
+      <b>{segment.count}</b>
+    </div>
+  );
+}
 
 export function ReadinessPostureDonut({
   state,
   runs,
-  checks
+  checks,
 }: {
   state: StatePayload | null;
   runs: DataItem[];
@@ -60,19 +77,7 @@ export function ReadinessPostureDonut({
       <div className="gauge-side">
         <div className="gauge-legend">
           {segments.map((segment) => (
-            <div
-              key={segment.key}
-              className="legend-row"
-              title={`${segment.label} · ${segment.count} checks · ${segment.pct}%`}
-            >
-              <span className="ld" style={{ background: SEGMENT_COLORS[segment.key] }} />
-              <span className="lg-label">{segment.label}</span>
-              <span className="lg-bar-wrap">
-                <span className="lg-bar" style={{ width: `${segment.pct}%`, background: SEGMENT_COLORS[segment.key] }} />
-              </span>
-              <span className="lg-pct">{segment.pct}%</span>
-              <b>{segment.count}</b>
-            </div>
+            <PostureLegendRow key={segment.key} segment={segment} />
           ))}
         </div>
         <p className="muted small">{total} checks correlated · this cycle</p>

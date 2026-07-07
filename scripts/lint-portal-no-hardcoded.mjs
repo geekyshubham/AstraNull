@@ -143,14 +143,17 @@ function scanSourceFile(file, errors) {
 
 function scanStylesCss(errors) {
   const source = readFileSync(STYLES_CSS, 'utf8');
-  const rootMatch = source.match(/:root\s*\{[\s\S]*?\}/);
-  const rootBlock = rootMatch?.[0] ?? '';
-  const outsideRoot = rootMatch
-    ? source.slice(0, rootMatch.index) + source.slice(rootMatch.index + rootBlock.length)
-    : source;
+  // Token-definition blocks live in `:root` and theme overrides such as
+  // `:root[data-theme="light"]`. Hex literals are allowed inside any of these
+  // design-token blocks; blank them out (preserving byte/line offsets) before
+  // scanning the remaining CSS for stray hardcoded hex colors.
+  const ROOT_BLOCK = /:root(?:\[[^\]]*\])?\s*\{[\s\S]*?\}/g;
+  const masked = source.replace(ROOT_BLOCK, (block) =>
+    block.replace(/[^\n]/g, ' '),
+  );
 
-  for (const match of outsideRoot.matchAll(HEX_COLOR)) {
-    const ctx = lineContext(source, (rootMatch?.index ?? 0) + rootBlock.length + (match.index ?? 0));
+  for (const match of masked.matchAll(HEX_COLOR)) {
+    const ctx = lineContext(source, match.index ?? 0);
     errors.push({ file: STYLES_CSS, line: ctx.line, rule: 'hex-outside-root', detail: match[0] });
   }
 }

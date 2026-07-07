@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Activity, Bot, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
@@ -27,6 +27,46 @@ function targetVerificationState(target: DataItem) {
 
 function targetEligibility(target: DataItem) {
   return getString(target, ['eligibility'], targetVerificationState(target) === 'unverified' ? 'not_eligible' : 'eligible');
+}
+
+function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
+  return (
+    <>
+      {loadError ? <div className="form-banner error" role="alert">{loadError}</div> : null}
+      {(message || error) && !loadError ? (
+        <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>
+          {error || message}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function DetailModal({
+  title,
+  onClose,
+  children,
+  wide = true
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  const titleId = useId();
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className={`modal${wide ? ' modal-wide' : ''}`}>
+        <div className="modal-head">
+          <h3 id={titleId}>{title}</h3>
+          <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close dialog">
+            Close
+          </Button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export function TargetGroupDetailView({
@@ -242,9 +282,11 @@ export function TargetGroupDetailView({
         const eligible = !targetEligibility(item).startsWith('not');
         return (
           <div className="row-end-actions">
-            <Button className="btn btn-ghost btn-sm" onClick={() => { window.location.hash = buildDetailHref('target-detail', id).replace(/^#/, ''); }}>Verify</Button>
+            <Button size="sm" variant="ghost" onClick={() => { window.location.hash = buildDetailHref('target-detail', id).replace(/^#/, ''); }}>Verify</Button>
             <Button
-              className={`btn btn-ghost btn-sm${eligible ? '' : ' is-locked'}`}
+              size="sm"
+              variant="ghost"
+              className={eligible ? undefined : 'is-locked'}
               disabled={!eligible || busy === `run-test-${id}`}
               title={eligible ? 'Run bounded test' : 'Verify to enable testing'}
               onClick={() => { void runBoundedTest(id, entityId); }}
@@ -298,8 +340,7 @@ export function TargetGroupDetailView({
       </div>
 
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
-      {loadError ? <div className="form-banner error">{loadError}</div> : null}
-      {(message || error) && !loadError ? <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div> : null}
+      <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
       {ladderLoading ? <PortalLoadingSkeleton rows={1} /> : null}
       {!ladderLoading && ladderSteps.length === 0 ? (
@@ -335,7 +376,7 @@ export function TargetGroupDetailView({
         <div className="kpi"><div className="kpi-label">LOA</div><div className="kpi-value"><Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge></div></div>
       </div>
 
-      <div className={`callout callout-loa${loaSigned ? '' : ''}`} data-loa-state={loaSigned ? 'signed' : 'required'}>
+      <div className="callout callout-loa" data-loa-state={loaSigned ? 'signed' : 'required'}>
         <span className="callout-icon" aria-hidden="true"><ShieldHalf size={16} /></span>
         <div>
           <p className="callout-title">{loaSigned ? 'LOA signed' : 'LOA signature required'}</p>
@@ -348,8 +389,8 @@ export function TargetGroupDetailView({
         <div className="callout-actions">
           {!loaSigned ? (
             <>
-              <Button className="btn btn-primary btn-sm" onClick={() => setShowLoaModal(true)}>Open target group and sign LOA</Button>
-              <Button className="btn btn-ghost btn-sm" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`}>Review DNS status</Button>
+              <Button size="sm" onClick={() => setShowLoaModal(true)}>Open target group and sign LOA</Button>
+              <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`}>Review DNS status</Button>
             </>
           ) : null}
         </div>
@@ -374,8 +415,8 @@ export function TargetGroupDetailView({
             <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(dnsChallenge, ['ttl', 'ttl_seconds'], '—')}</span></div>
           </div>
           <div className="dns-footer row-actions">
-            <Button className="btn btn-secondary btn-sm" loading={busy === `dns-issue-${entityId}`} onClick={() => void issueDnsChallenge()}>Issue DNS challenge</Button>
-            <Button className="btn btn-ghost btn-sm" loading={busy === `dns-verify-${entityId}`} onClick={() => void verifyDnsChallenge()}>Check now</Button>
+            <Button size="sm" variant="secondary" loading={busy === `dns-issue-${entityId}`} onClick={() => void issueDnsChallenge()}>Issue DNS challenge</Button>
+            <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} onClick={() => void verifyDnsChallenge()}>Check now</Button>
             {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
           </div>
         </CardContent>
@@ -399,7 +440,7 @@ export function TargetGroupDetailView({
                 <p>Scope required: <span className="mono">{scope}</span></p>
                 <p className="muted small">Status: {getString(connector, ['status', 'state'], 'unknown')}</p>
                 <div className="pc-actions">
-                  <Button className="btn btn-ghost btn-sm" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Open inventory</Button>
+                  <Button size="sm" variant="ghost" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Open inventory</Button>
                 </div>
               </div>
               );
@@ -435,25 +476,28 @@ export function TargetGroupDetailView({
       </Card>
 
       {inventoryProvider ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal modal-wide">
-            <div className="modal-head">
-              <h3>Provider inventory · {inventoryProvider}</h3>
-              <Button className="btn btn-ghost btn-sm" onClick={() => setInventoryProvider(null)}>Close</Button>
-            </div>
+        <DetailModal title={`Provider inventory · ${inventoryProvider}`} onClose={() => setInventoryProvider(null)}>
             <div className="inv-body">
               <DataTable
                 columns={[
-                  { key: 'select', label: '', render: (item) => {
+                  { key: 'select', label: 'Select', render: (item) => {
                     const id = getString(item, ['id', 'value'], '');
-                    return <input type="checkbox" checked={selectedInventory.has(id)} onChange={(event) => {
+                    const label = getString(item, ['value', 'name'], id);
+                    return (
+                      <input
+                        type="checkbox"
+                        checked={selectedInventory.has(id)}
+                        aria-label={`Select ${label}`}
+                        onChange={(event) => {
                       setSelectedInventory((current) => {
                         const next = new Set(current);
                         if (event.target.checked) next.add(id);
                         else next.delete(id);
                         return next;
                       });
-                    }} />;
+                    }}
+                      />
+                    );
                   } },
                   { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
                   { key: 'value', label: 'Value', render: (item) => getString(item, ['value', 'name'], '—') }
@@ -462,20 +506,14 @@ export function TargetGroupDetailView({
                 empty={emptyStateFromApi({ icon: Bot, meta: inventoryMeta })}
               />
               <div className="row-actions">
-                <Button className="btn btn-primary btn-sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected</Button>
+                <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected</Button>
               </div>
             </div>
-          </div>
-        </div>
+        </DetailModal>
       ) : null}
 
       {showLoaModal ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal modal-wide">
-            <div className="modal-head">
-              <h3>Sign LOA · {getString(entity, ['name'], entityId)}</h3>
-              <Button className="btn btn-ghost btn-sm" onClick={() => setShowLoaModal(false)}>Close</Button>
-            </div>
+        <DetailModal title={`Sign LOA · ${getString(entity, ['name'], entityId)}`} onClose={() => setShowLoaModal(false)}>
             <form className="loa-body product-form" onSubmit={(event) => void submitLoa(event)}>
               <div className="loa-doc">
                 <h4>Authorization artifact</h4>
@@ -489,10 +527,9 @@ export function TargetGroupDetailView({
               <label><span>Signer name</span><input name="signer_name" required /></label>
               <label><span>Signer title</span><input name="signer_title" required /></label>
               <label><span>Signed date</span><input name="signed_date" type="date" required /></label>
-              <div className="form-actions"><Button type="submit" className="btn btn-primary" loading={busy === `loa-${entityId}`}>Sign LOA</Button></div>
+              <div className="form-actions"><Button type="submit" loading={busy === `loa-${entityId}`}>Sign LOA</Button></div>
             </form>
-          </div>
-        </div>
+        </DetailModal>
       ) : null}
     </div>
   );

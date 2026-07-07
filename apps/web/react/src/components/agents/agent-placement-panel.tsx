@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ListChecks } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -24,6 +24,37 @@ const PLACEMENT_GATES = [
   'Probe and agent observations correlated under custody'
 ] as const;
 
+function PtMetricCell({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="pt-cell">
+      <div className="pt-label">{label}</div>
+      <div className="pt-value mono">{value}</div>
+    </div>
+  );
+}
+
+function PlacementGateRow({ gate, pass }: { gate: string; pass: boolean }) {
+  const status = pass ? 'pass' : 'pending';
+  return (
+    <li>
+      <ListChecks size={14} aria-hidden="true" style={{ color: 'var(--fg-2)' }} />
+      <span>{gate}</span>
+      <Badge tone={pass ? 'success' : 'muted'} aria-label={`${gate}: ${status}`}>
+        {status}
+      </Badge>
+    </li>
+  );
+}
+
+function PlacementPassChip({ provenance }: { provenance: string }) {
+  return (
+    <span className="verify-chip is-verified" title={provenance} aria-label={`Placement verified. ${provenance}`}>
+      <span className="vc-dot" aria-hidden="true" />
+      last run · pass
+    </span>
+  );
+}
+
 export function AgentPlacementPanel({
   agent,
   agentId,
@@ -43,15 +74,27 @@ export function AgentPlacementPanel({
   running?: boolean;
   busy?: boolean;
 }) {
-  const placementRun = useMemo(() => runs
-    .filter((run) => getString(run, ['check_id']) === ONBOARDING_PLACEMENT_TEST_CHECK_ID)
-    .sort((a, b) => String(b.started_at ?? b.created_at ?? '').localeCompare(String(a.started_at ?? a.created_at ?? '')))[0] ?? null, [runs]);
+  const placementRun = useMemo(
+    () =>
+      runs
+        .filter((run) => getString(run, ['check_id']) === ONBOARDING_PLACEMENT_TEST_CHECK_ID)
+        .sort((a, b) =>
+          String(b.started_at ?? b.created_at ?? '').localeCompare(String(a.started_at ?? a.created_at ?? ''))
+        )[0] ?? null,
+    [runs]
+  );
 
   const verdict = getString(placementRun, ['verdict'], getString(placementRun, ['status'], 'pending'));
-  const pass = ['pass', 'verdicted'].includes(verdict.toLowerCase()) || getString(placementRun, ['verdict']) === 'pass';
+  const pass =
+    ['pass', 'verdicted'].includes(verdict.toLowerCase()) || getString(placementRun, ['verdict']) === 'pass';
   const provenance = placementRun
     ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdict} from test-runs API.`
     : 'No placement test run recorded for this agent scope.';
+
+  const runDisabled = busy || !targetGroupId;
+  const runLabel = targetGroupId
+    ? 'Run placement test for this agent'
+    : 'Run placement test (select a target group first)';
 
   return (
     <Card>
@@ -61,48 +104,46 @@ export function AgentPlacementPanel({
           <CardDescription>Bounded protected-path canary. Metadata-only signal under custody.</CardDescription>
         </div>
         <div className="row-actions">
-          {pass ? (
-            <span className="verify-chip is-verified" title={provenance}>
-              <span className="vc-dot" aria-hidden="true" />
-              last run · pass
-            </span>
-          ) : (
-            <VerifyChip state="pending" provenance={provenance} />
-          )}
-          <Button size="sm" loading={running} disabled={busy || !targetGroupId} onClick={onRunPlacement}>Run placement test</Button>
+          {pass ? <PlacementPassChip provenance={provenance} /> : <VerifyChip state="pending" provenance={provenance} />}
+          <Button
+            size="sm"
+            loading={running}
+            disabled={runDisabled}
+            onClick={onRunPlacement}
+            aria-label={runLabel}
+          >
+            Run placement test
+          </Button>
         </div>
       </CardHeader>
       <CardContent className="stack-tight">
         <div className="pt-grid">
-          <div className="pt-cell">
-            <div className="pt-label">Last test</div>
-            <div className="pt-value mono">{placementRun ? formatDate(placementRun.started_at ?? placementRun.created_at) : '—'}</div>
-          </div>
-          <div className="pt-cell">
-            <div className="pt-label">Duration</div>
-            <div className="pt-value mono">{getString(placementRun, ['duration_ms', 'duration'], '—')}</div>
-          </div>
-          <div className="pt-cell">
-            <div className="pt-label">Signal</div>
-            <div className="pt-value mono">{getString(placementReview, ['observation_mode'], getString(agent, ['placement_type'], '—'))}</div>
-          </div>
-          <div className="pt-cell">
-            <div className="pt-label">Evidence</div>
-            <div className="pt-value mono">{placementRun ? getString(placementRun, ['id']) : '—'}</div>
-          </div>
+          <PtMetricCell
+            label="Last test"
+            value={placementRun ? formatDate(placementRun.started_at ?? placementRun.created_at) : '—'}
+          />
+          <PtMetricCell
+            label="Duration"
+            value={getString(placementRun, ['duration_ms', 'duration'], '—')}
+          />
+          <PtMetricCell
+            label="Signal"
+            value={getString(placementReview, ['observation_mode'], getString(agent, ['placement_type'], '—'))}
+          />
+          <PtMetricCell
+            label="Evidence"
+            value={placementRun ? getString(placementRun, ['id']) : '—'}
+          />
         </div>
-        <ul className="placement-gates">
+        <ul className="placement-gates" aria-label="Placement verification gates">
           {PLACEMENT_GATES.map((gate) => (
-            <li key={gate}>
-              <ListChecks size={14} aria-hidden="true" />
-              <span>{gate}</span>
-              <Badge tone={pass ? 'success' : 'muted'}>{pass ? 'pass' : 'pending'}</Badge>
-            </li>
+            <PlacementGateRow key={gate} gate={gate} pass={pass} />
           ))}
         </ul>
         {placementReview ? (
           <p className="muted" title={placementStatusHint(getString(placementReview, ['status'])) || undefined}>
-            Placement review: {formatPlacementStatus(getString(placementReview, ['status']))} · {getString(placementReview, ['summary'], '—')}
+            Placement review: {formatPlacementStatus(getString(placementReview, ['status']))} ·{' '}
+            {getString(placementReview, ['summary'], '—')}
           </p>
         ) : null}
       </CardContent>

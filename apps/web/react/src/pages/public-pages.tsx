@@ -8,7 +8,8 @@ import {
   ShieldCheck,
   Siren,
   TriangleAlert,
-  UserRound
+  UserRound,
+  type LucideIcon
 } from 'lucide-react';
 import {
   isOidcJwtMode,
@@ -17,7 +18,7 @@ import {
   saveSession,
   sessionFromLoginResponse
 } from '../lib/api';
-import { DEFENSIVE_RULES, PLATFORM_PROMISE, STAFF_LINKS } from '../lib/navigation';
+import { PLATFORM_PROMISE, STAFF_LINKS } from '../lib/navigation';
 import type { PortalConfig } from '../lib/types';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
@@ -51,6 +52,90 @@ function signupRequestStateLabel(state: string) {
 function SignupStateBadge({ state }: { state: unknown }) {
   const raw = String(state ?? 'recorded').trim() || 'recorded';
   return <Badge tone={signupRequestStateTone(raw)}>{signupRequestStateLabel(raw)}</Badge>;
+}
+
+function SignupRequestSummary({
+  record,
+  requestIdFallback,
+  organizationFallback = 'Not recorded',
+  planFallback = 'professional',
+  regionFallback = 'us',
+  showPlanBadgeWhenMissing = false,
+  statusFallback = 'recorded'
+}: {
+  record: Record<string, unknown>;
+  requestIdFallback?: string;
+  organizationFallback?: string;
+  planFallback?: string;
+  regionFallback?: string;
+  showPlanBadgeWhenMissing?: boolean;
+  statusFallback?: string;
+}) {
+  const plan = record.requested_plan ?? (showPlanBadgeWhenMissing ? planFallback : null);
+  const region = record.region ?? (showPlanBadgeWhenMissing ? regionFallback : null);
+  return (
+    <dl>
+      <div>
+        <dt>Request ID</dt>
+        <dd><Badge mono tone="muted">{String(record.id ?? requestIdFallback ?? 'submitted')}</Badge></dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd><SignupStateBadge state={record.state ?? record.status ?? statusFallback} /></dd>
+      </div>
+      <div>
+        <dt>Organization</dt>
+        <dd>{String(record.organization_name ?? record.organization ?? organizationFallback)}</dd>
+      </div>
+      <div>
+        <dt>Requested plan</dt>
+        <dd>
+          {plan != null
+            ? <Badge tone="info">{signupPlanLabel(plan)}</Badge>
+            : 'Not recorded'}
+        </dd>
+      </div>
+      <div>
+        <dt>Region</dt>
+        <dd>{region != null ? signupRegionLabel(region) : 'Not recorded'}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function AuthAsidePoints({ items }: { items: { icon: LucideIcon; text: string }[] }) {
+  return (
+    <ul className="auth-points">
+      {items.map(({ icon: Icon, text }) => (
+        <li key={text}>
+          <Icon size={16} aria-hidden="true" />
+          {text}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PublicAccessActions({
+  signupEnabled,
+  loginUrl,
+  showArrowOnPrimary = false
+}: {
+  signupEnabled: boolean;
+  loginUrl: string;
+  showArrowOnPrimary?: boolean;
+}) {
+  return (
+    <div className="public-actions">
+      {signupEnabled ? (
+        <AnchorButton href="/signup">
+          Request access
+          {showArrowOnPrimary ? <ArrowRight size={15} aria-hidden="true" /> : null}
+        </AnchorButton>
+      ) : null}
+      <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
+    </div>
+  );
 }
 
 const STAFF_ROLE_LABELS: Record<string, string> = {
@@ -246,11 +331,11 @@ const LANDING_COMPARE = [
   ['Exportable evidence trail', 'Evidence vault + custody', 'Run logs', 'Metric exports']
 ];
 
-const LANDING_TRUST_STRIP = [
-  'No cloud credentials required',
-  DEFENSIVE_RULES[1].title,
-  DEFENSIVE_RULES[2].title,
-  'Evidence-backed verdicts'
+const LANDING_TRUST_ITEMS = [
+  { icon: Check, text: 'No cloud credentials required' },
+  { icon: Check, text: 'Low-volume, bounded probes' },
+  { icon: Check, text: 'SOC-governed high-scale' },
+  { icon: ShieldCheck, text: 'Evidence-backed verdicts' }
 ] as const;
 
 const LANDING_USE_CASES = [
@@ -284,20 +369,14 @@ export function PublicLandingPage({ config }: PublicPageProps) {
           <p className="eyebrow">Defensive DDoS readiness validation</p>
           <h1>Prove DDoS readiness without handing over your cloud keys</h1>
           <p className="public-hero-lead">{promise}</p>
-          <div className="public-actions">
-            {signupEnabled ? (
-              <AnchorButton href="/signup">
-                Request access
-                <ArrowRight size={15} />
-              </AnchorButton>
-            ) : null}
-            <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
-          </div>
+          <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} showArrowOnPrimary />
           <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
-            <span><Check size={16} />No cloud credentials required</span>
-            <span><Check size={16} />Low-volume, bounded probes</span>
-            <span><Check size={16} />SOC-governed high-scale</span>
-            <span><ShieldCheck size={16} />Evidence-backed verdicts</span>
+            {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
+              <span key={text}>
+                <Icon size={16} aria-hidden="true" />
+                {text}
+              </span>
+            ))}
           </div>
         </section>
 
@@ -369,10 +448,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
         <section className="public-cta-final">
           <h2>Prove your edge holds — before an attacker proves it doesn&apos;t.</h2>
           <p>Request access. We&apos;ll review your account and stand up a tenant with the full customer portal.</p>
-          <div className="public-actions">
-            {signupEnabled ? <AnchorButton href="/signup">Request access</AnchorButton> : null}
-            <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
-          </div>
+          <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} />
         </section>
 
         <footer className="public-footer">
@@ -477,11 +553,13 @@ export function LoginPage({ config }: PublicPageProps) {
                 ? 'Local developer validation uses tenant headers to preview RBAC without a password.'
                 : 'Review declared targets, agent heartbeats, safe validation runs, and SOC-governed high-scale intake from one tenant-scoped surface.'}
             </p>
-            <ul className="auth-points">
-              <li><ShieldCheck size={16} /> Evidence-backed verdicts tied to observed probe data</li>
-              <li><LockKeyhole size={16} /> No default cloud credentials required</li>
-              <li><FileCheck2 size={16} /> Audit-ready exports and custody references</li>
-            </ul>
+            <AuthAsidePoints
+              items={[
+                { icon: ShieldCheck, text: 'Evidence-backed verdicts tied to observed probe data' },
+                { icon: LockKeyhole, text: 'No default cloud credentials required' },
+                { icon: FileCheck2, text: 'Audit-ready exports and custody references' }
+              ]}
+            />
           </>
         )}
         footer={(
@@ -702,11 +780,13 @@ export function SignupPage({ config }: PublicPageProps) {
           <>
             <h1 className="auth-title">Request governed validation access.</h1>
             <p className="auth-lead">Provisioning is review-gated. Operations validates organization details, intended use, and plan fit before creating a tenant workspace.</p>
-            <ul className="auth-points">
-              <li><ShieldCheck size={16} /> Safe-by-default validation is available immediately after approval</li>
-              <li><Siren size={16} /> High-scale programs stay SOC-scheduled and authorization-pack gated</li>
-              <li><UserRound size={16} /> Track request status any time with your request ID</li>
-            </ul>
+            <AuthAsidePoints
+              items={[
+                { icon: ShieldCheck, text: 'Safe-by-default validation is available immediately after approval' },
+                { icon: Siren, text: 'High-scale programs stay SOC-scheduled and authorization-pack gated' },
+                { icon: UserRound, text: 'Track request status any time with your request ID' }
+              ]}
+            />
           </>
         )}
         footer={(
@@ -746,13 +826,7 @@ export function SignupPage({ config }: PublicPageProps) {
                   <CheckCircle2 size={18} aria-hidden="true" />
                   <p className="success-panel-lead">We provision reviewed accounts only. Save your request ID to check status any time.</p>
                 </div>
-                <dl>
-                  <div><dt>Request ID</dt><dd><Badge mono tone="muted">{String(submitted.id ?? 'submitted')}</Badge></dd></div>
-                  <div><dt>Status</dt><dd><SignupStateBadge state={submitted.state ?? 'submitted'} /></dd></div>
-                  <div><dt>Organization</dt><dd>{String(submitted.organization_name ?? 'Recorded')}</dd></div>
-                  <div><dt>Requested plan</dt><dd><Badge tone="info">{signupPlanLabel(submitted.requested_plan ?? 'professional')}</Badge></dd></div>
-                  <div><dt>Region</dt><dd>{signupRegionLabel(submitted.region ?? 'us')}</dd></div>
-                </dl>
+                <SignupRequestSummary record={submitted} organizationFallback="Recorded" showPlanBadgeWhenMissing statusFallback="submitted" />
                 <div className="auth-form-actions row-actions">
                   <AnchorButton
                     href={`/signup-status?id=${encodeURIComponent(String(submitted.id ?? ''))}`}
@@ -904,13 +978,7 @@ export function SignupStatusPage() {
                   <CheckCircle2 size={18} aria-hidden="true" />
                   <p className="success-panel-lead">Request found — provisioning remains review-gated.</p>
                 </div>
-                <dl>
-                  <div><dt>Request ID</dt><dd><Badge mono tone="muted">{String(result.id ?? requestId)}</Badge></dd></div>
-                  <div><dt>Status</dt><dd><SignupStateBadge state={result.state ?? result.status ?? 'recorded'} /></dd></div>
-                  <div><dt>Organization</dt><dd>{String(result.organization_name ?? result.organization ?? 'Not recorded')}</dd></div>
-                  <div><dt>Requested plan</dt><dd>{result.requested_plan != null ? <Badge tone="info">{signupPlanLabel(result.requested_plan)}</Badge> : 'Not recorded'}</dd></div>
-                  <div><dt>Region</dt><dd>{result.region != null ? signupRegionLabel(result.region) : 'Not recorded'}</dd></div>
-                </dl>
+                <SignupRequestSummary record={result} requestIdFallback={requestId} />
                 {result.customer_notice ? (
                   <p className="auth-field-help">{String(result.customer_notice)}</p>
                 ) : null}
@@ -1105,7 +1173,7 @@ export function InternalAdminPage({ config }: PublicPageProps) {
                     </div>
                     <AnchorButton href={link.href} size="sm" variant="secondary">
                       Open
-                      <ArrowRight size={13} />
+                      <ArrowRight size={13} aria-hidden="true" />
                     </AnchorButton>
                   </li>
               ))}

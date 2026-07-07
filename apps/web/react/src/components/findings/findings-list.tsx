@@ -49,6 +49,35 @@ function statusMatches(finding: DataItem, filter: StatusFilter) {
   return true;
 }
 
+function StatusFilterTabs({
+  active,
+  counts,
+  onChange,
+}: {
+  active: StatusFilter;
+  counts: Record<StatusFilter, number>;
+  onChange: (filter: StatusFilter) => void;
+}) {
+  const filters: StatusFilter[] = ['open', 'closed', 'accepted', 'all'];
+  return (
+    <div className="ft-status" role="tablist" aria-label="Finding status filters">
+      {filters.map((filter) => (
+        <button
+          key={filter}
+          type="button"
+          className={`ft-tab btn${active === filter ? ' is-active' : ''}`}
+          role="tab"
+          aria-selected={active === filter}
+          onClick={() => onChange(filter)}
+        >
+          {filter === 'accepted' ? 'Accepted' : filter.charAt(0).toUpperCase() + filter.slice(1)}
+          <span className="ft-count">{counts[filter]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function sortFindings(items: DataItem[], sort: SortKey) {
   const copy = [...items];
   copy.sort((left, right) => {
@@ -147,30 +176,18 @@ export function FindingsListView({
   return (
     <div className="findings-surface">
       <div className="findings-toolbar">
-        {/*
-          Intentional segmented status control (distinct from the shared underline <Tabs>
-          used for navigation): a count-bearing filter that reads as one control alongside
-          the adjacent Select filters. It is a proper keyboard-operable tablist.
-        */}
-        <div className="ft-status" role="tablist" aria-label="Finding status filters">
-          {(['open', 'closed', 'accepted', 'all'] as StatusFilter[]).map((filter) => (
-            <button
-              key={filter}
-              type="button"
-              className={`ft-tab btn${statusFilter === filter ? ' is-active' : ''}`}
-              role="tab"
-              aria-selected={statusFilter === filter}
-              onClick={() => setStatusFilter(filter)}
-            >
-              {filter === 'accepted' ? 'Accepted' : filter.charAt(0).toUpperCase() + filter.slice(1)}
-              <span className="ft-count">{statusCounts[filter]}</span>
-            </button>
-          ))}
-        </div>
+        <StatusFilterTabs active={statusFilter} counts={statusCounts} onChange={setStatusFilter} />
         <div className="ft-controls">
           <label className="field ft-field ft-search">
             <span className="ft-label">Search</span>
-            <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter findings" />
+            <input
+              className="input"
+              type="search"
+              value={search}
+              aria-label="Filter findings by id, title, check, owner, or group"
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Filter findings"
+            />
           </label>
           <Select
             className="ft-field"
@@ -250,8 +267,8 @@ export function FindingsListView({
             options={PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
             onChange={(value) => setPageSize(Number(value) as (typeof PAGE_SIZES)[number])}
           />
-          <Button variant="ghost" size="sm" disabled={currentPage <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</Button>
-          <Button variant="ghost" size="sm" disabled={currentPage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</Button>
+          <Button variant="ghost" size="sm" disabled={currentPage <= 0} aria-label="Previous findings page" onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</Button>
+          <Button variant="ghost" size="sm" disabled={currentPage >= pageCount - 1} aria-label="Next findings page" onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</Button>
           <span className="fp-info">Page <span>{currentPage + 1}</span> of <span>{pageCount}</span></span>
         </div>
       </div>

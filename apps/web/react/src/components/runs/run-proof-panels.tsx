@@ -23,6 +23,32 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function isDenseProofValue(value: string) {
+  return value.length > 56 || value.includes(',') || value.includes('/');
+}
+
+export function ExplanationField({
+  label,
+  value,
+  fullWidth = false,
+}: {
+  label: string;
+  value: string;
+  fullWidth?: boolean;
+}) {
+  const display = value || '—';
+  return (
+    <div className={`verdict-explanation-item${fullWidth ? ' verdict-explanation-item--full' : ''}`}>
+      <span className="verdict-explanation-label">{label}</span>
+      {isDenseProofValue(display) ? (
+        <pre className="code verdict-explanation-value">{display}</pre>
+      ) : (
+        <span className="verdict-explanation-value">{display}</span>
+      )}
+    </div>
+  );
+}
+
 function getNestedString(item: DataItem | null | undefined, path: string[], fallback = '') {
   let current: unknown = item;
   for (const key of path) {
@@ -41,8 +67,8 @@ export function TrafficPathPanel({ detail }: { detail: DataItem | null }) {
     : 'Awaiting correlated probe and agent evidence.';
 
   return (
-    <section className="traffic-path" aria-label="Traffic path diagram">
-      <h4>Traffic path</h4>
+    <section className="traffic-path" aria-labelledby="traffic-path-heading">
+      <h4 id="traffic-path-heading">Traffic path</h4>
       <div className="traffic-path-track">
         {TRAFFIC_HOPS.map((hop, index) => (
           <span key={hop.key} className="traffic-path-hop">
@@ -86,10 +112,7 @@ export function VerdictExplanationPanel({
       <h4>{heading}</h4>
       <div className="verdict-explanation-grid">
         {fields.map((field) => (
-          <div key={field.label} className="verdict-explanation-item">
-            <span className="verdict-explanation-label text-xs">{field.label}</span>
-            <span className="verdict-explanation-value text-sm">{field.value}</span>
-          </div>
+          <ExplanationField key={field.label} label={field.label} value={field.value} />
         ))}
       </div>
     </section>
@@ -100,8 +123,8 @@ export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
   const current = normalizeVerdictKey(getNestedString(detail, ['verdict', 'verdict'], ''));
 
   return (
-    <section className="truth-table-viz">
-      <h4>Verdict truth table</h4>
+    <section className="truth-table-viz" aria-labelledby="truth-table-heading">
+      <h4 id="truth-table-heading">Verdict truth table</h4>
       <table className="truth-table data-table text-sm">
         <thead>
           <tr>

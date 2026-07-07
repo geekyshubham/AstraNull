@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstraNull Product Pitch and Competitive Positioning</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --ink-2: #3d4957;
+      --muted: #667386;
+      --line: #d9e0e8;
+      --paper: #f6f8fb;
+      --panel: #ffffff;
+      --panel-2: #edf5f2;
+      --accent: #087f75;
+      --accent-2: #c65d1e;
+      --accent-3: #2f6f9f;
+      --good: #1b8a5a;
+      --warn: #b75e13;
+      --shadow: 0 18px 50px rgba(23, 32, 42, 0.12);
+      --radius: 8px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font);
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    .hero {
+      background:
+        linear-gradient(145deg, rgba(8, 127, 117, 0.1), transparent 34%),
+        linear-gradient(20deg, rgba(198, 93, 30, 0.12), transparent 42%),
+        #fbfcfe;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
+      gap: 42px;
+      align-items: center;
+      min-height: 640px;
+      padding: 56px 0 42px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 18px;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 36px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 999px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      letter-spacing: 0;
+      line-height: 1.08;
+    }
+
+    h1 {
+      max-width: 760px;
+      font-size: clamp(2.75rem, 6vw, 5.7rem);
+      font-weight: 850;
+    }
+
+    h2 {
+      font-size: clamp(1.8rem, 3vw, 2.55rem);
+      font-weight: 820;
+    }
+
+    h3 {
+      font-size: 1.08rem;
+      font-weight: 780;
+    }
+
+    p {
+      margin: 0;
+      color: var(--ink-2);
+    }
+
+    .hero-copy {
+      max-width: 760px;
+      margin-top: 24px;
+      font-size: clamp(1.08rem, 1.65vw, 1.38rem);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 30px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border: 1px solid var(--ink);
+      border-radius: 6px;
+      color: var(--ink);
+      font-weight: 750;
+      text-decoration: none;
+      background: #fff;
+    }
+
+    .button.primary {
+      color: #fff;
+      background: var(--ink);
+    }
+
+    .hero-card {
+      position: relative;
+      overflow: hidden;
+      background: var(--ink);
+      color: #fff;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(140deg, rgba(8, 127, 117, 0.42), transparent 40%),
+        linear-gradient(310deg, rgba(198, 93, 30, 0.32), transparent 44%);
+      pointer-events: none;
+    }
+
+    .proof-map {
+      position: relative;
+      padding: 28px;
+      min-height: 390px;
+    }
+
+    .proof-map h3,
+    .proof-map p,
+    .path,
+    .proof-node,
+    .score {
+      position: relative;
+      z-index: 1;
+    }
+
+    .proof-map h3 {
+      color: #fff;
+      font-size: 1.28rem;
+    }
+
+    .proof-map p {
+      color: rgba(255, 255, 255, 0.74);
+      margin-top: 8px;
+      max-width: 330px;
+    }
+
+    .path {
+      display: grid;
+      gap: 10px;
+      margin: 26px 0;
+    }
+
+    .proof-node {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+    }
+
+    .proof-node b {
+      display: block;
+      color: #fff;
+    }
+
+    .proof-node span {
+      display: block;
+      color: rgba(255, 255, 255, 0.68);
+      font-size: 0.86rem;
+    }
+
+    .dot {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 800;
+    }
+
+    .score {
+      display: grid;
+      grid-template-columns: 104px 1fr;
+      gap: 16px;
+      align-items: center;
+      padding-top: 6px;
+    }
+
+    .ring {
+      display: grid;
+      place-items: center;
+      width: 104px;
+      height: 104px;
+      border-radius: 999px;
+      background: conic-gradient(var(--good) 0 72%, var(--warn) 72% 86%, rgba(255,255,255,0.22) 86% 100%);
+    }
+
+    .ring span {
+      display: grid;
+      place-items: center;
+      width: 70px;
+      height: 70px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 1.25rem;
+      font-weight: 850;
+    }
+
+    .score p {
+      color: rgba(255, 255, 255, 0.76);
+      font-size: 0.94rem;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(246, 248, 251, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+    }
+
+    nav .wrap {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 12px 0;
+    }
+
+    nav a {
+      flex: 0 0 auto;
+      padding: 8px 10px;
+      border-radius: 6px;
+      color: var(--ink-2);
+      font-size: 0.86rem;
+      font-weight: 720;
+      text-decoration: none;
+    }
+
+    nav a:hover {
+      background: #fff;
+      color: var(--ink);
+    }
+
+    main {
+      padding: 42px 0 64px;
+    }
+
+    section {
+      scroll-margin-top: 76px;
+      margin-bottom: 58px;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(280px, 1.1fr);
+      gap: 28px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    .section-head p {
+      font-size: 1.02rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 10px 28px rgba(23, 32, 42, 0.05);
+    }
+
+    .card h3 {
+      margin-bottom: 9px;
+    }
+
+    .card p {
+      font-size: 0.95rem;
+    }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      margin-bottom: 12px;
+      padding: 0 9px;
+      border-radius: 999px;
+      color: var(--accent);
+      background: rgba(8, 127, 117, 0.1);
+      font-size: 0.72rem;
+      font-weight: 820;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .label.orange {
+      color: var(--accent-2);
+      background: rgba(198, 93, 30, 0.11);
+    }
+
+    .label.blue {
+      color: var(--accent-3);
+      background: rgba(47, 111, 159, 0.11);
+    }
+
+    .pitch-box {
+      display: grid;
+      gap: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 22px;
+      box-shadow: 0 10px 28px rgba(23, 32, 42, 0.05);
+    }
+
+    .pitch-box strong {
+      color: var(--ink);
+    }
+
+    .steps {
+      counter-reset: step;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .step {
+      position: relative;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 10px 28px rgba(23, 32, 42, 0.05);
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 820;
+    }
+
+    .step-shot {
+      width: 100%;
+      margin: 0;
+      aspect-ratio: 16 / 10;
+      background: #07090c;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .step-shot img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: left top;
+    }
+
+    .step-body {
+      padding: 16px;
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .step span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .matrix-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(23, 32, 42, 0.05);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+    }
+
+    th,
+    td {
+      padding: 14px 15px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef3f7;
+      color: var(--ink);
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    td {
+      color: var(--ink-2);
+      font-size: 0.93rem;
+    }
+
+    td:first-child {
+      color: var(--ink);
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .same-diff {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+      gap: 16px;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .list li {
+      position: relative;
+      padding-left: 20px;
+      color: var(--ink-2);
+    }
+
+    .list li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.68em;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .list.orange li::before {
+      background: var(--accent-2);
+    }
+
+    .positioning {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .quote-card {
+      background: var(--ink);
+      color: #fff;
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .quote-card p {
+      color: rgba(255,255,255,0.76);
+      margin-top: 10px;
+    }
+
+    .quote-card b {
+      display: block;
+      color: #fff;
+      font-size: 1.12rem;
+      line-height: 1.25;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .source-list li {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--ink-2);
+      font-size: 0.94rem;
+    }
+
+    .footer {
+      padding: 28px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    @media (max-width: 1020px) {
+      .hero-grid,
+      .section-head,
+      .same-diff {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-grid {
+        min-height: auto;
+      }
+
+      .steps {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .wrap {
+        width: min(100% - 28px, 1120px);
+      }
+
+      .hero-grid {
+        padding-top: 34px;
+      }
+
+      .grid,
+      .two,
+      .positioning,
+      .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .score {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-actions {
+        flex-direction: column;
+      }
+
+      .button {
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="eyebrow">AstraNull pitch</div>
+        <h1>DDoS readiness proof without handing over cloud keys.</h1>
+        <p class="hero-copy">
+          AstraNull validates the targets customers declare, uses outbound-only agents and canaries for internal observation, and turns safe probes into evidence-backed verdicts. High-scale simulations are governed by SOC approval, scheduling, live monitoring, and stop controls.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#pitch">Read the pitch</a>
+          <a class="button" href="#comparison">Compare competitors</a>
+        </div>
+      </div>
+
+      <aside class="hero-card" aria-label="AstraNull proof model">
+        <div class="proof-map">
+          <h3>The proof path</h3>
+          <p>Every readiness answer ties back to a target declaration, an external probe, an internal observation, or an approval artifact.</p>
+          <div class="path">
+            <div class="proof-node">
+              <div class="dot">01</div>
+              <div><b>Declared scope</b><span>Customer chooses target groups and expected behavior.</span></div>
+            </div>
+            <div class="proof-node">
+              <div class="dot">02</div>
+              <div><b>Safe probes</b><span>Low-volume checks test origin, DNS, L3/L4, L7, API, and WAF readiness.</span></div>
+            </div>
+            <div class="proof-node">
+              <div class="dot">03</div>
+              <div><b>Agent observation</b><span>Outbound-only canaries report what reached the protected environment.</span></div>
+            </div>
+          </div>
+          <div class="score">
+            <div class="ring"><span>86</span></div>
+            <p>Readiness score example: confidence comes from correlated evidence, not from assumed provider configuration.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </header>
+
+  <nav aria-label="Page sections">
+    <div class="wrap">
+      <a href="#pitch">Pitch</a>
+      <a href="#use">Use</a>
+      <a href="#market">Market Role</a>
+      <a href="#same-different">Same vs Different</a>
+      <a href="#comparison">Matrix</a>
+      <a href="#buyer">Buyer Guidance</a>
+      <a href="#sources">Sources</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <section id="pitch">
+      <div class="section-head">
+        <h2>The short pitch</h2>
+        <p>AstraNull is built for enterprises that bought DDoS protection but still need proof that critical services are ready for real pressure, misrouting, bypass attempts, and operational scrutiny.</p>
+      </div>
+
+      <div class="pitch-box">
+        <p><strong>One-liner:</strong> AstraNull proves DDoS readiness for customer-declared targets without requiring cloud credentials, automatic IP discovery, or unsafe self-service traffic generation.</p>
+        <p><strong>Board version:</strong> We help security teams answer a simple question with evidence: if a protected service is targeted, will the right traffic be blocked, will the business path stay healthy, will the SOC know what happened, and can we prove it later?</p>
+        <p><strong>Practitioner version:</strong> Declare the service, bind an outbound-only agent or canary, run safe checks, review probe and agent evidence side by side, fix findings, and retest until the readiness score reflects observed behavior.</p>
+      </div>
+    </section>
+
+    <section id="use">
+      <div class="section-head">
+        <h2>What it is used for</h2>
+        <p>The product is not a DDoS mitigation provider. It validates whether the customer's existing protections, routes, runbooks, and evidence processes are actually ready.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-declare-targets.png" alt="Prototype target group detail showing declared targets, ownership verification, LOA status, and expected behavior per row.">
+          </figure>
+          <div class="step-body"><b>Declare targets</b><span>Group critical domains, URLs, IPs, ports, DNS services, APIs, and canary endpoints by business service.</span></div>
+        </div>
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-install-agents.png" alt="Prototype agents page showing installed outbound-only agents and the signed agent deployment command matrix.">
+          </figure>
+          <div class="step-body"><b>Install agents</b><span>Deploy an outbound-only agent or canary inside the protected environment. No inbound management port is required.</span></div>
+        </div>
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-run-safe-checks.png" alt="Prototype checks catalog showing safe origin-bypass, DNS, L3/L4, L7/API checks and a SOC-gated high-scale scenario.">
+          </figure>
+          <div class="step-body"><b>Run safe checks</b><span>Use bounded probes to validate origin bypass, protected paths, DNS posture, L3/L4 behavior, L7 rate limits, and API readiness.</span></div>
+        </div>
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-correlate-proof.png" alt="Prototype run detail showing timeline, external probe result, agent observation, and correlated verdict.">
+          </figure>
+          <div class="step-body"><b>Correlate proof</b><span>Match external probe events with internal observations, health signals, logs, and explicit customer declarations.</span></div>
+        </div>
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-fix-retest.png" alt="Prototype finding detail showing verdict explanation, owner, triage actions, affected target, and retest button.">
+          </figure>
+          <div class="step-body"><b>Fix and retest</b><span>Convert failed verdicts into findings, assign owners, track remediation, and rerun checks for proof of closure.</span></div>
+        </div>
+        <div class="step">
+          <figure class="step-shot">
+            <img src="assets/astranull-pitch/workflow-escalate-safely.png" alt="Prototype SOC console showing high-scale governance, kill switch controls, go/no-go gates, and cross-tenant execution queue.">
+          </figure>
+          <div class="step-body"><b>Escalate safely</b><span>Request high-scale validation only through SOC approval, provider authorization, scheduling, live monitoring, and kill switch controls.</span></div>
+        </div>
+      </div>
+
+      <div class="grid two" style="margin-top:16px;">
+        <div class="card">
+          <span class="label">Everyday readiness</span>
+          <h3>Safe validation for critical services</h3>
+          <p>Teams use AstraNull to prove whether declared services are protected as expected, whether agents are placed where they can observe traffic, and whether failed checks have enough evidence to drive remediation.</p>
+        </div>
+        <div class="card">
+          <span class="label orange">Controlled escalation</span>
+          <h3>SOC-gated high-scale workflow</h3>
+          <p>When higher-scale validation is needed, AstraNull becomes the governance workflow: authorization pack, provider approval, preflight, schedule, live SOC control room, stop path, and final evidence report.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="market">
+      <div class="section-head">
+        <h2>Where AstraNull sits in the market</h2>
+        <p>AstraNull overlaps with exposure management and DDoS validation, but its product wedge is narrower and deeper: declared-scope DDoS readiness with inside/outside evidence and safe governance.</p>
+      </div>
+
+      <div class="positioning">
+        <div class="quote-card">
+          <b>IONIX is broader.</b>
+          <p>IONIX publicly positions around continuous threat exposure management and external attack surface management: discovering, validating, prioritizing, and helping remediate external exposures across the internet-facing estate.</p>
+        </div>
+        <div class="quote-card">
+          <b>MazeBolt is closest.</b>
+          <p>MazeBolt RADAR publicly positions as an independent validation layer for DDoS defenses, continuously and non-disruptively validating protection layers such as scrubbing, CDN, WAF, and CPE.</p>
+        </div>
+        <div class="quote-card">
+          <b>AstraNull is evidence-first.</b>
+          <p>AstraNull focuses on customer-declared target groups, outbound-only internal observation, safe probes, evidence-backed verdicts, readiness scoring, and SOC-gated high-scale validation.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="same-different">
+      <div class="section-head">
+        <h2>How it is the same and different</h2>
+        <p>The simplest way to position AstraNull: it shares the validation mindset with both companies, but chooses a different trust model and operating model.</p>
+      </div>
+
+      <div class="same-diff">
+        <div class="card">
+          <span class="label">Same</span>
+          <h3>Shared themes</h3>
+          <ul class="list">
+            <li>All three products speak to security teams that want fewer assumptions and more proof.</li>
+            <li>All three help prioritize remediation instead of just showing raw technical signals.</li>
+            <li>All three are complementary to existing controls such as DDoS protection, WAFs, CDNs, cloud platforms, and SOC workflows.</li>
+            <li>AstraNull and MazeBolt both live close to DDoS readiness validation, especially around testing whether deployed defenses work.</li>
+            <li>AstraNull and IONIX both care about evidence, prioritization, WAF posture, and externally observable risk.</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <span class="label orange">Different</span>
+          <h3>AstraNull's wedge</h3>
+          <ul class="list orange">
+            <li>AstraNull does not require default cloud, CDN, WAF, or firewall credentials.</li>
+            <li>AstraNull does not make automatic asset discovery the core path. Customers declare the targets to validate.</li>
+            <li>AstraNull makes outbound-only agents and canaries part of the primary proof model.</li>
+            <li>AstraNull separates safe validation from high-scale simulation, with SOC gating for high-risk work.</li>
+            <li>AstraNull's verdicts must trace to observed probe data, agent observations, health signals, approval artifacts, or customer declarations.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="comparison">
+      <div class="section-head">
+        <h2>Competitive comparison matrix</h2>
+        <p>This matrix uses public positioning for IONIX and MazeBolt, and local AstraNull product scope from this repository. It is intended for pitch and product framing, not legal claims.</p>
+      </div>
+
+      <div class="matrix-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>AstraNull</th>
+              <th>IONIX</th>
+              <th>MazeBolt</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Primary category</td>
+              <td>No-access-first DDoS readiness validation and evidence platform.</td>
+              <td>External exposure management, CTEM, and attack surface management.</td>
+              <td>Continuous DDoS defense validation and DDoS vulnerability management.</td>
+            </tr>
+            <tr>
+              <td>Core buyer question</td>
+              <td>Can we prove our declared critical services are ready, and can we show the evidence?</td>
+              <td>What external exposures exist across our internet-facing estate, and which matter most?</td>
+              <td>Do our deployed DDoS defenses resist known and evolving DDoS vectors without disrupting production?</td>
+            </tr>
+            <tr>
+              <td>Default scope model</td>
+              <td>Customer-declared target groups. CSV/API import is allowed, but automatic IP inventory discovery is not required.</td>
+              <td>Discovery-forward external attack surface coverage, including digital supply chain, subsidiaries, cloud assets, and external dependencies.</td>
+              <td>DDoS protection surface and attack entry points across live protected services.</td>
+            </tr>
+            <tr>
+              <td>Access model</td>
+              <td>No cloud credentials by default. Outbound-only agents and canaries provide internal observations.</td>
+              <td>Public positioning emphasizes external discovery plus optional integrations with cloud, on-prem, and security solutions for richer validation.</td>
+              <td>Public positioning emphasizes independent, non-disruptive simulations against deployed DDoS protection layers.</td>
+            </tr>
+            <tr>
+              <td>Validation approach</td>
+              <td>Bounded safe probes correlated with agent observation, health signals, logs if configured, and explicit declarations.</td>
+              <td>Continuous external exposure validation and prioritization of exploitable or business-critical risks.</td>
+              <td>Continuous non-disruptive DDoS simulations to identify bypass paths, misconfigurations, and remediation needs.</td>
+            </tr>
+            <tr>
+              <td>DDoS focus</td>
+              <td>High. DDoS readiness is the main product promise.</td>
+              <td>Adjacent. Useful for exposed internet risk and WAF posture, but broader than DDoS readiness alone.</td>
+              <td>Very high. DDoS defense validation is the central category.</td>
+            </tr>
+            <tr>
+              <td>Internal proof</td>
+              <td>Core. Strong verdicts depend on what the outbound-only agent or canary observes inside the protected environment.</td>
+              <td>Not the central public wedge. Public positioning focuses on external attack surface coverage and exposure validation.</td>
+              <td>Public positioning focuses on defense validation across protection layers. AstraNull differentiates by making customer-side internal observation explicit in the proof model.</td>
+            </tr>
+            <tr>
+              <td>High-scale governance</td>
+              <td>High-scale tests are not customer self-serve. SOC approves, schedules, executes or coordinates, monitors, stops, and closes.</td>
+              <td>Not the primary public positioning. IONIX is oriented around exposure management and remediation workflows.</td>
+              <td>Public positioning emphasizes continuous non-disruptive testing. AstraNull separately models high-scale work as SOC-gated governance.</td>
+            </tr>
+            <tr>
+              <td>Evidence output</td>
+              <td>Verdicts, findings, readiness scores, timeline evidence, audit logs, authorization artifacts, and reports.</td>
+              <td>Validated exposures, prioritization, ownership context, remediation guidance, and exposure workflow outputs.</td>
+              <td>DDoS vulnerability findings, remediation insights, revalidation results, and protection-layer visibility.</td>
+            </tr>
+            <tr>
+              <td>Best-fit positioning</td>
+              <td>Best when the customer cannot or will not grant cloud access but still needs defensible DDoS readiness proof for declared services.</td>
+              <td>Best when the problem is broad external exposure discovery, prioritization, and attack surface reduction.</td>
+              <td>Best when the problem is continuous validation of existing DDoS protection controls against DDoS vectors.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="buyer">
+      <div class="section-head">
+        <h2>Buyer guidance</h2>
+        <p>This is the clean talk track for a prospect comparing categories.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <span class="label blue">Choose IONIX when</span>
+          <h3>You need broad external exposure management</h3>
+          <p>IONIX is the stronger fit if the first problem is finding and prioritizing internet-facing exposures across brands, subsidiaries, cloud assets, WAF posture, and digital supply chain dependencies.</p>
+        </div>
+        <div class="card">
+          <span class="label blue">Choose MazeBolt when</span>
+          <h3>You need established DDoS defense testing</h3>
+          <p>MazeBolt is the closer direct category peer if the first problem is continuous non-disruptive validation of DDoS protections such as scrubbing, CDN, WAF, and CPE.</p>
+        </div>
+        <div class="card">
+          <span class="label">Choose AstraNull when</span>
+          <h3>You need no-access-first proof</h3>
+          <p>AstraNull is the sharper fit when the customer wants declared-scope DDoS readiness, no mandatory credentials, outbound-only internal proof, audit-ready evidence, and SOC-gated high-scale workflow.</p>
+        </div>
+      </div>
+
+      <div class="pitch-box" style="margin-top:16px;">
+        <p><strong>Competitive summary:</strong> AstraNull should not claim to replace IONIX as an EASM/CTEM platform or MazeBolt as an established DDoS testing platform. The pitch is more precise: AstraNull proves DDoS readiness in environments where trust, access, auditability, and safe governance matter as much as the validation itself.</p>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="section-head">
+        <h2>Source notes</h2>
+        <p>Competitor summaries are based on public product positioning checked on July 7, 2026. AstraNull summaries are based on local product docs in this repository.</p>
+      </div>
+
+      <ul class="source-list">
+        <li><strong>IONIX homepage:</strong> public positioning around continuous external exposure detection, CTEM, attack surface visibility, WAF posture, digital supply chain exposure, and prioritization. <a href="https://www.ionix.io/">https://www.ionix.io/</a></li>
+        <li><strong>IONIX exposure management guide:</strong> describes the platform as an external exposure management solution focused on reducing external threats and improving remediation speed. <a href="https://www.ionix.io/guides/exposure-management/ionixs-approach-to-exposure-management/">IONIX approach to exposure management</a></li>
+        <li><strong>MazeBolt homepage:</strong> positions RADAR as an independent validation layer for DDoS defenses across scrubbing, CDN, WAF, and CPE, with non-disruptive continuous testing. <a href="https://mazebolt.com/">https://mazebolt.com/</a></li>
+        <li><strong>MazeBolt on Microsoft Marketplace:</strong> describes continuous DDoS simulation for live production services without maintenance windows, plus remediation and revalidation. <a href="https://marketplace.microsoft.com/en-us/product/mazebolttechnologiesltd1773752446408.mazebolt-ddos-validation">Microsoft Marketplace listing</a></li>
+        <li><strong>AstraNull local sources:</strong> <code>docs/product/01-platform-overview.md</code>, <code>docs/product/02-scope-and-principles.md</code>, and <code>docs/product/07-end-to-end-platform-spec.md</code>.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">
+      AstraNull pitch asset. Defensive validation only: no unmanaged traffic generation, no automatic IP inventory discovery as a core path, and no high-scale workflow outside SOC control.
+    </div>
+  </footer>
+</body>
+</html>

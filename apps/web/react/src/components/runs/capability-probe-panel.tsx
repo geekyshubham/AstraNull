@@ -1,4 +1,5 @@
 import { Badge } from '../ui/badge';
+import { ExplanationField } from './run-proof-panels';
 import {
   capabilityProbeKindLabel,
   domXssValidationLabel,
@@ -236,7 +237,7 @@ function OutsideInWafPostureSummary({ meta }: { meta: DataItem }) {
 
   return (
     <div className="capability-probe-posture-row verdict-explanation-item verdict-explanation-item--full">
-      <span>Posture</span>
+      <span className="verdict-explanation-label">Posture</span>
       <div className="capability-probe-posture-value">
         <Badge tone={postureLabelTone(postureRaw)}>{postureLabel || '—'}</Badge>
         {postureRaw ? <p className="muted small">{outsideInPostureExplanation(postureRaw)}</p> : null}
@@ -264,10 +265,7 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
       <div className="verdict-explanation-grid">
         {isOutsideInWafScan ? <OutsideInWafPostureSummary meta={meta} /> : null}
         {rows.map((row) => (
-          <div key={row.label} className="verdict-explanation-item">
-            <span>{row.label}</span>
-            <strong>{row.value || '—'}</strong>
-          </div>
+          <ExplanationField key={row.label} label={row.label} value={row.value} />
         ))}
       </div>
     </article>
