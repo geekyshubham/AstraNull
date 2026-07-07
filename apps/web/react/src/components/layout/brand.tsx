@@ -1,9 +1,13 @@
 export function BrandMark() {
   return (
-    <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2" />
-      <path d="M16 4 L25 22 H7 Z" fill="currentColor" />
-      <circle cx="16" cy="18" r="3" fill="var(--bg)" />
+    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <clipPath id="bm-clip">
+          <circle cx="16" cy="16" r="13.4" />
+        </clipPath>
+      </defs>
+      <circle className="ring" cx="16" cy="16" r="14.5" />
+      <path className="core" clipPath="url(#bm-clip)" d="M16 -5 L34.6 27 L-2.6 27 Z" />
     </svg>
   );
 }

@@ -1246,6 +1246,119 @@ describe('postgres validation service adapters', () => {
     assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
   });
 
+  it('external_only run auto-finalizes to edge_exposed finding after probe ingest without an agent', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'probe_worker', role: 'probe_worker' };
+    const run = collectingRun({
+      check_id: 'dns.authoritative_response.safe',
+      probe_external_result: 'connected',
+      collection_deadline_at: '2099-01-01T00:00:00.000Z',
+    });
+    const probeEvent = {
+      id: 'evt_probe',
+      test_run_id: 'run_1',
+      signal_type: 'probe_result',
+      nonce_hash: 'nh_1',
+      timestamp: FIXED_NOW.toISOString(),
+      source: 'probe_worker',
+      metadata: {
+        external_result: 'connected',
+        probe_kind: 'dns_resolve',
+        safety_attestation: { worker_version: '0.1.0' },
+      },
+    };
+    const target = { id: 'tgt_1', kind: 'fqdn', value: 'astranull.site' };
+    let upsertFinding = 0;
+    let findingVerdict = null;
+    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
+      getTestRun: async () => ({ ...run }),
+      listRunEvents: async () => [probeEvent],
+      updateTestRun: async (c, id, patch) => ({ ...run, ...patch }),
+      // external_only, no agents bound
+      getTargetGroup: async () => ({
+        id: 'tg_1',
+        tenant_id: 'ten_demo',
+        validation_mode: 'external_only',
+        targets: [target],
+      }),
+      listAgents: async () => [],
+      getVerdictForRun: async () => null,
+      createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
+      findOpenFinding: async () => null,
+      upsertOpenFindingFromVerdict: async (c, verdict) => {
+        upsertFinding += 1;
+        findingVerdict = verdict;
+        return { id: 'find_1' };
+      },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const verdict = await testRuns.maybeFinalizeRunAfterProbeIngest(ctx, 'run_1');
+
+    // Real external-only edge verdict + finding, backed by the real probe event.
+    assert.equal(verdict.verdict, 'edge_exposed');
+    assert.equal(verdict.confidence, 'external_only');
+    assert.equal(upsertFinding, 1);
+    assert.ok(String(findingVerdict.title).includes('edge_exposed'));
+    assert.equal(findingVerdict.severity, 'medium');
+    assert.equal(findingVerdict.status, 'open');
+    // Published as a real verdict, NOT a no-observation finalization.
+    assert.ok(auditEvents.some((a) => a.entry.action === 'verdict.published'));
+    assert.equal(
+      auditEvents.some((a) => a.entry.action === 'verdict.finalized_no_observation'),
+      false,
+    );
+    // No spurious agent_no_observation event is written for external-only runs.
+    assert.equal(
+      validationCalls.some(
+        (c) => c.method === 'appendEvent' && c.args?.[1]?.signal_type === 'agent_no_observation',
+      ),
+      false,
+    );
+  });
+
+  it('agent_assisted run with no agent still finalizes inconclusive (no external-only finding)', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'probe_worker', role: 'probe_worker' };
+    const run = collectingRun({
+      check_id: 'dns.authoritative_response.safe',
+      probe_external_result: 'connected',
+      collection_deadline_at: '2000-01-01T00:00:00.000Z',
+    });
+    const probeEvent = {
+      id: 'evt_probe',
+      test_run_id: 'run_1',
+      signal_type: 'probe_result',
+      nonce_hash: 'nh_1',
+      timestamp: FIXED_NOW.toISOString(),
+      metadata: { external_result: 'connected' },
+    };
+    let upsertFinding = 0;
+    const { repositories } = createRecordingValidationRepositories({
+      getTestRun: async () => ({ ...run }),
+      listRunEvents: async () => [probeEvent],
+      updateTestRun: async (c, id, patch) => ({ ...run, ...patch }),
+      appendEvent: async (c, e) => e,
+      getTargetGroup: async () => ({
+        id: 'tg_1',
+        tenant_id: 'ten_demo',
+        validation_mode: 'agent_assisted',
+        targets: [{ id: 'tgt_1', kind: 'fqdn', value: 'astranull.site' }],
+      }),
+      listAgents: async () => [],
+      getVerdictForRun: async () => null,
+      createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
+      findOpenFinding: async () => null,
+      upsertOpenFindingFromVerdict: async () => {
+        upsertFinding += 1;
+        return { id: 'find_1' };
+      },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const verdict = await testRuns.maybeFinalizeRunAfterProbeIngest(ctx, 'run_1');
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(upsertFinding, 0);
+  });
+
   it('ingestObservation rejects when markAgentJobObserved returns null despite acked job read', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
     const run = collectingRun();

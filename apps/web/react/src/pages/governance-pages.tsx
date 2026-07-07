@@ -256,7 +256,8 @@ export function NotificationsPage({
   const [ruleChannel, setRuleChannel] = useState('webhook');
   const [ruleTrigger, setRuleTrigger] = useState<(typeof NOTIFICATION_TRIGGERS)[number]>('finding.high_severity');
   const canWrite = canWriteNotifications(session.role);
-  const attempts = useMemo(() => deliveryAttempts(data.notificationEvents), [data.notificationEvents]);
+  const attempts = useMemo(() => deliveryAttempts(data.notificationEvents ?? []), [data.notificationEvents]);
+  const deliveredCount = attempts.filter((item) => getString(item, ['status']) === 'delivered_provider').length;
   const retryItems = attempts.filter((item) => getString(item, ['status']) === 'provider_retry_scheduled');
   const dlqItems = attempts.filter((item) => getString(item, ['status']) === 'provider_failed_dlq');
 
@@ -374,6 +375,11 @@ export function NotificationsPage({
   return (
     <div className="content">
       <PageHeader route="notifications" />
+      <div className="metric-grid three">
+        <MetricCard label="Delivered" value={deliveredCount} sub="successful deliveries" icon={CheckCircle2} tone="success" />
+        <MetricCard label="Retrying" value={retryItems.length} sub="awaiting retry" icon={Bell} tone={retryItems.length > 0 ? 'warn' : 'muted'} />
+        <MetricCard label="DLQ" value={dlqItems.length} sub="dead-letter queue" icon={Siren} tone={dlqItems.length > 0 ? 'danger' : 'muted'} />
+      </div>
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       {canWrite ? (
         <Card id="notifications-create-rule">
@@ -477,13 +483,48 @@ export function NotificationsPage({
 export function AuditPage({ data, session }: { data: PortalData; session: Session }) {
   const [filter, setFilter] = useState('');
   const [custodyOnly, setCustodyOnly] = useState(false);
+  const [actorFilter, setActorFilter] = useState('all');
+  const [actionFilter, setActionFilter] = useState('all');
   const [selectedId, setSelectedId] = useState('');
   const [showRawAuditMetadata, setShowRawAuditMetadata] = useState(false);
   const allowed = canReadAudit(session.role);
+
+  const actorOptions = useMemo(() => {
+    const actors = new Set<string>();
+    for (const entry of data.audit) {
+      const actor = getString(entry, ['actor_role', 'actor_user_id'], 'system');
+      if (actor !== '—') actors.add(actor);
+    }
+    return [
+      { value: 'all', label: 'all' },
+      ...Array.from(actors).sort().map((actor) => ({ value: actor, label: actor }))
+    ];
+  }, [data.audit]);
+
+  const actionOptions = useMemo(() => {
+    const actions = new Set<string>();
+    for (const entry of data.audit) {
+      const action = getString(entry, ['action'], '');
+      if (action !== '—') actions.add(action);
+    }
+    return [
+      { value: 'all', label: 'all' },
+      ...Array.from(actions).sort().map((action) => ({ value: action, label: action }))
+    ];
+  }, [data.audit]);
+
   const items = data.audit.filter((entry) => {
     const action = getString(entry, ['action'], '').toLowerCase();
     if (custodyOnly && !action.includes('custody') && !action.includes('export') && !action.includes('report')) {
       return false;
+    }
+    if (actorFilter !== 'all') {
+      const actor = getString(entry, ['actor_role', 'actor_user_id'], 'system');
+      if (actor !== actorFilter) return false;
+    }
+    if (actionFilter !== 'all') {
+      const entryAction = getString(entry, ['action'], '');
+      if (entryAction !== actionFilter) return false;
     }
     if (!filter.trim()) return true;
     const haystack = `${getString(entry, ['action'])} ${getString(entry, ['resource_type'])} ${getString(entry, ['resource_id'])}`.toLowerCase();
@@ -495,11 +536,42 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
     setShowRawAuditMetadata(false);
   }, [selectedId]);
 
+  function formatAuditCustodyDigest(item: DataItem) {
+    const hash = getString(item, ['entry_hash'], '');
+    if (!hash || hash === '—') return '—';
+    if (hash.length <= 12) return `sha256 ${hash}`;
+    return `sha256 ${hash.slice(0, 4)}…${hash.slice(-4)}`;
+  }
+
   const columns: TableColumn<DataItem>[] = [
-    { key: 'time', label: 'Time', render: (item) => formatDate(item.timestamp ?? item.created_at) },
-    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
-    { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'], '')} ${getString(item, ['resource_id'], '')}`.trim() },
-    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role', 'actor_user_id'], 'system') }
+    { key: 'time', label: 'Time', render: (item) => <span className="mono">{formatDate(item.timestamp ?? item.created_at)}</span> },
+    { key: 'actor', label: 'Actor', render: (item) => <span className="mono">{getString(item, ['actor_role', 'actor_user_id'], 'system')}</span> },
+    { key: 'action', label: 'Action', render: (item) => <span className="mono">{getString(item, ['action'])}</span> },
+    {
+      key: 'target',
+      label: 'Target',
+      render: (item) => {
+        const resourceId = getString(item, ['resource_id'], '');
+        const target = resourceId !== '—'
+          ? resourceId
+          : `${getString(item, ['resource_type'], '')} ${getString(item, ['resource_id'], '')}`.trim();
+        return <span className="mono">{target || '—'}</span>;
+      }
+    },
+    {
+      key: 'custody',
+      label: 'Custody',
+      render: (item) => {
+        const digest = formatAuditCustodyDigest(item);
+        const fullHash = getString(item, ['entry_hash'], '');
+        if (digest === '—') return <span className="muted">—</span>;
+        return (
+          <span className="mono muted" title={fullHash !== '—' ? fullHash : undefined}>
+            {digest}
+          </span>
+        );
+      }
+    }
   ];
 
   return (
@@ -509,17 +581,31 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
         <EmptyState icon={ClipboardList} title="Audit access required." body="Switch to owner, admin, SOC, or auditor role to read the tenant audit log." />
       ) : (
         <>
-          <div className="split">
           <Card>
             <CardHeader>
-              <CardTitle>Audit log</CardTitle>
-              <CardDescription>Security-relevant tenant actions with hash-chain integrity on the backend.</CardDescription>
+              <CardTitle>Filters</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="product-form">
-                <label className="full"><span>Filter</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="action, resource type, or id" /></label>
-                <label className="check-row full"><input type="checkbox" name="custody_only" checked={custodyOnly} onChange={(event) => setCustodyOnly(event.target.checked)} /><span>Custody chain only</span></label>
+              <div className="product-form row-actions" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: '12px 16px' }}>
+                <label className="check-row" style={{ margin: 0 }}>
+                  <input type="checkbox" name="custody_only" checked={custodyOnly} onChange={(event) => setCustodyOnly(event.target.checked)} />
+                  <span>Custody-chain only</span>
+                </label>
+                <Select label="Actor" name="audit_actor" value={actorFilter} options={actorOptions} onChange={setActorFilter} />
+                <Select label="Action" name="audit_action" value={actionFilter} options={actionOptions} onChange={setActionFilter} />
+                <label style={{ margin: 0, minWidth: 160, flex: '1 1 200px' }}>
+                  <span>Search</span>
+                  <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="action, resource type, or id" />
+                </label>
               </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Events</CardTitle>
+              <CardDescription>Append-only, custody-sealed event trail. Select a row for metadata drilldown.</CardDescription>
+            </CardHeader>
+            <CardContent>
               <DataTable
                 columns={columns}
                 items={items.slice().reverse()}
@@ -542,6 +628,9 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
                 <div><span>Actor</span><strong>{getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})</strong></div>
                 <div><span>Resource</span><strong>{getString(selectedEntry, ['resource_id'])}</strong></div>
                 <div><span>Timestamp</span><strong>{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</strong></div>
+                {getString(selectedEntry, ['entry_hash'], '') !== '—' ? (
+                  <div><span>Entry hash</span><strong className="mono">{getString(selectedEntry, ['entry_hash'])}</strong></div>
+                ) : null}
                 {selectedEntry.metadata && typeof selectedEntry.metadata === 'object' && !Array.isArray(selectedEntry.metadata) ? (
                   isFlatMetadataObject(selectedEntry.metadata)
                     ? Object.entries(selectedEntry.metadata).map(([key, value]) => (
@@ -589,7 +678,6 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
               </CardContent>
             </Card>
           ) : null}
-          </div>
         </>
       )}
     </div>

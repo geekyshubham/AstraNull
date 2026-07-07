@@ -12,6 +12,14 @@ type SortKey = 'severity' | 'recent' | 'oldest' | 'sla' | 'title';
 
 const PAGE_SIZES = [6, 12, 24] as const;
 
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'severity', label: 'Severity' },
+  { value: 'recent', label: 'Recently opened' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'sla', label: 'SLA remaining' },
+  { value: 'title', label: 'Title A to Z' }
+];
+
 function getString(item: DataItem, keys: string[], fallback = '') {
   for (const key of keys) {
     const value = item[key];
@@ -139,6 +147,11 @@ export function FindingsListView({
   return (
     <div className="findings-surface">
       <div className="findings-toolbar">
+        {/*
+          Intentional segmented status control (distinct from the shared underline <Tabs>
+          used for navigation): a count-bearing filter that reads as one control alongside
+          the adjacent Select filters. It is a proper keyboard-operable tablist.
+        */}
         <div className="ft-status" role="tablist" aria-label="Finding status filters">
           {(['open', 'closed', 'accepted', 'all'] as StatusFilter[]).map((filter) => (
             <button
@@ -155,44 +168,50 @@ export function FindingsListView({
           ))}
         </div>
         <div className="ft-controls">
-          <label className="ft-field ft-search">
+          <label className="field ft-field ft-search">
             <span className="ft-label">Search</span>
             <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter findings" />
           </label>
-          <label className="ft-field">
-            <span className="ft-label">Severity</span>
-            <select className="select" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}>
-              <option value="all">All severities</option>
-              {severities.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
-            </select>
-          </label>
-          <label className="ft-field">
-            <span className="ft-label">Owner</span>
-            <select className="select" value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}>
-              <option value="all">All owners</option>
-              {owners.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
-            </select>
-          </label>
-          <label className="ft-field">
-            <span className="ft-label">Target group</span>
-            <select className="select" value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
-              <option value="all">All groups</option>
-              {targetGroups.map((group) => {
+          <Select
+            className="ft-field"
+            label="Severity"
+            value={severityFilter}
+            options={[
+              { value: 'all', label: 'All severities' },
+              ...severities.map((severity) => ({ value: severity, label: severity }))
+            ]}
+            onChange={(value) => setSeverityFilter(value)}
+          />
+          <Select
+            className="ft-field"
+            label="Owner"
+            value={ownerFilter}
+            options={[
+              { value: 'all', label: 'All owners' },
+              ...owners.map((owner) => ({ value: owner, label: owner }))
+            ]}
+            onChange={(value) => setOwnerFilter(value)}
+          />
+          <Select
+            className="ft-field"
+            label="Target group"
+            value={groupFilter}
+            options={[
+              { value: 'all', label: 'All groups' },
+              ...targetGroups.map((group) => {
                 const id = getString(group, ['id'], '');
-                return <option key={id} value={id}>{getString(group, ['name', 'id'], id)}</option>;
-              })}
-            </select>
-          </label>
-          <label className="ft-field">
-            <span className="ft-label">Sort</span>
-            <select className="select" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-              <option value="severity">Severity</option>
-              <option value="recent">Recently opened</option>
-              <option value="oldest">Oldest first</option>
-              <option value="sla">SLA remaining</option>
-              <option value="title">Title A to Z</option>
-            </select>
-          </label>
+                return { value: id, label: getString(group, ['name', 'id'], id) };
+              })
+            ]}
+            onChange={(value) => setGroupFilter(value)}
+          />
+          <Select
+            className="ft-field"
+            label="Sort"
+            value={sort}
+            options={SORT_OPTIONS}
+            onChange={(value) => setSort(value as SortKey)}
+          />
         </div>
       </div>
 
@@ -231,8 +250,8 @@ export function FindingsListView({
             options={PAGE_SIZES.map((size) => ({ value: String(size), label: String(size) }))}
             onChange={(value) => setPageSize(Number(value) as (typeof PAGE_SIZES)[number])}
           />
-          <Button className="btn btn-ghost btn-sm" disabled={currentPage <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</Button>
-          <Button className="btn btn-ghost btn-sm" disabled={currentPage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</Button>
+          <Button variant="ghost" size="sm" disabled={currentPage <= 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</Button>
+          <Button variant="ghost" size="sm" disabled={currentPage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</Button>
           <span className="fp-info">Page <span>{currentPage + 1}</span> of <span>{pageCount}</span></span>
         </div>
       </div>

@@ -18,7 +18,11 @@ import {
 } from '../../lib/safeTestGuards.mjs';
 import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
-import { correlateVerdict, withinCorrelationWindow } from '../../services/correlation.mjs';
+import {
+  correlateExternalOnlyVerdict,
+  correlateVerdict,
+  withinCorrelationWindow,
+} from '../../services/correlation.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 
@@ -408,10 +412,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
     if (!hasExternalProbeEvidence(run, events)) return null;
 
-    const target = await (async () => {
-      const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
-      return group?.targets?.find((t) => t.id === run.target_id) ?? null;
-    })();
+    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+    const target = group?.targets?.find((t) => t.id === run.target_id) ?? null;
+    const externalOnly = group?.validation_mode === 'external_only';
 
     const probeEvent = findProbeEvent(run, events);
     const matchingObs = findMatchingObservation(run, events);
@@ -419,6 +422,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       options.agentObserved !== undefined ? options.agentObserved : Boolean(matchingObs);
 
     if (
+      !externalOnly &&
       !options.finalizedWithoutObservation &&
       !matchingObs &&
       !isCollectionWindowExpired(run, nowFn().getTime())
@@ -433,15 +437,19 @@ export function createPostgresValidationServices(repositories, options = {}) {
         ? agents.find((a) => a.id === matchingObs.agent_id) ?? null
         : null);
 
-    const result = correlateVerdict({
-      externalResult: run.probe_external_result ?? probeEvent?.metadata?.external_result,
-      agentObserved,
-      expectedBehavior: resolveExpectedBehaviorForCheck(run.check_id),
-      agentOnline: agent?.status === 'online',
-      agentBound: Boolean(
-        agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
-      ),
-    });
+    const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
+    const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
+    const result = externalOnly
+      ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior })
+      : correlateVerdict({
+        externalResult,
+        agentObserved,
+        expectedBehavior,
+        agentOnline: agent?.status === 'online',
+        agentBound: Boolean(
+          agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
+        ),
+      });
 
     const evidenceIds = events.map((e) => e.id);
     const placementStore = { agents, testRuns: [run] };
@@ -477,7 +485,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
     await appendAudit(
       { tenantId: run.tenant_id, userId: 'system', role: 'system' },
-      options.finalizedWithoutObservation ? 'verdict.finalized_no_observation' : 'verdict.published',
+      options.finalizedWithoutObservation && !externalOnly
+        ? 'verdict.finalized_no_observation'
+        : 'verdict.published',
       'test_run',
       run.id,
       {
@@ -538,6 +548,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
     if (!hasExternalProbeEvidence(run, events)) return null;
     if (hasMatchingObservation(run, events)) return null;
+    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+    if (collectingGroup?.validation_mode === 'external_only') {
+      return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
+    }
     if (!force && !isCollectionWindowExpired(run, nowFn().getTime())) return null;
     return finalizeNoObservation(ctx, run, agents);
   }
@@ -1058,6 +1072,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const agents = await agentControl.listAgents(ctx);
       if (hasMatchingObservation(run, events)) {
         return finalizeVerdictIfReady(ctx, run, agents);
+      }
+      const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+      if (ingestGroup?.validation_mode === 'external_only') {
+        if (run.status === 'running') {
+          await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
+          run.status = 'collecting';
+        }
+        return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
       }
       if (isCollectionWindowExpired(run, nowFn().getTime())) {
         return maybeFinalizeCollectingRun(ctx, run, agents);

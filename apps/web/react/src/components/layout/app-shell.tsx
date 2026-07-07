@@ -1,12 +1,11 @@
-import { Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { Menu, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { clearSession } from '../../lib/api';
-import { NAV_GROUP_LABELS, NAV_ITEMS, PLATFORM_PROMISE, ROUTE_BY_ID } from '../../lib/navigation';
+import { NAV_GROUP_LABELS, NAV_ITEMS, ROUTE_BY_ID } from '../../lib/navigation';
 import { canAccessRoute } from '../../lib/route-access';
 import type { NavItem, PortalData, RouteId, Session } from '../../lib/types';
 import { cn } from '../../lib/utils';
-import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Select } from '../ui/select';
 import { Brand } from './brand';
@@ -33,7 +32,7 @@ const roles = [
 function NavLink({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
   const Icon = item.icon;
   return (
-    <button type="button" className={cn('nav-item', active && 'active')} onClick={onClick} title={item.label}>
+    <button type="button" className={cn('nav-item', active && 'active', active && 'is-active')} onClick={onClick} title={item.label}>
       <Icon size={16} />
       <span>{item.label}</span>
       {item.count ? <span className="nav-count">{item.count}</span> : null}
@@ -41,7 +40,7 @@ function NavLink({ item, active, onClick }: { item: NavItem; active: boolean; on
   );
 }
 
-export function AppShell({ route, session, data, onRouteChange, onRoleChange, onRefresh, children }: AppShellProps) {
+export function AppShell({ route, session, data, onRouteChange, onRoleChange, children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -51,12 +50,8 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
     }
   });
   const current = ROUTE_BY_ID.get(route) ?? NAV_ITEMS[0];
-  const isStaffSurface = session.principal === 'staff' || route === 'admin' || route === 'internal-soc';
-  const surfaceLabel = route === 'internal-soc'
-    ? 'Staff SOC execution surface'
-    : isStaffSurface
-      ? 'Internal management console'
-      : 'Customer readiness console';
+  const tenantId = session.tenant_id ?? data.state?.tenant_id ?? 'ten_demo';
+  const environment = (data.state as { environment?: string } | null)?.environment ?? 'dev';
   const visibleNavItems = useMemo(() => {
     const role = session.role ?? 'admin';
     return NAV_ITEMS.filter((item) => {
@@ -122,15 +117,6 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
             <X size={17} />
           </Button>
         </div>
-        <p className="surface-label">{surfaceLabel}</p>
-        <div className="tenant-card">
-          <div>
-            <span className="tenant-label">Tenant</span>
-            <strong>{session.tenant_id ?? data.state?.tenant_id ?? 'ten_demo'}</strong>
-          </div>
-          <Badge tone="success">dev</Badge>
-        </div>
-        <Select label="Role" value={session.role ?? 'admin'} options={roles} onChange={onRoleChange} />
         <nav className="nav-scroll" aria-label="Portal">
           {(Object.keys(grouped) as Array<keyof typeof NAV_GROUP_LABELS>)
             .filter((group) => (grouped[group]?.length ?? 0) > 0)
@@ -144,10 +130,23 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
           ))}
         </nav>
         <div className="sidebar-foot">
-          <a href="/">Public site</a>
-          <Button type="button" variant="ghost" size="sm" onClick={logout}>
-            Sign out
-          </Button>
+          <span>
+            <b>{tenantId}</b> · {environment}
+          </span>
+          <span>safe-by-default · SOC-gated</span>
+          <Select
+            label="Role"
+            className="sidebar-role"
+            value={session.role ?? 'admin'}
+            options={roles}
+            onChange={onRoleChange}
+          />
+          <div className="sidebar-foot-actions">
+            <a href="/">Public site</a>
+            <Button type="button" variant="ghost" size="sm" onClick={logout}>
+              Sign out
+            </Button>
+          </div>
         </div>
       </aside>
       <div className={cn('scrim', sidebarOpen && 'open')} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
@@ -156,24 +155,17 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, on
           <Button variant="ghost" size="icon" className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">
             <Menu size={18} />
           </Button>
-          <div className="title-stack">
-            <p className="muted small topbar-caption">No-access-first · Evidence-backed · SOC-gated</p>
-            <h1>{current.label}</h1>
+          <div className="crumbs">
+            <span>{NAV_GROUP_LABELS[current.group]}</span>
+            <span className="sep">›</span>
+            <b>{current.label}</b>
           </div>
-          <div className="topbar-actions">
-            <Badge tone={data.error ? 'warn' : 'success'}>
-              <ShieldCheck size={12} />
-              {data.error ? 'Fallback data' : 'Live workspace'}
-            </Badge>
-            <Button variant="secondary" size="sm" onClick={onRefresh}>
-              <RefreshCw size={14} />
-              Refresh
-            </Button>
-          </div>
+          <div className="topbar-spacer" aria-hidden="true" />
+          <label className="search">
+            <Search size={15} aria-hidden="true" />
+            <input type="search" placeholder="Search runs, findings, agents…" aria-label="Search" />
+          </label>
         </header>
-        <section className="promise-strip">
-          <p>{PLATFORM_PROMISE}</p>
-        </section>
         {children}
       </main>
     </div>

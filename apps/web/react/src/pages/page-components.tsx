@@ -511,6 +511,21 @@ function declaredTargetGroupComplete(data: PortalData) {
   return data.targetGroups.some((group) => group.archived_at == null);
 }
 
+const DASHBOARD_EVIDENCE_RUN_STATUSES = new Set(['completed', 'verdicted']);
+
+function formatDashboardShortRelative(iso: string) {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return '—';
+  const seconds = Math.round(Math.max(0, Date.now() - ts) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 120) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
+}
+
 export function DashboardPage({ data }: { data: PortalData }) {
   const [tab, setTab] = useState<DashboardTabId>(readDashboardTabId);
   const tabOptions = routeTabs('dashboard').map((item) => ({ id: item.id as DashboardTabId, label: item.label }));
@@ -548,33 +563,157 @@ export function DashboardPage({ data }: { data: PortalData }) {
   const topAgents = [...data.agents].slice(0, 4);
   const agentsOnline = metrics.agentsOnline;
   const agentsTotal = data.agents.length;
-  const lastValidation = recentRuns[0] ? formatDate(recentRuns[0].created_at ?? recentRuns[0].started_at) : '—';
+  const agentsTotalDisplay = typeof data.state?.agents_total === 'number' ? data.state.agents_total : agentsTotal;
+  const readinessDelta = typeof data.state?.readiness?.delta === 'number' ? data.state.readiness.delta : null;
+  const activeTargetGroups = data.targetGroups.filter((group) => group.archived_at == null);
+  const groupsWithEvidence = activeTargetGroups.filter((group) => {
+    const groupId = getString(group, ['id'], '');
+    return data.runs.some(
+      (run) =>
+        getString(run, ['target_group_id'], '') === groupId &&
+        DASHBOARD_EVIDENCE_RUN_STATUSES.has(getString(run, ['status'], ''))
+    );
+  }).length;
+  const coveragePercent = activeTargetGroups.length ? Math.round((groupsWithEvidence / activeTargetGroups.length) * 100) : 0;
+  const openFindingsAtS2 = data.findings.filter(
+    (finding) =>
+      getString(finding, ['status'], 'open') === 'open' &&
+      ['s2', 'high'].includes(getString(finding, ['severity'], '').toLowerCase())
+  ).length;
+  const lastRun = recentRuns[0] ?? null;
+  const lastRunTimestamp = lastRun ? String(lastRun.created_at ?? lastRun.started_at ?? '') : '';
+  const lastSafeRunValue = lastRunTimestamp ? formatDashboardShortRelative(lastRunTimestamp) : '—';
+  const lastRunCheckCount = lastRun ? getNumber(lastRun, ['check_count'], 0) : 0;
 
   return (
     <div className="content">
-      <PageHeader route="dashboard" eyebrow="Readiness command center" />
+      <PageHeader
+        route="dashboard"
+        eyebrow="Readiness overview"
+        actions={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
+              Refresh
+            </Button>
+            <Button variant="default" size="sm">
+              Run safe checks
+            </Button>
+          </>
+        }
+      />
       <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" />
       {tab === 'overview' ? (
         workspaceHydrating ? (
           <DashboardWorkspaceSkeleton />
         ) : (
         <>
-          <div className="metric-grid four">
-            <MetricCard label="Readiness score" value={score ?? '—'} sub="Evidence-backed readiness from state API" icon={Activity} tone={score === null ? 'muted' : 'info'} />
-            <MetricCard label="Open findings" value={metrics.openFindings} sub="Evidence-backed gaps" icon={TriangleAlert} tone={metrics.openFindings > 0 ? 'warn' : 'success'} />
-            <MetricCard label="Agents online" value={`${agentsOnline}/${agentsTotal || agentsOnline}`} sub="Outbound-only observers" icon={Bot} tone="success" />
-            <MetricCard label="Last validation" value={lastValidation} sub={recentRuns[0] ? getString(recentRuns[0], ['id'], 'recent run') : 'No runs yet'} icon={ListChecks} tone="muted" />
+          <div className="kpi-row">
+            <div className="kpi-cell">
+              <div className="kpi-label">Readiness</div>
+              <div className="kpi-value">
+                {score ?? '—'}
+                {score !== null ? <span className="unit">/100</span> : null}
+              </div>
+              <div className={`kpi-delta${readinessDelta !== null && readinessDelta !== 0 ? (readinessDelta > 0 ? ' up' : ' down') : ''}`}>
+                {readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : '—'}
+              </div>
+            </div>
+            <div className="kpi-cell">
+              <div className="kpi-label">Coverage</div>
+              <div className="kpi-value">
+                {coveragePercent}
+                <span className="unit">%</span>
+              </div>
+              <div className="kpi-delta">{formatNumber(metrics.targetGroups)} targets</div>
+            </div>
+            <div className="kpi-cell">
+              <div className="kpi-label">Open findings</div>
+              <div className="kpi-value">{metrics.openFindings}</div>
+              <div className="kpi-delta">{openFindingsAtS2} at S2</div>
+            </div>
+            <div className="kpi-cell">
+              <div className="kpi-label">Agents healthy</div>
+              <div className="kpi-value">{`${agentsOnline}/${agentsTotalDisplay || agentsOnline}`}</div>
+              <div className="kpi-delta">all heartbeats ≤ 30s</div>
+            </div>
+            <div className="kpi-cell">
+              <div className="kpi-label">Last safe run</div>
+              <div className="kpi-value">{lastSafeRunValue}</div>
+              <div className="kpi-delta">
+                {lastRun ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount} checks` : 'No runs yet'}
+              </div>
+            </div>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Readiness posture</CardTitle>
-              <CardDescription>Segmented pass, review, and gap counts from correlated checks.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
-            </CardContent>
-          </Card>
+          <div className="dash-grid">
+            <Card>
+              <CardHeader>
+                <CardTitle>Readiness posture</CardTitle>
+                <CardDescription>Segmented pass, review, and gap counts from correlated checks.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
+              </CardContent>
+            </Card>
+            <div className="dash-col">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Target group status</CardTitle>
+                  <CardDescription>Top groups by criticality from target group API.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {topTargetGroups.length === 0 ? (
+                    <EmptyState icon={Target} title="No target groups yet." body="Declare target groups to map business services to validation scope." actionHref="#target-groups" actionLabel="Open target groups" />
+                  ) : (
+                    <ul className="dashboard-link-list">
+                      {topTargetGroups.map((group) => {
+                        const id = getString(group, ['id'], '');
+                        const open = data.findings.filter((finding) => getString(finding, ['target_group_id']) === id && getString(finding, ['status']) === 'open').length;
+                        return (
+                          <li key={id}>
+                            <div>
+                              <strong>{getString(group, ['name', 'id'], id)}</strong>
+                              <span className="muted">{open} open findings</span>
+                            </div>
+                            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', id)}>Open</AnchorButton>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Agent health</CardTitle>
+                  <CardDescription>Outbound-only heartbeat readout.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {topAgents.length === 0 ? (
+                    <EmptyState icon={Bot} title="No agents registered." body="Install an outbound agent after declaring target scope." actionHref="#agents" actionLabel="Open agents" />
+                  ) : (
+                    <ul className="dashboard-link-list">
+                      {topAgents.map((agent) => {
+                        const id = getString(agent, ['id'], '');
+                        return (
+                          <li key={id}>
+                            <div>
+                              <strong>{getString(agent, ['hostname', 'name', 'id'], id)}</strong>
+                              <span className="row-actions">
+                                <Badge tone={getString(agent, ['status']) === 'online' ? 'success' : 'warn'} title={`Agent status ${getString(agent, ['status'], 'unknown')} from agents API`}>{getString(agent, ['status'], 'unknown')}</Badge>
+                                <span className="muted">{formatDate(agent.last_heartbeat_at ?? agent.updated_at)}</span>
+                              </span>
+                            </div>
+                            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('agent-detail', id)}>Open</AnchorButton>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
 
           <Card>
             <CardHeader>
@@ -717,64 +856,6 @@ export function DashboardPage({ data }: { data: PortalData }) {
                             </span>
                           </div>
                           <AnchorButton size="sm" variant="secondary" href={href}>Triage</AnchorButton>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-          <div className="split">
-            <Card>
-              <CardHeader>
-                <CardTitle>Target group status</CardTitle>
-                <CardDescription>Top groups by criticality from target group API.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {topTargetGroups.length === 0 ? (
-                  <EmptyState icon={Target} title="No target groups yet." body="Declare target groups to map business services to validation scope." actionHref="#target-groups" actionLabel="Open target groups" />
-                ) : (
-                  <ul className="dashboard-link-list">
-                    {topTargetGroups.map((group) => {
-                      const id = getString(group, ['id'], '');
-                      const open = data.findings.filter((finding) => getString(finding, ['target_group_id']) === id && getString(finding, ['status']) === 'open').length;
-                      return (
-                        <li key={id}>
-                          <div>
-                            <strong>{getString(group, ['name', 'id'], id)}</strong>
-                            <span className="muted">{open} open findings</span>
-                          </div>
-                          <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', id)}>Open</AnchorButton>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Agent health</CardTitle>
-                <CardDescription>Outbound-only heartbeat readout.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {topAgents.length === 0 ? (
-                  <EmptyState icon={Bot} title="No agents registered." body="Install an outbound agent after declaring target scope." actionHref="#agents" actionLabel="Open agents" />
-                ) : (
-                  <ul className="dashboard-link-list">
-                    {topAgents.map((agent) => {
-                      const id = getString(agent, ['id'], '');
-                      return (
-                        <li key={id}>
-                          <div>
-                            <strong>{getString(agent, ['hostname', 'name', 'id'], id)}</strong>
-                            <span className="row-actions">
-                              <Badge tone={getString(agent, ['status']) === 'online' ? 'success' : 'warn'} title={`Agent status ${getString(agent, ['status'], 'unknown')} from agents API`}>{getString(agent, ['status'], 'unknown')}</Badge>
-                              <span className="muted">{formatDate(agent.last_heartbeat_at ?? agent.updated_at)}</span>
-                            </span>
-                          </div>
-                          <AnchorButton size="sm" variant="secondary" href={buildDetailHref('agent-detail', id)}>Open</AnchorButton>
                         </li>
                       );
                     })}
@@ -1251,11 +1332,138 @@ export function TargetGroupsPage({
     }
   }, [data.targetGroups, filteredGroups, addTargetGroupId]);
 
+  const [createFormsOpen, setCreateFormsOpen] = useState(false);
+
+  const groupStatsById = new Map(
+    businessServiceRows(data).map((row) => [row.groupId, row])
+  );
+
+  function extractRunVerdict(run: DataItem) {
+    const verdictField = run.verdict;
+    if (typeof verdictField === 'string' && verdictField) return verdictField;
+    if (verdictField && typeof verdictField === 'object' && !Array.isArray(verdictField)) {
+      return getString(verdictField as DataItem, ['verdict', 'status', 'result'], '');
+    }
+    return getString(run, ['verdict'], '');
+  }
+
+  function lastVerdictForGroup(groupId: string) {
+    const latest = [...data.runs]
+      .filter((run) => getString(run, ['target_group_id']) === groupId)
+      .filter((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))
+      .sort((left, right) =>
+        String(right.started_at ?? right.created_at ?? '').localeCompare(String(left.started_at ?? left.created_at ?? ''))
+      )[0];
+    return latest ? extractRunVerdict(latest) : '';
+  }
+
+  function targetGroupVerdictBadgeTone(verdict: string): UiBadgeTone {
+    const key = verdict.trim().toLowerCase();
+    if (!key) return 'muted';
+    if (['pass', 'passed', 'protected', 'success', 'ok'].includes(key)) return 'success';
+    if (['gap', 'fail', 'failed', 'danger', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return 'danger';
+    if (['review', 'warn', 'warning', 'partial', 'inconclusive', 'manual_review'].includes(key)) return 'warn';
+    return 'muted';
+  }
+
+  function formatTargetGroupVerdictLabel(verdict: string) {
+    const key = verdict.trim().toLowerCase();
+    if (!key) return 'None';
+    if (['pass', 'passed', 'ok', 'success'].includes(key)) return 'Pass';
+    if (['gap', 'fail', 'failed'].includes(key)) return 'Gap';
+    if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return 'Review';
+    return formatPolicyVerdictLabel(verdict);
+  }
+
+  function criticalityBadgeTone(value: string): UiBadgeTone {
+    if (value.trim().toLowerCase() === 'critical') return 'info';
+    return value && value !== '—' ? 'muted' : 'muted';
+  }
+
+  function openFindingsBadgeTone(count: number): UiBadgeTone {
+    if (count <= 0) return 'success';
+    if (count >= 2) return 'danger';
+    return 'warn';
+  }
+
   const groupColumns: TableColumn<DataItem>[] = [
-    { key: 'name', label: 'Group', render: (item) => getString(item, ['name', 'id']) },
-    { key: 'env', label: 'Environment', render: (item) => getString(item, ['environment_id']) },
-    { key: 'timezone', label: 'Timezone', render: (item) => getString(item, ['timezone']) },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
+    {
+      key: 'group',
+      label: 'Group',
+      render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span>
+    },
+    {
+      key: 'name',
+      label: 'Name',
+      render: (item) => getString(item, ['name'], '—')
+    },
+    {
+      key: 'env',
+      label: 'Env',
+      render: (item) => <span className="mono">{getString(item, ['environment_id'], '—')}</span>
+    },
+    {
+      key: 'criticality',
+      label: 'Criticality',
+      render: (item) => {
+        const value = getString(item, ['criticality', 'business_criticality'], '');
+        if (!value || value === '—') return <span className="muted">—</span>;
+        const label = value.charAt(0).toUpperCase() + value.slice(1);
+        return <Badge tone={criticalityBadgeTone(value)}>{label}</Badge>;
+      }
+    },
+    {
+      key: 'targets',
+      label: 'Targets',
+      render: (item) => formatNumber(getNumber(item, ['target_count']))
+    },
+    {
+      key: 'agents',
+      label: 'Agents',
+      render: (item) => {
+        const groupId = getString(item, ['id'], '');
+        const stats = groupStatsById.get(groupId);
+        const online = stats?.onlineAgents ?? 0;
+        const total = stats?.boundAgents ?? 0;
+        return <span className={`mono${total === 0 ? ' muted' : ''}`} title={total === 0 ? 'No agents bound to this group yet' : undefined}>{`${online}/${total}`}</span>;
+      }
+    },
+    {
+      key: 'runs',
+      label: 'Runs',
+      render: (item) => {
+        const groupId = getString(item, ['id'], '');
+        const runCount = data.runs.filter((run) => getString(run, ['target_group_id']) === groupId).length;
+        return <span className="num">{formatNumber(runCount)}</span>;
+      }
+    },
+    {
+      key: 'open',
+      label: 'Open',
+      render: (item) => {
+        const groupId = getString(item, ['id'], '');
+        const open = groupStatsById.get(groupId)?.openFindings ?? 0;
+        if (open === 0) return <Badge tone="success">0</Badge>;
+        return <Badge tone={openFindingsBadgeTone(open)}>{formatNumber(open)}</Badge>;
+      }
+    },
+    {
+      key: 'last_verdict',
+      label: 'Last verdict',
+      render: (item) => {
+        const groupId = getString(item, ['id'], '');
+        const verdict = lastVerdictForGroup(groupId);
+        return <Badge tone={targetGroupVerdictBadgeTone(verdict)}>{formatTargetGroupVerdictLabel(verdict)}</Badge>;
+      }
+    },
+    {
+      key: 'owner',
+      label: 'Owner',
+      render: (item) => {
+        const owner = getString(item, ['owner', 'owner_group', 'business_owner'], '');
+        return owner && owner !== '—' ? <span className="muted">{owner}</span> : <span className="muted">—</span>;
+      }
+    },
     {
       key: 'actions',
       label: 'Actions',
@@ -1340,12 +1548,24 @@ export function TargetGroupsPage({
 
   return (
     <div className="content">
-      <PageHeader route="target-groups" />
-      <div className="metric-grid three">
-        <MetricCard label="Declared groups" value={data.targetGroups.length} sub="Customer-provided scope only" icon={Target} tone="info" />
-        <MetricCard label="Declared targets" value={declaredTargetTotal} sub="Across all active groups" icon={Network} tone={declaredTargetTotal > 0 ? 'info' : 'muted'} />
-        <MetricCard label="Environments" value={environments.length} sub="Derived from target-group records" icon={ShieldCheck} tone="muted" />
-      </div>
+      <PageHeader
+        route="target-groups"
+        actions={
+          <>
+            <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => {
+                setCreateFormsOpen(true);
+                document.getElementById('tg-create-forms')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >
+              Create target group
+            </Button>
+          </>
+        }
+      />
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>
       )}
@@ -1355,85 +1575,6 @@ export function TargetGroupsPage({
           <AnchorButton href="#target-groups" variant="ghost" size="sm">Clear filter</AnchorButton>
         </div>
       ) : null}
-      <div className="split">
-        <Card>
-          <CardHeader>
-            <CardTitle>Create declared target group</CardTitle>
-            <CardDescription>Customers declare scope manually. AstraNull does not discover inventory automatically.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="product-form" onSubmit={handleCreateGroup}>
-              <label>
-                <span>Name</span>
-                <input name="name" placeholder="Retail Checkout - Production" required />
-              </label>
-              <label>
-                <span>Environment</span>
-                <input name="environment_id" placeholder="prod" defaultValue="prod" />
-              </label>
-              <details className="full" open={showCreateMoreOptions} onToggle={(event) => setShowCreateMoreOptions((event.currentTarget as HTMLDetailsElement).open)}>
-                <summary>More options</summary>
-                <label className="full">
-                  <span>Description</span>
-                  <textarea name="description" rows={3} placeholder="Business service, owner, and known protection context." />
-                </label>
-                <label>
-                  <span>Timezone</span>
-                  <input name="timezone" defaultValue="UTC" />
-                </label>
-                <label>
-                  <span>Max concurrent runs</span>
-                  <input name="max_concurrent_runs" type="number" min="1" max="5" defaultValue="1" />
-                </label>
-                <label>
-                  <span>Cooldown between runs (seconds)</span>
-                  <input name="min_seconds_between_runs" type="number" min="60" defaultValue="300" />
-                </label>
-              </details>
-              <div className="form-actions full">
-                <Button type="submit" loading={busy === 'create-target-group'}>Create group</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Add declared target</CardTitle>
-            <CardDescription>Add FQDN, URL, IP/port, DNS, or canary targets to the selected group.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="product-form" onSubmit={handleAddTarget}>
-              <input type="hidden" name="kind" value={addTargetKind} />
-              <Select
-                className="full"
-                label="Selected group"
-                value={effectiveGroupId}
-                disabled={filteredGroups.length === 0}
-                options={filteredGroups.length === 0
-                  ? [{ value: '', label: 'No target groups yet' }]
-                  : filteredGroups.map((group) => ({
-                    value: getString(group, ['id']),
-                    label: getString(group, ['name', 'id'])
-                  }))}
-                onChange={setAddTargetGroupId}
-              />
-              <Select
-                label="Target type"
-                value={addTargetKind}
-                options={TARGET_KIND_SELECT_OPTIONS}
-                onChange={setAddTargetKind}
-              />
-              <label>
-                <span>Value</span>
-                <input name="value" placeholder="checkout.example.com" required />
-              </label>
-              <div className="form-actions full">
-                <Button type="submit" loading={busy.startsWith('add-target-')} disabled={busy !== '' || !effectiveGroupId}>Add target</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
       <Card>
         <CardHeader>
           <div>
@@ -1446,6 +1587,27 @@ export function TargetGroupsPage({
           <DataTable
             columns={groupColumns}
             items={filteredGroups}
+            getRowId={(item) => getString(item, ['id'], '')}
+            getRowProps={(item) => {
+              const id = getString(item, ['id'], '');
+              const href = buildDetailHref('target-group-detail', id);
+              return {
+                role: 'link',
+                tabIndex: 0,
+                style: { cursor: 'pointer' },
+                'aria-label': `Open target group ${id} detail`,
+                onClick: (event) => {
+                  const target = event.target as HTMLElement;
+                  if (target.closest('a, button')) return;
+                  window.location.hash = href.replace(/^#/, '');
+                },
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  window.location.hash = href.replace(/^#/, '');
+                }
+              };
+            }}
             empty={emptyStateFromApi({
               icon: Target,
               meta: data.targetGroupsMeta,
@@ -1455,6 +1617,98 @@ export function TargetGroupsPage({
           />
         </CardContent>
       </Card>
+      <div className="metric-grid three">
+        <MetricCard label="Declared groups" value={data.targetGroups.length} sub="Customer-provided scope only" icon={Target} tone="info" />
+        <MetricCard label="Declared targets" value={declaredTargetTotal} sub="Across all active groups" icon={Network} tone={declaredTargetTotal > 0 ? 'info' : 'muted'} />
+        <MetricCard label="Environments" value={environments.length} sub="Derived from target-group records" icon={ShieldCheck} tone="muted" />
+      </div>
+      <details
+        id="tg-create-forms"
+        className="full"
+        open={createFormsOpen}
+        onToggle={(event) => setCreateFormsOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary>Create declared target group</summary>
+        <div className="split">
+          <Card>
+            <CardHeader>
+              <CardTitle>Create declared target group</CardTitle>
+              <CardDescription>Customers declare scope manually. AstraNull does not discover inventory automatically.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="product-form" onSubmit={handleCreateGroup}>
+                <label>
+                  <span>Name</span>
+                  <input name="name" placeholder="Retail Checkout - Production" required />
+                </label>
+                <label>
+                  <span>Environment</span>
+                  <input name="environment_id" placeholder="prod" defaultValue="prod" />
+                </label>
+                <details className="full" open={showCreateMoreOptions} onToggle={(event) => setShowCreateMoreOptions((event.currentTarget as HTMLDetailsElement).open)}>
+                  <summary>More options</summary>
+                  <label className="full">
+                    <span>Description</span>
+                    <textarea name="description" rows={3} placeholder="Business service, owner, and known protection context." />
+                  </label>
+                  <label>
+                    <span>Timezone</span>
+                    <input name="timezone" defaultValue="UTC" />
+                  </label>
+                  <label>
+                    <span>Max concurrent runs</span>
+                    <input name="max_concurrent_runs" type="number" min="1" max="5" defaultValue="1" />
+                  </label>
+                  <label>
+                    <span>Cooldown between runs (seconds)</span>
+                    <input name="min_seconds_between_runs" type="number" min="60" defaultValue="300" />
+                  </label>
+                </details>
+                <div className="form-actions full">
+                  <Button type="submit" loading={busy === 'create-target-group'}>Create group</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Add declared target</CardTitle>
+              <CardDescription>Add FQDN, URL, IP/port, DNS, or canary targets to the selected group.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="product-form" onSubmit={handleAddTarget}>
+                <input type="hidden" name="kind" value={addTargetKind} />
+                <Select
+                  className="full"
+                  label="Selected group"
+                  value={effectiveGroupId}
+                  disabled={filteredGroups.length === 0}
+                  options={filteredGroups.length === 0
+                    ? [{ value: '', label: 'No target groups yet' }]
+                    : filteredGroups.map((group) => ({
+                      value: getString(group, ['id']),
+                      label: getString(group, ['name', 'id'])
+                    }))}
+                  onChange={setAddTargetGroupId}
+                />
+                <Select
+                  label="Target type"
+                  value={addTargetKind}
+                  options={TARGET_KIND_SELECT_OPTIONS}
+                  onChange={setAddTargetKind}
+                />
+                <label>
+                  <span>Value</span>
+                  <input name="value" placeholder="checkout.example.com" required />
+                </label>
+                <div className="form-actions full">
+                  <Button type="submit" loading={busy.startsWith('add-target-')} disabled={busy !== '' || !effectiveGroupId}>Add target</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </details>
     </div>
   );
 }
@@ -2601,58 +2855,117 @@ export function EnvironmentsPage({ data }: { data: PortalData }) {
     : 0;
   const totalOpenFindings = rows.reduce((sum, row) => sum + row.openFindings, 0);
 
+  function environmentDisplayName(row: (typeof rows)[number]) {
+    const names = row.groups
+      .map((group) => getString(group, ['name', 'display_name'], ''))
+      .filter((name) => name && name !== '—');
+    if (names.length === 0) return '—';
+    const unique = [...new Set(names)];
+    return unique.length === 1 ? unique[0] : `${unique[0]} (+${unique.length - 1})`;
+  }
+
+  function environmentRegion(row: (typeof rows)[number]) {
+    for (const group of row.groups) {
+      const region = getString(group, ['region', 'region_summary', 'location'], '');
+      if (region && region !== '—') return region;
+    }
+    return '—';
+  }
+
+  function environmentAgentCount(environmentId: string) {
+    return data.agents.filter((agent) => getString(agent, ['environment_id'], '') === environmentId).length;
+  }
+
+  function environmentLastValidation(row: (typeof rows)[number]) {
+    const groupIds = new Set(row.groups.map((group) => getString(group, ['id'], '')));
+    let latestIso = '';
+    for (const run of data.runs) {
+      if (!groupIds.has(getString(run, ['target_group_id'], ''))) continue;
+      const stamp = run.completed_at ?? run.verdicted_at ?? run.updated_at ?? run.created_at;
+      if (stamp === undefined || stamp === null) continue;
+      const iso = String(stamp);
+      if (!latestIso || iso > latestIso) latestIso = iso;
+    }
+    return latestIso ? formatDate(latestIso) : '—';
+  }
+
+  function environmentStatusTone(row: (typeof rows)[number]) {
+    if (row.coverage === 100 && row.openFindings === 0) return 'success' as const;
+    if (row.coverage > 0) return 'warn' as const;
+    return 'muted' as const;
+  }
+
+  function environmentStatusLabel(row: (typeof rows)[number]) {
+    if (row.coverage === 100 && row.openFindings === 0) return 'Validated';
+    if (row.coverage > 0) return 'Review';
+    if (environmentAgentCount(row.id) === 0 && row.groupCount > 0) return 'No agent';
+    return 'Needs evidence';
+  }
+
+  const environmentColumns: TableColumn<(typeof rows)[number]>[] = [
+    {
+      key: 'id',
+      label: 'Environment',
+      render: (row) => (
+        <AnchorButton size="sm" variant="ghost" href={`#target-groups?environment_id=${encodeURIComponent(row.id)}`}>
+          {row.id}
+        </AnchorButton>
+      )
+    },
+    { key: 'name', label: 'Name', render: (row) => environmentDisplayName(row) },
+    { key: 'region', label: 'Region', render: (row) => <span className="muted">{environmentRegion(row)}</span> },
+    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{row.groupCount}</span> },
+    { key: 'agents', label: 'Agents', render: (row) => <span className="tabular-nums">{environmentAgentCount(row.id)}</span> },
+    { key: 'last', label: 'Last validation', render: (row) => <span className="muted">{environmentLastValidation(row)}</span> },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (row) => <Badge tone={environmentStatusTone(row)}>{environmentStatusLabel(row)}</Badge>
+    },
+    {
+      key: 'open',
+      label: 'Open findings',
+      render: (row) => row.openFindings > 0
+        ? <Badge tone="danger">{row.openFindings}</Badge>
+        : <span className="muted">—</span>
+    }
+  ];
+
   return (
     <div className="content">
       <PageHeader route="environments" />
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Declared environments</CardTitle>
+            <CardDescription>
+              Environment IDs from declared target groups with validation evidence, agent placement, and open findings.
+            </CardDescription>
+          </div>
+          {rows.length > 0 ? <Badge tone="info">{rows.length} environments</Badge> : null}
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={environmentColumns}
+            items={rows}
+            getRowId={(row) => row.id}
+            empty={
+              <EmptyState
+                icon={ServerCog}
+                title="No environments yet."
+                body="Create a declared target group with an environment ID to populate this view."
+                actionLabel="Open Target Groups"
+                actionHref="#target-groups"
+              />
+            }
+          />
+        </CardContent>
+      </Card>
       <div className="metric-grid three">
         <MetricCard label="Environments" value={rows.length} sub="From declared target groups" icon={ServerCog} tone="info" />
         <MetricCard label="Avg coverage" value={`${avgCoverage}%`} sub="Groups with completed runs" icon={Activity} tone={avgCoverage >= 100 ? 'success' : avgCoverage > 0 ? 'warn' : 'muted'} />
         <MetricCard label="Open findings" value={totalOpenFindings} sub="Across all environments" icon={TriangleAlert} tone={totalOpenFindings > 0 ? 'warn' : 'success'} />
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Environment readiness</CardTitle>
-          <CardDescription>
-            Segment declared groups by operational environment and current validation evidence. Coverage bar = share of groups with completed runs.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {rows.length === 0 ? (
-            <EmptyState icon={ServerCog} title="No environments yet." body="Create a declared target group with an environment ID to populate this view." actionLabel="Open Target Groups" actionHref="#target-groups" />
-          ) : (
-            <>
-          <div className="row-actions environment-legend">
-            <Badge tone="success">Fully covered</Badge>
-            <Badge tone="warn">Partial evidence</Badge>
-            <Badge tone="danger">Needs evidence</Badge>
-          </div>
-          <div className="environment-grid">
-          {rows.map((row) => (
-            <div
-              className="environment-card"
-              key={row.id}
-            >
-              <div>
-                <strong>{row.id}</strong>
-                <Badge
-                  tone={row.coverage === 100 && row.openFindings === 0 ? 'success' : row.coverage > 0 ? 'warn' : 'danger'}
-                  aria-label={`Readiness state: ${row.state}`}
-                >
-                  {row.state}
-                </Badge>
-              </div>
-              <Progress value={row.coverage} tone={scoreProgressTone(row.coverage)} label={`${row.id} coverage`} />
-              <span className="muted">{row.groupsWithEvidence}/{row.groupCount} groups with completed runs</span>
-              <span className="muted">{row.completedRuns} completed or verdicted runs</span>
-              <span className="muted">{row.openFindings} open findings</span>
-              <AnchorButton size="sm" variant="secondary" href={`#target-groups?environment_id=${encodeURIComponent(row.id)}`}>View target groups</AnchorButton>
-            </div>
-          ))}
-          </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -2685,7 +2998,30 @@ export function PolicyPage({
       label: getString(check, ['name', 'check_id'])
     }))
   ];
+  function formatPolicySafeWindow(item: DataItem) {
+    const windows = item.safe_windows;
+    if (!Array.isArray(windows) || windows.length === 0) return '—';
+    const first = windows[0];
+    if (!first || typeof first !== 'object') return '—';
+    const windowItem = first as DataItem;
+    const day = getString(windowItem, ['day'], '');
+    const start = getString(windowItem, ['start'], '');
+    const end = getString(windowItem, ['end'], '');
+    if (!start && !end) return '—';
+    const range = start && end ? `${start}–${end}` : start || end;
+    return day ? `${day} ${range}` : range;
+  }
+
+  function policyVerdictBadgeTone(verdict: string): UiBadgeTone {
+    const key = verdict.trim().toLowerCase();
+    if (['pass', 'passed', 'success', 'ok'].includes(key)) return 'success';
+    if (['fail', 'failed', 'gap'].includes(key)) return 'danger';
+    if (['review', 'manual_review', 'warn', 'warning', 'partial', 'inconclusive'].includes(key)) return 'warn';
+    return 'info';
+  }
+
   const policyColumns: TableColumn<DataItem>[] = [
+    { key: 'id', label: 'Policy', render: (item) => getString(item, ['id', 'policy_id']) },
     {
       key: 'target',
       label: 'Target group',
@@ -2713,7 +3049,8 @@ export function PolicyPage({
       return <Badge tone={state === 'paused' ? 'warn' : 'success'}>{formatPolicyStateLabel(state)}</Badge>;
     } },
     { key: 'cadence', label: 'Cadence', render: (item) => <Badge tone="info">{formatPolicyCadenceLabel(getString(item, ['cadence']))}</Badge> },
-    { key: 'expected', label: 'Expected verdict', render: (item) => <Badge tone="info">{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge> },
+    { key: 'safe_window', label: 'Safe window', render: (item) => <span className="mono muted">{formatPolicySafeWindow(item)}</span> },
+    { key: 'expected', label: 'Expected verdict', render: (item) => <Badge tone={policyVerdictBadgeTone(getString(item, ['expected_verdict']))}>{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge> },
     { key: 'targets', label: 'Targets', render: (item) => getNumber(item, ['target_count']) },
     { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
@@ -2832,84 +3169,37 @@ export function PolicyPage({
 
   return (
     <div className="content">
-      <PageHeader route="test-policies" />
+      <PageHeader
+        route="test-policies"
+        actions={
+          <Button
+            variant="default"
+            size="sm"
+            disabled={busy !== ''}
+            onClick={() => {
+              const el = document.querySelector('#test-policies-create');
+              if (el instanceof HTMLDetailsElement) el.open = true;
+              el?.scrollIntoView({ behavior: 'smooth' });
+            }}
+          >
+            New policy
+          </Button>
+        }
+      />
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
       )}
-      <div className="split">
-      <Card id="test-policies-create">
-        <CardHeader>
-          <CardTitle>Create safe validation policy</CardTitle>
-          <CardDescription>
-            Bind a customer-runnable safe check to an active declared target group. SOC-gated checks remain request-only.
-            {' '}
-            <span className="muted small">
-              {data.testPolicies.length} active · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
-            </span>
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="product-form" onSubmit={handleCreatePolicy}>
-            <input type="hidden" name="check_id" value={policyCheckId} />
-            <input type="hidden" name="cadence" value={policyCadence} />
-            <input type="hidden" name="expected_verdict" value={policyExpectedVerdict} />
-            <TargetGroupPicker
-              groups={data.targetGroups}
-              selectedIds={policyTargetGroupIds}
-              onChange={setPolicyTargetGroupIds}
-              disabled={data.targetGroups.length === 0 || busy !== ''}
-            />
-            <Select
-              label="Safe check"
-              value={policyCheckId}
-              options={policyCheckOptions}
-              disabled={safeChecks.length === 0}
-              onChange={setPolicyCheckId}
-            />
-            <Select
-              label="Cadence"
-              value={policyCadence}
-              options={POLICY_CADENCE_OPTIONS}
-              onChange={setPolicyCadence}
-            />
-            <Select
-              label="Expected verdict"
-              value={policyExpectedVerdict}
-              options={POLICY_VERDICT_OPTIONS}
-              onChange={setPolicyExpectedVerdict}
-            />
-            <details className="full">
-              <summary>Safe window (optional)</summary>
-              <label>
-                <span>Safe window day</span>
-                <input name="safe_window_day" placeholder="Mon" />
-              </label>
-              <label>
-                <span>Window timezone</span>
-                <input name="safe_window_timezone" defaultValue="UTC" />
-              </label>
-              <label>
-                <span>Window start</span>
-                <input name="safe_window_start" type="time" />
-              </label>
-              <label>
-                <span>Window end</span>
-                <input name="safe_window_end" type="time" />
-              </label>
-            </details>
-            <div className="form-actions full">
-              <Button type="submit" loading={busy === 'create-test-policy'} disabled={data.targetGroups.length === 0 || safeChecks.length === 0}>
-                Create policy
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
       <Card>
         <CardHeader>
           <div>
             <CardTitle>Safe validation policies</CardTitle>
-            <CardDescription>Scheduled bindings between declared target groups and customer-runnable safe checks.</CardDescription>
+            <CardDescription>
+              Scheduled bindings between declared target groups and customer-runnable safe checks.
+              {' '}
+              <span className="muted small">
+                {data.testPolicies.length} active · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
+              </span>
+            </CardDescription>
           </div>
           {data.testPolicies.length > 0 ? <Badge tone="info">{data.testPolicies.length} active</Badge> : null}
         </CardHeader>
@@ -2926,13 +3216,83 @@ export function PolicyPage({
               icon: ClipboardList,
               title: 'No test policies yet.',
               body: 'Create a safe validation policy after declaring target groups and reviewing the safe check catalog.',
-              actionLabel: 'Create policy above',
-              onAction: () => document.querySelector('#test-policies-create')?.scrollIntoView({ behavior: 'smooth' })
+              actionLabel: 'New policy',
+              onAction: () => {
+                const el = document.querySelector('#test-policies-create');
+                if (el instanceof HTMLDetailsElement) el.open = true;
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }
             })}
           />
         </CardContent>
       </Card>
-      </div>
+      <details id="test-policies-create" className="disclosure">
+        <summary>New policy</summary>
+        <Card>
+          <CardHeader>
+            <CardTitle>Create safe validation policy</CardTitle>
+            <CardDescription>
+              Bind a customer-runnable safe check to an active declared target group. SOC-gated checks remain request-only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="product-form" onSubmit={handleCreatePolicy}>
+              <input type="hidden" name="check_id" value={policyCheckId} />
+              <input type="hidden" name="cadence" value={policyCadence} />
+              <input type="hidden" name="expected_verdict" value={policyExpectedVerdict} />
+              <TargetGroupPicker
+                groups={data.targetGroups}
+                selectedIds={policyTargetGroupIds}
+                onChange={setPolicyTargetGroupIds}
+                disabled={data.targetGroups.length === 0 || busy !== ''}
+              />
+              <Select
+                label="Safe check"
+                value={policyCheckId}
+                options={policyCheckOptions}
+                disabled={safeChecks.length === 0}
+                onChange={setPolicyCheckId}
+              />
+              <Select
+                label="Cadence"
+                value={policyCadence}
+                options={POLICY_CADENCE_OPTIONS}
+                onChange={setPolicyCadence}
+              />
+              <Select
+                label="Expected verdict"
+                value={policyExpectedVerdict}
+                options={POLICY_VERDICT_OPTIONS}
+                onChange={setPolicyExpectedVerdict}
+              />
+              <details className="full">
+                <summary>Safe window (optional)</summary>
+                <label>
+                  <span>Safe window day</span>
+                  <input name="safe_window_day" placeholder="Mon" />
+                </label>
+                <label>
+                  <span>Window timezone</span>
+                  <input name="safe_window_timezone" defaultValue="UTC" />
+                </label>
+                <label>
+                  <span>Window start</span>
+                  <input name="safe_window_start" type="time" />
+                </label>
+                <label>
+                  <span>Window end</span>
+                  <input name="safe_window_end" type="time" />
+                </label>
+              </details>
+              <div className="form-actions full">
+                <Button type="submit" loading={busy === 'create-test-policy'} disabled={data.targetGroups.length === 0 || safeChecks.length === 0}>
+                  Create policy
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </details>
       <ConfirmModal
         open={Boolean(archivePolicyId)}
         title={`Archive test policy ${archivePolicyId}`}
@@ -3165,13 +3525,35 @@ export function IntegrationPage({
         </Card>
       ) : (
         <>
+          {(message || error) && (
+            <div className={error ? 'form-banner error' : 'form-banner'}>
+              {error || message}
+            </div>
+          )}
           <Card>
             <CardHeader>
-              <CardTitle>Create read-only connector</CardTitle>
-              <CardDescription>Store a provider credential in the encrypted secret vault or reference an existing secret, then create a metadata-only connector.</CardDescription>
+              <div>
+                <CardTitle>Configured connectors</CardTitle>
+                <CardDescription>Validate, poll, and disable connectors — plaintext credentials are never rendered.</CardDescription>
+              </div>
+              <Badge tone="info">{data.connectors.length} total</Badge>
             </CardHeader>
             <CardContent>
-              {activeConnectors.length === 0 ? (
+              <DataTable
+                columns={connectorColumns}
+                items={data.connectors}
+                empty={<EmptyState icon={PlugZap} title="No connectors configured." body="Create a read-only connector or continue using manual evidence workflows without provider access." />}
+              />
+            </CardContent>
+          </Card>
+          <details id="integrations-create-connector" className="disclosure" open={activeConnectors.length === 0}>
+            <summary>Add connector</summary>
+            <Card>
+              <CardHeader>
+                <CardTitle>Create read-only connector</CardTitle>
+                <CardDescription>Store a provider credential in the encrypted secret vault or reference an existing secret, then create a metadata-only connector.</CardDescription>
+              </CardHeader>
+              <CardContent>
                 <form className="product-form" onSubmit={handleCreateConnector} aria-busy={busy === 'create-connector' || undefined}>
                   <fieldset disabled={busy !== ''}>
                   <label>
@@ -3190,32 +3572,7 @@ export function IntegrationPage({
                     <textarea name="secret" rows={4} placeholder='Cloudflare token, or AWS JSON: {"access_key_id":"...","secret_access_key":"...","region":"us-east-1"}' />
                   </label>
                   <p className="muted full">Credentials are stored encrypted in the tenant secret vault before the connector is created. Plaintext is never shown again after submit.</p>
-                  <div className="form-actions full">
-                    <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">Create connector</Button>
-                  </div>
-                  </fieldset>
-                </form>
-              ) : (
-              <details className="disclosure">
-                <summary>Expand intake form</summary>
-                <form className="product-form" onSubmit={handleCreateConnector} aria-busy={busy === 'create-connector' || undefined}>
-                  <fieldset disabled={busy !== ''}>
-                  <label>
-                    <span>Provider</span>
-                    <select name="provider" defaultValue="cloudflare">
-                      <option value="cloudflare">Cloudflare</option>
-                      <option value="aws_waf">AWS WAF</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Name</span>
-                    <input name="name" placeholder="edge-readonly" required />
-                  </label>
-                  <label className="full">
-                    <span>API key or credential JSON</span>
-                    <textarea name="secret" rows={4} placeholder='Cloudflare token, or AWS JSON: {"access_key_id":"...","secret_access_key":"...","region":"us-east-1"}' />
-                  </label>
-                  <p className="muted full">Credentials are stored encrypted in the tenant secret vault before the connector is created. Plaintext is never shown again after submit.</p>
+                  {activeConnectors.length > 0 ? (
                   <details className="full" open={showConnectorAdvanced} onToggle={(event) => setShowConnectorAdvanced((event.currentTarget as HTMLDetailsElement).open)}>
                     <summary>Advanced options</summary>
                     <label>
@@ -3239,17 +3596,18 @@ export function IntegrationPage({
                       </select>
                     </label>
                   </details>
+                  ) : null}
                   <div className="form-actions full">
                     <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">Create connector</Button>
                   </div>
                   </fieldset>
                 </form>
-              </details>
-              )}
-            </CardContent>
-          </Card>
-          <p className="surface-label">Manual metadata ingest</p>
-          <Card>
+              </CardContent>
+            </Card>
+          </details>
+          <details className="disclosure">
+            <summary>Manual metadata snapshot</summary>
+            <Card>
               <CardHeader>
                 <CardTitle>Manual metadata snapshot</CardTitle>
                 <CardDescription>Use this when provider polling is unavailable or encryption is not configured locally.</CardDescription>
@@ -3308,27 +3666,7 @@ export function IntegrationPage({
                 </form>
               </CardContent>
             </Card>
-          {(message || error) && (
-            <div className={error ? 'form-banner error' : 'form-banner'}>
-              {error || message}
-            </div>
-          )}
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle>Configured connectors</CardTitle>
-                <CardDescription>Validate, poll, and disable connectors — plaintext credentials are never rendered.</CardDescription>
-              </div>
-              <Badge tone="info">{data.connectors.length} total</Badge>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={connectorColumns}
-                items={data.connectors}
-                empty={<EmptyState icon={PlugZap} title="No connectors configured." body="Create a read-only connector or continue using manual evidence workflows without provider access." />}
-              />
-            </CardContent>
-          </Card>
+          </details>
           <details>
             <summary>Connector snapshots ({snapshots.length} loaded)</summary>
             <Card>
@@ -3502,12 +3840,53 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
   const targetGroupUsage = getNumber(usage ?? {}, ['target_groups']);
   const usersLimit = getNestedNumber(subscription, ['limits', 'users'], -1);
   const agentsLimit = getNestedNumber(subscription, ['limits', 'agents'], -1);
+  const agentsUsed = getNumber(usage ?? {}, ['agents']);
+  const subscriptionStatus = getString(subscription ?? {}, ['status'], '—');
+  const highScaleMonthLimit = getNestedNumber(subscription, ['limits', 'high_scale_requests_per_month'], -1);
+  const highScaleMonthUsed = getNumber(usage ?? {}, ['high_scale_requests_this_month']);
+  const highScaleKpiUsed = summary
+    ? (highScaleMonthUsed > 0 ? highScaleMonthUsed : getNumber(usage ?? {}, ['pending_high_scale_requests']))
+    : 0;
+  const planKpiSub = summary ? `${subscriptionStatus} · current plan` : 'current plan';
+  const agentsKpiValue = summary ? (agentsLimit >= 0 ? `${agentsUsed}/${agentsLimit}` : agentsUsed) : '—';
+  const agentsKpiSub = summary ? (agentsLimit >= 0 ? `of ${agentsLimit} licensed` : 'recorded in workspace') : 'of — licensed';
+  const highScaleKpiValue = summary
+    ? (highScaleMonthLimit >= 0 ? `${highScaleKpiUsed}/${highScaleMonthLimit}` : highScaleKpiUsed)
+    : '—';
+  const highScaleKpiSub = summary
+    ? (highScaleMonthLimit >= 0
+      ? 'requests this month'
+      : highScaleEnabled
+        ? 'SOC-gated · program enabled'
+        : 'SOC-gated · program disabled')
+    : 'requests this month';
   const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], '');
+
+  const subscriptionKpiRow = (
+    <div className="metric-grid three">
+      <MetricCard label="Plan" value={summary ? planLabel : '—'} sub={planKpiSub} icon={ShieldCheck} tone={hasSubscription ? 'info' : 'muted'} />
+      <MetricCard
+        label="Agents used"
+        value={agentsKpiValue}
+        sub={agentsKpiSub}
+        icon={Bot}
+        tone={summary && agentsLimit >= 0 && agentsUsed >= agentsLimit ? 'warn' : 'info'}
+      />
+      <MetricCard
+        label="High-scale / month"
+        value={highScaleKpiValue}
+        sub={highScaleKpiSub}
+        icon={Siren}
+        tone={summary && highScaleMonthLimit >= 0 && highScaleKpiUsed >= highScaleMonthLimit ? 'warn' : 'muted'}
+      />
+    </div>
+  );
 
   if (!hasSubscription) {
     return (
       <div className="content">
         <PageHeader route="subscription" eyebrow="Entitlements" />
+        {subscriptionKpiRow}
         <EmptyState
           icon={LifeBuoy}
           title="No subscription configured for this tenant."
@@ -3525,6 +3904,7 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
   return (
     <div className="content">
       <PageHeader route="subscription" eyebrow="Entitlements" />
+      {subscriptionKpiRow}
       <PageContextSummary>
         {planLabel} · safe runs{' '}
         <span className="tabular-nums">{safeRunsUsed}</span>

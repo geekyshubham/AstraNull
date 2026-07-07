@@ -9,7 +9,6 @@ import {
   KeyRound,
   ListChecks,
   Network,
-  RadioTower,
   ScanSearch,
   ShieldCheck,
   Siren,
@@ -81,7 +80,7 @@ import {
 } from '../lib/waf-helpers';
 import { formatDate, scoreTone } from '../lib/utils';
 import type { ProgressTone } from '../components/ui/progress';
-import { MetricCard, PageHeader } from './page-components';
+import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 
 const WAF_POSTURE_SURFACE_TABS = [
   ...WAF_POSTURE_TABS,
@@ -143,6 +142,84 @@ function formatSafetyClassLabel(safetyClass: string) {
   if (safetyClass === 'safe') return 'Customer-runnable';
   if (safetyClass === 'soc_gated') return 'SOC request-only';
   return safetyClass.replace(/_/g, ' ');
+}
+
+function getRunVerdictValue(run: DataItem) {
+  const verdict = run.verdict;
+  if (verdict && typeof verdict === 'object' && !Array.isArray(verdict)) {
+    const nested = getString(verdict as DataItem, ['verdict'], '');
+    if (nested) return nested;
+  }
+  return getString(run, ['verdict', 'verdict'], '');
+}
+
+function buildLatestCheckVerdictMap(runs: DataItem[]) {
+  const map = new Map<string, { verdict: string; runId: string }>();
+  const sortKeys = new Map<string, string>();
+  for (const run of runs) {
+    const checkId = getString(run, ['check_id'], '');
+    if (!checkId) continue;
+    const status = getString(run, ['status'], '');
+    if (!['completed', 'verdicted'].includes(status)) continue;
+    const verdict = getRunVerdictValue(run);
+    if (!verdict) continue;
+    const at = String(run.updated_at ?? run.completed_at ?? run.started_at ?? run.created_at ?? '');
+    const prevAt = sortKeys.get(checkId) ?? '';
+    if (!prevAt || at.localeCompare(prevAt) >= 0) {
+      sortKeys.set(checkId, at);
+      map.set(checkId, { verdict, runId: getString(run, ['id'], '') });
+    }
+  }
+  return map;
+}
+
+function formatCheckModeLabel(safetyClass: string) {
+  if (safetyClass === 'safe') return 'safe';
+  if (safetyClass === 'soc_gated') return 'SOC-gated';
+  return formatSafetyClassLabel(safetyClass);
+}
+
+function checkModeBadgeTone(safetyClass: string): BadgeTone {
+  if (safetyClass === 'safe') return 'success';
+  if (safetyClass === 'soc_gated') return 'info';
+  return 'muted';
+}
+
+function formatCheckBoundLabel(check: DataItem) {
+  const maxRate = check.max_rate;
+  if (typeof maxRate === 'number' && Number.isFinite(maxRate) && maxRate > 0) {
+    return `${maxRate} RPS`;
+  }
+  if (typeof maxRate === 'string' && maxRate.trim()) {
+    return maxRate.replace(/_/g, ' ');
+  }
+  const kind = getNestedString(check, ['probe_profile', 'kind'], '');
+  if (kind === 'metadata_marker' || kind === 'ops_readiness') return 'metadata';
+  const profile = check.probe_profile;
+  if (profile && typeof profile === 'object' && !Array.isArray(profile)) {
+    const maxRequests = Number((profile as DataItem).max_requests);
+    if (Number.isFinite(maxRequests) && maxRequests === 1) return 'metadata';
+  }
+  return '—';
+}
+
+function formatCatalogVerdictLabel(verdict: string) {
+  const key = verdict.trim().toLowerCase();
+  if (!key) return '—';
+  if (['pass', 'passed', 'protected', 'ready', 'success', 'ok'].includes(key)) return 'Pass';
+  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable', 'penetrated'].includes(key)) return 'Gap';
+  if (['review', 'partial', 'inconclusive', 'warn', 'warning', 'medium'].includes(key)) return 'Review';
+  if (key === 'request') return 'request';
+  return formatVerdictLabel(verdict);
+}
+
+function catalogVerdictBadgeTone(verdict: string): BadgeTone {
+  const label = formatCatalogVerdictLabel(verdict);
+  if (label === 'Pass') return 'success';
+  if (label === 'Gap') return 'danger';
+  if (label === 'Review') return 'warn';
+  if (label === 'request') return 'muted';
+  return verdictBadgeTone(verdict);
 }
 
 function formatRunStatusLabel(status: string) {
@@ -539,6 +616,8 @@ export function AgentsPage({
         <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
       )
     },
+    { key: 'hostname', label: 'Hostname', render: (item) => getString(item, ['hostname', 'name'], '—') },
+    { key: 'environment', label: 'Env', render: (item) => getString(item, ['environment_id'], 'tenant scope') },
     {
       key: 'health',
       label: 'Health',
@@ -746,45 +825,66 @@ export function AgentsPage({
   return (
     <div className="content">
       <PageHeader route="agents" />
-      <div className="metric-grid three">
-        <MetricCard label="Declared groups" value={data.targetGroups.length} sub="Manual or API import only" icon={Target} tone="info" />
-        <MetricCard label="Agents" value={data.agents.length} sub="Outbound-only control channel" icon={Bot} tone="success" />
-        <MetricCard label="Online agents" value={onlineAgents} sub="Current heartbeat status" icon={RadioTower} tone={onlineAgents > 0 ? 'success' : 'muted'} />
-      </div>
+      <PageContextSummary>
+        <span className="tabular-nums">{data.targetGroups.length}</span> declared groups ·{' '}
+        <span className="tabular-nums">{data.agents.length}</span> agents ·{' '}
+        <span className="tabular-nums">{onlineAgents}</span> online
+      </PageContextSummary>
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       <Tabs value={agentTab} options={agentTabOptions} onChange={setAgentTab} className="tabs-wrap" />
-      {agentTab === 'install' ? (
-        <AgentInstallMatrix
-          data={data}
-          tokenSecret={tokenSecret}
-          onCreateToken={() => void createBootstrapToken()}
-          createBusy={busy === 'create-bootstrap-token'}
-          actionsDisabled={busy !== ''}
-        />
-      ) : null}
-      {agentTab === 'fleet' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Agent fleet</CardTitle>
-            <CardDescription>Registered outbound agents. Revoke invalidates credentials immediately.</CardDescription>
-          </CardHeader>
-          <CardContent aria-busy={auxLoading || undefined}>
-            {auxLoading ? <TableSkeleton rows={3} label="Refreshing agent fleet" /> : null}
-            {!auxLoading ? <DataTable
-              columns={fleetColumns}
-              items={data.agents}
-              empty={(
-                <EmptyState
-                  icon={Bot}
-                  title="No agents have registered yet."
-                  body="Create a bootstrap token on the Install tab, then install an outbound-only agent."
-                  actionLabel="Go to Install"
-                  onAction={() => setAgentTab('install')}
-                />
-              )}
-            /> : null}
-          </CardContent>
-        </Card>
+      {agentTab === 'fleet' || agentTab === 'install' ? (
+        <div className="stack">
+          <Card>
+            <CardHeader>
+              <CardTitle>Installed agents</CardTitle>
+              <CardDescription>Registered outbound agents. Revoke invalidates credentials immediately.</CardDescription>
+            </CardHeader>
+            <CardContent aria-busy={auxLoading || undefined}>
+              {auxLoading ? <TableSkeleton rows={3} label="Refreshing agent fleet" /> : null}
+              {!auxLoading ? <DataTable
+                columns={fleetColumns}
+                items={data.agents}
+                getRowProps={(item) => {
+                  const id = getString(item, ['id'], '');
+                  return {
+                    role: 'link',
+                    tabIndex: 0,
+                    style: { cursor: 'pointer' },
+                    'aria-label': `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`,
+                    onClick: (event) => {
+                      if ((event.target as HTMLElement).closest('a, button')) return;
+                      if (!id) return;
+                      window.location.hash = `agent-detail?id=${encodeURIComponent(id)}`;
+                    },
+                    onKeyDown: (event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      if ((event.target as HTMLElement).closest('a, button')) return;
+                      if (!id) return;
+                      event.preventDefault();
+                      window.location.hash = `agent-detail?id=${encodeURIComponent(id)}`;
+                    }
+                  };
+                }}
+                empty={(
+                  <EmptyState
+                    icon={Bot}
+                    title="No agents have registered yet."
+                    body="Create a bootstrap token below, then install an outbound-only agent."
+                    actionLabel="Deploy an agent"
+                    onAction={() => setAgentTab('install')}
+                  />
+                )}
+              /> : null}
+            </CardContent>
+          </Card>
+          <AgentInstallMatrix
+            data={data}
+            tokenSecret={tokenSecret}
+            onCreateToken={() => void createBootstrapToken()}
+            createBusy={busy === 'create-bootstrap-token'}
+            actionsDisabled={busy !== ''}
+          />
+        </div>
       ) : null}
       {agentTab === 'operations' ? (
         <div className="stack">
@@ -937,6 +1037,7 @@ export function ValidationSurfacePage({
     () => filterChecksCatalog(data.checks, checkFilter, checkSafetyScope),
     [data.checks, checkFilter, checkSafetyScope]
   );
+  const latestCheckVerdicts = useMemo(() => buildLatestCheckVerdictMap(data.runs), [data.runs]);
 
   const filteredRuns = useMemo(() => {
     const sorted = [...data.runs].sort((a, b) => {
@@ -1120,8 +1221,8 @@ export function ValidationSurfacePage({
           const name = getString(item, ['name'], '');
           return (
             <div className="stack-tight">
-              <strong>{name || checkId}</strong>
-              {name ? <span className="muted small"><code>{checkId}</code></span> : null}
+              <code className="traffic-path-label" title={checkId}>{checkId}</code>
+              {name && name !== checkId ? <span className="muted small">{name}</span> : null}
             </div>
           );
         }
@@ -1129,41 +1230,41 @@ export function ValidationSurfacePage({
       {
         key: 'family',
         label: 'Family',
-        render: (item) => <Badge tone="info">{formatVectorFamilyLabel(getString(item, ['vector_family']))}</Badge>
+        render: (item) => (
+          <code className="traffic-path-label">{getString(item, ['vector_family'], '—').replace(/_/g, '-')}</code>
+        )
       },
       {
-        key: 'safety',
-        label: 'Safety',
+        key: 'mode',
+        label: 'Mode',
         render: (item) => {
           const safetyClass = getString(item, ['safety_class'], '');
-          return <Badge tone={safetyClass === 'safe' ? 'success' : 'warn'}>{formatSafetyClassLabel(safetyClass)}</Badge>;
+          return <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>;
         }
       },
       {
-        key: 'description',
-        label: 'Summary',
-        render: (item) => {
-          const description = getString(item, ['description'], '');
-          if (!description || description === '—') return '—';
-          return <span title={description}>{truncateText(description)}</span>;
-        }
+        key: 'bound',
+        label: 'Bound',
+        render: (item) => <code className="traffic-path-label">{formatCheckBoundLabel(item)}</code>
       },
       {
-        key: 'setup',
-        label: 'Required setup',
+        key: 'verdict',
+        label: 'Last verdict',
         render: (item) => {
-          const setup = formatRequiredSetupList(item);
-          if (setup.length === 0) return <span className="muted">—</span>;
-          return <span title={setup.join(' · ')}>{truncateText(setup.join(', '), 56)}</span>;
-        }
-      },
-      {
-        key: 'probe',
-        label: 'Probe profile',
-        render: (item) => {
-          const kind = getString(item, ['probe_profile', 'kind'], '');
-          if (!kind || kind === '—') return <span className="muted">Unknown</span>;
-          return formatSnakeLabel(kind);
+          const checkId = getString(item, ['check_id'], '');
+          const safetyClass = getString(item, ['safety_class'], '');
+          const latest = latestCheckVerdicts.get(checkId);
+          if (!latest?.verdict) {
+            if (safetyClass === 'soc_gated') {
+              return <Badge tone="muted">request</Badge>;
+            }
+            return <span className="muted">—</span>;
+          }
+          return (
+            <Badge tone={catalogVerdictBadgeTone(latest.verdict)}>
+              {formatCatalogVerdictLabel(latest.verdict)}
+            </Badge>
+          );
         }
       },
       {
@@ -1186,16 +1287,11 @@ export function ValidationSurfacePage({
     return (
       <div className="content">
         <PageHeader route="checks" />
-        <div className="metric-grid three">
-          <MetricCard label="Catalog checks" value={checkSafetyCounts.all} sub="Tenant-visible definitions" icon={ListChecks} tone="info" />
-          <MetricCard label="Runnable" value={checkSafetyCounts.safe} sub="Customer-safe scope" icon={ShieldCheck} tone="success" />
-          <MetricCard label="SOC-only" value={checkSafetyCounts.soc} sub="Request through SOC" icon={Siren} tone="warn" />
-        </div>
         <Card>
           <CardHeader>
-            <CardTitle>Check library</CardTitle>
+            <CardTitle>Check catalog</CardTitle>
             <CardDescription>
-              Browse the validation catalog by safety scope and vector family. High-scale checks remain request-only through SOC.
+              Safe-by-default validation definitions. Click a row to open the latest run detail when available.
               {' '}
               <span className="muted small">
                 {checkSafetyCounts.all} catalog · {checkSafetyCounts.safe} runnable · {checkSafetyCounts.soc} SOC-only
@@ -1214,6 +1310,29 @@ export function ValidationSurfacePage({
             <DataTable
               columns={columns}
               items={filteredChecks}
+              getRowProps={(item) => {
+                const checkId = getString(item, ['check_id'], '');
+                const latest = latestCheckVerdicts.get(checkId);
+                const runId = latest?.runId ?? '';
+                return {
+                  role: runId ? 'link' : undefined,
+                  tabIndex: runId ? 0 : undefined,
+                  style: runId ? { cursor: 'pointer' } : undefined,
+                  'aria-label': runId ? `Open latest run for ${checkId}` : undefined,
+                  onClick: (event) => {
+                    if ((event.target as HTMLElement).closest('a, button')) return;
+                    if (!runId) return;
+                    window.location.hash = `run-detail?id=${encodeURIComponent(runId)}`;
+                  },
+                  onKeyDown: (event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    if ((event.target as HTMLElement).closest('a, button')) return;
+                    if (!runId) return;
+                    event.preventDefault();
+                    window.location.hash = `run-detail?id=${encodeURIComponent(runId)}`;
+                  }
+                };
+              }}
               empty={checkFilter === 'custom' ? (
                 <EmptyState icon={ListChecks} title="No custom checks in catalog." body="Customer-defined safe checks bind through test policies after staff-reviewed scope declaration." actionLabel="Open test policies" actionHref="#test-policies" />
               ) : (
@@ -1222,6 +1341,11 @@ export function ValidationSurfacePage({
             />
           </CardContent>
         </Card>
+        <div className="metric-grid three">
+          <MetricCard label="Catalog checks" value={checkSafetyCounts.all} sub="Tenant-visible definitions" icon={ListChecks} tone="info" />
+          <MetricCard label="Runnable" value={checkSafetyCounts.safe} sub="Customer-safe scope" icon={ShieldCheck} tone="success" />
+          <MetricCard label="SOC-only" value={checkSafetyCounts.soc} sub="Request through SOC" icon={Siren} tone="warn" />
+        </div>
       </div>
     );
   }

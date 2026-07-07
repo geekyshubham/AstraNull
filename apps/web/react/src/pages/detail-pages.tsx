@@ -1044,6 +1044,8 @@ function TenantDetailView({
   const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<DataItem | null>(null);
   const [subscriptionError, setSubscriptionError] = useState('');
   const [localDetail, setLocalDetail] = useState<DataItem | null>(detail);
+  const [entitlementFeature, setEntitlementFeature] = useState<string>(STAFF_ENTITLEMENT_FEATURES[0]);
+  const [entitlementEnabled, setEntitlementEnabled] = useState('true');
 
   useEffect(() => {
     setLocalDetail(detail);
@@ -1329,21 +1331,26 @@ function TenantDetailView({
           <CardContent>
             {subscriptionError ? <div className="form-banner error">{subscriptionError}</div> : null}
             <form className="product-form" onSubmit={grantEntitlement}>
-              <label>
-                <span>Feature</span>
-                <select name="feature" defaultValue="waf_posture">
-                  {STAFF_ENTITLEMENT_FEATURES.map((feature) => (
-                    <option key={feature} value={feature}>{STAFF_ENTITLEMENT_LABELS[feature] ?? feature}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Action</span>
-                <select name="enabled" defaultValue="true">
-                  <option value="true">Grant / enable</option>
-                  <option value="false">Revoke / disable</option>
-                </select>
-              </label>
+              <Select
+                label="Feature"
+                name="feature"
+                value={entitlementFeature}
+                onChange={setEntitlementFeature}
+                options={STAFF_ENTITLEMENT_FEATURES.map((feature) => ({
+                  value: feature,
+                  label: STAFF_ENTITLEMENT_LABELS[feature] ?? feature
+                }))}
+              />
+              <Select
+                label="Action"
+                name="enabled"
+                value={entitlementEnabled}
+                onChange={setEntitlementEnabled}
+                options={[
+                  { value: 'true', label: 'Grant / enable' },
+                  { value: 'false', label: 'Revoke / disable' }
+                ]}
+              />
               <label className="full"><span>Reason</span><input name="reason" placeholder="Verified plan exception" required /></label>
               <div className="form-actions full"><Button type="submit" disabled={busy !== ''}>Apply entitlement</Button></div>
             </form>

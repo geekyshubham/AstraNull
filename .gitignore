@@ -65,3 +65,8 @@ PRODUCT.md
 # DigitalOcean operator lab helpers (local staging only)
 scripts/do-lab-bootstrap.mjs
 scripts/do-tenant-cleanup.mjs
+.grok-ui-reference/
+ui-compare-tmp.mjs
+ui-responsive-tmp.mjs
+apps/web/dist/
+test-results/
