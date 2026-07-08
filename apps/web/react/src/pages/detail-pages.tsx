@@ -1001,6 +1001,8 @@ function RunDetailView({
     : '—';
   const verdictValue = getNestedString(entity, ['verdict', 'verdict'], 'pending');
   const primaryFinding = relatedFindings[0] ?? null;
+  const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
+  const correlatingAgentId = getString(agentEvents[0] ?? {}, ['agent_id'], '');
   const rawEventColumns: TableColumn<DataItem>[] = [
     { key: 'signal', label: 'Signal', render: (event) => humanizeSignalType(getString(event, ['signal_type'], 'event')) },
     { key: 'source', label: 'Source', render: (event) => getString(event, ['source'], '—') },
@@ -1045,7 +1047,9 @@ function RunDetailView({
         <Card>
           <CardHeader>
             <CardTitle>Timeline</CardTitle>
-            <CardDescription>Ordered run lifecycle from scheduling through final verdict.</CardDescription>
+            <CardDescription>
+              Ordered run lifecycle from scheduling through final verdict{runPolicyId ? <> · policy <code>{runPolicyId}</code></> : null}{correlatingAgentId ? <> · agent <code>{correlatingAgentId}</code></> : null}.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <TimelinePanel items={milestoneTimeline} />
@@ -1181,6 +1185,7 @@ function TenantDetailView({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [tab, setTab] = useState('overview');
   const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<DataItem | null>(null);
   const [subscriptionError, setSubscriptionError] = useState('');
   const [localDetail, setLocalDetail] = useState<DataItem | null>(detail);
@@ -1202,6 +1207,11 @@ function TenantDetailView({
     (item) => getString(item, ['tenant_id'], '') === entityId
   );
   const lifecycleState = getString(account, ['lifecycle_state'], 'active');
+  // KPIs sourced from real records only: agents from the loaded tenant-scoped agent list, MRR from
+  // the subscription/account billing payload when present (graceful — no fabricated dollar figure).
+  const tenantAgents = data.agents.filter((item) => getString(item, ['tenant_id'], '') === entityId);
+  const mrrValue = getString(subscription, ['mrr', 'monthly_recurring_revenue', 'amount'], '')
+    || getString(account, ['mrr', 'monthly_recurring_revenue'], '');
 
   const effectiveEntitlements = getNestedItem(subscription, ['effective_entitlements'])
     ?? getNestedItem(subscriptionSnapshot, ['effective_entitlements']);
@@ -1371,10 +1381,15 @@ function TenantDetailView({
         <MetricCard label="Lifecycle" value={formatStatusLabel(lifecycleState, 'active')} sub="Account state from staff administration" icon={ShieldCheck} tone={lifecycleState === 'active' ? 'success' : 'warn'} />
         <MetricCard label="Plan" value={getString(subscription, ['plan_id'], '—')} sub={formatStatusLabel(getString(subscription, ['status'], 'unknown'))} icon={FileText} tone="muted" />
         <MetricCard label="Region" value={getString(account, ['region'], '—')} sub="Data residency region" icon={Network} tone="info" />
+        <MetricCard label="Agents" value={tenantAgents.length} sub="Outbound observers in workspace scope" icon={Bot} tone={tenantAgents.length > 0 ? 'success' : 'muted'} />
         <MetricCard label="Users" value={users.length} sub="Tenant-scoped identities" icon={Users} tone="info" />
+        <MetricCard label="MRR" value={mrrValue || '—'} sub={mrrValue ? `plan ${getString(subscription, ['plan_id'], '—')}` : 'not reported in billing payload'} icon={FileText} tone="muted" />
         <MetricCard label="Approvals" value={relatedApprovals.length} sub="Internal requests for this tenant" icon={ClipboardList} tone={relatedApprovals.length > 0 ? 'warn' : 'muted'} />
         <MetricCard label="Audit events" value={recentAudit.length} sub="Recent tenant-scoped audit entries" icon={FileCheck2} tone="muted" />
       </div>
+      <Tabs value={tab} options={[{ id: 'overview', label: 'Overview' }, { id: 'users', label: 'Users' }]} onChange={setTab} className="tabs-wrap" />
+      {tab === 'overview' ? (
+      <>
         <div className="split">
           <Card>
             <CardHeader>
@@ -1427,15 +1442,6 @@ function TenantDetailView({
             )}
           </CardContent>
         </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Tenant users</CardTitle>
-              <CardDescription>Resend invites or disable users through staff support APIs.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable columns={userColumns} items={users} empty={<EmptyState icon={Users} title="No users on this tenant." body="Provisioned tenants include an initial owner invite." />} />
-            </CardContent>
-          </Card>
           <Card>
             <CardHeader>
               <CardTitle>Support owner</CardTitle>
@@ -1501,6 +1507,19 @@ function TenantDetailView({
           </CardContent>
         </Card>
         </div>
+      </>
+      ) : null}
+      {tab === 'users' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Tenant users</CardTitle>
+            <CardDescription>Resend invites or disable users through staff support APIs. Owner and member identities scoped to this tenant.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DataTable columns={userColumns} items={users} empty={<EmptyState icon={Users} title="No users on this tenant." body="Provisioned tenants include an initial owner invite." />} />
+          </CardContent>
+        </Card>
+      ) : null}
       </>
       ) : null}
     </div>
@@ -2096,6 +2115,36 @@ function AgentDetailView({
     { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role'], 'system') },
     { key: 'when', label: 'Recorded', render: (item) => formatDate(item.created_at ?? item.timestamp) }
   ];
+  // Recent observations = real correlated runs on this agent's declared target group (no fabricated rows).
+  const agentObservationRuns = targetGroupId
+    ? data.runs
+        .filter((run) => getString(run, ['target_group_id'], '') === targetGroupId)
+        .sort((left, right) =>
+          String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? ''))
+        )
+        .slice(0, 8)
+    : [];
+  const observationRunColumns: TableColumn<DataItem>[] = [
+    { key: 'run', label: 'Run', render: (run) => <span className="mono small">{getString(run, ['id'], '—')}</span> },
+    { key: 'check', label: 'Check', render: (run) => checkDisplayName(data.checks, getString(run, ['check_id'], '')) },
+    {
+      key: 'verdict',
+      label: 'Agrees with probe',
+      render: (run) => {
+        const value = getNestedString(run, ['verdict', 'verdict'], getString(run, ['status'], 'pending'));
+        return <StatusBadge value={value} tone={verdictBadgeTone(value)} fallback="pending" />;
+      }
+    },
+    { key: 'sealed', label: 'Sealed', render: (run) => <span className="muted">{formatDate(run.updated_at ?? run.created_at)}</span> }
+  ];
+  // Placement evidence record built from the real agent entity; empty rows are omitted so no placeholder data is shown.
+  const placementEvidenceBlock = evidenceCodeBlock([
+    ['agent_id', entityId],
+    ['hostname', getString(entity, ['hostname', 'name'], '')],
+    ['environment', getString(entity, ['environment_id'], '')],
+    ['placement_kind', formatAgentPlacement(entity)],
+    ['outbound_only', 'true']
+  ]);
 
   useEffect(() => {
     if (tab !== 'placement') return undefined;
@@ -2185,10 +2234,10 @@ function AgentDetailView({
       {!loading ? (
       <>
       <div className="metric-grid four">
-        <MetricCard label="Status" value={formatAgentHealth(entity)} sub="From last heartbeat" icon={Activity} tone={getString(entity, ['status']) === 'online' ? 'success' : getString(entity, ['status']) === 'revoked' ? 'danger' : 'muted'} />
         <MetricCard label="Heartbeat" value={agentHeartbeatFreshness(entity)} sub={formatDate(entity.last_heartbeat_at)} icon={Bot} tone="info" />
-        <MetricCard label="Target group" value={targetGroupId ? 'Bound' : 'Unbound'} sub={targetGroupId || 'No group assignment'} icon={Target} tone={targetGroupId ? 'success' : 'warn'} />
         <MetricCard label="Version" value={getString(entity, ['version'], 'unknown')} sub={getString(entity, ['environment_id'], 'tenant scope')} icon={ShieldCheck} tone="muted" />
+        <MetricCard label="Placement" value={formatAgentPlacement(entity)} sub={targetGroupId ? `bound · ${targetGroupId}` : 'no group assignment'} icon={Target} tone={targetGroupId ? 'success' : 'warn'} />
+        <MetricCard label="Status" value={formatAgentHealth(entity)} sub="From last heartbeat" icon={Activity} tone={getString(entity, ['status']) === 'online' ? 'success' : getString(entity, ['status']) === 'revoked' ? 'danger' : 'muted'} />
       </div>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'overview' ? (
@@ -2210,6 +2259,44 @@ function AgentDetailView({
           running={busy === `placement-${entityId}`}
           busy={busy !== ''}
         />
+        <div className="dash-grid">
+          <Card>
+            <CardHeader>
+              <CardTitle>Placement evidence</CardTitle>
+              <CardDescription>Declared · outbound-only. Placement is tied to the environment declared at install — never inferred from cloud inventory.</CardDescription>
+            </CardHeader>
+            <CardContent className="stack-tight">
+              <div className="kv-list">
+                <div><span>Environment</span><strong>{getString(entity, ['environment_id'], 'tenant scope')}</strong></div>
+                <div><span>Direction</span><strong>egress HTTPS only</strong></div>
+                <div><span>Placement</span><strong>{formatAgentPlacement(entity)}</strong></div>
+              </div>
+              {placementEvidenceBlock ? (
+                <DetailCodeBlock label="Placement evidence record">{placementEvidenceBlock}</DetailCodeBlock>
+              ) : (
+                <EmptyState icon={ShieldCheck} title="No placement evidence yet." body="Placement evidence appears after the agent registers with declared environment metadata." />
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>Recent observations</CardTitle>
+                <CardDescription>Correlated · metadata-only runs on this agent's declared target group.</CardDescription>
+              </div>
+              <AnchorButton size="sm" variant="ghost" href="#runs">View runs</AnchorButton>
+            </CardHeader>
+            <CardContent>
+              <DataTable
+                columns={observationRunColumns}
+                items={agentObservationRuns}
+                getRowId={(run) => getString(run, ['id'], '')}
+                getRowProps={(run) => detailRowNavProps('run-detail', getString(run, ['id'], ''))}
+                empty={<EmptyState icon={Activity} title={targetGroupId ? 'No correlated runs yet.' : 'Agent not bound to a group.'} body={targetGroupId ? 'Runs on this target group appear here once safe checks execute.' : 'Bind this agent to a target group to correlate run observations.'} actionLabel="Open test runs" actionHref="#runs" />}
+              />
+            </CardContent>
+          </Card>
+        </div>
         <div className="split">
           <Card>
             <CardHeader>
@@ -2606,13 +2693,18 @@ function EvidenceDetailView({
   if (!entityId) {
     return (
       <div className="content">
-        <DetailPageIntro route="evidence-detail" eyebrow="Validation · evidence artifact" />
+        <DetailPageHeader
+          route="evidence-detail"
+          eyebrow="Validation · evidence artifact"
+          entityId=""
+          title="Evidence artifact"
+        />
         <EmptyState
           icon={ShieldCheck}
           title="No evidence artifact selected."
-          body="Open an artifact from a run's evidence chain or the evidence vault with ?id=."
-          actionLabel="Open evidence vault"
-          actionHref="#evidence"
+          body="Open an artifact from a run's evidence chain or a finding's evidence bundle."
+          actionLabel="Open findings"
+          actionHref="#findings"
         />
       </div>
     );
@@ -2630,13 +2722,18 @@ function EvidenceDetailView({
   if (!entity) {
     return (
       <div className="content">
-        <DetailPageIntro route="evidence-detail" eyebrow="Validation · evidence artifact" />
+        <DetailPageHeader
+          route="evidence-detail"
+          eyebrow={`Validation · evidence artifact · ${entityId}`}
+          entityId={entityId}
+          title={entityId}
+        />
         <EmptyState
           icon={ShieldCheck}
           title="Evidence artifact not found."
           body={loadError || 'The requested artifact is missing or outside this tenant scope.'}
-          actionLabel="Open evidence vault"
-          actionHref="#evidence"
+          actionLabel="Open findings"
+          actionHref="#findings"
         />
       </div>
     );
@@ -3267,11 +3364,47 @@ function SocRequestDetailView({
   const state = getString(entity, ['state'], '');
   const packReady = getNestedString(entity, ['authorization_pack_status', 'overall'], '') === 'accepted';
   const hasPostTestReport = Boolean(postTestReport && getString(postTestReport, ['id'], ''));
+  // Pre-flight gates + KPI strip are derived from real request evidence only.
+  const windowStart = getNestedString(entity, ['scheduled_window', 'window_start'], '') || getNestedString(entity, ['requested_window', 'window_start'], '');
+  const windowEnd = getNestedString(entity, ['scheduled_window', 'window_end'], '') || getNestedString(entity, ['requested_window', 'window_end'], '');
+  const windowConfirmed = Boolean(windowStart && windowEnd);
+  const scopeSealed = Boolean(getString(entity, ['scope_hash'], '') || getNestedItem(entity, ['scope_confirmation']));
+  const socApprovalsCount = Array.isArray(entity.soc_approvals) ? (entity.soc_approvals as DataItem[]).length : 0;
+  const stateTone = highScaleStateBadgeTone(state);
+  const preflightGates = [
+    { label: 'Authorization pack accepted', pass: packReady },
+    { label: 'Safe window confirmed', pass: windowConfirmed },
+    { label: 'Scope hash sealed', pass: scopeSealed },
+    { label: 'SOC approval recorded', pass: socApprovalsCount > 0 }
+  ];
 
   return (
     <div className="content">
       <DetailPageHeader route="queue-detail" eyebrow="SOC execution workspace" entityId={entityId} title={title} />
       <DetailStatusBanners error={error} message={message} hideMessageWhenLoadError={false} />
+      <div className="metric-grid four">
+        <MetricCard label="State" value={formatStatusLabel(state, 'submitted')} sub="Governed lifecycle state" icon={ShieldCheck} tone={stateTone === 'danger' ? 'danger' : stateTone === 'warn' ? 'warn' : stateTone === 'success' ? 'success' : 'info'} />
+        <MetricCard label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} sub="Authorization pack review" icon={FileCheck2} tone={packReady ? 'success' : 'warn'} />
+        <MetricCard label="Target group" value={getString(entity, ['target_group_id'], '—')} sub="Declared scope under request" icon={Target} tone="muted" />
+        <MetricCard label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} sub={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} icon={Activity} tone={windowConfirmed ? 'info' : 'muted'} />
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Go / No-Go gates</CardTitle>
+          <CardDescription>Pre-flight readiness derived from real request evidence. Every gate must pass before governed execution starts.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="placement-gates" aria-label="Pre-flight execution gates">
+            {preflightGates.map((gate) => (
+              <li key={gate.label}>
+                <ShieldCheck size={14} aria-hidden="true" style={{ color: gate.pass ? 'var(--success)' : 'var(--fg-2)' }} />
+                <span>{gate.label}</span>
+                <Badge tone={gate.pass ? 'success' : 'muted'} aria-label={`${gate.label}: ${gate.pass ? 'pass' : 'pending'}`}>{gate.pass ? 'pass' : 'pending'}</Badge>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
       <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" />
       {tab === 'workspace' ? (
         <Card>
@@ -3863,6 +3996,10 @@ export function DetailRoutePage({
     `/v1/findings/${encodeURIComponent(entityId)}`,
     findingFallback
   );
+  // Agent detail is sourced by id from the real GET /v1/agents tenant list: the backend exposes
+  // GET /v1/agents plus /v1/agents/:id/{revoke,heartbeat,jobs,observations,update} but no single
+  // GET /v1/agents/:id document route, so a list-backed lookup returns the real agent record by id
+  // without a fabricated endpoint that would 404 (postgres_route_not_wired) in Postgres mode.
   const agentDetail = useListBackedDetail(
     route === 'agent-detail' && Boolean(entityId),
     config,
@@ -4426,6 +4563,21 @@ export function ReportDetailPage({
     }, `Report exported as ${format}.`);
   }
 
+  async function copyCustodyDigest() {
+    const digest = preview?.contentSha256 ?? '';
+    if (!digest) {
+      setError('No custody digest available yet — export JSON to compute it first.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(digest);
+      setError('');
+      setMessage('Custody digest copied to clipboard.');
+    } catch {
+      setError('Clipboard unavailable — copy the digest from the custody preview manually.');
+    }
+  }
+
   if (!entityId) {
     return (
       <div className="content">
@@ -4495,7 +4647,19 @@ export function ReportDetailPage({
 
   return (
     <div className="content">
-      <DetailPageHeader route="report-detail" eyebrow="Report detail" entityId={entityId} title={reportTitle} />
+      <DetailPageHeader
+        route="report-detail"
+        eyebrow="Report detail"
+        entityId={entityId}
+        title={reportTitle}
+        actions={(
+          <>
+            <AnchorButton size="sm" variant="secondary" href="#reports">Reports</AnchorButton>
+            <Button size="sm" variant="ghost" loading={busy === 'refresh-report'} disabled={busy !== ''} onClick={() => void runReportAction('refresh-report', onRefresh, 'Report refreshed.')}>Refresh</Button>
+            <Button size="sm" variant="default" loading={busy === `export-${entityId}-json`} disabled={busy !== ''} onClick={() => void exportReport(entityId, 'json')}>Export JSON</Button>
+          </>
+        )}
+      />
       <DetailStatusBanners loadError={reportDetail.error} error={error} message={message} mode="combined" />
       {reportDetail.loading || previewLoading ? (
         <DetailLoadingPlaceholder label={reportDetail.loading ? 'Loading report detail…' : 'Loading custody preview…'} variant="layout" />
@@ -4537,6 +4701,9 @@ export function ReportDetailPage({
                 <DetailKvMonoField label="Content digest (SHA-256)" value={preview.contentSha256} compact />
                 <DetailKvField label="Schema">{preview.schemaVersion ?? '—'}</DetailKvField>
                 <div><span>Verification</span><StatusBadge value={verificationOk || 'verified'} tone={verificationOk === 'false' ? 'danger' : 'success'} fallback="verified" /></div>
+                <div className="row-actions">
+                  <Button size="sm" variant="ghost" disabled={!preview.contentSha256} onClick={() => void copyCustodyDigest()}>Copy custody digest</Button>
+                </div>
               </>
             ) : preview?.textPreview ? (
               <>

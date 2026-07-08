@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentPropsWithoutRef, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ComponentPropsWithoutRef, type CSSProperties, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   Activity,
   Bot,
@@ -702,6 +702,215 @@ function formatDashboardShortRelative(iso: string) {
   return `${days}d`;
 }
 
+/**
+ * Documented readiness factor weights (points, from src/services/readiness.mjs +
+ * src/persistence/postgres/stateServiceAdapters.mjs). Each factor's `score` is emitted in
+ * [0, weight] points; per-factor health % = score / weight * 100. Keyed by the factor `key`
+ * returned by the state API so the weight binds to real data in both dev and Postgres modes.
+ */
+const READINESS_FACTOR_WEIGHTS: Record<string, number> = {
+  coverage: 40,
+  agent_placement: 25,
+  verdicts: 25,
+  evidence_freshness: 15,
+  soc_readiness: 10
+};
+
+type CorrelationStatus = 'pass' | 'review' | 'gap' | 'none';
+type CorrelationCellData = { status: CorrelationStatus; pass: number; review: number; gap: number; total: number };
+
+/** Vector families mirror components/charts/vector-heatmap.tsx so both matrices classify consistently. */
+const CORRELATION_FAMILIES: { label: string; keys: string[] }[] = [
+  { label: 'Origin', keys: ['origin'] },
+  { label: 'L3/L4', keys: ['l3_l4', 'l3/l4', 'layer_3_4'] },
+  { label: 'DNS', keys: ['dns'] },
+  { label: 'L7/API', keys: ['l7_api', 'l7/api', 'application', 'api'] },
+  { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] }
+];
+
+const CORRELATION_TONE_CLASS: Record<CorrelationStatus, string> = {
+  pass: 'heatmap-cell heatmap-success',
+  review: 'heatmap-cell heatmap-warn',
+  gap: 'heatmap-cell heatmap-danger',
+  none: 'heatmap-cell heatmap-muted'
+};
+
+const CORRELATION_LABEL: Record<CorrelationStatus, string> = {
+  pass: 'Pass',
+  review: 'Review',
+  gap: 'Gap',
+  none: 'No data'
+};
+
+function checkMatchesCorrelationFamily(check: DataItem, keys: string[]) {
+  const haystack = [
+    getString(check, ['vector_family'], ''),
+    getString(check, ['category'], ''),
+    getString(check, ['name'], ''),
+    getString(check, ['check_id', 'id'], '')
+  ].join(' ').toLowerCase();
+  return keys.some((key) => haystack.includes(key));
+}
+
+function classifyCorrelationVerdict(verdict: string): CorrelationStatus | null {
+  const key = verdict.trim().toLowerCase();
+  if (!key || ['pending', 'planned', 'running'].includes(key)) return null;
+  if (['pass', 'passed', 'protected', 'success', 'ok'].includes(key)) return 'pass';
+  if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return 'gap';
+  return 'review';
+}
+
+function extractRunVerdictString(run: DataItem): string {
+  const raw = run.verdict;
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return getString(raw as DataItem, ['verdict', 'status', 'result'], '');
+  }
+  return getString(run, ['verdict'], '');
+}
+
+/** Aggregate completed/verdicted runs for a target group + vector family into a pass/review/gap cell (worst-case wins). */
+function buildCorrelationCell(runs: DataItem[], groupId: string, familyCheckIds: Set<string>): CorrelationCellData {
+  if (!groupId || familyCheckIds.size === 0) return { status: 'none', pass: 0, review: 0, gap: 0, total: 0 };
+  let pass = 0;
+  let review = 0;
+  let gap = 0;
+  for (const run of runs) {
+    if (getString(run, ['target_group_id'], '') !== groupId) continue;
+    if (!familyCheckIds.has(getString(run, ['check_id'], ''))) continue;
+    if (!['completed', 'verdicted'].includes(getString(run, ['status'], ''))) continue;
+    const bucket = classifyCorrelationVerdict(extractRunVerdictString(run));
+    if (bucket === 'pass') pass += 1;
+    else if (bucket === 'review') review += 1;
+    else if (bucket === 'gap') gap += 1;
+  }
+  const total = pass + review + gap;
+  let status: CorrelationStatus = 'none';
+  if (gap > 0) status = 'gap';
+  else if (review > 0) status = 'review';
+  else if (pass > 0) status = 'pass';
+  return { status, pass, review, gap, total };
+}
+
+/** 16px inline SVG glyph (currentColor): tick for pass, dot for review, cross for gap, dash for no data. No Unicode glyphs. */
+function CorrelationGlyph({ status }: { status: CorrelationStatus }) {
+  if (status === 'pass') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M3.5 8.5 L6.75 11.75 L12.5 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (status === 'gap') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M4.5 4.5 L11.5 11.5 M11.5 4.5 L4.5 11.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (status === 'review') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <circle cx="8" cy="8" r="3" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M4.5 8 L11.5 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+    </svg>
+  );
+}
+
+function CorrelationMatrixCell({ cell, familyLabel }: { cell: CorrelationCellData; familyLabel: string }) {
+  const title = cell.status === 'none'
+    ? `No correlated verdict for ${familyLabel} on this target group yet.`
+    : `${CORRELATION_LABEL[cell.status]} · ${cell.pass} pass · ${cell.review} review · ${cell.gap} gap across ${cell.total} correlated run${cell.total === 1 ? '' : 's'}`;
+  return (
+    <span
+      className={CORRELATION_TONE_CLASS[cell.status]}
+      role="img"
+      aria-label={`${familyLabel}: ${CORRELATION_LABEL[cell.status]}`}
+      title={title}
+    >
+      <CorrelationGlyph status={cell.status} />
+    </span>
+  );
+}
+
+function CorrelationLegendItem({ status, label }: { status: CorrelationStatus; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+      <CorrelationGlyph status={status} /> {label}
+    </span>
+  );
+}
+
+/** Overview correlation matrix (§4.1.3): vector family x declared target group, pass/review/gap cells with inline SVG ticks. */
+function DashboardCorrelationMatrix({
+  checks,
+  targetGroups,
+  runs
+}: {
+  checks: DataItem[];
+  targetGroups: DataItem[];
+  runs: DataItem[];
+}) {
+  const groups = targetGroups.filter((group) => group.archived_at == null).slice(0, 5);
+  if (groups.length === 0) {
+    return (
+      <EmptyState
+        icon={Network}
+        title="No declared target groups yet."
+        body="Declare target groups before the correlation matrix can map vector families to bounded verdicts."
+        actionHref="#target-groups"
+        actionLabel="Open target groups"
+      />
+    );
+  }
+  const families = CORRELATION_FAMILIES.map((family) => ({
+    label: family.label,
+    ids: new Set(
+      checks
+        .filter((check) => checkMatchesCorrelationFamily(check, family.keys))
+        .map((check) => getString(check, ['check_id', 'id'], ''))
+        .filter(Boolean)
+    )
+  }));
+  const gridStyle = { '--heatmap-cols': CORRELATION_FAMILIES.length } as CSSProperties;
+  return (
+    <div className="heatmap">
+      <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
+        <span className="heatmap-head">Target group</span>
+        {families.map((family) => (
+          <span className="heatmap-head" key={family.label}>{family.label}</span>
+        ))}
+        {groups.map((group, groupIndex) => {
+          const groupId = getString(group, ['id'], '');
+          return (
+            <Fragment key={groupId || groupIndex}>
+              <strong className="heatmap-name">{getString(group, ['name', 'id'], 'Declared group')}</strong>
+              {families.map((family) => (
+                <CorrelationMatrixCell
+                  key={`${groupIndex}-${family.label}`}
+                  cell={buildCorrelationCell(runs, groupId, family.ids)}
+                  familyLabel={family.label}
+                />
+              ))}
+            </Fragment>
+          );
+        })}
+      </div>
+      <div className="heatmap-legend">
+        <CorrelationLegendItem status="pass" label="Pass" />
+        <CorrelationLegendItem status="review" label="Review" />
+        <CorrelationLegendItem status="gap" label="Gap" />
+        <CorrelationLegendItem status="none" label="No data" />
+      </div>
+    </div>
+  );
+}
+
 export function DashboardPage({
   data,
   config,
@@ -764,10 +973,10 @@ export function DashboardPage({
   const score = typeof data.state?.readiness?.score === 'number' ? data.state.readiness.score : null;
   const factors = Array.isArray(data.state?.readiness?.factors) ? data.state.readiness.factors : [];
   const metrics = resolveDashboardMetrics(data);
-  const recentRuns = resolveRecentRuns(data);
+  const recentRuns = resolveRecentRuns(data, 6);
   const openFindingRows = data.findings
     .filter((finding) => getString(finding, ['status'], 'open') === 'open')
-    .slice(0, 5);
+    .slice(0, 6);
   const agingFindings = [...data.findings]
     .filter((finding) => getString(finding, ['status'], 'open') === 'open')
     .sort((left, right) => String(left.created_at ?? left.id ?? '').localeCompare(String(right.created_at ?? right.id ?? '')))
@@ -1134,8 +1343,17 @@ export function DashboardPage({
           </div>
           <Card>
             <CardHeader>
+              <CardTitle>Correlation matrix</CardTitle>
+              <CardDescription>Vector family x declared target group. Each cell classifies the latest bounded verdict as pass, review, or gap from real run evidence.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DashboardCorrelationMatrix checks={data.checks} targetGroups={data.targetGroups} runs={data.runs} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
               <CardTitle>What to do next</CardTitle>
-              <CardDescription>One prioritized action from your current readiness posture — complete it before diving into charts and feeds.</CardDescription>
+              <CardDescription>One prioritized action from your current readiness posture. Complete it before diving into charts and feeds.</CardDescription>
             </CardHeader>
             <CardContent>
               {!prioritizedNext ? (
@@ -1170,7 +1388,7 @@ export function DashboardPage({
               <CardHeader>
                 <CardTitle>Weighted factors</CardTitle>
                 <CardDescription>
-                  No factor can pass without supporting evidence. Heatmap, aging findings, and the evidence feed live on the Risk Trends and Evidence Feed tabs.
+                  No factor can pass without supporting evidence. Each factor shows its weight and current score; the readiness trend and vector coverage matrix live on the Risk trends tab.
                 </CardDescription>
               </CardHeader>
               <CardContent className="factor-list">
@@ -1184,12 +1402,21 @@ export function DashboardPage({
                   />
                 ) : (
                   factors.map((factor: ReadinessFactor) => {
-                    const value = Math.round(factor.score ?? 0);
+                    const rawScore = Math.round(factor.score ?? 0);
+                    const weightFromApi = typeof factor.weight === 'number' && factor.weight > 0 ? factor.weight : null;
+                    const weight = weightFromApi ?? READINESS_FACTOR_WEIGHTS[factor.key ?? ''] ?? null;
+                    // Factor score is emitted in [0, weight] points; render per-factor health as a 0-100% share.
+                    const value = weight ? Math.max(0, Math.min(100, Math.round((rawScore / weight) * 100))) : rawScore;
                     return (
                       <div className="factor" key={factor.key ?? factor.label}>
                         <div>
                           <strong>{factor.label ?? factor.key}</strong>
                           <span>{factor.reason ?? factor.detail ?? 'Awaiting evidence.'}</span>
+                          {weight !== null ? (
+                            <span className="mono" title={`Contributes up to ${weight} points to the readiness score`}>
+                              weight {weight} pts · scored {rawScore}/{weight}
+                            </span>
+                          ) : null}
                         </div>
                         <Badge tone={scoreTone(value)}>{value}%</Badge>
                         <Progress value={value} tone={scoreProgressTone(value)} label={factor.label ?? factor.key ?? 'Readiness factor'} />
@@ -3243,10 +3470,12 @@ export function EnvironmentsPage({
     { key: 'agents', label: 'Agents', render: (row) => <span className="tabular-nums">{environmentAgentCount(row.id)}</span> },
     {
       key: 'findings',
-      label: 'Findings',
-      render: (row) => row.openFindings > 0
-        ? <Badge tone="danger">{row.openFindings}</Badge>
-        : <span className="muted">—</span>
+      label: 'Open findings',
+      render: (row) => {
+        const open = row.openFindings;
+        if (open <= 0) return <Badge tone="success">0</Badge>;
+        return <Badge tone={open >= 2 ? 'danger' : 'warn'}>{formatNumber(open)}</Badge>;
+      }
     },
     {
       key: 'status',

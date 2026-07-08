@@ -1,10 +1,20 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Activity, Bot, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type HTMLAttributes,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react';
+import { Activity, Bot, Check, Globe, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate } from '../lib/utils';
-import { VerifyChip, resolveVerifyChipState } from '../lib/verify-chip';
+import { VerifyChip, resolveVerifyChipState, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { emptyStateFromApi, PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -20,6 +30,11 @@ const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
   { id: 'ip', label: 'IP address · Agent callback' },
   { id: 'cloud', label: 'Cloud provider · pull inventory' }
 ];
+
+/** §7.1 verification states that unlock the per-row Run test action. */
+const RUN_ENABLED_STATES = new Set(['dns_verified', 'agent_verified', 'user_confirmed']);
+const DNS_POLL_INTERVAL_MS = 30_000;
+const DNS_POLL_MAX_MS = 15 * 60 * 1000;
 
 const DETAIL_MODAL_STYLES_ID = 'detail-modal-primitive-styles';
 const detailModalStyles = `
@@ -59,13 +74,39 @@ const detailModalStyles = `
 }
 `;
 
-function ensureDetailModalStyles() {
+const TG_DETAIL_STYLES_ID = 'tg-detail-view-styles';
+// Token-only styling for the prototype's DNS/link-button primitives, scoped to this page so it
+// cannot collide with styles injected by sibling detail pages. No literal colors (tokens only).
+const tgDetailStyles = `
+.tg-detail-view .vl-num svg { display: block; color: var(--success); }
+.tg-detail-view .dns-field { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.tg-detail-view .dns-key { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-2); }
+.tg-detail-view .dns-val { color: var(--fg); font-size: var(--text-sm); word-break: break-all; }
+.tg-detail-view .dns-head { display: flex; align-items: center; gap: 10px; }
+.tg-detail-view .dns-head .spacer { flex: 1 1 auto; }
+.tg-detail-view .dns-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tg-detail-view .dns-history { margin-top: 16px; }
+.tg-detail-view .dns-history-title { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-2); margin: 0 0 8px; }
+.tg-detail-view .link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; font-size: var(--text-xs); text-decoration: underline; text-underline-offset: 2px; }
+.tg-detail-view .link-btn:hover { color: var(--fg); }
+.tg-detail-view .link-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+`;
+
+function ensureStyles(id: string, css: string) {
   if (typeof document === 'undefined') return;
-  if (document.getElementById(DETAIL_MODAL_STYLES_ID)) return;
+  if (document.getElementById(id)) return;
   const node = document.createElement('style');
-  node.id = DETAIL_MODAL_STYLES_ID;
-  node.textContent = detailModalStyles;
+  node.id = id;
+  node.textContent = css;
   document.head.appendChild(node);
+}
+
+function ensureDetailModalStyles() {
+  ensureStyles(DETAIL_MODAL_STYLES_ID, detailModalStyles);
+}
+
+function ensureTgDetailStyles() {
+  ensureStyles(TG_DETAIL_STYLES_ID, tgDetailStyles);
 }
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
@@ -77,12 +118,49 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
-function targetVerificationState(target: DataItem) {
-  return getString(target, ['verification_state', 'verification', 'state'], 'unverified');
+/** Nested verification envelope (Postgres target payload) when present. */
+function targetVerificationEnvelope(item: DataItem): DataItem | null {
+  const nested = item.verification;
+  return nested && typeof nested === 'object' && !Array.isArray(nested) ? (nested as DataItem) : null;
 }
 
-function targetEligibility(target: DataItem) {
-  return getString(target, ['eligibility'], targetVerificationState(target) === 'unverified' ? 'not_eligible' : 'eligible');
+/** Authoritative verification state across dev (flat) and Postgres (nested) target shapes. */
+function targetVerificationState(item: DataItem) {
+  const nested = targetVerificationEnvelope(item);
+  if (nested) {
+    const state = getString(nested, ['state'], '');
+    if (state !== '—' && state) return state;
+  }
+  return getString(item, ['verification_state', 'verify_state', 'state'], 'unverified');
+}
+
+function canRunTest(state: string) {
+  return RUN_ENABLED_STATES.has(state.trim().toLowerCase());
+}
+
+function targetEligibility(item: DataItem) {
+  const explicit = getString(item, ['eligibility'], '');
+  if (explicit !== '—' && explicit) return explicit;
+  return canRunTest(targetVerificationState(item)) ? 'eligible' : 'not_eligible';
+}
+
+/** Map a DNS challenge record onto a §7.1 verification-chip state. */
+function challengeChipState(challenge: DataItem | null, verified?: boolean) {
+  if (!challenge) return 'unverified';
+  const state = getString(challenge, ['state'], '').toLowerCase();
+  if (verified === true || state === 'resolved') return 'dns_verified';
+  if (state === 'pending') return 'pending';
+  if (state === 'expired' || state === '—' || !state) return 'unverified';
+  return state;
+}
+
+function pickActiveChallenge(list: DataItem[]): DataItem | null {
+  if (list.length === 0) return null;
+  const pending = list.find((row) => getString(row, ['state'], '').toLowerCase() === 'pending');
+  if (pending) return pending;
+  return [...list].sort((a, b) =>
+    String(getString(b, ['issued_at'], '')).localeCompare(String(getString(a, ['issued_at'], '')))
+  )[0] ?? null;
 }
 
 function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
@@ -161,11 +239,15 @@ export function TargetGroupDetailView({
   loading: boolean;
   loadError: string;
 }) {
+  ensureTgDetailStyles();
+
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [dnsChallenge, setDnsChallenge] = useState<DataItem | null>(null);
   const [dnsVerifyResult, setDnsVerifyResult] = useState<DataItem | null>(null);
+  const [dnsChallenges, setDnsChallenges] = useState<DataItem[]>([]);
+  const [copiedField, setCopiedField] = useState('');
   const [ladder, setLadder] = useState<DataItem | null>(null);
   const [ladderLoading, setLadderLoading] = useState(true);
   const [connectors, setConnectors] = useState<DataItem[]>([]);
@@ -178,8 +260,12 @@ export function TargetGroupDetailView({
   const [showOnboardModal, setShowOnboardModal] = useState(false);
   const [onboardTab, setOnboardTab] = useState<OnboardTab>('fqdn');
 
+  const onRefreshRef = useRef(onRefresh);
+  useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
+
   const targets = Array.isArray(entity.targets) ? entity.targets as DataItem[] : [];
   const agents = Array.isArray(data.agents) ? data.agents as DataItem[] : [];
+  const checks = Array.isArray(data.checks) ? data.checks as DataItem[] : [];
   const relatedRuns = Array.isArray(entity.runs_recent) ? entity.runs_recent as DataItem[] : [];
   const relatedFindings = Array.isArray(entity.findings_on_group) ? entity.findings_on_group as DataItem[] : [];
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
@@ -187,6 +273,29 @@ export function TargetGroupDetailView({
   const loaState = getString(entity, ['loa_state', 'loa_status'], getString(entity.loa as DataItem | undefined, ['state'], 'required'));
   const loaSigned = loaState.toLowerCase() === 'signed';
   const ladderSteps = Array.isArray(ladder?.steps) ? ladder.steps as DataItem[] : [];
+
+  // First customer-runnable safe check — the concrete check a bounded Run test executes.
+  const safeCheck = checks.find((check) => getString(check, ['safety_class'], '') === 'safe') ?? null;
+  const safeCheckId = getString(safeCheck, ['check_id'], '');
+  const verifiedTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
+
+  // Active DNS challenge shown in the panel: freshest verify result, then freshly issued, then list.
+  const activeChallenge = (dnsVerifyResult?.challenge as DataItem | undefined) ?? dnsChallenge ?? pickActiveChallenge(dnsChallenges);
+  const dnsVerified = dnsVerifyResult?.verified === true || getString(activeChallenge, ['state'], '').toLowerCase() === 'resolved';
+  const dnsChipState = challengeChipState(activeChallenge, dnsVerified);
+  const activeChallengeId = getString(activeChallenge, ['id', 'challenge_id'], '');
+  const activeChallengeState = getString(activeChallenge, ['state'], '').toLowerCase();
+  // §7.2 cycle: surface the transient "checking…" chip while a verify request is in flight.
+  const displayedDnsChipState = busy === `dns-verify-${entityId}` && dnsChipState === 'pending' ? 'checking' : dnsChipState;
+
+  const loadDnsChallenges = useCallback(() => {
+    return requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership`)
+      .then((payload) => {
+        const envelope = payload as DataItem;
+        setDnsChallenges(Array.isArray(envelope.items) ? envelope.items as DataItem[] : []);
+      })
+      .catch(() => setDnsChallenges([]));
+  }, [config, session, entityId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,25 +307,47 @@ export function TargetGroupDetailView({
     return () => { cancelled = true; };
   }, [config, session, entityId]);
 
+  useEffect(() => { void loadDnsChallenges(); }, [loadDnsChallenges]);
+
   useEffect(() => {
-    let cancelled = false;
-    requestJson(config, session, '/v1/connectors')
-      .then((payload) => {
-        if (cancelled) return;
-        const envelope = payload as DataItem;
-        setConnectors(Array.isArray(envelope.items) ? envelope.items as DataItem[] : []);
-        setConnectorsMeta(envelope.meta && typeof envelope.meta === 'object' ? envelope.meta as DataItem : null);
+    // Use connectors already loaded by fetchPortalData (gated on the connectorsEnabled
+    // deployment feature). Avoids an unconditional GET /v1/connectors that 404s when the
+    // connector add-on is disabled for the tenant.
+    setConnectors(Array.isArray(data.connectors) ? (data.connectors as DataItem[]) : []);
+    setConnectorsMeta(null);
+  }, [data.connectors]);
+
+  // §7.2 optional background polling: re-check a pending challenge every 30s until resolved.
+  // Disabled under prefers-reduced-motion and capped at 15 minutes.
+  useEffect(() => {
+    if (activeChallengeState !== 'pending' || !activeChallengeId) return undefined;
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
+
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - startedAt > DNS_POLL_MAX_MS) {
+        window.clearInterval(timer);
+        return;
+      }
+      requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/verify`, {
+        method: 'POST',
+        body: { challenge_id: activeChallengeId }
       })
-      .catch((err) => {
-        if (!cancelled) {
-          setConnectors([]);
-          const payload = (err as Error & { payload?: DataItem })?.payload;
-          const payloadMeta = payload?.meta && typeof payload.meta === 'object' ? payload.meta as DataItem : null;
-          setConnectorsMeta(payloadMeta ?? (payload ? { empty_reason: getString(payload, ['error', 'message']) } : null));
-        }
-      });
-    return () => { cancelled = true; };
-  }, [config, session]);
+        .then(async (payload) => {
+          const result = payload as DataItem;
+          setDnsVerifyResult(result);
+          if (result.verified === true) {
+            window.clearInterval(timer);
+            await loadDnsChallenges();
+            await onRefreshRef.current();
+          }
+        })
+        .catch(() => undefined);
+    }, DNS_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [config, session, entityId, activeChallengeId, activeChallengeState, loadDnsChallenges]);
 
   async function runAction(label: string, action: () => Promise<void>, success: string) {
     setBusy(label);
@@ -279,24 +410,68 @@ export function TargetGroupDetailView({
     void addTarget('ip', port ? `${ip}:${port}` : ip, String(form.get('expected_behavior') ?? ''));
   }
 
-  async function issueDnsChallenge() {
+  async function issueDnsChallenge(targetId?: string) {
     await runAction(`dns-issue-${entityId}`, async () => {
-      const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/issue`, { method: 'POST' }) as DataItem;
+      const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/issue`, {
+        method: 'POST',
+        body: targetId ? { target_id: targetId } : {}
+      }) as DataItem;
       const challenge = result.challenge && typeof result.challenge === 'object' ? result.challenge as DataItem : result;
       setDnsChallenge(challenge);
       setDnsVerifyResult(null);
-    }, 'DNS TXT challenge issued.');
+      await loadDnsChallenges();
+    }, 'DNS TXT challenge issued. Publish the record, then run Check now.');
   }
 
-  async function verifyDnsChallenge() {
+  async function verifyDnsChallenge(explicitChallengeId?: string) {
     await runAction(`dns-verify-${entityId}`, async () => {
-      const challengeId = getString(dnsChallenge, ['id', 'challenge_id'], '');
+      const challengeId = explicitChallengeId
+        || getString(activeChallenge, ['id', 'challenge_id'], '')
+        || getString(dnsChallenge, ['id', 'challenge_id'], '');
       const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/verify`, {
         method: 'POST',
         body: challengeId ? { challenge_id: challengeId } : {}
       }) as DataItem;
       setDnsVerifyResult(result);
-    }, 'DNS ownership verification completed.');
+      await loadDnsChallenges();
+    }, 'DNS ownership verification checked.');
+  }
+
+  function copyField(field: string, value: string) {
+    if (!value || value === '—') return;
+    const flash = () => {
+      setCopiedField(field);
+      window.setTimeout(() => setCopiedField((current) => (current === field ? '' : current)), 1600);
+    };
+    try {
+      if (navigator?.clipboard?.writeText) {
+        navigator.clipboard.writeText(value).then(flash).catch(() => undefined);
+      } else {
+        flash();
+      }
+    } catch {
+      // Clipboard API unavailable — no-op.
+    }
+  }
+
+  // Per-row Verify: for a domain, issue (or re-check) a scoped DNS TXT challenge in place; for an
+  // IP/agent-bound target, jump to target detail where the agent-binding flow lives (§4.5).
+  function verifyTarget(item: DataItem) {
+    const id = getString(item, ['id'], '');
+    if (!id) return;
+    const kind = getString(item, ['kind'], '').toLowerCase();
+    if (kind !== 'fqdn') {
+      window.location.hash = `target-detail?id=${encodeURIComponent(id)}`;
+      return;
+    }
+    const existing = dnsChallenges.find(
+      (row) => getString(row, ['target_id'], '') === id && getString(row, ['state'], '').toLowerCase() === 'pending'
+    );
+    if (existing) {
+      void verifyDnsChallenge(getString(existing, ['id'], ''));
+    } else {
+      void issueDnsChallenge(id);
+    }
   }
 
   async function openInventory(connectorId: string) {
@@ -337,13 +512,18 @@ export function TargetGroupDetailView({
     }, 'Selected inventory rows imported.');
   }
 
-  async function runBoundedTest(targetId: string, targetGroupId: string) {
+  async function runBoundedTest(targetId: string) {
+    if (!safeCheckId) {
+      setError('No customer-runnable safe check is available to run.');
+      setMessage('');
+      return;
+    }
     await runAction(`run-test-${targetId}`, async () => {
       await requestJson(config, session, '/v1/test-runs', {
         method: 'POST',
-        body: { target_group_id: targetGroupId, target_id: targetId }
+        body: { check_id: safeCheckId, target_group_id: entityId, target_id: targetId }
       });
-    }, 'Bounded test run started.');
+    }, 'Bounded safe test run started.');
   }
 
   async function submitLoa(event: FormEvent<HTMLFormElement>) {
@@ -367,51 +547,80 @@ export function TargetGroupDetailView({
     }, 'LOA signed and recorded in custody ledger.');
   }
 
-  const targetColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'target',
-      label: 'Target',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        return (
-          <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', id)}>
-            {getString(item, ['value'], id)}
-          </AnchorButton>
-        );
+  function targetRowNavProps(item: DataItem): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+    const id = getString(item, ['id'], '');
+    if (!id) return {};
+    const go = () => { window.location.hash = `target-detail?id=${encodeURIComponent(id)}`; };
+    return {
+      role: 'link',
+      tabIndex: 0,
+      style: { cursor: 'pointer' },
+      'aria-label': `Open target ${getString(item, ['value'], id)}`,
+      onClick: go,
+      onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          go();
+        }
       }
-    },
-    { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
+    };
+  }
+
+  const targetColumns: TableColumn<DataItem>[] = [
+    { key: 'target', label: 'Target', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    { key: 'kind', label: 'Kind', render: (item) => <span className="mono">{getString(item, ['kind'], '—')}</span> },
     { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
     {
       key: 'verification',
       label: 'Verification',
       render: (item) => {
         const state = targetVerificationState(item);
-        const chip = resolveVerifyChipState(state, getString(item, ['verification_title', 'verification_provenance'], `Verification ${state} from target API.`));
+        const provenance = resolveTargetVerificationProvenance(item, targetVerificationEnvelope(item));
+        const chip = resolveVerifyChipState(state, provenance);
         return <span className={chip.className} title={chip.title}><span className="vc-dot" aria-hidden="true" />{chip.label}</span>;
       }
     },
     {
       key: 'eligibility',
       label: 'Eligibility',
-      render: (item) => <Badge tone={targetEligibility(item).startsWith('not') ? 'warn' : 'success'} title={`Eligibility ${targetEligibility(item)} from target API`}>{targetEligibility(item)}</Badge>
+      render: (item) => {
+        const eligibility = targetEligibility(item);
+        const notEligible = eligibility.startsWith('not');
+        const reason = getString(item, ['eligibility_reason'], '');
+        return (
+          <Badge tone={notEligible ? 'warn' : 'success'} title={reason !== '—' && reason ? `Eligibility ${eligibility}: ${reason}` : `Eligibility ${eligibility} from target API`}>
+            {eligibility}
+          </Badge>
+        );
+      }
     },
     {
       key: 'actions',
       label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
-        const eligible = !targetEligibility(item).startsWith('not');
+        const runnable = canRunTest(targetVerificationState(item));
+        const runReady = runnable && Boolean(safeCheckId);
+        const runTitle = runnable
+          ? (safeCheckId ? 'Run bounded safe test' : 'No customer-runnable safe check available')
+          : 'Verify to enable testing';
         return (
-          <div className="row-end-actions">
-            <Button size="sm" variant="ghost" onClick={() => { window.location.hash = buildDetailHref('target-detail', id).replace(/^#/, ''); }}>Verify</Button>
+          <div className="row-end-actions" onClick={(event) => event.stopPropagation()}>
             <Button
               size="sm"
               variant="ghost"
-              className={eligible ? undefined : 'is-locked'}
-              disabled={!eligible || busy === `run-test-${id}`}
-              title={eligible ? 'Run bounded test' : 'Verify to enable testing'}
-              onClick={() => { void runBoundedTest(id, entityId); }}
+              onClick={(event) => { event.stopPropagation(); verifyTarget(item); }}
+            >
+              Verify
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className={runReady ? undefined : 'is-locked'}
+              disabled={!runReady || busy === `run-test-${id}`}
+              title={runTitle}
+              loading={busy === `run-test-${id}`}
+              onClick={(event) => { event.stopPropagation(); void runBoundedTest(id); }}
             >
               Run test
             </Button>
@@ -450,8 +659,23 @@ export function TargetGroupDetailView({
     { key: 'agent', label: 'Agent', render: (item) => getString(item, ['agent_id'], '—') }
   ];
 
+  const dnsHistoryColumns: TableColumn<DataItem>[] = [
+    { key: 'record', label: 'Record name', render: (item) => <span className="mono">{getString(item, ['record_name', 'name'], '—')}</span> },
+    {
+      key: 'state',
+      label: 'State',
+      render: (item) => <VerifyChip state={challengeChipState(item)} provenance={`DNS challenge ${getString(item, ['id'], '')} · ${getString(item, ['state'], 'pending')} per ownership API`} />
+    },
+    { key: 'issued', label: 'Issued', render: (item) => formatDate(item.issued_at) },
+    { key: 'checked', label: 'Last checked', render: (item) => (item.last_checked_at ? formatDate(item.last_checked_at) : '—') }
+  ];
+
+  const dnsProvenance = dnsVerified
+    ? `TXT record resolved for ${getString(activeChallenge, ['record_name'], 'this domain')} per DNS ownership API`
+    : `DNS ownership challenge ${activeChallengeId || 'pending'} awaiting TXT resolution`;
+
   return (
-    <div className="content stack-tight">
+    <div className="content stack-tight tg-detail-view">
       <div className="page-head">
         <div>
           <p className="eyebrow">Declared business service</p>
@@ -464,6 +688,7 @@ export function TargetGroupDetailView({
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
       <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
+      {/* (1) Ownership ladder — Declared → DNS verified → Agent verified → User confirmed. */}
       {ladderLoading ? <PortalLoadingSkeleton rows={1} /> : null}
       {!ladderLoading && ladderSteps.length === 0 ? (
         emptyStateFromApi({
@@ -479,10 +704,10 @@ export function TargetGroupDetailView({
           const now = !done && ladderSteps.slice(0, index).every((entry) => entry.done === true);
           return (
             <li key={getString(step, ['id'], String(index))} className={`vl-step${done ? ' is-done' : ''}${now ? ' is-now' : ''}`}>
-              <span className="vl-num">{index + 1}</span>
+              <span className="vl-num" aria-hidden="true">{done ? <Check size={13} strokeWidth={2.6} /> : index + 1}</span>
               <div className="vl-body">
                 <strong>{getString(step, ['label'], 'Step')}</strong>
-                <span className="vl-meta">{getString(step, ['count'], '0')}/{getString(step, ['total'], '0')}</span>
+                <span className="vl-meta">{getString(step, ['count'], '0')} of {getString(step, ['total'], '0')}</span>
               </div>
             </li>
           );
@@ -490,39 +715,131 @@ export function TargetGroupDetailView({
       </ol>
       ) : null}
 
-      <div className="metric-grid four">
-        <div className="kpi"><div className="kpi-label">Group id</div><div className="kpi-value mono">{entityId}</div></div>
-        <div className="kpi"><div className="kpi-label">Environment</div><div className="kpi-value">{getString(entity, ['environment_id'], '—')}</div></div>
-        <div className="kpi"><div className="kpi-label">Criticality</div><div className="kpi-value">{getString(entity, ['criticality', 'business_criticality'], '—')}</div></div>
-        <div className="kpi"><div className="kpi-label">Total targets</div><div className="kpi-value">{targetCount}</div></div>
-        <div className="kpi"><div className="kpi-label">LOA</div><div className="kpi-value"><Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge></div></div>
+      {/* (2) KPI row — Group id · Env · Criticality · Total targets · LOA state. */}
+      <div className="kpi-row">
+        <div className="kpi-cell"><div className="kpi-label">Group id</div><div className="kpi-value mono">{entityId}</div></div>
+        <div className="kpi-cell"><div className="kpi-label">Environment</div><div className="kpi-value">{getString(entity, ['environment_id'], '—')}</div></div>
+        <div className="kpi-cell"><div className="kpi-label">Criticality</div><div className="kpi-value">{getString(entity, ['criticality', 'business_criticality'], '—')}</div></div>
+        <div className="kpi-cell">
+          <div className="kpi-label">Total targets</div>
+          <div className="kpi-value">{targetCount}</div>
+          <div className="kpi-delta">{verifiedTargetCount} verified · {Math.max(0, targets.length - verifiedTargetCount)} unverified</div>
+        </div>
+        <div className="kpi-cell">
+          <div className="kpi-label">LOA</div>
+          <div className="kpi-value" style={{ fontSize: '18px' }}>
+            <Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge>
+          </div>
+        </div>
       </div>
 
+      {/* (3) LOA callout — orange warn when unsigned, green success (signer + digest + date) when signed. */}
       <div className="callout callout-loa" data-loa-state={loaSigned ? 'signed' : 'required'}>
         <span className="callout-icon" aria-hidden="true"><ShieldHalf size={16} /></span>
-        <div>
-          <p className="callout-title">{loaSigned ? 'LOA signed' : 'LOA signature required'}</p>
+        <div className="callout-body">
+          <p className="callout-title">{loaSigned ? 'LOA signed' : 'Letter of Authorization required'}</p>
           <p className="callout-desc">
             {loaSigned
               ? `${getString(entity.loa as DataItem | undefined, ['signer_name'], getString(entity, ['loa_signer'], '—'))} · ${getString(entity.loa as DataItem | undefined, ['custody_digest_sha256', 'digest'], getString(entity, ['loa_digest'], '—'))} · ${formatDate((entity.loa as DataItem | undefined)?.signed_at ?? entity.loa_signed_at)}`
-              : 'Sign the authorization artifact before SOC-gated checks can execute on this group.'}
+              : 'AstraNull will not run checks against these targets until a scoped LOA is signed by an owner. Sign the authorization artifact before SOC-gated checks can execute on this group.'}
           </p>
         </div>
         <div className="callout-actions">
           {!loaSigned ? (
             <>
-              <Button size="sm" onClick={() => setShowLoaModal(true)}>Open target group and sign LOA</Button>
-              <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`}>Review DNS status</Button>
+              <Button size="sm" onClick={() => setShowLoaModal(true)}>Open target group &amp; sign LOA</Button>
+              <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId}>Review DNS status</Button>
             </>
           ) : null}
         </div>
       </div>
 
+      {/* (4) DNS TXT verification panel — §7.2 issue → publish → check now → dns_verified. */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>DNS TXT verification</CardTitle>
+            <CardDescription>Prove domain ownership by publishing a one-time <span className="mono">_astranull-challenge</span> TXT record. Required before external-only checks run.</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => void issueDnsChallenge()} loading={busy === `dns-issue-${entityId}`}>
+            {activeChallenge ? 'Re-issue challenge' : 'Issue DNS challenge'}
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {activeChallenge ? (
+            <div className="dns-challenge" data-state={dnsChipState}>
+              <div className="dns-head">
+                <span className="eyebrow">Publish this TXT record</span>
+                <span className="spacer" />
+                <VerifyChip state={displayedDnsChipState} provenance={dnsProvenance} />
+              </div>
+              <div className="dns-fields">
+                <div className="dns-field">
+                  <span className="dns-key">Record type</span>
+                  <span className="dns-val mono">TXT</span>
+                </div>
+                <div className="dns-field">
+                  <span className="dns-key">Record name</span>
+                  <span className="dns-val mono">{getString(activeChallenge, ['record_name', 'name'], '—')}</span>
+                  <button type="button" className="link-btn" onClick={() => copyField('dns-name', getString(activeChallenge, ['record_name', 'name'], ''))} aria-label="Copy record name">
+                    {copiedField === 'dns-name' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="dns-field">
+                  <span className="dns-key">Record value</span>
+                  <span className="dns-val mono">{getString(activeChallenge, ['record_value', 'value'], '—')}</span>
+                  <button type="button" className="link-btn" onClick={() => copyField('dns-value', getString(activeChallenge, ['record_value', 'value'], ''))} aria-label="Copy record value">
+                    {copiedField === 'dns-value' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="dns-field">
+                  <span className="dns-key">TTL</span>
+                  <span className="dns-val mono">{getString(activeChallenge, ['ttl_seconds', 'ttl'], '—')} seconds</span>
+                </div>
+              </div>
+              <div className="dns-footer">
+                <Button size="sm" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId || dnsChipState === 'dns_verified'}>
+                  Check now
+                </Button>
+                <span className="muted small">
+                  {dnsChipState === 'dns_verified'
+                    ? `Resolved ${formatDate(getString(activeChallenge, ['resolved_at'], '') || undefined)}`
+                    : getString(activeChallenge, ['last_checked_at'], '') !== '—' && getString(activeChallenge, ['last_checked_at'], '')
+                      ? `Last checked ${formatDate(activeChallenge?.last_checked_at)}`
+                      : 'Last checked: not yet'}
+                </span>
+                {dnsChipState === 'pending' ? <span className="muted small">Auto-rechecks every 30s until resolved.</span> : null}
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon={Globe}
+              title="No DNS challenge issued yet"
+              body="Issue a challenge to generate the TXT record for this group's domain target, publish it at your DNS provider, then run Check now to prove ownership."
+              actionLabel="Issue DNS challenge"
+              onAction={() => void issueDnsChallenge()}
+            />
+          )}
+          {dnsChallenges.length > 0 ? (
+            <div className="dns-history">
+              <p className="dns-history-title">Challenge history</p>
+              <DataTable
+                columns={dnsHistoryColumns}
+                items={dnsChallenges}
+                getRowId={(item, index) => getString(item, ['id'], String(index))}
+                empty={<span className="muted small">No challenges recorded.</span>}
+              />
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* (5) Declared targets — clickable rows deep-link to target detail; per-row Verify + Run test. */}
       <Card>
         <CardHeader>
           <div>
             <CardTitle>Declared targets</CardTitle>
-            <CardDescription>Env <span className="mono">{getString(entity, ['environment_id'], '—')}</span> · expected behavior declared per row</CardDescription>
+            <CardDescription>Env <span className="mono">{getString(entity, ['environment_id'], '—')}</span> · expected behavior declared per row · unverified targets cannot be run against</CardDescription>
           </div>
           <Button size="sm" onClick={() => openOnboardModal()}>Edit targets</Button>
         </CardHeader>
@@ -531,6 +848,8 @@ export function TargetGroupDetailView({
             columns={targetColumns}
             items={targets}
             className="tg-targets-table"
+            getRowId={(item, index) => getString(item, ['id'], String(index))}
+            getRowProps={(item) => targetRowNavProps(item)}
             empty={
               <EmptyState
                 icon={Target}
@@ -544,6 +863,7 @@ export function TargetGroupDetailView({
         </CardContent>
       </Card>
 
+      {/* (6) Findings on this group — Target column deep-links target detail. */}
       <Card>
         <CardHeader><CardTitle>Findings on this group</CardTitle></CardHeader>
         <CardContent>
@@ -551,6 +871,7 @@ export function TargetGroupDetailView({
         </CardContent>
       </Card>
 
+      {/* (7) Recent runs — 6-column run history. */}
       <Card>
         <CardHeader><CardTitle>Recent runs</CardTitle></CardHeader>
         <CardContent>
@@ -634,18 +955,19 @@ export function TargetGroupDetailView({
               <div className="dns-challenge">
                 <div className="dns-head">
                   <span className="eyebrow">Challenge state</span>
+                  <span className="spacer" />
                   <VerifyChip
-                    state={getString(dnsVerifyResult?.challenge as DataItem | undefined, ['state'], getString(dnsChallenge, ['state'], dnsVerifyResult?.verified === true ? 'dns_verified' : 'pending'))}
-                    provenance={getString(dnsVerifyResult, ['meta', 'provenance'], 'DNS ownership verification API')}
+                    state={displayedDnsChipState}
+                    provenance={dnsProvenance}
                   />
                 </div>
                 <div className="dns-fields">
-                  <div className="dns-field"><span className="dns-key">Name</span><span className="dns-val mono">{getString(dnsChallenge, ['record_name', 'name'], '—')}</span></div>
-                  <div className="dns-field"><span className="dns-key">Value</span><span className="dns-val mono">{getString(dnsChallenge, ['record_value', 'value'], '—')}</span></div>
-                  <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(dnsChallenge, ['ttl', 'ttl_seconds'], '—')}</span></div>
+                  <div className="dns-field"><span className="dns-key">Name</span><span className="dns-val mono">{getString(activeChallenge, ['record_name', 'name'], '—')}</span></div>
+                  <div className="dns-field"><span className="dns-key">Value</span><span className="dns-val mono">{getString(activeChallenge, ['record_value', 'value'], '—')}</span></div>
+                  <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(activeChallenge, ['ttl_seconds', 'ttl'], '—')}</span></div>
                 </div>
                 <div className="dns-footer row-actions">
-                  <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} onClick={() => void verifyDnsChallenge()}>Check now</Button>
+                  <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId} onClick={() => void verifyDnsChallenge()}>Check now</Button>
                   {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
                 </div>
               </div>
@@ -674,7 +996,8 @@ export function TargetGroupDetailView({
               <div className="dns-challenge">
                 <div className="dns-head">
                   <span className="eyebrow">Agent callback</span>
-                  <VerifyChip state="pending" provenance="Awaiting agent heartbeat from this IP" />
+                  <span className="spacer" />
+                  <VerifyChip state="awaiting_heartbeat" provenance="Awaiting agent heartbeat from this IP" />
                 </div>
                 <ol className="muted small">
                   <li>Install an agent on any host that can reach the target IP (container image, Helm chart, or native package from the Agents screen).</li>

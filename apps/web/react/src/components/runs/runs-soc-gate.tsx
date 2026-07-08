@@ -274,20 +274,17 @@ export function RunsSocGatePanel({
       label: 'Request',
       render: (item) => {
         const requestId = getString(item, ['id'], '');
-        // P0#2: open the shared high-scale request detail route. queue-detail renders the
-        // customer-facing HighScaleDetailView for non-staff principals (this customer panel)
-        // and the staff SOC workspace only for staff, so customers reach their own
-        // high-scale flow instead of the staff-only "access denied" gate.
-        const href = buildDetailHref('queue-detail', requestId);
+        // §4.7: customers see their own high-scale requests INLINE (all state is in this row);
+        // the queue-detail SOC workspace is staff-only, so customers do NOT navigate there
+        // (avoids the staff-gated "access denied" dead-end). Staff open the workspace from here.
+        if (!isStaffPrincipal) {
+          return <code title={`High-scale request ${requestId} · status shown inline`}>{requestId}</code>;
+        }
         return (
           <AnchorButton
             variant="ghost"
-            href={href}
-            aria-label={
-              isStaffPrincipal
-                ? `Open SOC workspace for request ${requestId}`
-                : `Open high-scale request detail for ${requestId}`
-            }
+            href={buildDetailHref('queue-detail', requestId)}
+            aria-label={`Open SOC workspace for request ${requestId}`}
           >
             <code>{getString(item, ['id'])}</code>
           </AnchorButton>

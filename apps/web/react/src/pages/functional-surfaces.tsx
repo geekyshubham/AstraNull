@@ -794,9 +794,45 @@ export function AgentsPage({
   const [tokenRevealed, setTokenRevealed] = useState(false);
   const [tokenRevoked, setTokenRevoked] = useState(false);
   const [copyNotice, setCopyNotice] = useState('');
+  const [updateReleases, setUpdateReleases] = useState<DataItem[]>([]);
+  const [trustKeys, setTrustKeys] = useState<DataItem[]>([]);
+  const [auxLoading, setAuxLoading] = useState(false);
 
   const onlineAgents = data.agents.filter((agent) => getString(agent, ['status']) === 'online').length;
   const firstGroup = data.targetGroups[0] ?? null;
+
+  // Load agent update releases + update-signing trust keys for the rollout / trust-key
+  // panels. Both GET /v1/agent-updates and GET /v1/agent-update-trust-keys return
+  // `{ items: [...] }`. There are no sub-tabs on this surface, so load once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    setAuxLoading(true);
+    Promise.all([
+      requestJson(config, session, '/v1/agent-updates'),
+      requestJson(config, session, '/v1/agent-update-trust-keys')
+    ])
+      .then(([releasesPayload, trustPayload]) => {
+        if (cancelled) return;
+        const releases = Array.isArray((releasesPayload as { items?: unknown }).items)
+          ? (releasesPayload as { items: DataItem[] }).items
+          : [];
+        const keys = Array.isArray((trustPayload as { items?: unknown }).items)
+          ? (trustPayload as { items: DataItem[] }).items
+          : [];
+        setUpdateReleases(releases);
+        setTrustKeys(keys);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setUpdateReleases([]);
+          setTrustKeys([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setAuxLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [config, session]);
 
   const fleetColumns: TableColumn<DataItem>[] = [
     {
@@ -826,6 +862,92 @@ export function AgentsPage({
         const status = getString(item, ['status', 'state'], 'unknown');
         const tone = status === 'online' ? 'success' : status === 'revoked' ? 'danger' : 'muted';
         return <Badge tone={tone} title="Agent status from heartbeat and credential state">{formatAgentHealth(item)}</Badge>;
+      }
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => {
+        const id = getString(item, ['id'], '');
+        const revoked = getString(item, ['status', 'state'], '') === 'revoked';
+        if (revoked) return <span className="muted">revoked</span>;
+        if (!id) return <span className="muted">—</span>;
+        return (
+          <div className="row-actions">
+            <Button
+              size="sm"
+              variant="danger"
+              loading={busy === `revoke-${id}`}
+              disabled={busy !== ''}
+              aria-label={`Revoke agent ${getString(item, ['hostname', 'name', 'id'], id)}`}
+              onClick={() => void revokeAgent(id)}
+            >
+              Revoke
+            </Button>
+          </div>
+        );
+      }
+    }
+  ];
+
+  const releaseColumns: TableColumn<DataItem>[] = [
+    { key: 'version', label: 'Version', render: (item) => <code className="traffic-path-label">{getString(item, ['version'])}</code> },
+    { key: 'channel', label: 'Channel', render: (item) => <span className="muted">{getString(item, ['channel'], 'stable')}</span> },
+    { key: 'state', label: 'State', render: (item) => <Badge tone="info" title="Release rollout state from agent-updates">{formatSnakeLabel(getString(item, ['state'], 'active'))}</Badge> },
+    { key: 'rollout', label: 'Rollout', render: (item) => <span className="num tabular-nums">{getNestedNumber(item, ['rollout', 'percentage'], 100)}%</span> },
+    { key: 'created', label: 'Created', render: (item) => <span className="muted">{formatDate(item.created_at)}</span> },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => {
+        const id = getString(item, ['id'], '');
+        const canRollback = Boolean(item.rollback) && getString(item, ['state']) !== 'rollback_requested';
+        return canRollback ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy === `rollback-${id}`}
+            disabled={busy !== ''}
+            aria-label={`Request rollback for release ${getString(item, ['version'], id)}`}
+            onClick={() => void requestReleaseRollback(id)}
+          >
+            Request rollback
+          </Button>
+        ) : <span className="muted">—</span>;
+      }
+    }
+  ];
+
+  const trustKeyColumns: TableColumn<DataItem>[] = [
+    { key: 'name', label: 'Name', render: (item) => getString(item, ['name']) },
+    { key: 'fingerprint', label: 'Fingerprint', render: (item) => <code className="traffic-path-label" title={getString(item, ['fingerprint_sha256'])}>{getString(item, ['fingerprint_sha256'])}</code> },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => {
+        const status = getString(item, ['status']);
+        return <Badge tone={status === 'active' ? 'success' : 'muted'}>{formatSnakeLabel(status)}</Badge>;
+      }
+    },
+    { key: 'created', label: 'Created', render: (item) => <span className="muted">{formatDate(item.created_at)}</span> },
+    {
+      key: 'actions',
+      label: 'Actions',
+      render: (item) => {
+        const id = getString(item, ['id'], '');
+        const active = getString(item, ['status']) === 'active';
+        return active ? (
+          <Button
+            size="sm"
+            variant="danger"
+            loading={busy === `trust-revoke-${id}`}
+            disabled={busy !== ''}
+            aria-label={`Revoke trust key ${getString(item, ['name'], id)}`}
+            onClick={() => void revokeTrustKey(id)}
+          >
+            Revoke
+          </Button>
+        ) : <span className="muted">revoked</span>;
       }
     }
   ];
@@ -892,9 +1014,122 @@ export function AgentsPage({
     }
   }
 
+  async function refreshAgentReleases() {
+    const payload = await requestJson(config, session, '/v1/agent-updates') as { items?: DataItem[] };
+    setUpdateReleases(Array.isArray(payload.items) ? payload.items : []);
+  }
+
+  async function refreshTrustKeys() {
+    const payload = await requestJson(config, session, '/v1/agent-update-trust-keys') as { items?: DataItem[] };
+    setTrustKeys(Array.isArray(payload.items) ? payload.items : []);
+  }
+
+  async function revokeAgent(id: string) {
+    if (!id) return;
+    if (!window.confirm("Revoke this agent's credentials? It will stop reporting until re-registered.")) return;
+    await runAction(
+      setBusy,
+      setError,
+      setMessage,
+      `revoke-${id}`,
+      () => requestJson(config, session, `/v1/agents/${id}/revoke`, { method: 'POST' }),
+      'Agent revoked. Heartbeat and jobs will be rejected.',
+      onRefresh
+    );
+  }
+
+  async function requestReleaseRollback(releaseId: string) {
+    if (!releaseId) return;
+    if (!window.confirm('Request rollback for this agent release? Eligible agents will move to the previous signed version.')) return;
+    await runAction(
+      setBusy,
+      setError,
+      setMessage,
+      `rollback-${releaseId}`,
+      () => requestJson(config, session, `/v1/agent-updates/${releaseId}/rollback`, { method: 'POST' }),
+      'Rollback requested for eligible agents.',
+      async () => {
+        await refreshAgentReleases();
+        await onRefresh();
+      }
+    );
+  }
+
+  async function revokeTrustKey(keyId: string) {
+    if (!keyId) return;
+    if (!window.confirm('Revoke this agent update trust key? Agents will reject updates signed with it.')) return;
+    await runAction(
+      setBusy,
+      setError,
+      setMessage,
+      `trust-revoke-${keyId}`,
+      () => requestJson(config, session, `/v1/agent-update-trust-keys/${keyId}/revoke`, { method: 'POST' }),
+      'Trust key revoked.',
+      async () => {
+        await refreshTrustKeys();
+        await onRefresh();
+      }
+    );
+  }
+
+  async function handleAddTrustKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    // Capture the form node before awaiting — event.currentTarget is nulled after the
+    // synchronous handler returns, so form.reset() must use the captured reference.
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    await runAction(
+      setBusy,
+      setError,
+      setMessage,
+      'add-trust-key',
+      () => requestJson(config, session, '/v1/agent-update-trust-keys', {
+        method: 'POST',
+        body: {
+          name: String(formData.get('name') ?? '').trim() || 'agent update signing key',
+          public_key_der_base64: String(formData.get('public_key_der_base64') ?? '').trim()
+        }
+      }),
+      'Trust key registered.',
+      async () => {
+        await refreshTrustKeys();
+        form.reset();
+        await onRefresh();
+      }
+    );
+  }
+
+  // Prototype-parity: #screen-agents page-head exposes a Refresh action. Refresh the
+  // portal fleet data plus the separately-loaded release rollout / trust-key panels.
+  async function handleAgentsRefresh() {
+    setBusy('refresh');
+    setError('');
+    setMessage('');
+    try {
+      await Promise.all([refreshAgentReleases(), refreshTrustKeys(), onRefresh()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Refresh failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
   return (
     <div className="content">
-      <PageHeader route="agents" />
+      <PageHeader
+        route="agents"
+        actions={(
+          <Button
+            size="sm"
+            variant="ghost"
+            loading={busy === 'refresh'}
+            disabled={busy !== ''}
+            onClick={() => void handleAgentsRefresh()}
+          >
+            Refresh
+          </Button>
+        )}
+      />
       <PageContextSummary>
         <span className="tabular-nums">{data.targetGroups.length}</span> declared groups ·{' '}
         <span className="tabular-nums">{data.agents.length}</span> agents ·{' '}
@@ -994,6 +1229,55 @@ export function AgentsPage({
           createBusy={busy === 'create-bootstrap-token'}
           actionsDisabled={busy !== ''}
         />
+        <div className="split">
+          <SurfaceTableCard
+            title="Release rollout"
+            description="Tenant agent release rollouts. Agents pull signed updates over the outbound channel. Request rollback to move eligible agents to the previous signed version."
+            columns={releaseColumns}
+            items={updateReleases}
+            loading={auxLoading}
+            loadingLabel="Loading agent releases"
+            empty={(
+              <EmptyState
+                icon={Bot}
+                title="No agent releases published."
+                body="Publish signed manifests through your operator packaging workflow to roll out agent versions."
+              />
+            )}
+          />
+          <Card>
+            <CardHeader>
+              <CardTitle>Trust keys</CardTitle>
+              <CardDescription>
+                Ed25519 signing keys that agents trust for update manifests. Revoking a key makes agents reject updates signed with it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="product-form stack">
+              {auxLoading ? (
+                <TableSkeleton rows={2} label="Loading trust keys" />
+              ) : (
+                <DataTable
+                  columns={trustKeyColumns}
+                  items={trustKeys}
+                  empty={(
+                    <EmptyState
+                      icon={KeyRound}
+                      title="No trust keys registered."
+                      body="Add the public key from your agent update signing ceremony."
+                    />
+                  )}
+                />
+              )}
+              <form className="product-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
+                <label><span>Key name</span><input name="name" placeholder="production signing key" /></label>
+                <label className="full"><span>Public key (DER base64)</span><textarea name="public_key_der_base64" rows={3} placeholder="MCowBQYDK2VwAyEA…" required /></label>
+                <div className="form-actions full">
+                  <Button type="submit" loading={busy === 'add-trust-key'} disabled={busy !== ''}>Register trust key</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
@@ -1216,6 +1500,21 @@ export function ValidationSurfacePage({
     }
   }
 
+  // Prototype-parity: #screen-checks and #screen-findings page-heads expose a Refresh
+  // action. Reuses the portal onRefresh so the catalog / findings reflect fresh state.
+  async function handleSurfaceRefresh() {
+    setBusy('refresh');
+    setError('');
+    setMessage('');
+    try {
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Refresh failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
   if (route === 'checks') {
     const columns: TableColumn<DataItem>[] = [
       {
@@ -1268,7 +1567,20 @@ export function ValidationSurfacePage({
     ];
     return (
       <div className="content">
-        <PageHeader route="checks" />
+        <PageHeader
+          route="checks"
+          actions={(
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busy === 'refresh'}
+              disabled={busy !== ''}
+              onClick={() => void handleSurfaceRefresh()}
+            >
+              Refresh
+            </Button>
+          )}
+        />
         <Card>
           <CardHeader>
             <CardTitle>Check catalog</CardTitle>
@@ -1466,7 +1778,20 @@ export function ValidationSurfacePage({
   if (route === 'findings') {
     return (
       <div className="content">
-        <PageHeader route="findings" />
+        <PageHeader
+          route="findings"
+          actions={(
+            <Button
+              size="sm"
+              variant="ghost"
+              loading={busy === 'refresh'}
+              disabled={busy !== ''}
+              onClick={() => void handleSurfaceRefresh()}
+            >
+              Refresh
+            </Button>
+          )}
+        />
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>

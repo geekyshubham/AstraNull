@@ -113,9 +113,144 @@ function validateOwnershipChallengeInputs(ctx, body) {
   return { group, agent, targetGroupId, agentId, declaredFqdn };
 }
 
+/**
+ * Non-production agent-verification simulation gate.
+ *
+ * Mirrors the DNS ownership simulation in dnsOwnership.mjs: when
+ * ASTRANULL_AGENT_VERIFY_SIMULATE=1 (or the shared ASTRANULL_DNS_SIMULATE=1) and
+ * NODE_ENV is not production, the agent-observation flow can be demonstrated in
+ * dev/CI without the full probe-nonce + agent-observation correlation dance.
+ * Hard-gated off in production (mirrors ASTRANULL_PROBE_MODE and the dnsOwnership
+ * sim), so the real, evidence-based path is the only one that ever runs live.
+ */
+function agentVerifySimulationEnabled() {
+  if (process.env.NODE_ENV === 'production') return false;
+  return (
+    process.env.ASTRANULL_AGENT_VERIFY_SIMULATE === '1'
+    || process.env.ASTRANULL_DNS_SIMULATE === '1'
+  );
+}
+
+function findOnlineBoundAgent(ctx, groupId) {
+  return getStore().agents.find(
+    (a) =>
+      a.tenant_id === ctx.tenantId
+      && a.target_group_id === groupId
+      && a.status === 'online',
+  ) ?? null;
+}
+
+/**
+ * Dev/CI-only agent-observation simulation. When an online agent is bound to the
+ * target group, transitions its declared target(s) to `agent_verified` by
+ * appending an `agent_observation` targetVerification (canonical shape shared with
+ * the DNS `dns_txt` path) and updating `target.verify_state`. This makes the
+ * verification ladder reach `agent_verified` and unblocks LOA + user_confirmed
+ * without requiring a signed probe endpoint on the demo agent.
+ *
+ * Returns null when the simulation does not apply (missing group, or no online
+ * agent bound to the group) so the caller falls through to the real,
+ * evidence-based error. Never runs in production (guarded by the caller).
+ *
+ * @param {import('../context.mjs').TenantScope} ctx
+ * @param {{ target_group_id?: string, target_id?: string }} body
+ */
+function simulateAgentVerification(ctx, body) {
+  const group = findTargetGroup(ctx, body?.target_group_id);
+  if (!group) return null;
+
+  const agent = findOnlineBoundAgent(ctx, group.id);
+  if (!agent) return null;
+
+  const groupTargets = getStore().targets.filter(
+    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === group.id,
+  );
+  let targets = groupTargets;
+  if (body?.target_id) {
+    const scoped = groupTargets.find((t) => t.id === body.target_id);
+    if (!scoped) {
+      return { dry_run: false, simulated: true, ready: false, error: 'target_not_found', status: 404 };
+    }
+    targets = [scoped];
+  }
+  if (targets.length === 0) {
+    return { dry_run: false, simulated: true, ready: false, error: 'no_targets_in_group', status: 409 };
+  }
+
+  if (!getStore().targetVerifications) getStore().targetVerifications = [];
+  const now = new Date().toISOString();
+  const results = [];
+  for (const target of targets) {
+    const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+    const currentState = current?.state ?? target.verify_state ?? 'unverified';
+    // Idempotent, and never downgrade an already-stronger state.
+    if (currentState === 'agent_verified' || currentState === 'user_confirmed') {
+      results.push({ target_id: target.id, state: currentState, changed: false });
+      continue;
+    }
+    const auditEntry = audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId ?? null,
+      actor_role: ctx.role ?? 'system',
+      action: 'target_verification.agent_verified',
+      resource_type: 'target',
+      resource_id: target.id,
+      metadata: { target_group_id: group.id, agent_id: agent.id, simulated: true },
+    });
+    const verification = {
+      id: newId('tv'),
+      tenant_id: ctx.tenantId,
+      target_id: target.id,
+      state: 'agent_verified',
+      source_kind: 'agent_observation',
+      source_ref: {
+        agent_id: agent.id,
+        observation_id: newId('obs'),
+        correlated_at: now,
+        simulated: true,
+      },
+      transitioned_at: now,
+      transitioned_by: ctx.userId ?? 'system',
+      audit_entry_id: auditEntry.id,
+    };
+    getStore().targetVerifications.push(verification);
+    target.verify_state = 'agent_verified';
+    results.push({
+      target_id: target.id,
+      state: 'agent_verified',
+      changed: true,
+      audit_entry_id: auditEntry.id,
+    });
+  }
+
+  // Mirror applyOwnershipSignal's group-level rollup without downgrading a
+  // customer-confirmed group.
+  if (group.ownership_status !== 'user_confirmed') {
+    group.ownership_status = 'agent_verified';
+  }
+  persistStore();
+
+  return {
+    dry_run: false,
+    simulated: true,
+    ready: true,
+    target_group_id: group.id,
+    agent_id: agent.id,
+    targets: results,
+  };
+}
+
 export function verifyOwnershipSetup(ctx, body, _runtimeConfig) {
   const validated = validateOwnershipChallengeInputs(ctx, body);
   if (validated.error) {
+    // Dev/CI-only: when the real setup validation fails (e.g. the demo agent has
+    // no signed probe_endpoint yet) but an online agent is bound to the group,
+    // simulate the agent observation so the flow reaches agent_verified. Hard-gated
+    // off in production; the real evidence-based dry-run below is unchanged.
+    if (agentVerifySimulationEnabled()) {
+      const simulated = simulateAgentVerification(ctx, body);
+      if (simulated) return simulated;
+    }
     return {
       dry_run: true,
       ready: false,

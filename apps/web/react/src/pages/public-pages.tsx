@@ -292,39 +292,43 @@ function AuthCardHeader({
 const LANDING_PRINCIPLES = [
   {
     title: 'No-access-first',
-    body: 'You declare the target groups you want validated. AstraNull never defaults to cloud access and never auto-discovers your IP inventory. Validation uses outside probes and inside agents you place — nothing more.'
+    body: 'You declare the target groups you want validated. AstraNull never defaults to cloud access and never auto-discovers your IP inventory. Validation uses outside probes and inside agents you place. Nothing more.'
   },
   {
     title: 'Evidence over assumptions',
-    body: 'Every verdict is backed by correlated probe results and agent observations, written to an evidence vault you control. Readiness is a number you can defend in an incident review — not a green checkmark.'
+    body: 'Every verdict is backed by correlated probe results and agent observations, written to an evidence vault you control. Readiness is a number you can defend in an incident review, not a green checkmark.'
   },
   {
     title: 'SOC-gated high-scale',
-    body: 'Default validation is low-volume, bounded, and non-disruptive. High-scale assessments are reviewed and executed by the AstraNull SOC after approval — customers submit requests, never run floods themselves.'
+    body: 'Default validation is low-volume, bounded, and non-disruptive. High-scale assessments are reviewed and executed by the AstraNull SOC after approval. Customers submit requests, never run floods themselves.'
   }
 ];
 
 const LANDING_FLOW = [
   {
+    step: '01',
     title: 'Scope your target groups',
-    body: 'Register environments and target groups — the FQDNs, DNS zones, and TCP surfaces you want validated. Declare expected behavior so verdicts map to your real edge topology.'
+    body: 'Register environments and target groups: the FQDNs, DNS zones, and TCP surfaces you want validated. Declare expected behavior so verdicts map to your real edge topology.'
   },
   {
+    step: '02',
     title: 'Place agents, run safe checks',
     body: 'Install outbound-only agents and run the safe-by-default check catalog: origin-bypass, L3/L4, DNS, L7/API. Each check is bounded and metadata-only unless you escalate.'
   },
   {
+    step: '03',
     title: 'Correlate probe + agent',
     body: 'Verdicts combine external probe reachability with internal agent path observation. Every result lands in the evidence vault, exportable for audits and incident reviews.'
   },
   {
+    step: '04',
     title: 'Escalate through the SOC',
-    body: 'When you need high-scale validation, submit a request. The SOC reviews, schedules, and executes under a kill switch — with full custody and audit trail.'
+    body: 'When you need high-scale validation, submit a request. The SOC reviews, schedules, and executes under a kill switch, with full custody and audit trail.'
   }
 ];
 
 const LANDING_COMPARE = [
-  ['Requires cloud credentials', 'No — declared scope only', 'Often', 'Yes, read/write'],
+  ['Requires cloud credentials', 'No. Declared scope only.', 'Often', 'Yes, read/write'],
   ['Default probe posture', 'Bounded & non-disruptive', 'High-volume by default', 'Passive metrics only'],
   ['Inside + outside correlation', 'Probes + placed agents', 'Outside only', 'Inside only'],
   ['High-scale execution', 'SOC-gated after approval', 'Self-service', 'Not available'],
@@ -340,12 +344,12 @@ const LANDING_TRUST_ITEMS = [
 
 const LANDING_USE_CASES = [
   {
-    quote: 'Regulated fintech that needs a defensible readiness number for audit — without granting a tool cloud credentials or letting it inventory production IPs.',
-    attr: 'Platform & security leads — declared-scope validation and evidence they can hand to an auditor.'
+    quote: 'Regulated fintech that needs a defensible readiness number for audit, without granting a tool cloud credentials or letting it inventory production IPs.',
+    attr: 'Platform & security leads. Declared-scope validation and evidence they can hand to an auditor.'
   },
   {
-    quote: 'High-traffic media & CDN teams that want real high-scale assurance, but only under governance — no self-service floods pointed at production.',
-    attr: 'SRE & edge owners — SOC-governed high-scale, bounded probes the rest of the time.'
+    quote: 'High-traffic media & CDN teams that want real high-scale assurance, but only under governance. No self-service floods pointed at production.',
+    attr: 'SRE & edge owners. SOC-governed high-scale, bounded probes the rest of the time.'
   }
 ];
 
@@ -477,7 +481,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   const loginUrl = config.loginUrl;
 
   usePageMeta({
-    title: `${productName} — Prove DDoS readiness without handing over your cloud keys`
+    title: `${productName} · Prove DDoS readiness without handing over your cloud keys`
   });
 
   return (
@@ -520,8 +524,6 @@ export function PublicLandingPage({ config }: PublicPageProps) {
           </div>
         </section>
 
-        <ProofChainSection />
-
         <section className="public-section" id="principles">
           <h2>A defensive readiness platform, not self-service attack tooling.</h2>
           <p className="public-section-lead">Three commitments shape every screen, every probe, every verdict in AstraNull.</p>
@@ -536,35 +538,39 @@ export function PublicLandingPage({ config }: PublicPageProps) {
         </section>
 
         <section className="public-section" id="how">
-          <h2>Declare · Validate · Evidence · Govern</h2>
+          <p className="eyebrow">The loop</p>
+          <h2>Declare. Validate. Evidence. Govern.</h2>
           <p className="public-section-lead">A four-stage loop that turns a declared scope into a defensible readiness posture.</p>
           <div className="public-flow">
-            {LANDING_FLOW.map((step) => (
-              <article className="public-flow-step" key={step.title}>
-                <h3>{step.title}</h3>
-                <p>{step.body}</p>
+            {LANDING_FLOW.map((item) => (
+              <article className="public-flow-step" key={item.step}>
+                <p className="public-flow-tag">{item.step}</p>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
               </article>
             ))}
           </div>
         </section>
 
+        <ProofChainSection />
+
         <section className="public-section public-section--narrow" id="compare">
-          <h2>Built for teams that can&apos;t hand over the keys</h2>
+          <h2>Built for teams that can&apos;t hand over the keys.</h2>
           <div className="public-compare table-wrap">
             <table>
               <thead>
                 <tr>
                   <th scope="col" />
                   <th scope="col">AstraNull</th>
-                  <th scope="col">Legacy load-testing</th>
-                  <th scope="col">Cloud DDoS dashboards</th>
+                  <th scope="col">Self-run load tests</th>
+                  <th scope="col">Provider DDoS dashboards</th>
                 </tr>
               </thead>
               <tbody>
                 {LANDING_COMPARE.map(([label, anull, legacy, cloud]) => (
                   <tr key={label}>
                     <th scope="row">{label}</th>
-                    <td className="public-compare-yes"><Badge tone="success">{anull}</Badge></td>
+                    <td className="public-compare-yes">{anull}</td>
                     <td>{legacy}</td>
                     <td>{cloud}</td>
                   </tr>
@@ -575,7 +581,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
         </section>
 
         <section className="public-section">
-          <h2>Where the no-access model matters most</h2>
+          <h2>Where the no-access model matters most.</h2>
           <p className="public-section-lead">Two profiles that keep hitting the wall between &ldquo;prove the edge holds&rdquo; and &ldquo;don&apos;t hand a validation tool our cloud keys.&rdquo;</p>
           <div className="public-quotes">
             {LANDING_USE_CASES.map((item) => (
@@ -588,17 +594,21 @@ export function PublicLandingPage({ config }: PublicPageProps) {
         </section>
 
         <section className="public-cta-final">
-          <h2>Prove your edge holds — before an attacker proves it doesn&apos;t.</h2>
+          <h2>Prove your edge holds. Before an attacker does it for you.</h2>
           <p>Request access. We&apos;ll review your account and stand up a tenant with the full customer portal.</p>
           <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} />
         </section>
 
         <footer className="public-footer">
-          <span>© {productName} — DDoS readiness validation. Defensive platform only.</span>
+          <span>© {productName} · DDoS readiness validation. Defensive platform only.</span>
           <nav aria-label="Public footer">
             <a href={loginUrl}>Log in</a>
+            {signupEnabled ? <a href="/signup">Request access</a> : null}
+            <a href="/signup-status">Request status</a>
+            <a href={config.staffLoginPath}>Staff sign-in</a>
             <a href="#principles">Principles</a>
-            <a href="#trust">Security &amp; trust</a>
+            <a href="#how">How it works</a>
+            <a href="#compare">Compare</a>
           </nav>
         </footer>
       </main>
@@ -607,7 +617,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
 }
 
 export function LoginPage({ config }: PublicPageProps) {
-  usePageMeta({ title: 'Log in — AstraNull Customer Portal' });
+  usePageMeta({ title: 'Log in · AstraNull Customer Portal' });
 
   const [userId, setUserId] = useState('');
   const [role, setRole] = useState('admin');
@@ -638,7 +648,7 @@ export function LoginPage({ config }: PublicPageProps) {
   }, [loginDisabled]);
 
   const cardDescription = isDevHeaders
-    ? 'Developer validation mode — continue with local tenant headers (no password required).'
+    ? 'Developer validation mode: continue with local tenant headers (no password required).'
     : config.bundledLoginEnabled
       ? 'Bundled staging login mints a short-lived bearer session for this environment.'
       : idpRedirect
@@ -756,7 +766,7 @@ export function LoginPage({ config }: PublicPageProps) {
                       disabled={loginDisabled}
                     />
                     {!isDevHeaders && config.bundledLoginEnabled ? (
-                      <span className="auth-field-help">Staging only — production sign-in derives role from your identity provider.</span>
+                      <span className="auth-field-help">Staging only. Production sign-in derives role from your identity provider.</span>
                     ) : null}
                   </div>
                 ) : null}
@@ -863,7 +873,7 @@ function signupSubmitErrorMessage(status: number, json: Record<string, unknown>)
 }
 
 export function SignupPage({ config }: PublicPageProps) {
-  usePageMeta({ title: 'Request access — AstraNull' });
+  usePageMeta({ title: 'Request access · AstraNull' });
 
   const signupEnabled = config.siteConfig.signup_enabled !== false;
   const [submitted, setSubmitted] = useState<Record<string, unknown> | null>(null);
@@ -955,7 +965,7 @@ export function SignupPage({ config }: PublicPageProps) {
             <AuthAsidePoints
               items={[
                 { icon: ShieldCheck, text: 'Safe-by-default validation is available immediately after approval' },
-                { icon: Siren, text: 'High-scale programs stay SOC-scheduled and authorization-pack gated' },
+                { icon: Siren, text: 'High-scale programs stay SOC-scheduled and pack-gated' },
                 { icon: UserRound, text: 'Track request status any time with your request ID' }
               ]}
             />
@@ -973,7 +983,7 @@ export function SignupPage({ config }: PublicPageProps) {
           <AuthCardHeader
             badge={<Badge tone="info">Reviewed access</Badge>}
             title={submitted ? 'Request submitted' : 'Request an AstraNull account'}
-            description="Account creation is reviewed before provisioning a tenant."
+            description="Account creation is reviewed before provisioning a tenant. Save your request ID to check status any time."
           />
           <CardContent>
             {!signupEnabled ? (
@@ -1031,7 +1041,7 @@ export function SignupPage({ config }: PublicPageProps) {
                   disabled={loading}
                 />
                 <label className="auth-field-full" htmlFor="signup-intended-use"><span>Intended use</span><textarea id="signup-intended-use" name="intended_use" required rows={4} placeholder="Defensive readiness for declared production origins." disabled={loading} /></label>
-                <label className="auth-field-full auth-check-row" htmlFor="signup-high-scale"><input id="signup-high-scale" name="high_scale_interest" type="checkbox" disabled={loading} /><span>We may need SOC-governed high-scale validation.</span></label>
+                <label className="auth-field-full auth-check-row" htmlFor="signup-high-scale"><input id="signup-high-scale" name="high_scale_interest" type="checkbox" disabled={loading} /><span>Interested in governed high-scale rehearsal programs.</span></label>
                 {error ? <p className="form-error auth-field-full" role="alert">{error}</p> : null}
                 <div className="auth-form-actions auth-field-full">
                   <Button type="submit" loading={loading}>Submit request</Button>
@@ -1046,7 +1056,7 @@ export function SignupPage({ config }: PublicPageProps) {
 }
 
 export function SignupStatusPage() {
-  usePageMeta({ title: 'Request status — AstraNull' });
+  usePageMeta({ title: 'Request status · AstraNull' });
 
   const [requestId, setRequestId] = useState(() => {
     if (typeof window === 'undefined') return '';
@@ -1092,11 +1102,11 @@ export function SignupStatusPage() {
   }
 
   return (
-    <PublicShell eyebrow="Self-service status lookup">
+    <PublicShell eyebrow="Request status lookup">
       <AuthPageLayout
         aside={(
           <>
-            <h1 className="auth-title">Sign-up status</h1>
+            <h1 className="auth-title">Check your access request.</h1>
             <p className="auth-lead">Track your account request. You&apos;ll find the request ID in the confirmation panel shown after you submit the intake form, or in the email we sent to the work address you registered.</p>
           </>
         )}
@@ -1148,7 +1158,7 @@ export function SignupStatusPage() {
               <div className="success-panel" role="status" aria-live="polite">
                 <div className="callout info">
                   <CheckCircle2 size={18} aria-hidden="true" />
-                  <p className="success-panel-lead">Request found — provisioning remains review-gated.</p>
+                  <p className="success-panel-lead">Request found. Provisioning remains review-gated.</p>
                 </div>
                 <SignupRequestSummary record={result} requestIdFallback={requestId} />
                 {result.customer_notice ? (
@@ -1164,7 +1174,7 @@ export function SignupStatusPage() {
 }
 
 export function StaffLoginPage({ config }: PublicPageProps) {
-  usePageMeta({ title: 'Staff sign-in — AstraNull Internal', robots: 'noindex, nofollow' });
+  usePageMeta({ title: 'Staff sign-in · AstraNull Internal', robots: 'noindex, nofollow' });
 
   const [staffId, setStaffId] = useState('');
   const [staffRole, setStaffRole] = useState('internal_admin');
@@ -1194,7 +1204,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   }, [loginDisabled]);
 
   const cardDescription = isDevHeaders
-    ? 'Developer validation mode — continue with staff dev headers (no password required).'
+    ? 'Developer validation mode: continue with staff dev headers (no password required).'
     : config.bundledLoginEnabled
       ? 'Bundled staging login mints a short-lived staff bearer session for this environment.'
       : idpRedirect
@@ -1298,7 +1308,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
                       disabled={loginDisabled}
                     />
                     {!isDevHeaders && config.bundledLoginEnabled ? (
-                      <span className="auth-field-help">Staging only — production staff sign-in derives role from your identity provider.</span>
+                      <span className="auth-field-help">Staging only. Production staff sign-in derives role from your identity provider.</span>
                     ) : null}
                   </div>
                 ) : null}
@@ -1326,7 +1336,7 @@ export function InternalAdminPage({ config }: PublicPageProps) {
           <div>
             <Badge tone="warn">Staff plane</Badge>
             <h2>Internal Admin</h2>
-            <p className="muted">Tenant lifecycle, sign-up review, subscriptions, support actions, approvals, and audit — separate from the customer portal.</p>
+            <p className="muted">Tenant lifecycle, sign-up review, subscriptions, support actions, approvals, and audit, separate from the customer portal.</p>
           </div>
           <AnchorButton href="/app" variant="secondary">Customer portal</AnchorButton>
         </section>

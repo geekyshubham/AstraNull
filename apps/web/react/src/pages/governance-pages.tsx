@@ -110,6 +110,9 @@ function downloadJsonFile(filename: string, payload: unknown) {
 
 function validateNotificationDestination(channel: string, rawDestination: string): { destination: string } | { error: string } {
   const destination = rawDestination.trim();
+  if (channel === 'in_app') {
+    return { destination: '' };
+  }
   if (channel === 'webhook') {
     if (!/^https?:\/\/.+/i.test(destination)) {
       return { error: 'Enter a valid http(s) webhook URL before adding the rule.' };
@@ -443,6 +446,19 @@ const SOC_SCHEDULED_STATES = ['scheduled', 'approved'];
 const SOC_REVIEW_STATES = ['submitted', 'under_review', 'pending', 'draft'];
 const SOC_RUNNING_STATES = ['running', 'executing', 'active', 'started'];
 
+// Validated kill-switch sequence, mirroring the frozen server contract
+// (src/contracts/killSwitchValidation.mjs → KILL_SWITCH_REQUIRED_STEP_IDS).
+// Rendered as the documented arming sequence; each step is custody-recorded on exercise.
+const KILL_SWITCH_VALIDATED_SEQUENCE = [
+  'activate_tenant_kill_switch',
+  'block_new_safe_runs',
+  'cancel_active_safe_runs',
+  'probe_fleet_stops_leasing',
+  'adapter_stop_path_invoked',
+  'audit_timeline_recorded',
+  'clear_and_resume_guarded'
+] as const;
+
 function normalizeHighScaleState(item: DataItem) {
   return getString(item, ['state'], '').trim().toLowerCase();
 }
@@ -573,6 +589,46 @@ function buildSocExecutionTimeline(requests: DataItem[]): SocTimelineRow[] {
     .slice(0, 12);
 }
 
+type SocCrossTenantRow = { id: string; tenantId: string; kind: string; state: string; requestedAt: string };
+
+// Staff SOC surface only. Cross-tenant governed requests come from the staff approval queue
+// (`data.internalApprovalRequests`, fetched for staff sessions), filtered to high-scale kinds.
+function isHighScaleApprovalKind(kind: string) {
+  return kind.trim().toLowerCase().startsWith('high_scale');
+}
+
+function buildSocCrossTenantRows(approvals: DataItem[]): SocCrossTenantRow[] {
+  return approvals
+    .filter((item) => isHighScaleApprovalKind(getString(item, ['kind'], '')))
+    .map((item) => ({
+      id: getString(item, ['id'], '—'),
+      tenantId: getString(item, ['tenant_id'], '—'),
+      kind: getString(item, ['kind'], '—'),
+      state: getString(item, ['state'], '—'),
+      requestedAt: getString(item, ['created_at', 'requested_at'], '')
+    }))
+    .sort((left, right) => new Date(right.requestedAt).getTime() - new Date(left.requestedAt).getTime());
+}
+
+const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
+  { key: 'tenant', label: 'Tenant', render: (item) => <span className="mono">{item.tenantId}</span> },
+  { key: 'request', label: 'Request', render: (item) => <span className="mono">{item.id}</span> },
+  { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{formatGovernanceStatusLabel(item.kind, 'high scale')}</Badge> },
+  {
+    key: 'state',
+    label: 'State',
+    render: (item) => <Badge tone={highScaleStateBadgeTone(item.state)}>{formatGovernanceStatusLabel(item.state, 'Unknown')}</Badge>
+  },
+  { key: 'requested', label: 'Requested', render: (item) => formatDate(item.requestedAt) },
+  {
+    key: 'actions',
+    label: 'Actions',
+    render: (item) => (
+      <AnchorButton size="sm" variant="secondary" href={buildDetailHref('queue-detail', item.id)}>Open</AnchorButton>
+    )
+  }
+];
+
 export function NotificationsPage({
   data,
   config,
@@ -588,9 +644,11 @@ export function NotificationsPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [destinationError, setDestinationError] = useState('');
+  const [triggerError, setTriggerError] = useState('');
   const [ruleDryRunPreview, setRuleDryRunPreview] = useState('');
   const [ruleChannel, setRuleChannel] = useState('webhook');
-  const [ruleTrigger, setRuleTrigger] = useState<(typeof NOTIFICATION_TRIGGERS)[number]>('finding.high_severity');
+  const [ruleTriggers, setRuleTriggers] = useState<string[]>(['finding.high_severity']);
+  const [ruleEnabled, setRuleEnabled] = useState(true);
   const canWrite = canWriteNotifications(session.role);
   const attempts = useMemo(() => deliveryAttempts(data.notificationEvents ?? []), [data.notificationEvents]);
   const deliveredCount = attempts.filter((item) => getString(item, ['status']) === 'delivered_provider').length;
@@ -652,12 +710,26 @@ export function NotificationsPage({
     }
   }
 
+  function toggleRuleTrigger(trigger: string) {
+    setTriggerError('');
+    setRuleDryRunPreview('');
+    setRuleTriggers((current) =>
+      current.includes(trigger) ? current.filter((item) => item !== trigger) : [...current, trigger]
+    );
+  }
+
   async function handleCreateRule(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formEl = event.currentTarget;
     const form = new FormData(formEl);
     const channel = ruleChannel.trim();
-    const trigger = ruleTrigger.trim();
+    const triggers = NOTIFICATION_TRIGGERS.filter((trigger) => ruleTriggers.includes(trigger));
+    if (triggers.length === 0) {
+      setTriggerError('Select at least one rule kind before adding the rule.');
+      setRuleDryRunPreview('');
+      return;
+    }
+    setTriggerError('');
     const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
     if ('error' in validation) {
       setDestinationError(validation.error);
@@ -666,23 +738,32 @@ export function NotificationsPage({
     }
     setDestinationError('');
     setRuleDryRunPreview('');
-    const destination = validation.destination;
-    await runAction('create-notification-rule', () => requestJson(config, session, '/v1/notifications', {
+    const created = await runAction('create-notification-rule', () => requestJson(config, session, '/v1/notifications', {
       method: 'POST',
       body: {
         channel,
-        enabled: true,
-        triggers: [trigger],
-        destination
+        enabled: ruleEnabled,
+        triggers,
+        destination: validation.destination
       }
-    }), 'Notification rule created (metadata-only delivery ledger).');
-    formEl.reset();
+    }), `Notification rule created ${ruleEnabled ? 'enabled' : 'disabled'} (metadata-only delivery ledger).`);
+    if (created) {
+      formEl.reset();
+      setRuleTriggers(['finding.high_severity']);
+      setRuleEnabled(true);
+    }
   }
 
   function previewRuleFromForm(formEl: HTMLFormElement) {
     const form = new FormData(formEl);
     const channel = ruleChannel.trim();
-    const trigger = ruleTrigger.trim();
+    const triggers = NOTIFICATION_TRIGGERS.filter((trigger) => ruleTriggers.includes(trigger));
+    if (triggers.length === 0) {
+      setTriggerError('Select at least one rule kind before previewing.');
+      setRuleDryRunPreview('');
+      return;
+    }
+    setTriggerError('');
     const validation = validateNotificationDestination(channel, String(form.get('destination_preview') ?? ''));
     if ('error' in validation) {
       setDestinationError(validation.error);
@@ -690,8 +771,10 @@ export function NotificationsPage({
       return;
     }
     setDestinationError('');
+    const triggerLabels = triggers.map((trigger) => humanizeNotificationTrigger(trigger)).join(', ');
+    const target = channel === 'in_app' ? 'in-app feed' : validation.destination;
     setRuleDryRunPreview(
-      `Dry-run: would create a ${channel} rule for “${humanizeNotificationTrigger(trigger)}” → ${validation.destination} (no ledger write).`
+      `Dry-run: would create ${ruleEnabled ? 'an enabled' : 'a disabled'} ${channel} rule for ${triggers.length} trigger${triggers.length === 1 ? '' : 's'} (${triggerLabels}) to ${target}. No ledger write.`
     );
   }
 
@@ -719,7 +802,14 @@ export function NotificationsPage({
 
   return (
     <div className="content">
-      <PageHeader route="notifications" />
+      <PageHeader
+        route="notifications"
+        actions={
+          <Button size="sm" variant="ghost" onClick={() => void onRefresh()} disabled={busy !== ''}>
+            Refresh
+          </Button>
+        }
+      />
       <div className="metric-grid three">
         <MetricCard label="Delivered" value={deliveredCount} sub="successful deliveries" icon={CheckCircle2} tone="success" />
         <MetricCard label="Retrying" value={retryItems.length} sub="awaiting retry" icon={Bell} tone={retryItems.length > 0 ? 'warn' : 'muted'} />
@@ -730,33 +820,57 @@ export function NotificationsPage({
         <Card id="notifications-create-rule">
           <CardHeader>
             <CardTitle>Create notification rule</CardTitle>
-            <CardDescription>Metadata-only rule creation. External delivery remains opt-in through server delivery mode.</CardDescription>
+            <CardDescription>Pick a delivery mode, the rule kinds (triggers) that fire it, and whether it starts enabled. Metadata-only ledger. External delivery stays opt-in through the server delivery mode.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="product-form" onSubmit={handleCreateRule} aria-busy={busy === 'create-notification-rule'}>
               <Select
-                label="Channel"
+                label="Delivery mode"
                 value={ruleChannel}
                 options={NOTIFICATION_CHANNEL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-                onChange={setRuleChannel}
-                disabled={busy !== ''}
-              />
-              <Select
-                label="Trigger"
-                value={ruleTrigger}
-                options={NOTIFICATION_TRIGGERS.map((trigger) => ({ value: trigger, label: humanizeNotificationTrigger(trigger) }))}
-                onChange={(value) => setRuleTrigger(value as (typeof NOTIFICATION_TRIGGERS)[number])}
+                onChange={(value) => { setRuleChannel(value); setDestinationError(''); setRuleDryRunPreview(''); }}
                 disabled={busy !== ''}
               />
               <label className="full">
-                <span>Destination</span>
+                <span>{ruleChannel === 'in_app' ? 'Destination (optional for in-app)' : 'Destination'}</span>
                 <input
                   name="destination_preview"
-                  placeholder="https://hooks.example.invalid/notifications"
+                  placeholder={ruleChannel === 'email' ? 'alerts@example.com' : ruleChannel === 'in_app' ? 'Delivered to the tenant in-app feed' : 'https://hooks.example.invalid/notifications'}
                   aria-invalid={destinationError ? true : undefined}
                   aria-describedby={destinationError ? 'notification-destination-error' : undefined}
+                  disabled={busy !== '' || ruleChannel === 'in_app'}
+                />
+              </label>
+              <fieldset className="full">
+                <legend>Rule kinds and filters (triggers)</legend>
+                {NOTIFICATION_TRIGGERS.map((trigger) => (
+                  <label key={trigger} className="check-row">
+                    <input
+                      type="checkbox"
+                      name="triggers"
+                      value={trigger}
+                      checked={ruleTriggers.includes(trigger)}
+                      onChange={() => toggleRuleTrigger(trigger)}
+                      disabled={busy !== ''}
+                    />
+                    <span>{humanizeNotificationTrigger(trigger)}</span>
+                  </label>
+                ))}
+              </fieldset>
+              {triggerError ? (
+                <p className="form-banner error full" id="notification-trigger-error" role="alert">
+                  {triggerError}
+                </p>
+              ) : null}
+              <label className="check-row full">
+                <input
+                  type="checkbox"
+                  name="enabled"
+                  checked={ruleEnabled}
+                  onChange={(changeEvent) => setRuleEnabled(changeEvent.target.checked)}
                   disabled={busy !== ''}
                 />
+                <span>Enabled on creation (uncheck to add the rule in a disabled state)</span>
               </label>
               {destinationError ? (
                 <p className="form-banner error full" id="notification-destination-error" role="alert">
@@ -897,6 +1011,49 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
     setShowRawAuditMetadata(false);
   }, [selectedId]);
 
+  const filtersActive = custodyOnly || actorFilter !== 'all' || actionFilter !== 'all' || filter.trim() !== '';
+  const hasAnyAudit = data.audit.length > 0;
+
+  function clearAuditFilters() {
+    setCustodyOnly(false);
+    setActorFilter('all');
+    setActionFilter('all');
+    setFilter('');
+  }
+
+  function renderAuditEmpty() {
+    if (hasAnyAudit && filtersActive) {
+      const custodyIsOnlyFilter = custodyOnly && actorFilter === 'all' && actionFilter === 'all' && !filter.trim();
+      if (custodyIsOnlyFilter) {
+        return (
+          <EmptyState
+            icon={ClipboardList}
+            title="No custody-sealed entries in this view."
+            body="Custody-chain only is on, so this view lists export, report, and custody actions. Turn it off to see all security-relevant actions."
+            actionLabel="Show all entries"
+            onAction={() => setCustodyOnly(false)}
+          />
+        );
+      }
+      return (
+        <EmptyState
+          icon={ClipboardList}
+          title="No audit entries match the current filters."
+          body="Adjust or clear the custody, actor, action, or search filters to widen the trail."
+          actionLabel="Clear filters"
+          onAction={clearAuditFilters}
+        />
+      );
+    }
+    return (
+      <EmptyState
+        icon={ClipboardList}
+        title="No audit entries."
+        body="Security-relevant actions will appear here after workflow activity."
+      />
+    );
+  }
+
   function formatAuditCustodyDigest(item: DataItem) {
     const hash = getString(item, ['entry_hash'], '');
     if (!hash || hash === '—') return '—';
@@ -987,7 +1144,7 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
                 getRowProps={(item) => ({
                   onClick: () => setSelectedId(auditEntrySelectionKey(item))
                 })}
-                empty={<EmptyState icon={ClipboardList} title="No audit entries." body="Security-relevant actions will appear here after workflow activity." />}
+                empty={renderAuditEmpty()}
               />
             </CardContent>
           </Card>
@@ -1409,13 +1566,24 @@ export function SocConsolePage({
   const goNoGoGates = buildSocGoNoGoGates(data.highScale, { killSwitchActive, runningCount, openFindings: openFindingsCount });
   const providerContactRows = buildProviderContactRows(data.highScale);
   const executionTimeline = buildSocExecutionTimeline(data.highScale);
+  const crossTenantHighScale = staffSocSurface ? buildSocCrossTenantRows(data.internalApprovalRequests) : [];
+  const activeTenantCount = new Set(
+    crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—')
+  ).size;
 
   return (
     <div className="content">
       <PageHeader
         route="internal-soc"
         eyebrow="SOC execution plane"
-        actions={staffSocSurface ? <Badge tone="warn">Staff plane</Badge> : undefined}
+        actions={
+          <>
+            {staffSocSurface ? <Badge tone="warn">Staff plane</Badge> : null}
+            <Button size="sm" variant="ghost" onClick={() => void onRefresh()} disabled={busy !== ''}>
+              Refresh
+            </Button>
+          </>
+        }
       />
       <div className={killSwitchActive ? 'callout warn' : 'callout info'}>
         {killSwitchActive ? <Siren size={18} aria-hidden="true" /> : <ShieldCheck size={18} aria-hidden="true" />}
@@ -1426,12 +1594,22 @@ export function SocConsolePage({
         </span>
       </div>
       <div className="metric-grid four">
-        <MetricCard label="Queue" value={data.highScale.length} sub="governed requests" icon={ShieldCheck} tone={data.highScale.length > 0 ? 'info' : 'muted'} />
+        {staffSocSurface ? (
+          <MetricCard label="Active tenants" value={activeTenantCount} sub="with governed requests" icon={Users} tone={activeTenantCount > 0 ? 'info' : 'muted'} />
+        ) : (
+          <MetricCard label="Queue" value={data.highScale.length} sub="governed requests" icon={ShieldCheck} tone={data.highScale.length > 0 ? 'info' : 'muted'} />
+        )}
         <MetricCard label="Scheduled" value={scheduledCount} sub="approved or scheduled" icon={CalendarClock} tone={scheduledCount > 0 ? 'info' : 'muted'} />
         <MetricCard label="In review" value={inReviewCount} sub="awaiting SOC decision" icon={ClipboardList} tone={inReviewCount > 0 ? 'warn' : 'muted'} />
         <MetricCard label="Kill switch" value={killSwitchActive ? 'Armed' : 'Clear'} sub="tenant emergency stop" icon={Siren} tone={killSwitchActive ? 'danger' : 'success'} />
       </div>
       <PageContextSummary>
+        {staffSocSurface ? (
+          <>
+            Cross-tenant <span className="tabular-nums">{crossTenantHighScale.length}</span> governed requests across{' '}
+            <span className="tabular-nums">{activeTenantCount}</span> tenants ·{' '}
+          </>
+        ) : null}
         Queue <span className="tabular-nums">{data.highScale.length}</span> governed requests ·{' '}
         <span className="tabular-nums">{data.state?.open_findings ?? data.findings.length}</span> open findings
       </PageContextSummary>
@@ -1469,10 +1647,28 @@ export function SocConsolePage({
           </CardContent>
         </Card>
       </div>
+      {staffSocSurface ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cross-tenant execution</CardTitle>
+            <CardDescription>Governed high-scale requests across all customer tenants, sourced from the staff approval queue. Open a request for the full lifecycle workspace.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={socCrossTenantColumns}
+              items={crossTenantHighScale}
+              getRowId={(item) => item.id}
+              empty={<EmptyState icon={Users} title="No cross-tenant high-scale requests." body="Governed requests across tenants appear here after intake and authorization-pack review." />}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle>High-scale queue</CardTitle>
-          <CardDescription>Open a request for the full lifecycle workspace. Quick approve is available here only when the authorization pack is accepted.</CardDescription>
+          <CardDescription>{staffSocSurface
+            ? 'Governed requests for the active execution-tenant context. Open a request for the full lifecycle workspace; quick approve is available when the authorization pack is accepted.'
+            : 'Open a request for the full lifecycle workspace. Quick approve is available here only when the authorization pack is accepted.'}</CardDescription>
         </CardHeader>
         <CardContent aria-busy={queueRefreshing}>
           <DataTable

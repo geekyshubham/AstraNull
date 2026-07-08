@@ -250,8 +250,20 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
   const checked_at = nowIso();
   let lookup;
   let timedOut = false;
+  // Non-production DNS ownership simulation: when ASTRANULL_DNS_SIMULATE=1 and NODE_ENV is not
+  // production, resolve the challenge's own TXT value so the ownership flow is demonstrable in
+  // dev/CI without controlling real DNS. Hard-gated off in production (mirrors ASTRANULL_PROBE_MODE).
+  let effectiveResolveTxt = options.resolveTxt;
+  if (
+    !effectiveResolveTxt
+    && process.env.ASTRANULL_DNS_SIMULATE === '1'
+    && process.env.NODE_ENV !== 'production'
+  ) {
+    effectiveResolveTxt = async (name) =>
+      name === challenge.record_name ? [[challenge.record_value]] : [];
+  }
   try {
-    lookup = await resolveTxtWithTimeout(challenge.record_name, options.resolveTxt);
+    lookup = await resolveTxtWithTimeout(challenge.record_name, effectiveResolveTxt);
   } catch (err) {
     if (err?.code === 'ETIMEOUT') {
       timedOut = true;

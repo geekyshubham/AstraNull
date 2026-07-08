@@ -51,6 +51,37 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+/** Coerce an unknown API field into a list of object rows; returns null when the field is absent/not an array. */
+function coerceItemArray(value: unknown): DataItem[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((row): row is DataItem => Boolean(row) && typeof row === 'object' && !Array.isArray(row));
+}
+
+/** Humanize a byte count for the evidence-bundle Size column (matches the prototype's KB/MB display). */
+function formatBytes(value: unknown): string {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Map the finding's `remStateClass` (badge--warn/--danger/--muted/--success, §7.6) to a Badge tone. */
+function remStateTone(remStateClass: string, remState: string): StatTone {
+  const cls = remStateClass.trim().toLowerCase();
+  if (cls.includes('danger')) return 'danger';
+  if (cls.includes('warn')) return 'warn';
+  if (cls.includes('success')) return 'success';
+  if (cls.includes('muted')) return 'muted';
+  if (cls.includes('info')) return 'info';
+  const state = remState.trim().toLowerCase();
+  if (['resolved', 'delivered'].includes(state)) return 'success';
+  if (state === 'accepted_risk') return 'muted';
+  if (state === 'in_progress') return 'info';
+  if (['open', 'remediation_pending'].includes(state)) return 'warn';
+  return 'default';
+}
+
 /**
  * Whole-row click-through props to an artifact's evidence-detail route.
  * Matches the shared `role="link"` row convention (hash + `?id=` per lib/route-params);
@@ -66,6 +97,33 @@ function evidenceRowNavProps(artifactId: string): Omit<HTMLAttributes<HTMLTableR
     tabIndex: 0,
     style: { cursor: 'pointer' },
     'aria-label': `Open evidence detail for artifact ${artifactId}`,
+    onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
+      if ((event.target as HTMLElement).closest('a, button')) return;
+      navigate();
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      navigate();
+    }
+  };
+}
+
+/**
+ * Whole-row click-through props to a declared target's target-detail route (§4.6.3 "rows deep-link").
+ * Same `role="link"` + hash `?id=` convention as the evidence rows; nested link/button clicks
+ * (e.g. the Target cell anchor) fall through to their own handler.
+ */
+function targetRowNavProps(targetId: string): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+  if (!targetId) return {};
+  const navigate = () => {
+    window.location.hash = `target-detail?id=${encodeURIComponent(targetId)}`;
+  };
+  return {
+    role: 'link',
+    tabIndex: 0,
+    style: { cursor: 'pointer' },
+    'aria-label': `Open target detail for ${targetId}`,
     onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
       if ((event.target as HTMLElement).closest('a, button')) return;
       navigate();
@@ -115,6 +173,7 @@ export function FindingDetailView({
   const [error, setError] = useState('');
   const [evidence, setEvidence] = useState<Awaited<ReturnType<typeof populateFindingEvidence>> | null>(null);
   const [affectedTargets, setAffectedTargets] = useState<DataItem[]>([]);
+  const [chainVerified, setChainVerified] = useState<boolean | null>(null);
 
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
   const remSteps = remediation.remSteps.split('|').map((step) => step.trim()).filter(Boolean);
@@ -131,6 +190,15 @@ export function FindingDetailView({
 
   useEffect(() => {
     let cancelled = false;
+    // Primary source per §4.6.3: affected targets embedded on the finding payload
+    // (GET /v1/findings/:id, passed in as `entity`). Prefer `affected_targets`, then `targets`.
+    const embedded = coerceItemArray(entity.affected_targets) ?? coerceItemArray(entity.targets);
+    if (embedded && embedded.length > 0) {
+      setAffectedTargets(embedded);
+      return undefined;
+    }
+    // Fallback: resolve declared-target linkage through the target group so the table stays
+    // populated against backends that don't yet embed affected targets on the finding.
     const groupId = getString(entity, ['target_group_id'], '');
     if (!groupId) {
       setAffectedTargets([]);
@@ -139,7 +207,7 @@ export function FindingDetailView({
     requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}`)
       .then((payload) => {
         if (cancelled) return;
-        const targets = Array.isArray((payload as DataItem).targets) ? (payload as DataItem).targets as DataItem[] : [];
+        const targets = coerceItemArray((payload as DataItem).targets) ?? [];
         const directTargetId = getString(entity, ['target_id'], '');
         const matched = populateFindingAffectedTargets(entityId, targets);
         if (directTargetId && !matched.some((target) => getString(target, ['id'], '') === directTargetId)) {
@@ -180,6 +248,7 @@ export function FindingDetailView({
   }
 
   async function verifyChain() {
+    setChainVerified(null);
     await runAction(`verify-${entityId}`, async () => {
       // The verify endpoint recomputes the SHA-256 over the export payload and compares it to
       // the custody manifest digest, so it needs { payload, custody } — not { finding_id }.
@@ -196,10 +265,12 @@ export function FindingDetailView({
       const result = await requestJson(config, session, verifyUrl, { method: 'POST', body: { payload, custody } }) as DataItem | null;
       // The endpoint returns HTTP 200 even when verification fails, so inspect result.ok explicitly.
       if (!result || result.ok !== true) {
+        setChainVerified(false);
         const verification = (result && typeof result.verification === 'object' ? result.verification : {}) as DataItem;
         const reason = getString(verification, ['error'], 'verification_failed');
         throw new Error(`Custody verification failed: ${formatFindingLabel(reason)}.`);
       }
+      setChainVerified(true);
     }, 'Custody chain verified — SHA-256 digest matches the sealed manifest.');
   }
 
@@ -230,7 +301,7 @@ export function FindingDetailView({
     { key: 'run', label: 'Run', render: (item) => getString(item, ['run_id'], '—') },
     { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small">{getString(item, ['sha256', 'content_sha256'], '—')}</span> },
     { key: 'sealed', label: 'Sealed', render: (item) => formatDate(item.sealed_at) },
-    { key: 'size', label: 'Size', render: (item) => String(item.size_bytes ?? '—') },
+    { key: 'size', label: 'Size', render: (item) => <span className="num">{formatBytes(item.size_bytes)}</span> },
     {
       key: 'export',
       label: '',
@@ -238,11 +309,25 @@ export function FindingDetailView({
     }
   ];
 
-  const custodyPreview = {
-    finding: entityId,
-    bundle_sha256: getString(evidence?.bundle, ['sha256'], ''),
-    verified: evidence?.custody_chain?.length ? true : false
-  };
+  const custodyChain = evidence?.custody_chain ?? [];
+  const bundleSha256 = getString(evidence?.bundle, ['sha256'], '');
+  const custodySealedAt = getString(evidence?.bundle, ['sealed_at'], '');
+  // `verified` reflects a real explicit Verify-chain result once run; before that it mirrors
+  // whether a sealed bundle digest / custody chain exists for the finding.
+  const custodyVerified = chainVerified !== null ? chainVerified : Boolean(bundleSha256 || custodyChain.length);
+  const custodyYaml = [
+    `finding: ${entityId}`,
+    `digest_kind: ${getString(evidence?.bundle, ['custody_schema_version'], 'json-key-sorted-v1')}`,
+    ...(custodyChain.length
+      ? ['chain:', ...custodyChain.flatMap((step) => [
+          `  - artifact: ${getString(step, ['kind', 'step'], 'artifact')}`,
+          `    sha256: ${getString(step, ['sha256'], '—')}`
+        ])]
+      : []),
+    `bundle_sha256: ${bundleSha256 || '—'}`,
+    ...(custodySealedAt ? [`sealed_at: ${custodySealedAt}`] : []),
+    `verified: ${custodyVerified}`
+  ].join('\n');
 
   return (
     <div className="content stack-tight">
@@ -323,10 +408,16 @@ export function FindingDetailView({
             <EmptyState
               icon={TriangleAlert}
               title="No declared targets matched."
-              body="It may apply at the target-group level: zone-wide, edge-wide: rather than to a single declared target."
+              body="It may apply at the target-group level — zone-wide, edge-wide — rather than to a single declared target."
             />
           ) : (
-            <DataTable columns={affectedColumns} items={affectedTargets} empty={<span className="muted">No affected targets returned.</span>} />
+            <DataTable
+              columns={affectedColumns}
+              items={affectedTargets}
+              getRowId={(item) => getString(item, ['id'], '')}
+              getRowProps={(item) => targetRowNavProps(getString(item, ['id'], ''))}
+              empty={<span className="muted">No affected targets returned.</span>}
+            />
           )}
         </CardContent>
       </Card>
@@ -337,7 +428,7 @@ export function FindingDetailView({
           <div className="rem-grid">
             <div className="rem-cell"><span className="rem-label">Action</span><span className="rem-value mono">{remediation.remAction || '—'}</span></div>
             <div className="rem-cell"><span className="rem-label">Owner</span><span className="rem-value">{remediation.remOwner || '—'}</span></div>
-            <div className="rem-cell"><span className="rem-label">State</span><Badge title={`Remediation state ${remediation.remState} from finding API`}>{remediation.remState || '—'}</Badge></div>
+            <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Remediation state ${remediation.remState} from finding API`}>{remediation.remState || '—'}</Badge></div>
             <div className="rem-cell"><span className="rem-label">SLA</span><span className="rem-value">{remediation.remSla || '—'}</span></div>
           </div>
           <p className="muted">{remediation.remDescription || getString(entity, ['description', 'summary'], 'No remediation description returned by API.')}</p>
@@ -398,7 +489,7 @@ export function FindingDetailView({
       <Card>
         <CardHeader><CardTitle>Custody chain</CardTitle><CardDescription>Scoped YAML preview from evidence hydrator.</CardDescription></CardHeader>
         <CardContent>
-          <pre className="code">{`finding: ${custodyPreview.finding}\nbundle_sha256: ${custodyPreview.bundle_sha256}\nverified: ${custodyPreview.verified}`}</pre>
+          <pre className="code">{custodyYaml}</pre>
         </CardContent>
       </Card>
     </div>

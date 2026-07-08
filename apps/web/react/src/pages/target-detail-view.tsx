@@ -38,7 +38,18 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
-function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail'; id: string; label?: string }) {
+function formatRunDuration(run: DataItem): string {
+  const start = Date.parse(String(run.started_at ?? run.created_at ?? ''));
+  const end = Date.parse(String(run.completed_at ?? run.finalized_at ?? run.updated_at ?? ''));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '—';
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {
   if (!id) return <strong>—</strong>;
   return <AnchorButton size="sm" variant="ghost" href={buildDetailHref(route, id)}>{label ?? id}</AnchorButton>;
 }
@@ -81,11 +92,15 @@ export function TargetDetailView({
   const verification = detail?.verification ?? null;
   const wafPosture = detail?.waf_posture ?? null;
   const eligibility = getString(target, ['eligibility'], 'unknown');
-  const canRun = !eligibility.startsWith('not');
+  // §4.5 header: Run bounded checks is gated when eligibility is not/unverified.
+  const canRun = !eligibility.startsWith('not') && !eligibility.startsWith('unverified');
   const verificationState = getString(verification, ['state'], getString(target, ['verification_state'], 'unverified'));
   const provenance = resolveTargetVerificationProvenance(target, verification);
   const kind = getString(target, ['kind'], 'unknown');
-  const showWaf = kind !== 'ip' && verificationState !== 'unverified' && wafPosture;
+  // §4.5 WAF panel visibility: hidden for IP targets and unverified targets that do not yet
+  // map to a WAF asset. Shown when a WAF asset exists, or the target is a non-IP target whose
+  // verification state is not `unverified`.
+  const showWaf = Boolean(wafPosture) || (kind !== 'ip' && verificationState !== 'unverified');
 
   async function runBoundedChecks() {
     if (!canRun || !target) return;
@@ -109,12 +124,54 @@ export function TargetDetailView({
     }
   }
 
+  // Header renders in every state (loading / empty / loaded) so the h1 target id is always present.
+  function renderHeader() {
+    const targetGroupId = getString(target, ['target_group_id'], '');
+    const hasTarget = Boolean(target);
+    return (
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">Declared scope</p>
+          <h1 className="page-title mono">{entityId}</h1>
+          <p className="muted">{hasTarget ? `${getString(target, ['value'])} · ${kind}` : 'Per-target validation surface.'}</p>
+          {hasTarget ? (
+            <div className="detail-status-line">
+              <VerifyChip state={verificationState} provenance={provenance} />
+              <span className="detail-status-sep" aria-hidden="true">·</span>
+              <Badge tone={canRun ? 'success' : 'warn'} title={`Eligibility ${eligibility} from target API`}>{formatTargetLabel(eligibility)}</Badge>
+            </div>
+          ) : null}
+        </div>
+        <div className="row-actions">
+          {targetGroupId ? (
+            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', targetGroupId)}>← Target group</AnchorButton>
+          ) : null}
+          {hasTarget ? (
+            <Button
+              size="sm"
+              className={canRun ? undefined : 'is-locked'}
+              disabled={!canRun || busy !== ''}
+              title={canRun ? 'Start bounded checks for this target' : 'Verify to enable testing'}
+              loading={busy === 'run-checks'}
+              onClick={() => void runBoundedChecks()}
+            >
+              Run bounded checks
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   if (!detail || detail.loading) {
     return (
-      <div className="content stack-tight" aria-busy="true" aria-live="polite">
-        <div className="skeleton skeleton-row" />
-        <div className="skeleton skeleton-row" />
-        <div className="skeleton skeleton-row" />
+      <div className="content stack-tight">
+        {renderHeader()}
+        <div className="stack-tight" aria-busy="true" aria-live="polite">
+          <div className="skeleton skeleton-row" />
+          <div className="skeleton skeleton-row" />
+          <div className="skeleton skeleton-row" />
+        </div>
       </div>
     );
   }
@@ -126,7 +183,8 @@ export function TargetDetailView({
         ? { empty_reason: detail.error }
         : null;
     return (
-      <div className="content">
+      <div className="content stack-tight">
+        {renderHeader()}
         {emptyStateFromApi({
           icon: Target,
           meta: emptyMeta,
@@ -139,16 +197,19 @@ export function TargetDetailView({
 
   const runColumns: TableColumn<DataItem>[] = [
     { key: 'run', label: 'Run', render: (item) => <DetailEntityLink route="run-detail" id={getString(item, ['run_id', 'id'], '')} /> },
-    { key: 'policy', label: 'Policy', render: (item) => getString(item, ['policy_id'], '—') },
-    { key: 'verdict', label: 'Verdict', render: (item) => <Badge tone="info" title={`Verdict ${getString(item, ['verdict'], 'pending')} from runs API`}>{getString(item, ['verdict'], 'pending')}</Badge> },
-    { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) },
-    { key: 'agent', label: 'Agent', render: (item) => getString(item, ['agent_id'], '—') }
+    { key: 'policy', label: 'Policy', render: (item) => getString(item, ['policy_id', 'test_policy_id'], '—') },
+    { key: 'verdict', label: 'Verdict', render: (item) => <Badge tone="info" title={`Verdict ${getString(item, ['verdict', 'status'], 'pending')} from runs API`}>{getString(item, ['verdict', 'status'], 'pending')}</Badge> },
+    { key: 'agent', label: 'Agent', render: (item) => <span className="mono">{getString(item, ['agent_id'], '—')}</span> },
+    { key: 'duration', label: 'Duration', render: (item) => <span className="mono">{formatRunDuration(item)}</span> },
+    { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
   ];
 
   const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Finding', render: (item) => <DetailEntityLink route="finding-detail" id={getString(item, ['id'], '')} label={getString(item, ['title'], getString(item, ['id']))} /> },
     { key: 'severity', label: 'Severity', render: (item) => getString(item, ['severity'], 'unknown') },
+    { key: 'id', label: 'Finding', render: (item) => <DetailEntityLink route="finding-detail" id={getString(item, ['id'], '')} label={getString(item, ['title'], getString(item, ['id']))} /> },
+    { key: 'target', label: 'Target', render: (item) => <DetailEntityLink route="target-detail" id={getString(item, ['target_id'], entityId)} label={getString(item, ['target_value', 'target'], getString(target, ['value'], getString(item, ['target_id'], entityId)))} /> },
     { key: 'state', label: 'State', render: (item) => getString(item, ['state', 'status'], 'open') },
+    { key: 'opened', label: 'Opened', render: (item) => formatDate(item.opened_at ?? item.created_at) },
     { key: 'owner', label: 'Owner', render: (item) => getString(item, ['owner_group', 'assignee'], 'unassigned') }
   ];
 
@@ -188,28 +249,7 @@ export function TargetDetailView({
   return (
     <div className="content stack-tight">
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">Declared scope</p>
-          <h1 className="page-title mono">{entityId}</h1>
-          <p className="muted">{getString(target, ['value'])} · {kind}</p>
-        </div>
-        <div className="row-actions">
-          {getString(target, ['target_group_id'], '') ? (
-            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', getString(target, ['target_group_id'], ''))}>← Target group</AnchorButton>
-          ) : null}
-          <Button
-            size="sm"
-            className={canRun ? undefined : 'is-locked'}
-            disabled={!canRun || busy !== ''}
-            title={canRun ? 'Start bounded checks for this target' : 'Verify to enable testing'}
-            loading={busy === 'run-checks'}
-            onClick={() => void runBoundedChecks()}
-          >
-            Run bounded checks
-          </Button>
-        </div>
-      </div>
+      {renderHeader()}
 
       <div className="metric-grid four">
         <MetricCard label="Kind" value={kind} sub="Declared target type" icon={Target} tone="info" />
@@ -233,7 +273,9 @@ export function TargetDetailView({
                   {kind === 'fqdn' ? (
                     <tr><td className="muted">DNS TXT</td><td><div className="kv"><VerifyChip state={verificationState.includes('dns') ? 'dns_verified' : verificationState} provenance={provenance} />{dnsCheckedAt ? <span className="kv-meta">{formatDate(dnsCheckedAt)}</span> : null}</div></td></tr>
                   ) : null}
-                  <tr><td className="muted">Agent binding</td><td><div className="kv"><span className="mono">{agentBindingId}</span>{agentBindingAt ? <span className="kv-meta">{formatDate(agentBindingAt)}</span> : null}</div></td></tr>
+                  {kind !== 'fqdn' ? (
+                    <tr><td className="muted">Agent binding</td><td><div className="kv"><span className="mono">{agentBindingId}</span>{agentBindingAt ? <span className="kv-meta">{formatDate(agentBindingAt)}</span> : null}</div></td></tr>
+                  ) : null}
                   <tr><td className="muted">Group LOA</td><td><div className="kv"><Badge tone={loaSigned ? 'success' : 'warn'} title="LOA state inherited from target group API">{loaState}</Badge>{loaCustody ? <span className="kv-meta">{loaCustody}</span> : null}</div></td></tr>
                   {loaSigner ? (
                     <tr><td className="muted">LOA signer</td><td><div className="kv"><span>{loaSigner}</span>{loaSignedAt ? <span className="kv-meta">{formatDate(loaSignedAt)}</span> : null}</div></td></tr>
