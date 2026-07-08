@@ -74,4 +74,10 @@ test-results/
 # Local design-skill (impeccable) live-preview tooling — not product code
 .github/hooks/
 .github/skills/
+docs/ux/reference-2026-07/
 ui-compare-proto-tmp.mjs
+
+# Local pitch/design export artifacts — not product code
+docs/readinessbas-pitch-comparison.html
+docs/astranull-pitch-comparison.html
+scripts/export-open-design-chat.mjs
