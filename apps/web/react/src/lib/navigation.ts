@@ -2,6 +2,7 @@ import {
   Activity,
   Bell,
   Bot,
+  CalendarClock,
   ClipboardList,
   CreditCard,
   FileText,
@@ -67,10 +68,10 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: 'test-policies',
-    label: 'Test policies',
+    label: 'Scheduler',
     group: 'validation',
-    description: 'Cadence, expected verdicts, target bindings, safe windows, and high-scale policy gating.',
-    icon: ClipboardList
+    description: 'Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
+    icon: CalendarClock
   },
   {
     id: 'runs',
@@ -154,6 +155,27 @@ export const NAV_ITEMS: NavItem[] = [
 /** Detail routes reachable via deep-link but hidden from the sidebar. */
 export const DETAIL_ROUTE_ITEMS: NavItem[] = [
   {
+    id: 'environment-detail',
+    label: 'Environment detail',
+    group: 'scope',
+    description: 'Declared environment scope, agents, target groups, validation evidence, and findings.',
+    icon: ServerCog
+  },
+  {
+    id: 'check-detail',
+    label: 'Check detail',
+    group: 'validation',
+    description: 'Vector family, safety mode, bounds, expected behavior, and recent verdicts for one check.',
+    icon: ListChecks
+  },
+  {
+    id: 'policy-detail',
+    label: 'Policy detail',
+    group: 'validation',
+    description: 'Cadence, target bindings, expected verdicts, safe windows, and high-scale gating for one policy.',
+    icon: ClipboardList
+  },
+  {
     id: 'target-group-detail',
     label: 'Target group detail',
     group: 'scope',
@@ -187,6 +209,13 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     group: 'validation',
     description: 'Verdict explanation, triage state, remediation, evidence bundle, and custody export for one finding.',
     icon: TriangleAlert
+  },
+  {
+    id: 'evidence-detail',
+    label: 'Evidence detail',
+    group: 'validation',
+    description: 'Artifact record, custody chain position, SHA-256 digest, and sealed payload for one evidence artifact.',
+    icon: ShieldCheck
   },
   {
     id: 'report-detail',

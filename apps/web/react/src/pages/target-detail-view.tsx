@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, FileCheck2, Target, TriangleAlert } from 'lucide-react';
+import { Activity, FileCheck2, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
 import { populateTargetDetail } from '../lib/target-detail';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref } from '../lib/route-params';
@@ -9,8 +9,25 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
-import { Badge } from '../components/ui/badge';
+import { Badge, type BadgeProps } from '../components/ui/badge';
 import { requestJson } from '../lib/api';
+import { MetricCard } from './page-components';
+
+type StatTone = NonNullable<BadgeProps['tone']>;
+
+function verificationTone(state: string): StatTone {
+  const key = state.trim().toLowerCase();
+  if (['agent_verified', 'dns_verified', 'user_confirmed', 'verified'].includes(key)) return 'success';
+  if (key === 'unverified') return 'warn';
+  return 'muted';
+}
+
+function formatTargetLabel(value: string, fallback = '—') {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  const label = trimmed.replace(/_/g, ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -142,18 +159,45 @@ export function TargetDetailView({
     { key: 'ran', label: 'Last ran', render: (item) => formatDate(item.last_ran_at) }
   ];
 
+  const loa = detail.loa;
+  const loaState = getString(loa, ['state', 'status'], 'inherited');
+  const loaSigned = ['signed', 'active', 'valid'].includes(loaState.trim().toLowerCase());
+  const loaCustody = getString(loa, ['custody_digest_sha256', 'custody_digest', 'digest'], '');
+  const loaSigner = getString(loa, ['signer_name', 'signed_by'], '');
+  const loaSignedAt = loa?.signed_at ?? loa?.updated_at;
+  const agentBinding = target.agent_binding && typeof target.agent_binding === 'object' && !Array.isArray(target.agent_binding)
+    ? target.agent_binding as DataItem
+    : null;
+  const agentBindingId = getString(agentBinding, ['agent_id'], 'none');
+  const agentBindingAt = agentBinding?.bound_at ?? agentBinding?.last_heartbeat_at ?? agentBinding?.updated_at;
+  const dnsCheckedAt = verification?.checked_at ?? verification?.updated_at;
+  const ownershipMethod = getString(
+    verification,
+    ['method', 'ownership_method'],
+    kind === 'fqdn' ? 'DNS TXT + agent callback' : kind === 'ip' ? 'Agent callback' : 'Declared scope'
+  );
+  const expectedBehavior = getString(target, ['expected_behavior', 'expected'], '—');
+  const eligibilityReason = getString(
+    target,
+    ['eligibility_reason'],
+    canRun
+      ? 'Ownership verified and in scope for bounded validation.'
+      : 'Verify ownership and sign the group LOA to unlock bounded validation.'
+  );
+
   return (
     <div className="content stack-tight">
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
       <div className="page-head">
         <div>
-          <p className="eyebrow">Declared target</p>
-          <h2 className="page-title mono">{entityId}</h2>
+          <p className="eyebrow">Declared scope</p>
+          <h1 className="page-title mono">{entityId}</h1>
           <p className="muted">{getString(target, ['value'])} · {kind}</p>
         </div>
         <div className="row-actions">
-          <VerifyChip state={verificationState} provenance={provenance} />
-          <Badge tone={canRun ? 'success' : 'warn'} title={`Eligibility ${eligibility} from target API`}>{eligibility}</Badge>
+          {getString(target, ['target_group_id'], '') ? (
+            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', getString(target, ['target_group_id'], ''))}>← Target group</AnchorButton>
+          ) : null}
           <Button
             size="sm"
             className={canRun ? undefined : 'is-locked'}
@@ -167,14 +211,44 @@ export function TargetDetailView({
         </div>
       </div>
 
+      <div className="metric-grid four">
+        <MetricCard label="Kind" value={kind} sub="Declared target type" icon={Target} tone="info" />
+        <MetricCard label="Expected behavior" value={formatTargetLabel(getString(target, ['expected_behavior', 'expected'], '—'))} sub="Declared expectation" icon={Activity} tone="muted" />
+        <MetricCard label="Verification" value={formatTargetLabel(verificationState)} sub="Ownership signal from target API" icon={ShieldCheck} tone={verificationTone(verificationState)} />
+        <MetricCard label="Eligibility" value={formatTargetLabel(eligibility)} sub={canRun ? 'Eligible for bounded checks' : 'Verify to enable testing'} icon={FileCheck2} tone={canRun ? 'success' : 'warn'} />
+      </div>
+
       <Card>
-        <CardHeader><CardTitle>Ownership</CardTitle></CardHeader>
-        <CardContent className="kv-list">
-          <div><span>Target group</span><DetailEntityLink route="target-group-detail" id={getString(target, ['target_group_id'], '')} /></div>
-          <div><span>Environment</span><strong>{getString(target, ['environment_id'], 'inherited')}</strong></div>
-          <div><span>LOA</span><strong title="LOA state inherited from target group API">{getString(detail.loa, ['state'], getString(detail.loa, ['status'], 'inherited'))}</strong></div>
-          {kind === 'fqdn' ? <div><span>DNS TXT</span><VerifyChip state={verificationState.includes('dns') ? 'dns_verified' : verificationState} provenance={provenance} /></div> : null}
-          <div><span>Agent binding</span><strong>{getString(target?.agent_binding as DataItem | undefined, ['agent_id'], 'none')}</strong></div>
+        <CardHeader><CardTitle>Ownership + eligibility</CardTitle><CardDescription>{ownershipMethod}</CardDescription></CardHeader>
+        <CardContent>
+          <div className="stack-tight">
+            <div className="table-wrap">
+              <table className="data-table">
+                <tbody>
+                  <tr><td className="muted">Ownership method</td><td><div className="kv"><span className="mono">{ownershipMethod}</span></div></td></tr>
+                  <tr><td className="muted">Ownership status</td><td><div className="kv"><VerifyChip state={verificationState} provenance={provenance} /></div></td></tr>
+                  <tr><td className="muted">Target group</td><td><div className="kv"><span className="mono">{getString(target, ['target_group_id'], '—')}</span></div></td></tr>
+                  <tr><td className="muted">Environment</td><td><div className="kv"><span className="mono">{getString(target, ['environment_id'], 'inherited')}</span></div></td></tr>
+                  <tr><td className="muted">Expected behavior</td><td><div className="kv"><span className="mono">{expectedBehavior}</span></div></td></tr>
+                  {kind === 'fqdn' ? (
+                    <tr><td className="muted">DNS TXT</td><td><div className="kv"><VerifyChip state={verificationState.includes('dns') ? 'dns_verified' : verificationState} provenance={provenance} />{dnsCheckedAt ? <span className="kv-meta">{formatDate(dnsCheckedAt)}</span> : null}</div></td></tr>
+                  ) : null}
+                  <tr><td className="muted">Agent binding</td><td><div className="kv"><span className="mono">{agentBindingId}</span>{agentBindingAt ? <span className="kv-meta">{formatDate(agentBindingAt)}</span> : null}</div></td></tr>
+                  <tr><td className="muted">Group LOA</td><td><div className="kv"><Badge tone={loaSigned ? 'success' : 'warn'} title="LOA state inherited from target group API">{loaState}</Badge>{loaCustody ? <span className="kv-meta">{loaCustody}</span> : null}</div></td></tr>
+                  {loaSigner ? (
+                    <tr><td className="muted">LOA signer</td><td><div className="kv"><span>{loaSigner}</span>{loaSignedAt ? <span className="kv-meta">{formatDate(loaSignedAt)}</span> : null}</div></td></tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            <div className="callout">
+              <span className="callout-icon" aria-hidden="true"><ShieldCheck size={18} /></span>
+              <div className="callout-body">
+                <p className="callout-title"><Badge tone={canRun ? 'success' : 'warn'}>{formatTargetLabel(eligibility)}</Badge> for validation</p>
+                <p className="callout-desc">{eligibilityReason}</p>
+              </div>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -182,7 +256,7 @@ export function TargetDetailView({
         <Card>
           <CardHeader><CardTitle>WAF posture</CardTitle><CardDescription>Per-target WAF asset from hydrator API.</CardDescription></CardHeader>
           <CardContent>
-            <div className="metric-grid four">
+            <div className="kpi-inline">
               <div className="kpi"><div className="kpi-label">Posture</div><div className="kpi-value">{getString(wafPosture, ['posture', 'status'], '—')}</div></div>
               <div className="kpi"><div className="kpi-label">Drift</div><div className="kpi-value">{getString(wafPosture, ['drift_reason'], 'none')}</div></div>
               <div className="kpi"><div className="kpi-label">Validation</div><div className="kpi-value">{getString(wafPosture?.validation as DataItem | undefined, ['verdict'], '—')}</div></div>
@@ -206,19 +280,20 @@ export function TargetDetailView({
         </Card>
       ) : null}
 
-      <Card>
-        <CardHeader><CardTitle>Checks applied</CardTitle></CardHeader>
-        <CardContent>
-          <DataTable columns={checkColumns} items={detail.checks_applied} empty={emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })} />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Recent runs</CardTitle></CardHeader>
-        <CardContent>
-          <DataTable columns={runColumns} items={detail.runs_recent} empty={emptyStateFromApi({ icon: Activity, meta: detail.sectionMeta?.runs, actionHref: '#runs', actionLabel: 'Open test runs' })} />
-        </CardContent>
-      </Card>
+      <div className="dash-grid">
+        <Card>
+          <CardHeader><CardTitle>Checks applied</CardTitle></CardHeader>
+          <CardContent>
+            <DataTable columns={checkColumns} items={detail.checks_applied} empty={emptyStateFromApi({ icon: FileCheck2, meta: detail.sectionMeta?.checks })} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Recent runs</CardTitle></CardHeader>
+          <CardContent>
+            <DataTable columns={runColumns} items={detail.runs_recent} empty={emptyStateFromApi({ icon: Activity, meta: detail.sectionMeta?.runs, actionHref: '#runs', actionLabel: 'Open test runs' })} />
+          </CardContent>
+        </Card>
+      </div>
 
       <Card>
         <CardHeader><CardTitle>Findings on this target</CardTitle></CardHeader>

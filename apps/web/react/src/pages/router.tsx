@@ -22,6 +22,10 @@ const DETAIL_ROUTES = new Set<RouteId>([
   'agent-detail',
   'run-detail',
   'finding-detail',
+  'evidence-detail',
+  'check-detail',
+  'environment-detail',
+  'policy-detail',
   'tenant-detail',
   'queue-detail'
 ]);
@@ -37,8 +41,8 @@ type RouteViewProps = {
 };
 
 export function RouteView({ route, data, config, session, onRefresh }: RouteViewProps) {
-  if (route === 'dashboard') return <DashboardPage data={data} />;
-  if (route === 'environments') return <EnvironmentsPage data={data} />;
+  if (route === 'dashboard') return <DashboardPage data={data} config={config} session={session} onRefresh={onRefresh} />;
+  if (route === 'environments') return <EnvironmentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'target-groups') {
     return <TargetGroupsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }

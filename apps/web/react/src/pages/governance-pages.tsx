@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Bell, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, ShieldCheck, Siren } from 'lucide-react';
+import { Activity, Bell, CalendarClock, CheckCircle2, ClipboardList, Copy, FileText, Info, Lock, ShieldCheck, Siren, Users } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -12,6 +12,7 @@ import {
   pickReleaseEvidenceCustodyUri,
   summarizeReleaseEvidenceValidation
 } from '../lib/release-evidence';
+import { buildLifecycleTimeline } from '../lib/high-scale';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref } from '../lib/route-params';
 import { formatDate } from '../lib/utils';
@@ -237,6 +238,81 @@ function deliveryAttempts(events: DataItem[]) {
   });
 }
 
+type ProviderHealthRow = {
+  channel: string;
+  label: string;
+  detail: string;
+  ruleCount: number;
+  enabledCount: number;
+  delivered: number;
+  retrying: number;
+  dlq: number;
+  tone: GovernanceBadgeTone;
+  status: string;
+};
+
+// Derives per-provider delivery health from real notification rules (configured channels)
+// correlated with recorded delivery attempts. No provider status is hardcoded.
+function buildProviderHealthRows(rules: DataItem[], attempts: DataItem[]): ProviderHealthRow[] {
+  type Acc = { ruleCount: number; enabledCount: number; delivered: number; retrying: number; dlq: number; detail: string };
+  const channels = new Map<string, Acc>();
+  const ensure = (channel: string): Acc => {
+    const existing = channels.get(channel);
+    if (existing) return existing;
+    const created: Acc = { ruleCount: 0, enabledCount: 0, delivered: 0, retrying: 0, dlq: 0, detail: '' };
+    channels.set(channel, created);
+    return created;
+  };
+  for (const rule of rules) {
+    const channel = getString(rule, ['channel'], '').trim();
+    if (!channel || channel === '—') continue;
+    const entry = ensure(channel);
+    entry.ruleCount += 1;
+    if (rule.enabled !== false) entry.enabledCount += 1;
+    if (!entry.detail) {
+      const dest = getString(rule, ['destination_preview'], '');
+      if (dest && dest !== '—') entry.detail = dest;
+    }
+  }
+  for (const attempt of attempts) {
+    const channel = getString(attempt, ['channel'], '').trim();
+    if (!channel || channel === '—') continue;
+    const entry = ensure(channel);
+    const status = getString(attempt, ['status'], '');
+    if (status === 'delivered_provider') entry.delivered += 1;
+    else if (status === 'provider_retry_scheduled') entry.retrying += 1;
+    else if (status === 'provider_failed_dlq') entry.dlq += 1;
+    if (!entry.detail) {
+      const dest = getString(attempt, ['destination_preview'], '');
+      if (dest && dest !== '—') entry.detail = dest;
+    }
+  }
+  return Array.from(channels.entries())
+    .map(([channel, entry]) => {
+      const label = NOTIFICATION_CHANNEL_OPTIONS.find((option) => option.value === channel)?.label
+        ?? formatGovernanceStatusLabel(channel);
+      let tone: GovernanceBadgeTone;
+      let status: string;
+      if (entry.dlq > 0) {
+        tone = 'danger';
+        status = 'Dead-letter';
+      } else if (entry.retrying > 0) {
+        tone = 'warn';
+        status = 'Retrying';
+      } else if (entry.delivered > 0) {
+        tone = 'success';
+        status = 'Healthy';
+      } else {
+        tone = 'muted';
+        status = entry.ruleCount > 0 ? 'Idle' : 'No rules';
+      }
+      const detail = entry.detail
+        || (entry.ruleCount > 0 ? `${entry.ruleCount} rule${entry.ruleCount === 1 ? '' : 's'}` : 'metadata-only');
+      return { channel, label, ...entry, detail, tone, status };
+    })
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
 function GovernanceFeedbackBanner({ message, error }: { message: string; error: string }) {
   if (!message && !error) return null;
   return (
@@ -363,6 +439,140 @@ function TableQueueSkeleton({ rows = 2 }: { rows?: number }) {
   );
 }
 
+const SOC_SCHEDULED_STATES = ['scheduled', 'approved'];
+const SOC_REVIEW_STATES = ['submitted', 'under_review', 'pending', 'draft'];
+const SOC_RUNNING_STATES = ['running', 'executing', 'active', 'started'];
+
+function normalizeHighScaleState(item: DataItem) {
+  return getString(item, ['state'], '').trim().toLowerCase();
+}
+
+type SocGoNoGoGate = { key: string; label: string; tone: GovernanceBadgeTone; status: string };
+
+function socPackGate(actionableCount: number, pendingCount: number): { tone: GovernanceBadgeTone; status: string } {
+  if (actionableCount === 0) return { tone: 'muted', status: 'No open requests' };
+  if (pendingCount === 0) return { tone: 'success', status: 'All accepted' };
+  return { tone: 'warn', status: `${pendingCount} pending` };
+}
+
+function buildSocGoNoGoGates(
+  requests: DataItem[],
+  context: { killSwitchActive: boolean; runningCount: number; openFindings: number }
+): SocGoNoGoGate[] {
+  const actionable = requests.filter((item) =>
+    [...SOC_REVIEW_STATES, ...SOC_SCHEDULED_STATES].includes(normalizeHighScaleState(item))
+  );
+  const packAccepted = actionable.filter(
+    (item) => getNestedString(item, ['authorization_pack_status', 'overall'], 'missing') === 'accepted'
+  ).length;
+  return [
+    { key: 'packs', label: 'Authorization packs reviewed', ...socPackGate(actionable.length, actionable.length - packAccepted) },
+    {
+      key: 'kill',
+      label: 'Kill switch clear',
+      tone: context.killSwitchActive ? 'danger' : 'success',
+      status: context.killSwitchActive ? 'Armed' : 'Clear'
+    },
+    {
+      key: 'execution',
+      label: 'Managed execution only',
+      tone: context.runningCount > 0 ? 'info' : 'success',
+      status: context.runningCount > 0 ? `${context.runningCount} active` : 'Idle'
+    },
+    {
+      key: 'findings',
+      label: 'Findings triaged',
+      tone: context.openFindings > 0 ? 'warn' : 'success',
+      status: context.openFindings > 0 ? `${context.openFindings} open` : 'Clear'
+    }
+  ];
+}
+
+function providerNameForRequest(item: DataItem): string {
+  const context = getNestedItem(item, ['provider_context']);
+  const contextName = getString(context, ['provider_name', 'provider', 'name'], '');
+  if (contextName && contextName !== '—') return contextName;
+  const checklist = Array.isArray(item.provider_approval_checklist)
+    ? (item.provider_approval_checklist as DataItem[])
+    : [];
+  for (const entry of checklist) {
+    const name = getString(entry, ['provider_name', 'provider', 'name'], '');
+    if (name && name !== '—') return name;
+  }
+  return '';
+}
+
+function extractEmergencyContact(contact: unknown): { name: string; detail: string; role: string } {
+  if (typeof contact === 'string') return { name: contact, detail: '', role: '' };
+  if (contact && typeof contact === 'object' && !Array.isArray(contact)) {
+    const item = contact as DataItem;
+    return {
+      name: getString(item, ['name', 'contact', 'email', 'phone'], '—'),
+      detail: getString(item, ['contact', 'email', 'phone'], ''),
+      role: getString(item, ['role', 'title'], '')
+    };
+  }
+  return { name: '—', detail: '', role: '' };
+}
+
+type ProviderContactRow = { id: string; requestId: string; provider: string; contact: string; role: string };
+
+function buildProviderContactRows(requests: DataItem[]): ProviderContactRow[] {
+  return requests.flatMap((request) => {
+    const requestId = getString(request, ['id'], '—');
+    const provider = providerNameForRequest(request);
+    const contacts = Array.isArray(request.emergency_contacts) ? request.emergency_contacts : [];
+    if (contacts.length === 0) {
+      if (!provider) return [];
+      return [{ id: `${requestId}::provider`, requestId, provider, contact: '—', role: '—' }];
+    }
+    return contacts.map((contact, index) => {
+      const info = extractEmergencyContact(contact);
+      const label = info.detail && info.detail !== info.name ? `${info.name} · ${info.detail}` : info.name;
+      return {
+        id: `${requestId}::${index}`,
+        requestId,
+        provider: provider || '—',
+        contact: label,
+        role: info.role || '—'
+      };
+    });
+  });
+}
+
+const providerContactColumns: TableColumn<ProviderContactRow>[] = [
+  { key: 'request', label: 'Request', render: (item) => <span className="mono">{item.requestId}</span> },
+  {
+    key: 'provider',
+    label: 'Provider',
+    render: (item) => (item.provider === '—' ? <span className="muted">—</span> : <Badge tone="info">{item.provider}</Badge>)
+  },
+  { key: 'contact', label: 'Contact', render: (item) => <span className="mono">{item.contact}</span> },
+  {
+    key: 'role',
+    label: 'Role',
+    render: (item) => (item.role === '—' ? <span className="muted">—</span> : formatGovernanceStatusLabel(item.role))
+  }
+];
+
+type SocTimelineRow = { key: string; requestId: string; action: string; at: string; by: string };
+
+function buildSocExecutionTimeline(requests: DataItem[]): SocTimelineRow[] {
+  return requests
+    .flatMap((request) => {
+      const requestId = getString(request, ['id'], '—');
+      return buildLifecycleTimeline(request).map((event, index) => ({
+        key: `${requestId}::${index}::${event.at}`,
+        requestId,
+        action: event.action,
+        at: event.at,
+        by: event.by
+      }));
+    })
+    .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime())
+    .slice(0, 12);
+}
+
 export function NotificationsPage({
   data,
   config,
@@ -386,6 +596,10 @@ export function NotificationsPage({
   const deliveredCount = attempts.filter((item) => getString(item, ['status']) === 'delivered_provider').length;
   const retryItems = attempts.filter((item) => getString(item, ['status']) === 'provider_retry_scheduled');
   const dlqItems = attempts.filter((item) => getString(item, ['status']) === 'provider_failed_dlq');
+  const providerHealthRows = useMemo(
+    () => buildProviderHealthRows(data.notificationRules ?? [], attempts),
+    [data.notificationRules, attempts]
+  );
 
   const ruleColumns: TableColumn<DataItem>[] = [
     {
@@ -413,6 +627,11 @@ export function NotificationsPage({
     { key: 'trigger', label: 'Trigger', render: (item) => humanizeNotificationTrigger(getString(item, ['trigger'])) },
     { key: 'subject', label: 'Subject', render: (item) => getString(item, ['subject']) },
     { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) }
+  ];
+  const providerColumns: TableColumn<ProviderHealthRow>[] = [
+    { key: 'provider', label: 'Provider', render: (item) => <Badge tone="info">{item.label}</Badge> },
+    { key: 'channel', label: 'Channel', render: (item) => <span className="muted">{item.detail}</span> },
+    { key: 'health', label: 'Health', render: (item) => <Badge tone={item.tone}>{item.status}</Badge> }
   ];
 
   async function runAction<T>(label: string, action: () => Promise<T>, success: string) {
@@ -573,6 +792,20 @@ export function NotificationsPage({
         <span className="tabular-nums">{data.notificationEvents.length}</span> events ·{' '}
         <span className="tabular-nums">{dlqItems.length}</span> DLQ ({retryItems.length} retries scheduled)
       </PageContextSummary>
+      <Card>
+        <CardHeader>
+          <CardTitle>Providers</CardTitle>
+          <CardDescription>Delivery-provider health derived from configured rules correlated with recorded delivery attempts.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={providerColumns}
+            items={providerHealthRows}
+            getRowId={(item) => item.channel}
+            empty={<EmptyState icon={Bell} title="No delivery providers." body="Provider health appears once notification rules are created and delivery attempts are recorded." />}
+          />
+        </CardContent>
+      </Card>
       <div className="split" aria-busy={busy !== ''}>
         <Card>
           <CardHeader><CardTitle>Rules</CardTitle></CardHeader>
@@ -609,7 +842,8 @@ export function NotificationsPage({
 
 export function AuditPage({ data, session }: { data: PortalData; session: Session }) {
   const [filter, setFilter] = useState('');
-  const [custodyOnly, setCustodyOnly] = useState(false);
+  // Prototype defaults the custody-chain-only filter ON so the audit view opens on the sealed provenance trail.
+  const [custodyOnly, setCustodyOnly] = useState(true);
   const [actorFilter, setActorFilter] = useState('all');
   const [actionFilter, setActionFilter] = useState('all');
   const [selectedId, setSelectedId] = useState('');
@@ -703,7 +937,7 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
 
   return (
     <div className="content">
-      <PageHeader route="audit" />
+      <PageHeader route="audit" description="Append-only, custody-sealed event trail. Toggle custody-chain-only to trace the provenance of any verdict or approval." />
       {!allowed ? (
         <EmptyState icon={ClipboardList} title="Audit access required." body="Switch to owner, admin, SOC, or auditor role to read the tenant audit log." />
       ) : (
@@ -743,7 +977,6 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
           <Card>
             <CardHeader>
               <CardTitle>Events</CardTitle>
-              <CardDescription>Append-only, custody-sealed event trail. Select a row for metadata drilldown.</CardDescription>
             </CardHeader>
             <CardContent>
               <DataTable
@@ -1168,6 +1401,14 @@ export function SocConsolePage({
   }
 
   const killSwitchActive = Boolean(data.state?.kill_switch?.active ?? data.state?.kill_switch?.enabled);
+  const killSwitchReason = getString(data.state?.kill_switch as DataItem, ['reason'], 'tenant-scoped emergency stop');
+  const scheduledCount = data.highScale.filter((item) => SOC_SCHEDULED_STATES.includes(normalizeHighScaleState(item))).length;
+  const inReviewCount = data.highScale.filter((item) => SOC_REVIEW_STATES.includes(normalizeHighScaleState(item))).length;
+  const runningCount = data.highScale.filter((item) => SOC_RUNNING_STATES.includes(normalizeHighScaleState(item))).length;
+  const openFindingsCount = Number(data.state?.open_findings ?? data.findings.length) || 0;
+  const goNoGoGates = buildSocGoNoGoGates(data.highScale, { killSwitchActive, runningCount, openFindings: openFindingsCount });
+  const providerContactRows = buildProviderContactRows(data.highScale);
+  const executionTimeline = buildSocExecutionTimeline(data.highScale);
 
   return (
     <div className="content">
@@ -1184,21 +1425,50 @@ export function SocConsolePage({
             : 'Kill switch is clear; governed runs may proceed when approved and scheduled.'}
         </span>
       </div>
+      <div className="metric-grid four">
+        <MetricCard label="Queue" value={data.highScale.length} sub="governed requests" icon={ShieldCheck} tone={data.highScale.length > 0 ? 'info' : 'muted'} />
+        <MetricCard label="Scheduled" value={scheduledCount} sub="approved or scheduled" icon={CalendarClock} tone={scheduledCount > 0 ? 'info' : 'muted'} />
+        <MetricCard label="In review" value={inReviewCount} sub="awaiting SOC decision" icon={ClipboardList} tone={inReviewCount > 0 ? 'warn' : 'muted'} />
+        <MetricCard label="Kill switch" value={killSwitchActive ? 'Armed' : 'Clear'} sub="tenant emergency stop" icon={Siren} tone={killSwitchActive ? 'danger' : 'success'} />
+      </div>
       <PageContextSummary>
         Queue <span className="tabular-nums">{data.highScale.length}</span> governed requests ·{' '}
         <span className="tabular-nums">{data.state?.open_findings ?? data.findings.length}</span> open findings
       </PageContextSummary>
       <GovernanceFeedbackBanner message={message} error={error} />
-      <Card>
-        <CardHeader>
-          <CardTitle>Kill switch</CardTitle>
-          <CardDescription>Tenant-scoped emergency stop for governed high-scale adapter runs.</CardDescription>
-        </CardHeader>
-        <CardContent className="row-actions">
-          <Button size="sm" variant="danger" loading={busy === 'kill-on'} disabled={busy !== '' && busy !== 'kill-on'} onClick={() => void setKillSwitch(true)}>Activate</Button>
-          <Button size="sm" variant="secondary" loading={busy === 'kill-off'} disabled={busy !== '' && busy !== 'kill-off'} onClick={() => void setKillSwitch(false)}>Clear</Button>
-        </CardContent>
-      </Card>
+      <div className="dash-grid">
+        <Card>
+          <CardHeader>
+            <CardTitle>Kill switch</CardTitle>
+            <CardDescription>Tenant-scoped emergency stop for governed high-scale adapter runs.</CardDescription>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div className="kv-list">
+              <KvField label="Status">
+                <Badge tone={killSwitchActive ? 'danger' : 'success'}>{killSwitchActive ? 'Armed' : 'Clear'}</Badge>
+              </KvField>
+              <KvField label="Reason">{killSwitchReason}</KvField>
+            </div>
+            <div className="row-actions">
+              <Button size="sm" variant="danger" loading={busy === 'kill-on'} disabled={busy !== '' && busy !== 'kill-on'} onClick={() => void setKillSwitch(true)}>Activate</Button>
+              <Button size="sm" variant="secondary" loading={busy === 'kill-off'} disabled={busy !== '' && busy !== 'kill-off'} onClick={() => void setKillSwitch(false)}>Clear</Button>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Go / No-Go</CardTitle>
+            <CardDescription>Pre-flight gates computed from the current governed queue and tenant safety state.</CardDescription>
+          </CardHeader>
+          <CardContent className="kv-list">
+            {goNoGoGates.map((gate) => (
+              <KvField key={gate.key} label={gate.label}>
+                <Badge tone={gate.tone}>{gate.status}</Badge>
+              </KvField>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
       <Card>
         <CardHeader>
           <CardTitle>High-scale queue</CardTitle>
@@ -1216,6 +1486,45 @@ export function SocConsolePage({
           />
         </CardContent>
       </Card>
+      <div className="split">
+        <Card>
+          <CardHeader>
+            <CardTitle>Execution timeline</CardTitle>
+            <CardDescription>Lifecycle events across governed requests, newest first.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {executionTimeline.length === 0 ? (
+              <EmptyState icon={Activity} title="No execution timeline yet." body="Lifecycle events appear after SOC approval, scheduling, or execution actions." />
+            ) : (
+              <div className="timeline-list">
+                {executionTimeline.map((event, index) => (
+                  <div key={event.key}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{formatGovernanceStatusLabel(event.action)} · <span className="mono">{event.requestId}</span></strong>
+                      <p>{formatDate(event.at)} · {event.by}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Provider contacts</CardTitle>
+            <CardDescription>Provider and emergency contacts declared on governed high-scale requests.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={providerContactColumns}
+              items={providerContactRows}
+              getRowId={(item) => item.id}
+              empty={<EmptyState icon={Users} title="No provider or emergency contacts." body="Contacts appear after authorization-pack intake declares provider and emergency contacts." />}
+            />
+          </CardContent>
+        </Card>
+      </div>
       {output ? (
         <Card>
           <CardHeader>
@@ -1226,7 +1535,7 @@ export function SocConsolePage({
             </CardTitle>
             {lastActionRequestId ? (
               <CardDescription>
-                <AnchorButton size="sm" variant="ghost" href={buildDetailHref('soc-request-detail', lastActionRequestId)}>Open request detail</AnchorButton>
+                <AnchorButton size="sm" variant="ghost" href={buildDetailHref('queue-detail', lastActionRequestId)}>Open request detail</AnchorButton>
               </CardDescription>
             ) : null}
           </CardHeader>

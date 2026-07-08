@@ -338,6 +338,121 @@ function runDisplayLabelForId(checks: DataItem[], runs: DataItem[], runId: strin
   return checkDisplayName(checks, getString(run, ['check_id']));
 }
 
+function resolveTargetGroupName(groups: DataItem[], groupId: string) {
+  if (!groupId) return '—';
+  const group = groups.find((item) => getString(item, ['id'], '') === groupId);
+  return getString(group ?? {}, ['name', 'title'], groupId);
+}
+
+function formatRunDuration(run: DataItem) {
+  const start = Date.parse(String(run.started_at ?? run.created_at ?? ''));
+  const end = Date.parse(String(run.completed_at ?? run.finalized_at ?? run.updated_at ?? ''));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '—';
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+const IN_PROGRESS_RUN_STATUSES = new Set(['running', 'collecting']);
+
+function isInProgressRunStatus(status: string) {
+  return IN_PROGRESS_RUN_STATUSES.has(status);
+}
+
+function formatStartedAgo(value: unknown) {
+  const started = Date.parse(String(value ?? ''));
+  if (!Number.isFinite(started)) return '';
+  const diffMs = Date.now() - started;
+  if (diffMs < 0) return 'started just now';
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return `started ${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `started ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `started ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `started ${days}d ago`;
+}
+
+// Scoped runtime style (guarded, tokens only) — mirrors the ui/* primitive pattern
+// (see components/ui/badge.tsx / button.tsx). Provides the in-progress live-pulse dot
+// with prefers-reduced-motion support. Does NOT modify the shared stylesheet.
+const FUNCTIONAL_SURFACE_STYLE_ID = 'astranull-functional-surface-styles';
+
+function ensureFunctionalSurfaceStyles() {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(FUNCTIONAL_SURFACE_STYLE_ID)) return;
+  const node = document.createElement('style');
+  node.id = FUNCTIONAL_SURFACE_STYLE_ID;
+  node.textContent = `
+.run-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info);
+  flex: none;
+  animation: astranull-run-live-pulse 1.5s ease-in-out infinite;
+}
+@keyframes astranull-run-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-live-dot { animation: none; opacity: 0.85; }
+}
+`;
+  document.head.appendChild(node);
+}
+
+// Buckets a catalog check into a coarse verdict-status key for the checks status filter.
+function checkStatusFilterKey(
+  check: DataItem,
+  verdicts: Map<string, { verdict: string; runId: string }>
+) {
+  const checkId = getString(check, ['check_id'], '');
+  const latest = verdicts.get(checkId);
+  if (latest?.verdict) {
+    const label = formatCatalogVerdictLabel(latest.verdict);
+    if (label === 'Pass') return 'pass';
+    if (label === 'Gap') return 'gap';
+    if (label === 'Review') return 'review';
+    if (label === 'request') return 'request';
+    return 'review';
+  }
+  if (getString(check, ['safety_class'], '') === 'soc_gated') return 'request';
+  return 'untested';
+}
+
+const CHECK_FAMILY_FILTER_OPTIONS: { value: CheckFamilyTabId; label: string }[] = [
+  { value: 'recommended', label: 'Recommended' },
+  { value: 'origin-bypass', label: 'Origin bypass' },
+  { value: 'l3l4', label: 'L3 / L4' },
+  { value: 'dns', label: 'DNS' },
+  { value: 'l7api', label: 'L7 / API' },
+  { value: 'protocols', label: 'Protocols / TLS' },
+  { value: 'high-scale', label: 'High-scale (SOC)' }
+];
+
+const CHECK_STATUS_FILTER_OPTIONS = [
+  { value: 'all', label: 'All statuses' },
+  { value: 'pass', label: 'Pass' },
+  { value: 'gap', label: 'Gap' },
+  { value: 'review', label: 'Review' },
+  { value: 'request', label: 'SOC request' },
+  { value: 'untested', label: 'Untested' }
+];
+
+const TOKEN_EXPIRY_OPTIONS = [
+  { value: '15', label: '15 minutes' },
+  { value: '60', label: '1 hour' },
+  { value: '240', label: '4 hours' },
+  { value: '1440', label: '24 hours' }
+];
+
+const MASKED_TOKEN_SECRET = '\u2022'.repeat(32);
+
 function TableSkeleton({ rows = 4, label = 'Loading' }: { rows?: number; label?: string }) {
   return (
     <div className="stack-tight" aria-busy="true" aria-label={label}>
@@ -674,197 +789,56 @@ export function AgentsPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [tokenSecret, setTokenSecret] = useState('');
-  const [agentTab, setAgentTab] = useState('fleet');
+  const [tokenId, setTokenId] = useState('');
+  const [tokenExpiryMinutes, setTokenExpiryMinutes] = useState('60');
+  const [tokenRevealed, setTokenRevealed] = useState(false);
+  const [tokenRevoked, setTokenRevoked] = useState(false);
+  const [copyNotice, setCopyNotice] = useState('');
 
-  const [placementReviews, setPlacementReviews] = useState<DataItem | null>(null);
-  const [updateReleases, setUpdateReleases] = useState<DataItem[]>([]);
-  const [trustKeys, setTrustKeys] = useState<DataItem[]>([]);
-  const [auxLoading, setAuxLoading] = useState(false);
   const onlineAgents = data.agents.filter((agent) => getString(agent, ['status']) === 'online').length;
   const firstGroup = data.targetGroups[0] ?? null;
-  const agentTabOptions = AGENT_SURFACE_TABS.map((tab) => ({ id: tab.id, label: tab.label }));
-  const placementSummary = getNestedItem(placementReviews, ['summary']);
-  const placementReviewRows = Array.isArray(placementReviews?.reviews) ? placementReviews.reviews as DataItem[] : [];
-  const agentAuditEntries = filterAgentAuditEntries(data.audit);
-  const placementReviewColumns: TableColumn<DataItem>[] = [
-    {
-      key: 'group',
-      label: 'Target group',
-      render: (review) => getString(review, ['target_group_name', 'target_group_id'], 'group')
-    },
-    {
-      key: 'status',
-      label: 'Placement status',
-      render: (review) => {
-        const status = getString(review, ['status'], 'unknown');
-        const hint = placementStatusHint(status);
-        return <Badge tone={placementStatusBadgeTone(status)} title={hint || undefined}>{formatPlacementStatus(status)}</Badge>;
-      }
-    },
-    {
-      key: 'summary',
-      label: 'Summary',
-      render: (review) => getString(review, ['summary'], '—')
-    }
-  ];
 
   const fleetColumns: TableColumn<DataItem>[] = [
     {
-      key: 'id',
-      label: 'ID',
+      key: 'agent',
+      label: 'Agent',
       render: (item) => (
         <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
       )
     },
-    { key: 'hostname', label: 'Hostname', render: (item) => getString(item, ['hostname', 'name'], '—') },
-    { key: 'environment', label: 'Env', render: (item) => getString(item, ['environment_id'], 'tenant scope') },
+    { key: 'hostname', label: 'Hostname', render: (item) => <span className="muted">{getString(item, ['hostname', 'name'], '—')}</span> },
+    { key: 'environment', label: 'Env', render: (item) => <code className="traffic-path-label">{getString(item, ['environment_id'], 'tenant scope')}</code> },
+    { key: 'version', label: 'Version', render: (item) => <code className="traffic-path-label">{getString(item, ['version', 'agent_version'], '—')}</code> },
+    { key: 'heartbeat', label: 'Heartbeat', render: (item) => <span className="muted">{formatDate(item.last_heartbeat_at)}</span> },
     {
-      key: 'health',
-      label: 'Health',
+      key: 'placement',
+      label: 'Placement',
       render: (item) => {
-        const health = formatAgentHealth(item);
-        const tone = health === 'online' ? 'success' : health === 'revoked' ? 'danger' : 'muted';
-        return <Badge tone={tone}>{health}</Badge>;
+        const placement = getString(item, ['placement_type', 'placement'], '');
+        const label = placement ? placement.replace(/_/g, ' ') : 'unbound';
+        return <Badge tone="muted" title="Placement type reported on agent registration">{label}</Badge>;
       }
     },
-    { key: 'version', label: 'Version', render: (item) => getString(item, ['version', 'agent_version'], '—') },
-    { key: 'placement', label: 'Placement', render: (item) => formatAgentPlacement(item) },
-    { key: 'last_heartbeat', label: 'Last heartbeat', render: (item) => formatDate(item.last_heartbeat_at) },
-    {
-      key: 'actions',
-      label: 'Actions',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const revoked = getString(item, ['status']) === 'revoked';
-        return (
-          <div className="row-actions">
-            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('agent-detail', id)}>Detail</AnchorButton>
-            {!revoked ? <Button size="sm" variant="danger" loading={busy === `revoke-${id}`} disabled={busy !== ''} aria-label={`Revoke agent ${getString(item, ['hostname', 'name', 'id'], id)}`} onClick={() => void revokeAgent(id)}>Revoke</Button> : null}
-          </div>
-        );
-      }
-    }
-  ];
-
-  const healthColumns: TableColumn<DataItem>[] = [
-    { key: 'name', label: 'Agent', render: (item) => getString(item, ['hostname', 'name', 'id']) },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'online' ? 'success' : 'muted'}>{formatAgentHealth(item)}</Badge> },
-    { key: 'freshness', label: 'Heartbeat', render: (item) => formatHeartbeatFreshness(agentHeartbeatFreshness(item)) },
-    { key: 'heartbeat', label: 'Last heartbeat', render: (item) => formatDate(item.last_heartbeat_at) },
-    { key: 'version', label: 'Version', render: (item) => getString(item, ['version'], '—') },
-    { key: 'fingerprint', label: 'Gateway fingerprint', render: (item) => <code>{getString(item, ['fingerprint'], 'not registered')}</code> }
-  ];
-
-  const capabilityColumns: TableColumn<DataItem>[] = [
-    { key: 'name', label: 'Agent', render: (item) => getString(item, ['hostname', 'name', 'id']) },
-    { key: 'capabilities', label: 'Observation modes', render: (item) => formatAgentCapabilities(item) },
-    { key: 'environment', label: 'Environment', render: (item) => getString(item, ['environment_id'], 'tenant scope') },
-    { key: 'group', label: 'Target group', render: (item) => getString(item, ['target_group_id'], 'unbound') }
-  ];
-
-  const releaseColumns: TableColumn<DataItem>[] = [
-    { key: 'version', label: 'Version', render: (item) => getString(item, ['version']) },
-    { key: 'channel', label: 'Channel', render: (item) => getString(item, ['channel'], 'stable') },
-    { key: 'state', label: 'State', render: (item) => <Badge tone="info">{getString(item, ['state'], 'active')}</Badge> },
-    { key: 'rollout', label: 'Rollout', render: (item) => `${getNestedNumber(item, ['rollout', 'percentage'], 100)}%` },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
-    {
-      key: 'actions',
-      label: 'Actions',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const canRollback = Boolean(item.rollback) && getString(item, ['state']) !== 'rollback_requested';
-        return canRollback ? (
-          <Button size="sm" variant="secondary" loading={busy === `rollback-${id}`} disabled={busy !== ''} aria-label={`Request rollback for release ${getString(item, ['version'], id)}`} onClick={() => void requestReleaseRollback(id)}>Request rollback</Button>
-        ) : <span className="muted">—</span>;
-      }
-    }
-  ];
-
-  const trustKeyColumns: TableColumn<DataItem>[] = [
-    { key: 'name', label: 'Name', render: (item) => getString(item, ['name']) },
-    { key: 'fingerprint', label: 'Fingerprint', render: (item) => <code>{getString(item, ['fingerprint_sha256'])}</code> },
     {
       key: 'status',
       label: 'Status',
       render: (item) => {
-        const status = getString(item, ['status']);
-        return <Badge tone={status === 'active' ? 'success' : 'muted'}>{formatSnakeLabel(status)}</Badge>;
-      }
-    },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
-    {
-      key: 'actions',
-      label: 'Actions',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const active = getString(item, ['status']) === 'active';
-        return active ? (
-          <Button size="sm" variant="danger" loading={busy === `trust-revoke-${id}`} disabled={busy !== ''} aria-label={`Revoke trust key ${getString(item, ['name'], id)}`} onClick={() => void revokeTrustKey(id)}>Revoke</Button>
-        ) : <span className="muted">revoked</span>;
+        const status = getString(item, ['status', 'state'], 'unknown');
+        const tone = status === 'online' ? 'success' : status === 'revoked' ? 'danger' : 'muted';
+        return <Badge tone={tone} title="Agent status from heartbeat and credential state">{formatAgentHealth(item)}</Badge>;
       }
     }
   ];
 
-  const logColumns: TableColumn<DataItem>[] = [
-    { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
-    { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'])}` },
-    { key: 'actor', label: 'Actor', render: (item) => getString(item, ['actor_role'], 'system') },
-    { key: 'when', label: 'Recorded', render: (item) => formatDate(item.created_at ?? item.timestamp) }
-  ];
-
-  useEffect(() => {
-    if (!['operations', 'install', 'fleet'].includes(agentTab)) return undefined;
-    let cancelled = false;
-    setAuxLoading(true);
-    requestJson(config, session, '/v1/placement/reviews')
-      .then((payload) => {
-        if (!cancelled) setPlacementReviews(payload as DataItem);
-      })
-      .catch(() => {
-        if (!cancelled) setPlacementReviews(null);
-      })
-      .finally(() => {
-        if (!cancelled) setAuxLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [agentTab, config, session]);
-
-  useEffect(() => {
-    if (agentTab !== 'operations') return undefined;
-    let cancelled = false;
-    setAuxLoading(true);
-    Promise.all([
-      requestJson(config, session, '/v1/agent-updates'),
-      requestJson(config, session, '/v1/agent-update-trust-keys')
-    ])
-      .then(([releasesPayload, trustPayload]) => {
-        if (cancelled) return;
-        const releases = Array.isArray((releasesPayload as { items?: unknown }).items)
-          ? (releasesPayload as { items: DataItem[] }).items
-          : [];
-        const keys = Array.isArray((trustPayload as { items?: unknown }).items)
-          ? (trustPayload as { items: DataItem[] }).items
-          : [];
-        setUpdateReleases(releases);
-        setTrustKeys(keys);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setUpdateReleases([]);
-          setTrustKeys([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setAuxLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [agentTab, config, session]);
-
   async function createBootstrapToken() {
+    const minutes = Number(tokenExpiryMinutes);
+    const expiryMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
     const body: DataItem = {
       name: 'agent-install',
-      expires_in_minutes: 60,
+      // Backend honors `expires_at`; `expires_in_minutes` alone is ignored and falls back
+      // to a 24h default (see src/services/tokens.mjs). Send both so the chosen TTL applies.
+      expires_at: new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString(),
+      expires_in_minutes: expiryMinutes,
       max_registrations: 1
     };
     const environmentId = getString(firstGroup, ['environment_id'], '');
@@ -875,51 +849,47 @@ export function AgentsPage({
       method: 'POST',
       body
     }), 'Bootstrap token created. Copy the one-time secret now.', onRefresh);
-    const secret = getString(created as DataItem, ['secret'], getNestedString(created as DataItem, ['token', 'secret'], ''));
-    if (secret) setTokenSecret(secret);
+    const createdItem = (created as DataItem) ?? {};
+    const secret = getString(createdItem, ['secret'], getNestedString(createdItem, ['token', 'secret'], ''));
+    const createdId = getString(createdItem, ['id'], getNestedString(createdItem, ['token', 'id'], ''));
+    if (secret) {
+      setTokenSecret(secret);
+      setTokenId(createdId);
+      setTokenRevealed(false);
+      setTokenRevoked(false);
+      setCopyNotice('');
+    }
   }
 
-  async function revokeAgent(id: string) {
-    if (!id) return;
-    if (!window.confirm('Revoke this agent\'s credentials? It will stop reporting until re-registered.')) return;
-    await runAction(setBusy, setError, setMessage, `revoke-${id}`, () => requestJson(config, session, `/v1/agents/${id}/revoke`, { method: 'POST' }), 'Agent revoked. Heartbeat and jobs will be rejected.', onRefresh);
+  async function copyTokenSecret() {
+    if (!tokenSecret) return;
+    try {
+      await navigator.clipboard.writeText(tokenSecret);
+      setCopyNotice('Secret copied to clipboard.');
+    } catch {
+      setCopyNotice('Clipboard copy failed. Reveal the secret and copy it manually.');
+    }
   }
 
-  async function requestReleaseRollback(releaseId: string) {
-    if (!releaseId) return;
-    if (!window.confirm('Request rollback for this agent release? Eligible agents will move to the previous signed version.')) return;
-    await runAction(setBusy, setError, setMessage, `rollback-${releaseId}`, () => requestJson(config, session, `/v1/agent-updates/${releaseId}/rollback`, { method: 'POST' }), 'Rollback requested for eligible agents.', async () => {
-      const payload = await requestJson(config, session, '/v1/agent-updates') as { items?: DataItem[] };
-      setUpdateReleases(Array.isArray(payload.items) ? payload.items : []);
-      await onRefresh();
-    });
-  }
-
-  async function revokeTrustKey(keyId: string) {
-    if (!keyId) return;
-    if (!window.confirm('Revoke this agent update trust key? Agents will reject updates signed with it.')) return;
-    await runAction(setBusy, setError, setMessage, `trust-revoke-${keyId}`, () => requestJson(config, session, `/v1/agent-update-trust-keys/${keyId}/revoke`, { method: 'POST' }), 'Trust key revoked.', async () => {
-      const payload = await requestJson(config, session, '/v1/agent-update-trust-keys') as { items?: DataItem[] };
-      setTrustKeys(Array.isArray(payload.items) ? payload.items : []);
-      await onRefresh();
-    });
-  }
-
-  async function handleAddTrustKey(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await runAction(setBusy, setError, setMessage, 'add-trust-key', () => requestJson(config, session, '/v1/agent-update-trust-keys', {
-      method: 'POST',
-      body: {
-        name: String(form.get('name') ?? '').trim() || 'agent update signing key',
-        public_key_der_base64: String(form.get('public_key_der_base64') ?? '').trim()
-      }
-    }), 'Trust key registered.', async () => {
-      const payload = await requestJson(config, session, '/v1/agent-update-trust-keys') as { items?: DataItem[] };
-      setTrustKeys(Array.isArray(payload.items) ? payload.items : []);
-      event.currentTarget.reset();
-      await onRefresh();
-    });
+  async function revokeBootstrapToken() {
+    if (!tokenId) {
+      setError('No bootstrap token id was returned, so it cannot be revoked from here.');
+      return;
+    }
+    if (!window.confirm('Revoke this bootstrap token? New agent registrations using it will fail.')) return;
+    const result = await runAction(
+      setBusy,
+      setError,
+      setMessage,
+      `revoke-bootstrap-${tokenId}`,
+      () => requestJson(config, session, `/v1/bootstrap-tokens/${tokenId}/revoke`, { method: 'POST' }),
+      'Bootstrap token revoked.',
+      onRefresh
+    );
+    if (result) {
+      setTokenRevoked(true);
+      setTokenRevealed(false);
+    }
   }
 
   return (
@@ -931,127 +901,100 @@ export function AgentsPage({
         <span className="tabular-nums">{onlineAgents}</span> online
       </PageContextSummary>
       <MutationFeedbackBanner message={message} error={error} />
-      <Tabs value={agentTab} options={agentTabOptions} onChange={setAgentTab} className="tabs-wrap" />
-      {agentTab === 'fleet' || agentTab === 'install' ? (
-        <div className="stack">
-          <SurfaceTableCard
-            title="Installed agents"
-            description="Registered outbound agents. Revoke invalidates credentials immediately."
-            columns={fleetColumns}
-            items={data.agents}
-            loading={auxLoading}
-            loadingLabel="Refreshing agent fleet"
-            getRowProps={(item) => {
-              const id = getString(item, ['id'], '');
-              return buildDetailHashRowProps(
-                'agent-detail',
-                id,
-                `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`
-              );
-            }}
-            empty={(
-              <EmptyState
-                icon={Bot}
-                title="No agents have registered yet."
-                body="Create a bootstrap token below, then install an outbound-only agent."
-                actionLabel="Deploy an agent"
-                onAction={() => setAgentTab('install')}
-              />
-            )}
-          />
-          <AgentInstallMatrix
-            data={data}
-            tokenSecret={tokenSecret}
-            onCreateToken={() => void createBootstrapToken()}
-            createBusy={busy === 'create-bootstrap-token'}
-            actionsDisabled={busy !== ''}
-          />
-        </div>
-      ) : null}
-      {agentTab === 'operations' ? (
-        <div className="stack">
-          <SurfaceTableCard
-            title="Agent health"
-            description="Heartbeat freshness and gateway trust metadata for each registered agent."
-            columns={healthColumns}
-            items={data.agents}
-            loading={auxLoading}
-            loadingLabel="Loading agent health"
-            empty={<EmptyState icon={Activity} title="No agents to monitor." body="Register an agent to see heartbeat freshness and version posture." />}
-          />
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent coverage by target group</CardTitle>
-              <CardDescription>
-                A target group is a set of URLs or hosts you want to test together. Each group needs its own agent on the traffic path.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {auxLoading ? <TableSkeleton rows={3} label="Loading placement reviews" /> : null}
-              {!auxLoading && placementReviewRows.length === 0 ? (
-                <EmptyState icon={Target} title="No placement reviews yet." body="Declare target groups and register agents to compute placement confidence." />
-              ) : null}
-              {!auxLoading && placementReviewRows.length > 0 ? (
-                <DataTable
-                  columns={placementReviewColumns}
-                  items={placementReviewRows}
-                  empty={<EmptyState icon={Target} title="No placement reviews yet." body="Declare target groups and register agents to compute placement confidence." />}
-                />
-              ) : null}
-              {placementSummary ? (
-                <div className="stack-tight">
-                  <p className="muted">{formatPlacementOverview(placementSummary)}</p>
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-          <SurfaceTableCard
-            title="Agent capabilities"
-            description="Observation modes reported on registration and each heartbeat."
-            columns={capabilityColumns}
-            items={data.agents}
-            empty={<EmptyState icon={ListChecks} title="No capability reports yet." body="Capabilities appear after the first agent heartbeat." />}
-          />
-          <SurfaceTableCard
-            title="Agent audit trail"
-            description="Metadata-only lifecycle events for agent registration, heartbeat, revoke, and updates—not host operational logs."
-            columns={logColumns}
-            items={agentAuditEntries}
-            empty={<EmptyState icon={ClipboardList} title="No agent audit events yet." body="Registration, heartbeat, revoke, and update actions appear here after agents connect." />}
-          />
-          <div className="split">
-            <SurfaceTableCard
-              title="Release rollout"
-              description="Tenant release rollouts. Agents pull signed updates over the outbound channel."
-              columns={releaseColumns}
-              items={updateReleases}
-              loading={auxLoading}
-              loadingLabel="Loading agent releases"
-              empty={<EmptyState icon={Bot} title="No agent releases published." body="Publish signed manifests through your operator packaging workflow to roll out agent versions." />}
+      <div className="stack">
+        <SurfaceTableCard
+          title="Installed agents"
+          description="Outbound-only observation agents. They call AstraNull over HTTPS. Click a row to open the agent detail."
+          columns={fleetColumns}
+          items={data.agents}
+          getRowProps={(item) => {
+            const id = getString(item, ['id'], '');
+            return buildDetailHashRowProps(
+              'agent-detail',
+              id,
+              `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`
+            );
+          }}
+          empty={(
+            <EmptyState
+              icon={Bot}
+              title="No agents have registered yet."
+              body="Create a bootstrap token below, then install an outbound-only agent."
             />
-            <Card>
-              <CardHeader>
-                <CardTitle>Trust keys</CardTitle>
-                <CardDescription>Ed25519 signing keys that agents trust for update manifests.</CardDescription>
-              </CardHeader>
-              <CardContent className="product-form stack">
-                {auxLoading ? <TableSkeleton rows={2} label="Loading trust keys" /> : (
-                  <DataTable
-                    columns={trustKeyColumns}
-                    items={trustKeys}
-                    empty={<EmptyState icon={KeyRound} title="No trust keys registered." body="Add the public key from your agent update signing ceremony." />}
-                  />
-                )}
-                <form className="product-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
-                  <label><span>Key name</span><input name="name" placeholder="production signing key" /></label>
-                  <label className="full"><span>Public key (DER base64)</span><textarea name="public_key_der_base64" rows={3} placeholder="MCowBQYDK2VwAyEA…" required /></label>
-                  <div className="form-actions full"><Button type="submit" loading={busy === 'add-trust-key'} disabled={busy !== ''}>Register trust key</Button></div>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      ) : null}
+          )}
+        />
+        <Card>
+          <CardHeader>
+            <CardTitle>Bootstrap token</CardTitle>
+            <CardDescription>
+              Pick a token lifetime, then use “Create bootstrap token” below. The one-time secret is shown once — reveal, copy, or revoke it here.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
+              <Select
+                label="Token expiry"
+                value={tokenExpiryMinutes}
+                options={TOKEN_EXPIRY_OPTIONS}
+                onChange={setTokenExpiryMinutes}
+                disabled={busy !== ''}
+              />
+            </div>
+            {tokenSecret ? (
+              <Card className="secret-card">
+                <CardHeader>
+                  <CardTitle>One-time bootstrap token secret</CardTitle>
+                  <CardDescription>
+                    Shown once. It is not returned by list APIs and will not be visible after refresh.
+                    {tokenId ? <> Token id <code className="traffic-path-label">{tokenId}</code>.</> : null}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="stack-tight">
+                  <pre className="codeblock" aria-label="Bootstrap token secret">
+                    {tokenRevoked ? 'Token revoked.' : tokenRevealed ? tokenSecret : MASKED_TOKEN_SECRET}
+                  </pre>
+                  <div className="row-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      aria-pressed={tokenRevealed}
+                      disabled={tokenRevoked}
+                      onClick={() => setTokenRevealed((value) => !value)}
+                    >
+                      {tokenRevealed ? 'Hide' : 'Reveal'}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={tokenRevoked}
+                      onClick={() => void copyTokenSecret()}
+                    >
+                      Copy
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      loading={busy === `revoke-bootstrap-${tokenId}`}
+                      disabled={!tokenId || tokenRevoked || (busy !== '' && busy !== `revoke-bootstrap-${tokenId}`)}
+                      onClick={() => void revokeBootstrapToken()}
+                    >
+                      {tokenRevoked ? 'Revoked' : 'Revoke'}
+                    </Button>
+                  </div>
+                  {copyNotice ? <p className="muted" role="status" aria-live="polite">{copyNotice}</p> : null}
+                </CardContent>
+              </Card>
+            ) : null}
+          </CardContent>
+        </Card>
+        <AgentInstallMatrix
+          data={data}
+          tokenSecret={tokenSecret}
+          onCreateToken={() => void createBootstrapToken()}
+          createBusy={busy === 'create-bootstrap-token'}
+          actionsDisabled={busy !== ''}
+        />
+      </div>
     </div>
   );
 }
@@ -1074,6 +1017,7 @@ export function ValidationSurfacePage({
   const [error, setError] = useState('');
   const [checkFilter, setCheckFilter] = useState<CheckFamilyTabId>('recommended');
   const [checkSafetyScope, setCheckSafetyScope] = useState<CheckSafetyScopeId>('all');
+  const [checkStatusFilter, setCheckStatusFilter] = useState('all');
   const [findingTab, setFindingTab] = useState<FindingTabId>('open');
   const [exportOutput, setExportOutput] = useState('');
   const [showTechnicalExport, setShowTechnicalExport] = useState(false);
@@ -1099,6 +1043,11 @@ export function ValidationSurfacePage({
     [data.checks, checkFilter, checkSafetyScope]
   );
   const latestCheckVerdicts = useMemo(() => buildLatestCheckVerdictMap(data.runs), [data.runs]);
+
+  const visibleChecks = useMemo(() => {
+    if (checkStatusFilter === 'all') return filteredChecks;
+    return filteredChecks.filter((check) => checkStatusFilterKey(check, latestCheckVerdicts) === checkStatusFilter);
+  }, [filteredChecks, checkStatusFilter, latestCheckVerdicts]);
 
   const filteredRuns = useMemo(() => {
     const sorted = [...data.runs].sort((a, b) => {
@@ -1147,7 +1096,7 @@ export function ValidationSurfacePage({
     if (route !== 'runs' || inFlightRuns.length === 0) return undefined;
     const timer = window.setInterval(() => {
       void onRefresh();
-    }, 12000);
+    }, 8000);
     return () => window.clearInterval(timer);
   }, [route, inFlightRuns.length, onRefresh]);
 
@@ -1268,25 +1217,13 @@ export function ValidationSurfacePage({
   }
 
   if (route === 'checks') {
-    const checkTabOptions = routeTabs('checks').map((tab) => ({ id: tab.id as CheckFamilyTabId, label: tab.label }));
-    const safetyScopeOptions = CHECK_SAFETY_SCOPE_TABS.map((tab) => ({
-      id: tab.id,
-      label: `${tab.label} (${checkSafetyCounts[tab.id]})`
-    }));
     const columns: TableColumn<DataItem>[] = [
       {
         key: 'check',
         label: 'Check',
-        render: (item) => {
-          const checkId = getString(item, ['check_id'], '');
-          const name = getString(item, ['name'], '');
-          return (
-            <div className="stack-tight">
-              <code className="traffic-path-label" title={checkId}>{checkId}</code>
-              {name && name !== checkId ? <span className="muted small">{name}</span> : null}
-            </div>
-          );
-        }
+        render: (item) => (
+          <code className="traffic-path-label" title={getString(item, ['check_id'])}>{getString(item, ['check_id'])}</code>
+        )
       },
       {
         key: 'family',
@@ -1300,7 +1237,7 @@ export function ValidationSurfacePage({
         label: 'Mode',
         render: (item) => {
           const safetyClass = getString(item, ['safety_class'], '');
-          return <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>;
+          return <Badge tone={checkModeBadgeTone(safetyClass)} title="Safety class from check catalog">{formatCheckModeLabel(safetyClass)}</Badge>;
         }
       },
       {
@@ -1317,38 +1254,14 @@ export function ValidationSurfacePage({
           const latest = latestCheckVerdicts.get(checkId);
           if (!latest?.verdict) {
             if (safetyClass === 'soc_gated') {
-              return <Badge tone="muted">request</Badge>;
+              return <Badge tone="muted" title="SOC-gated checks run only after SOC approval">request</Badge>;
             }
             return <span className="muted">—</span>;
           }
           return (
-            <Badge tone={catalogVerdictBadgeTone(latest.verdict)}>
+            <Badge tone={catalogVerdictBadgeTone(latest.verdict)} title="Latest correlated verdict for this check">
               {formatCatalogVerdictLabel(latest.verdict)}
             </Badge>
-          );
-        }
-      },
-      {
-        key: 'actions',
-        label: 'Actions',
-        render: (item) => {
-          const checkId = getString(item, ['check_id'], '');
-          const isSafe = getString(item, ['safety_class']) === 'safe';
-          return (
-            <div className="row-actions row-actions--spaced">
-              <AnchorButton variant="secondary" href="#test-policies">Bind in policy</AnchorButton>
-              {isSafe ? (
-                <Button
-                  variant="ghost"
-                  loading={busy === 'start-safe-run'}
-                  disabled={busy !== ''}
-                  aria-label={`Start safe run for check ${checkId}`}
-                  onClick={() => void startSafeRun(checkId)}
-                >
-                  Start safe run
-                </Button>
-              ) : null}
-            </div>
           );
         }
       }
@@ -1360,107 +1273,124 @@ export function ValidationSurfacePage({
           <CardHeader>
             <CardTitle>Check catalog</CardTitle>
             <CardDescription>
-              Safe-by-default validation definitions. Click a row to open the latest run detail when available.
-              {' '}
-              <span className="muted small">
-                {checkSafetyCounts.all} catalog · {checkSafetyCounts.safe} runnable · {checkSafetyCounts.soc} SOC-only
-              </span>
+              Filter by vector family, safety class, and last verdict. Showing{' '}
+              <span className="tabular-nums">{visibleChecks.length}</span> of{' '}
+              <span className="tabular-nums">{data.checks.length}</span> checks.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <FilterFieldset legend="Safety scope">
-              <Tabs value={checkSafetyScope} options={safetyScopeOptions} onChange={setCheckSafetyScope} className="tabs-wrap" />
-            </FilterFieldset>
-            <FilterFieldset legend="Vector family">
-              <Tabs value={checkFilter} options={checkTabOptions} onChange={(value) => setCheckFilter(value as CheckFamilyTabId)} className="tabs-wrap" />
-            </FilterFieldset>
+          <CardContent className="stack-tight">
+            <div
+              role="group"
+              aria-label="Check catalog filters"
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-3)' }}
+            >
+              <Select
+                label="Vector family"
+                value={checkFilter}
+                options={CHECK_FAMILY_FILTER_OPTIONS}
+                onChange={(value) => setCheckFilter(value as CheckFamilyTabId)}
+              />
+              <Select
+                label="Safety class"
+                value={checkSafetyScope}
+                options={CHECK_SAFETY_SCOPE_TABS.map((tab) => ({
+                  value: tab.id,
+                  label: `${tab.label} (${checkSafetyCounts[tab.id]})`
+                }))}
+                onChange={(value) => setCheckSafetyScope(value as CheckSafetyScopeId)}
+              />
+              <Select
+                label="Last verdict"
+                value={checkStatusFilter}
+                options={CHECK_STATUS_FILTER_OPTIONS}
+                onChange={setCheckStatusFilter}
+              />
+            </div>
             <DataTable
               columns={columns}
-              items={filteredChecks}
+              items={visibleChecks}
               getRowProps={(item) => {
                 const checkId = getString(item, ['check_id'], '');
-                const runId = latestCheckVerdicts.get(checkId)?.runId ?? '';
-                return runId
-                  ? buildDetailHashRowProps('run-detail', runId, `Open latest run for ${checkId}`)
-                  : {};
+                return checkId ? buildDetailHashRowProps('check-detail', checkId, `Open ${checkId}`) : {};
               }}
-              empty={checkFilter === 'custom' ? (
-                <EmptyState icon={ListChecks} title="No custom checks in catalog." body="Customer-defined safe checks bind through test policies after staff-reviewed scope declaration." actionLabel="Open test policies" actionHref="#test-policies" />
-              ) : (
-                <EmptyState icon={ListChecks} title="No checks in this family." body="The check catalog appears after your tenant is provisioned and scope is declared." />
+              empty={(
+                data.checks.length === 0 ? (
+                  <EmptyState icon={ListChecks} title="No checks in catalog." body="The check catalog appears after your tenant is provisioned and scope is declared." />
+                ) : (
+                  <EmptyState icon={ListChecks} title="No checks match these filters." body="Adjust the vector family, safety class, or last-verdict filter to see more checks." />
+                )
               )}
             />
           </CardContent>
         </Card>
-        <div className="metric-grid three">
-          <MetricCard label="Catalog checks" value={checkSafetyCounts.all} sub="Tenant-visible definitions" icon={ListChecks} tone="info" />
-          <MetricCard label="Runnable" value={checkSafetyCounts.safe} sub="Customer-safe scope" icon={ShieldCheck} tone="success" />
-          <MetricCard label="SOC-only" value={checkSafetyCounts.soc} sub="Request through SOC" icon={Siren} tone="warn" />
-        </div>
       </div>
     );
   }
 
   if (route === 'runs') {
-    const runStatusTabs = [
-      { id: 'all', label: 'All' },
-      { id: 'running', label: 'Running' },
-      { id: 'collecting', label: 'Collecting' },
-      { id: 'verdicted', label: 'Verdicted' },
-      { id: 'cancelled', label: 'Cancelled' },
-      { id: 'failed', label: 'Failed' }
-    ];
+    ensureFunctionalSurfaceStyles();
     const runColumns: TableColumn<DataItem>[] = [
       {
         key: 'run',
         label: 'Run',
+        render: (item) => <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
+      },
+      {
+        key: 'group',
+        label: 'Target group',
+        render: (item) => resolveTargetGroupName(data.targetGroups, getString(item, ['target_group_id']))
+      },
+      {
+        key: 'checks',
+        label: 'Checks',
         render: (item) => {
-          const id = getString(item, ['id'], '');
-          const checkId = getString(item, ['check_id'], '');
-          return (
-            <div className="stack-tight">
-              <AnchorButton variant="secondary" href={buildDetailHref('run-detail', id)} aria-label={`Open run ${id}`}>{checkDisplayName(data.checks, checkId, id)}</AnchorButton>
-              <span className="muted small"><code>{id}</code></span>
-            </div>
-          );
+          const checkCount = getNumber(item, ['check_count'], -1);
+          if (checkCount >= 0) return <span className="num tabular-nums">{checkCount}</span>;
+          return checkDisplayName(data.checks, getString(item, ['check_id']), getString(item, ['id']));
         }
       },
       {
         key: 'status',
         label: 'Status',
         render: (item) => {
-          const status = getString(item, ['status'], '');
-          return <Badge tone={runStatusBadgeTone(status)}>{formatRunStatusLabel(status)}</Badge>;
+          const status = getString(item, ['status'], 'planned');
+          const inProgress = isInProgressRunStatus(status);
+          const startedAgo = inProgress ? formatStartedAgo(item.started_at ?? item.created_at) : '';
+          return (
+            <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                {inProgress ? <span className="run-live-dot" aria-hidden="true" /> : null}
+                <Badge tone={runStatusBadgeTone(status)} title="Run lifecycle status from API">
+                  {inProgress ? `In progress · ${formatRunStatusLabel(status)}` : formatRunStatusLabel(status)}
+                </Badge>
+              </span>
+              {startedAgo ? <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>{startedAgo}</span> : null}
+            </span>
+          );
         }
       },
       {
         key: 'verdict',
         label: 'Verdict',
         render: (item) => {
-          const verdict = getString(item, ['verdict', 'verdict'], 'pending');
-          return <Badge tone={verdictBadgeTone(verdict)}>{formatVerdictLabel(verdict)}</Badge>;
+          const verdict = getRunVerdictValue(item) || 'pending';
+          return <Badge tone={verdictBadgeTone(verdict)} title="Correlated run verdict">{formatVerdictLabel(verdict)}</Badge>;
         }
       },
-      { key: 'time', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) },
       {
-        key: 'actions',
-        label: 'Actions',
-        render: (item) => {
-          const id = getString(item, ['id'], '');
-          const status = getString(item, ['status'], '');
-          const cancellable = ['planned', 'running', 'collecting'].includes(status);
-          return (
-            <div className="row-actions row-actions--spaced">
-              <AnchorButton variant="secondary" href={buildDetailHref('run-detail', id)}>View run</AnchorButton>
-              {cancellable ? (
-                <>
-                  <Button size="sm" variant="danger" loading={busy === `cancel-${id}`} disabled={busy !== ''} aria-label={`Cancel run ${id}`} onClick={() => void cancelRun(id)}>Cancel</Button>
-                  <Button size="sm" variant="ghost" loading={busy === `finalize-${id}`} disabled={busy !== ''} aria-label={`Finalize run ${id}`} onClick={() => void finalizeRun(id)}>Finalize</Button>
-                </>
-              ) : null}
-            </div>
-          );
-        }
+        key: 'duration',
+        label: 'Duration',
+        render: (item) => <code className="traffic-path-label">{formatRunDuration(item)}</code>
+      },
+      {
+        key: 'agent',
+        label: 'Agent',
+        render: (item) => <code className="traffic-path-label">{getString(item, ['agent_id', 'observed_agent_id'], '—')}</code>
+      },
+      {
+        key: 'started',
+        label: 'Started',
+        render: (item) => <span className="muted">{formatDate(item.started_at ?? item.created_at)}</span>
       }
     ];
     const canStartRun = Boolean(firstGroup && safeCheck && runStartTargetPreview);
@@ -1500,75 +1430,35 @@ export function ValidationSurfacePage({
         />
         {inFlightRuns.length > 0 ? (
           <div className="form-banner info" role="status" aria-live="polite">
-            Runs in progress — auto-refreshing every 12s ({inFlightRuns.length} active).
+            Runs in progress — live status auto-refreshes every 8s ({inFlightRuns.length} active). Verdicts appear when the observation window closes.
+          </div>
+        ) : null}
+        {!canStartRun && startDisabledReason ? (
+          <div className="form-banner neutral" role="note">
+            Start a safe run from “Run safe checks” above once ready — {startDisabledReason}
           </div>
         ) : null}
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
-          <CardHeader>
-            <CardTitle>Start safe validation</CardTitle>
-            <CardDescription>Confirm the resolved target group, target, and check before starting a bounded safe run.</CardDescription>
-          </CardHeader>
-          <CardContent className="stack-tight">
-            <div className="kv-list kv-list--compact">
-              <div><span>Target group</span><strong>{firstGroup ? getString(firstGroup, ['name', 'id']) : '—'}</strong></div>
-              <div>
-                <span>Target</span>
-                {runStartTargetLoading ? (
-                  <span className="skeleton skeleton-text" aria-busy="true" aria-label="Loading target preview" />
-                ) : (
-                  <strong>{runStartTargetPreview || '—'}</strong>
-                )}
-              </div>
-              <div>
-                <span>Check</span>
-                {safeCheck ? (
-                  <div className="stack-tight">
-                    <AnchorButton variant="ghost" href="#checks">{getString(safeCheck, ['name'], getString(safeCheck, ['check_id']))}</AnchorButton>
-                    <span className="muted small"><code>{getString(safeCheck, ['check_id'])}</code></span>
-                  </div>
-                ) : (
-                  <strong>—</strong>
-                )}
-              </div>
-            </div>
-            {startDisabledReason ? <p className="muted">{startDisabledReason}</p> : null}
-            <Button
-              loading={busy === 'start-safe-run'}
-              disabled={busy !== '' || !canStartRun}
-              aria-label="Start safe validation run for resolved target and check"
-              onClick={() => void startSafeRun()}
-            >
-              Start safe run
-            </Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Test runs</CardTitle><CardDescription>Live safe-validation runs with probe results, agent observations, and verdicts. Open a run for detail, or cancel or finalize in flight.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Recent runs</CardTitle><CardDescription>safe runs · click a row to open the correlated verdict</CardDescription></CardHeader>
           <CardContent>
-            <Tabs value={runStatusFilter} options={runStatusTabs} onChange={setRunStatusFilter} className="tabs-wrap" />
             <DataTable
               columns={runColumns}
               items={filteredRuns}
+              getRowProps={(item) => {
+                const id = getString(item, ['id'], '');
+                return buildDetailHashRowProps('run-detail', id, `Open ${id} detail`);
+              }}
               empty={renderFriendlyEmptyState({
                 icon: Activity,
                 title: 'No test runs yet.',
                 body: 'Start a safe validation run after declaring target scope.',
-                actionLabel: 'Run safe checks',
+                actionLabel: 'Start safe run',
                 onAction: () => void startSafeRun()
               })}
             />
           </CardContent>
         </Card>
-        <ConfirmModal
-          open={Boolean(cancelRunId)}
-          title={`Cancel run ${cancelRunId}`}
-          description={<p>Are you sure? This stops probe jobs immediately and writes an audit entry.</p>}
-          confirmLabel="Cancel run"
-          busy={busy === `cancel-${cancelRunId}`}
-          onCancel={() => setCancelRunId('')}
-          onConfirm={() => void confirmCancelRun()}
-        />
       </div>
     );
   }
@@ -1581,7 +1471,7 @@ export function ValidationSurfacePage({
         <Card>
           <CardHeader>
             <CardTitle>Findings</CardTitle>
-            <CardDescription>Filter, sort, and paginate evidence-backed gaps. Detail panels live on finding detail.</CardDescription>
+            <CardDescription>click a card to open the correlated verdict</CardDescription>
           </CardHeader>
           <CardContent className="findings-surface-wrap">
             <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} />

@@ -14,12 +14,15 @@ const buttonPrimitiveStyles = `
   box-shadow: var(--focus-ring);
 }
 [data-ui='button'].btn-default:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--fg), transparent 82%);
 }
 [data-ui='button'].btn-default:active:not(:disabled) {
-  background: var(--accent-active);
-  border-color: var(--accent-active);
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
 }
 [data-ui='button'].btn-danger {
   border-color: color-mix(in oklab, var(--danger), var(--bg) 18%);

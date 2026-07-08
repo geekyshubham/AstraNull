@@ -335,7 +335,7 @@ const LANDING_TRUST_ITEMS = [
   { icon: Check, text: 'No cloud credentials required' },
   { icon: Check, text: 'Low-volume, bounded probes' },
   { icon: Check, text: 'SOC-governed high-scale' },
-  { icon: ShieldCheck, text: 'Evidence-backed verdicts' }
+  { icon: Check, text: 'Evidence-backed verdicts' }
 ] as const;
 
 const LANDING_USE_CASES = [
@@ -348,6 +348,127 @@ const LANDING_USE_CASES = [
     attr: 'SRE & edge owners — SOC-governed high-scale, bounded probes the rest of the time.'
   }
 ];
+
+function ReadinessConsolePreview() {
+  const verdicts: { id: string; kind: string; state: string; tone: BadgeTone }[] = [
+    { id: 'chk_origin_bypass', kind: 'Origin-bypass', state: 'Pass', tone: 'success' },
+    { id: 'chk_dns_shadow', kind: 'DNS', state: 'Review', tone: 'warn' },
+    { id: 'chk_l7_rate', kind: 'L7 / API', state: 'Gap', tone: 'danger' },
+    { id: 'chk_l3_l4', kind: 'L3 / L4', state: 'Pass', tone: 'success' }
+  ];
+  const readiness = 82;
+  const circumference = 2 * Math.PI * 53;
+  const dashOffset = circumference * (1 - readiness / 100);
+  return (
+    <aside className="public-card" aria-label="AstraNull readiness console preview" style={{ gap: 'var(--space-4)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+        <span aria-hidden="true" style={{ display: 'inline-flex', gap: '6px' }}>
+          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
+          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
+          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
+        </span>
+        <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
+          tenant · <b style={{ color: 'var(--fg)' }}>acme-prod</b>
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 'var(--space-5)', alignItems: 'center' }}>
+        <div style={{ position: 'relative', width: '120px', height: '120px', display: 'grid', placeItems: 'center' }}>
+          <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden="true" style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx="60" cy="60" r="53" fill="none" stroke="var(--border)" strokeWidth="8" />
+            <circle
+              cx="60"
+              cy="60"
+              r="53"
+              fill="none"
+              stroke="var(--accent)"
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+            />
+          </svg>
+          <div style={{ position: 'absolute', textAlign: 'center' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xl)', lineHeight: 1, color: 'var(--fg)' }}>{readiness}</div>
+            <div className="muted" style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: 'var(--tracking-caps)' }}>Readiness</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--success)' }}>▲ 6 vs last cycle</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {verdicts.map((verdict) => (
+            <div key={verdict.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg)' }}>{verdict.id}</span>
+              <span className="muted" style={{ fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>{verdict.kind}</span>
+              <Badge tone={verdict.tone}>{verdict.state}</Badge>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)', borderTop: '1px solid var(--border)', paddingTop: 'var(--space-3)' }}>
+        <span style={{ color: 'var(--success)' }}>custody · json-key-sorted-v1</span>
+        <span className="mono muted">sha256:9f2a…c41e</span>
+        <span className="muted" style={{ marginLeft: 'auto' }}>evidence vault · 1,284 artifacts</span>
+      </div>
+    </aside>
+  );
+}
+
+function ProofChainSection() {
+  const nodes: { label: string; title: string; body: string; src: string[] }[] = [
+    {
+      label: 'Outside probe',
+      title: 'Origin reached directly under bounded load.',
+      body: 'A bounded 50 RPS origin-bypass request reached the origin at 47 ms; the scrubber tier was bypassed at the second hop. No high-volume traffic was generated.',
+      src: ['probe · probe-eu-west-2', 'bound · 50 RPS · metadata-only']
+    },
+    {
+      label: 'Inside agent',
+      title: 'Agent saw the direct-to-origin path.',
+      body: 'The outbound-only agent agt_edge_01 observed a direct TCP handshake to the origin, bypassing the declared WAF pool. The agent path agrees with the probe.',
+      src: ['agent · agt_edge_01', 'heartbeat · healthy · v1.4.2']
+    },
+    {
+      label: 'Correlated verdict',
+      title: 'Origin exposed under bounded load → Gap.',
+      body: 'Probe and agent agree the origin is reachable behind the declared edge. Verdict: Gap, severity S2, owner edge-sre. Retest opens automatically on the next safe window.',
+      src: ['custody · json-key-sorted-v1', 'sha256 4c1b…e7a9 · signed']
+    }
+  ];
+  return (
+    <section className="public-section" id="proof">
+      <h2>Every verdict traces back to observed data.</h2>
+      <p className="public-section-lead">A readiness verdict in AstraNull is never a green checkmark. It is an outside probe correlated with an inside agent observation, sealed with a custody digest you can hand to an auditor.</p>
+      <div className="public-card" style={{ gap: 'var(--space-5)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
+          <span className="mono" style={{ color: 'var(--fg)' }}>chk_l7_rate</span>
+          <Badge tone="danger">Gap · Severity S2</Badge>
+          <span className="muted" style={{ marginLeft: 'auto' }}>run run_8f3c… · sealed with custody digest</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-4)' }}>
+          {nodes.map((node) => (
+            <article
+              key={node.label}
+              style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--proof-surface)', padding: 'var(--space-4)' }}
+            >
+              <span className="eyebrow" style={{ color: 'var(--accent)' }}>{node.label}</span>
+              <h3 style={{ margin: 0, fontSize: 'var(--text-base)', color: 'var(--fg)' }}>{node.title}</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{node.body}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: 'auto', paddingTop: 'var(--space-2)' }}>
+                {node.src.map((line) => (
+                  <span key={line} className="mono muted" style={{ fontSize: 'var(--text-xs)' }}>{line}</span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)', borderTop: '1px solid var(--border)', paddingTop: 'var(--space-3)' }}>
+          <Badge tone="muted">Evidence bundle</Badge>
+          <span className="muted">3 artifacts · probe-result.json · agent-observation.json · verdict.json</span>
+          <span className="muted" style={{ marginLeft: 'auto' }}>Exportable to the evidence vault for audit</span>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export function PublicLandingPage({ config }: PublicPageProps) {
   const productName = String(config.siteConfig.product_name ?? 'AstraNull');
@@ -366,22 +487,43 @@ export function PublicLandingPage({ config }: PublicPageProps) {
           <a href="#how">Skip to how it works</a>
         </p>
         <section className="public-hero">
-          <p className="eyebrow">Defensive DDoS readiness validation</p>
-          <h1>Prove DDoS readiness without handing over your cloud keys</h1>
-          <p className="public-hero-lead">{promise}</p>
-          <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} showArrowOnPrimary />
-          <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
-            {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
-              <span key={text}>
-                <Icon size={16} aria-hidden="true" />
-                {text}
-              </span>
-            ))}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-8)', alignItems: 'center' }}>
+            <div>
+              <p className="eyebrow">DDoS readiness validation</p>
+              <h1>
+                Prove DDoS readiness{' '}
+                <span style={{ color: 'var(--accent)' }}>without handing over</span>{' '}
+                your cloud keys.
+              </h1>
+              <p className="public-hero-lead">{promise}</p>
+              <div className="public-actions">
+                {signupEnabled ? (
+                  <AnchorButton href="/signup">
+                    Request access
+                    <ArrowRight size={15} aria-hidden="true" />
+                  </AnchorButton>
+                ) : (
+                  <AnchorButton href={loginUrl}>Log in</AnchorButton>
+                )}
+                <AnchorButton href="#how" variant="ghost">See how it works</AnchorButton>
+              </div>
+              <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
+                {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
+                  <span key={text}>
+                    <Icon size={16} aria-hidden="true" />
+                    {text}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <ReadinessConsolePreview />
           </div>
         </section>
 
+        <ProofChainSection />
+
         <section className="public-section" id="principles">
-          <h2>A defensive readiness platform, not self-service attack tooling</h2>
+          <h2>A defensive readiness platform, not self-service attack tooling.</h2>
           <p className="public-section-lead">Three commitments shape every screen, every probe, every verdict in AstraNull.</p>
           <div className="public-pillars">
             {LANDING_PRINCIPLES.map((pillar) => (
@@ -656,6 +798,29 @@ function signupRegionLabel(slug: unknown) {
   return SIGNUP_REGION_LABELS[key] ?? (key || 'United States');
 }
 
+type SignupPlanOption = { value: string; label: string };
+
+// Consume plans[] from the public site-config (config.siteConfig.plans) so the
+// requested-plan options reflect the server's subscription catalog rather than a
+// hardcoded list. Falls back to the static labels if the config omits plans.
+function signupPlanOptions(config: PublicPageProps['config']): SignupPlanOption[] {
+  const rawPlans = (config.siteConfig as { plans?: unknown }).plans;
+  if (Array.isArray(rawPlans)) {
+    const options = rawPlans
+      .map((plan): SignupPlanOption | null => {
+        if (!plan || typeof plan !== 'object') return null;
+        const record = plan as Record<string, unknown>;
+        const value = String(record.id ?? '').trim();
+        if (!value) return null;
+        const label = String(record.name ?? '').trim() || signupPlanLabel(value);
+        return { value, label };
+      })
+      .filter((option): option is SignupPlanOption => option !== null);
+    if (options.length > 0) return options;
+  }
+  return Object.entries(SIGNUP_PLAN_LABELS).map(([value, label]) => ({ value, label }));
+}
+
 const CUSTOMER_STAGING_ROLES = ['admin', 'engineer', 'soc', 'viewer', 'auditor', 'owner'] as const;
 
 const CUSTOMER_STAGING_ROLE_LABELS: Record<(typeof CUSTOMER_STAGING_ROLES)[number], string> = {
@@ -707,6 +872,13 @@ export function SignupPage({ config }: PublicPageProps) {
   const [hydrating, setHydrating] = useState(false);
   const [requestedPlan, setRequestedPlan] = useState('professional');
   const [region, setRegion] = useState('us');
+  const planOptions = useMemo(() => signupPlanOptions(config), [config]);
+
+  useEffect(() => {
+    if (planOptions.length > 0 && !planOptions.some((option) => option.value === requestedPlan)) {
+      setRequestedPlan(planOptions[0].value);
+    }
+  }, [planOptions, requestedPlan]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -840,17 +1012,16 @@ export function SignupPage({ config }: PublicPageProps) {
             ) : (
               <form className="auth-form auth-form--grid" onSubmit={submit} aria-busy={loading}>
                 <label htmlFor="signup-organization"><span>Organization</span><input id="signup-organization" name="organization_name" required placeholder="Acme Corp" autoComplete="organization" disabled={loading} /></label>
-                <label htmlFor="signup-email"><span>Work email</span><input id="signup-email" name="contact_email" type="email" required placeholder="you@company.com" autoComplete="email" disabled={loading} /></label>
-                <label htmlFor="signup-contact"><span>Primary contact</span><input id="signup-contact" name="contact_name" required placeholder="Jordan Lee" autoComplete="name" disabled={loading} /></label>
+                <label htmlFor="signup-contact"><span>Contact name</span><input id="signup-contact" name="contact_name" required placeholder="Jordan Lee" autoComplete="name" disabled={loading} /></label>
+                <label className="auth-field-full" htmlFor="signup-email"><span>Contact email</span><input id="signup-email" name="contact_email" type="email" required placeholder="you@company.com" autoComplete="email" disabled={loading} /></label>
                 <Select
                   label="Requested plan"
                   name="requested_plan"
                   value={requestedPlan}
-                  options={Object.entries(SIGNUP_PLAN_LABELS).map(([value, label]) => ({ value, label }))}
+                  options={planOptions}
                   onChange={setRequestedPlan}
                   disabled={loading}
                 />
-                <label className="auth-field-full" htmlFor="signup-intended-use"><span>Intended use</span><textarea id="signup-intended-use" name="intended_use" required rows={4} placeholder="Defensive readiness for declared production origins." disabled={loading} /></label>
                 <Select
                   label="Region"
                   name="region"
@@ -859,6 +1030,7 @@ export function SignupPage({ config }: PublicPageProps) {
                   onChange={setRegion}
                   disabled={loading}
                 />
+                <label className="auth-field-full" htmlFor="signup-intended-use"><span>Intended use</span><textarea id="signup-intended-use" name="intended_use" required rows={4} placeholder="Defensive readiness for declared production origins." disabled={loading} /></label>
                 <label className="auth-field-full auth-check-row" htmlFor="signup-high-scale"><input id="signup-high-scale" name="high_scale_interest" type="checkbox" disabled={loading} /><span>We may need SOC-governed high-scale validation.</span></label>
                 {error ? <p className="form-error auth-field-full" role="alert">{error}</p> : null}
                 <div className="auth-form-actions auth-field-full">
@@ -1090,7 +1262,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
       >
         <Card className="auth-card">
           <AuthCardHeader
-            badge={<Badge tone="warn">Staff only</Badge>}
+            badge={<Badge tone="warn">Staff plane</Badge>}
             title="Staff sign-in"
             description={cardDescription}
           />

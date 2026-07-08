@@ -1,4 +1,4 @@
-import { Menu, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Menu, Moon, Search, Sun, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 import { clearSession } from '../../lib/api';
@@ -155,24 +155,25 @@ export function AppShell({ route, session, data, onRouteChange, onRoleChange, ch
   }
 
   const collapseLabel = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
-  const CollapseIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
+  const CollapseIcon = sidebarCollapsed ? ChevronRight : ChevronLeft;
 
   return (
     <div className={cn('app-shell', sidebarCollapsed && 'sidebar-collapsed')}>
       <aside className={cn('sidebar', sidebarOpen && 'open')}>
-        <ShellIconButton
-          label={collapseLabel}
-          variant="secondary"
-          className="sidebar-collapse"
-          onClick={toggleSidebarCollapsed}
-        >
-          <CollapseIcon size={16} aria-hidden="true" focusable="false" />
-        </ShellIconButton>
         <div className="sidebar-head">
           <Brand />
-          <ShellIconButton label="Close navigation" className="sidebar-close" onClick={() => setSidebarOpen(false)}>
-            <X size={17} aria-hidden="true" focusable="false" />
-          </ShellIconButton>
+          <div className="sidebar-head-actions">
+            <ShellIconButton
+              label={collapseLabel}
+              className="sidebar-collapse"
+              onClick={toggleSidebarCollapsed}
+            >
+              <CollapseIcon size={18} aria-hidden="true" focusable="false" />
+            </ShellIconButton>
+            <ShellIconButton label="Close navigation" className="sidebar-close" onClick={() => setSidebarOpen(false)}>
+              <X size={17} aria-hidden="true" focusable="false" />
+            </ShellIconButton>
+          </div>
         </div>
         <nav className="nav-scroll" aria-label="Portal">
           {(Object.keys(grouped) as Array<keyof typeof NAV_GROUP_LABELS>)

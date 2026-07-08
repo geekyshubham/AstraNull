@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Activity, Bot, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
@@ -11,6 +11,62 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { EmptyState } from '../components/ui/empty-state';
 import { Badge } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
+import { Tabs, type TabOption } from '../components/ui/tabs';
+
+type OnboardTab = 'fqdn' | 'ip' | 'cloud';
+
+const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
+  { id: 'fqdn', label: 'Domain · DNS TXT' },
+  { id: 'ip', label: 'IP address · Agent callback' },
+  { id: 'cloud', label: 'Cloud provider · pull inventory' }
+];
+
+const DETAIL_MODAL_STYLES_ID = 'detail-modal-primitive-styles';
+const detailModalStyles = `
+.detail-modal.modal-confirm {
+  padding: 0;
+  max-width: min(560px, calc(100% - 32px));
+  width: min(560px, calc(100% - 32px));
+  max-height: min(88vh, 920px);
+  display: flex;
+  flex-direction: column;
+}
+.detail-modal.detail-modal-wide.modal-confirm {
+  max-width: min(920px, calc(100% - 32px));
+  width: min(920px, calc(100% - 32px));
+}
+.detail-modal .detail-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.detail-modal .detail-modal-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.detail-modal .detail-modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+}
+.detail-modal .detail-modal-body .tabs {
+  margin-bottom: var(--space-4);
+}
+`;
+
+function ensureDetailModalStyles() {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(DETAIL_MODAL_STYLES_ID)) return;
+  const node = document.createElement('style');
+  node.id = DETAIL_MODAL_STYLES_ID;
+  node.textContent = detailModalStyles;
+  document.head.appendChild(node);
+}
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -54,18 +110,35 @@ function DetailModal({
   wide?: boolean;
 }) {
   const titleId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  ensureDetailModalStyles();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, []);
+
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      <div className={`modal${wide ? ' modal-wide' : ''}`}>
-        <div className="modal-head">
-          <h3 id={titleId}>{title}</h3>
-          <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close dialog">
-            Close
-          </Button>
-        </div>
-        {children}
+    <dialog
+      ref={dialogRef}
+      className={`modal-confirm detail-modal${wide ? ' detail-modal-wide' : ''}`}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <div className="detail-modal-head">
+        <h3 id={titleId}>{title}</h3>
+        <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close dialog">
+          Close
+        </Button>
       </div>
-    </div>
+      <div className="detail-modal-body">{children}</div>
+    </dialog>
   );
 }
 
@@ -102,8 +175,11 @@ export function TargetGroupDetailView({
   const [inventoryMeta, setInventoryMeta] = useState<DataItem | null>(null);
   const [selectedInventory, setSelectedInventory] = useState<Set<string>>(new Set());
   const [showLoaModal, setShowLoaModal] = useState(false);
+  const [showOnboardModal, setShowOnboardModal] = useState(false);
+  const [onboardTab, setOnboardTab] = useState<OnboardTab>('fqdn');
 
   const targets = Array.isArray(entity.targets) ? entity.targets as DataItem[] : [];
+  const agents = Array.isArray(data.agents) ? data.agents as DataItem[] : [];
   const relatedRuns = Array.isArray(entity.runs_recent) ? entity.runs_recent as DataItem[] : [];
   const relatedFindings = Array.isArray(entity.findings_on_group) ? entity.findings_on_group as DataItem[] : [];
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
@@ -155,6 +231,52 @@ export function TargetGroupDetailView({
     } finally {
       setBusy('');
     }
+  }
+
+  function openOnboardModal(tab: OnboardTab = 'fqdn') {
+    setOnboardTab(tab);
+    setError('');
+    setMessage('');
+    setShowOnboardModal(true);
+  }
+
+  async function addTarget(kind: string, value: string, expectedBehavior: string) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setError('A target value is required.');
+      setMessage('');
+      return;
+    }
+    setBusy(`add-target-${kind}`);
+    setError('');
+    setMessage('');
+    try {
+      await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
+        method: 'POST',
+        body: { kind, value: trimmed, expected_behavior: expectedBehavior || null }
+      });
+      setMessage('Target declared.');
+      setShowOnboardModal(false);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to declare target.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function submitFqdnTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    void addTarget('fqdn', String(form.get('value') ?? ''), String(form.get('expected_behavior') ?? ''));
+  }
+
+  function submitIpTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const ip = String(form.get('value') ?? '').trim();
+    const port = String(form.get('port') ?? '').trim();
+    void addTarget('ip', port ? `${ip}:${port}` : ip, String(form.get('expected_behavior') ?? ''));
   }
 
   async function issueDnsChallenge() {
@@ -333,7 +455,7 @@ export function TargetGroupDetailView({
       <div className="page-head">
         <div>
           <p className="eyebrow">Declared business service</p>
-          <h2 className="page-title">{getString(entity, ['name'], entityId)}</h2>
+          <h1 className="page-title">{getString(entity, ['name'], entityId)}</h1>
           <p className="muted mono">{entityId}</p>
         </div>
         <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
@@ -398,65 +520,26 @@ export function TargetGroupDetailView({
 
       <Card>
         <CardHeader>
-          <CardTitle>DNS TXT verification</CardTitle>
-          <CardDescription>Issue and verify `_astranull-challenge` TXT records via DNS ownership API.</CardDescription>
+          <div>
+            <CardTitle>Declared targets</CardTitle>
+            <CardDescription>Env <span className="mono">{getString(entity, ['environment_id'], '—')}</span> · expected behavior declared per row</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => openOnboardModal()}>Edit targets</Button>
         </CardHeader>
-        <CardContent className="dns-challenge">
-          <div className="dns-head">
-            <span className="eyebrow">Challenge state</span>
-            <VerifyChip
-              state={getString(dnsVerifyResult?.challenge as DataItem | undefined, ['state'], getString(dnsChallenge, ['state'], dnsVerifyResult?.verified === true ? 'dns_verified' : 'pending'))}
-              provenance={getString(dnsVerifyResult, ['meta', 'provenance'], 'DNS ownership verification API')}
-            />
-          </div>
-          <div className="dns-fields">
-            <div className="dns-field"><span className="dns-key">Name</span><span className="dns-val mono">{getString(dnsChallenge, ['record_name', 'name'], '—')}</span></div>
-            <div className="dns-field"><span className="dns-key">Value</span><span className="dns-val mono">{getString(dnsChallenge, ['record_value', 'value'], '—')}</span></div>
-            <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(dnsChallenge, ['ttl', 'ttl_seconds'], '—')}</span></div>
-          </div>
-          <div className="dns-footer row-actions">
-            <Button size="sm" variant="secondary" loading={busy === `dns-issue-${entityId}`} onClick={() => void issueDnsChallenge()}>Issue DNS challenge</Button>
-            <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} onClick={() => void verifyDnsChallenge()}>Check now</Button>
-            {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Cloud provider integrations</CardTitle><CardDescription>Opt-in pull-only inventory per connector.</CardDescription></CardHeader>
-        <CardContent>
-          {connectors.length === 0 ? emptyStateFromApi({ icon: Bot, meta: connectorsMeta }) : null}
-          <div className="provider-grid">
-            {connectors.map((connector) => {
-              const connectorId = getString(connector, ['id'], '');
-              const providerLabel = getString(connector, ['name', 'provider'], connectorId);
-              const scope = getString(connector, ['scope', 'config_json.scope'], getString(connector.config_json as DataItem | undefined, ['scope'], '—'));
-              return (
-              <div className="provider-card" key={connectorId}>
-                <div className="pc-head">
-                  <span className="pc-mark">{providerLabel.slice(0, 2).toUpperCase()}</span>
-                  <h3>{providerLabel}</h3>
-                </div>
-                <p>Scope required: <span className="mono">{scope}</span></p>
-                <p className="muted small">Status: {getString(connector, ['status', 'state'], 'unknown')}</p>
-                <div className="pc-actions">
-                  <Button size="sm" variant="ghost" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Open inventory</Button>
-                </div>
-              </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Declared targets</CardTitle></CardHeader>
         <CardContent>
           <DataTable
             columns={targetColumns}
             items={targets}
             className="tg-targets-table"
-            empty={emptyStateFromApi({ icon: Target, meta: groupMeta ? { empty_reason: getString(groupMeta, ['targets_empty_reason'], '') } : null })}
+            empty={
+              <EmptyState
+                icon={Target}
+                title="No targets declared yet"
+                body="Declare a domain, IP, or cloud inventory selection to start validating this group. Nothing runs until a target is verified."
+                actionLabel="+ Add Target"
+                onAction={() => openOnboardModal()}
+              />
+            }
           />
         </CardContent>
       </Card>
@@ -509,6 +592,125 @@ export function TargetGroupDetailView({
                 <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected</Button>
               </div>
             </div>
+        </DetailModal>
+      ) : null}
+
+      {showOnboardModal ? (
+        <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)}>
+          <Tabs
+            value={onboardTab}
+            options={ONBOARD_TAB_OPTIONS}
+            onChange={(value) => setOnboardTab(value)}
+            ariaLabel="Target onboarding method"
+          />
+          {onboardTab === 'fqdn' ? (
+            <div className="stack-tight">
+              <p className="muted">Prove you control the domain by publishing a one-time TXT record. Verification is required before any probe runs.</p>
+              <form className="product-form" onSubmit={submitFqdnTarget}>
+                <label className="full"><span>Domain</span><input name="value" className="mono" placeholder="origin.example.com" required /></label>
+                <label>
+                  <span>Expected behavior</span>
+                  <select name="expected_behavior" defaultValue="block_at_edge">
+                    <option value="block_at_edge">block_at_edge</option>
+                    <option value="absorb_at_origin">absorb_at_origin</option>
+                    <option value="rate_shape">rate_shape</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Bind to agent (optional)</span>
+                  <select name="agent_id" defaultValue="">
+                    <option value="">any agent in {getString(entity, ['environment_id'], 'this environment')}</option>
+                    {agents.map((agent) => {
+                      const optId = getString(agent, ['id'], '');
+                      return <option key={optId} value={optId}>{optId} · {getString(agent, ['hostname', 'name'], optId)}</option>;
+                    })}
+                  </select>
+                </label>
+                <div className="form-actions full">
+                  <Button type="submit" loading={busy === 'add-target-fqdn'}>Add target</Button>
+                  <Button type="button" variant="secondary" loading={busy === `dns-issue-${entityId}`} onClick={() => void issueDnsChallenge()}>Issue DNS challenge</Button>
+                </div>
+              </form>
+              <div className="dns-challenge">
+                <div className="dns-head">
+                  <span className="eyebrow">Challenge state</span>
+                  <VerifyChip
+                    state={getString(dnsVerifyResult?.challenge as DataItem | undefined, ['state'], getString(dnsChallenge, ['state'], dnsVerifyResult?.verified === true ? 'dns_verified' : 'pending'))}
+                    provenance={getString(dnsVerifyResult, ['meta', 'provenance'], 'DNS ownership verification API')}
+                  />
+                </div>
+                <div className="dns-fields">
+                  <div className="dns-field"><span className="dns-key">Name</span><span className="dns-val mono">{getString(dnsChallenge, ['record_name', 'name'], '—')}</span></div>
+                  <div className="dns-field"><span className="dns-key">Value</span><span className="dns-val mono">{getString(dnsChallenge, ['record_value', 'value'], '—')}</span></div>
+                  <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(dnsChallenge, ['ttl', 'ttl_seconds'], '—')}</span></div>
+                </div>
+                <div className="dns-footer row-actions">
+                  <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} onClick={() => void verifyDnsChallenge()}>Check now</Button>
+                  {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {onboardTab === 'ip' ? (
+            <div className="stack-tight">
+              <p className="muted">You cannot prove control of an IP with DNS. Install an agent inside that instance. When the agent registers, its outbound call reveals the public IP and binds the target to a verified agent.</p>
+              <form className="product-form" onSubmit={submitIpTarget}>
+                <label><span>IP address</span><input name="value" className="mono" placeholder="203.0.113.10" required /></label>
+                <label><span>Protocol / port</span><input name="port" className="mono" placeholder="443" /></label>
+                <label>
+                  <span>Expected behavior</span>
+                  <select name="expected_behavior" defaultValue="absorb_at_origin">
+                    <option value="absorb_at_origin">absorb_at_origin</option>
+                    <option value="block_at_edge">block_at_edge</option>
+                    <option value="rate_shape">rate_shape</option>
+                  </select>
+                </label>
+                <label className="full"><span>Notes (optional)</span><input name="notes" placeholder="Origin behind CDN · single-AZ · IPv4 only" /></label>
+                <div className="form-actions full">
+                  <Button type="submit" loading={busy === 'add-target-ip'}>Register &amp; wait for agent</Button>
+                  <AnchorButton size="sm" variant="secondary" href="#agents">Open agent install</AnchorButton>
+                </div>
+              </form>
+              <div className="dns-challenge">
+                <div className="dns-head">
+                  <span className="eyebrow">Agent callback</span>
+                  <VerifyChip state="pending" provenance="Awaiting agent heartbeat from this IP" />
+                </div>
+                <ol className="muted small">
+                  <li>Install an agent on any host that can reach the target IP (container image, Helm chart, or native package from the Agents screen).</li>
+                  <li>Bind it at deploy time with <span className="mono">ASTRANULL_TARGET_GROUP={entityId}</span>. No inbound port needed.</li>
+                  <li>When the agent heartbeats, AstraNull records its <span className="mono">discovered_public_ip</span> and matches it against the IP you registered.</li>
+                  <li>Verified after a probe + agent correlation on the same nonce.</li>
+                </ol>
+              </div>
+            </div>
+          ) : null}
+          {onboardTab === 'cloud' ? (
+            <div className="stack-tight">
+              <p className="muted">Connect a provider once, then pick which zones or instances belong in this target group. AstraNull normalizes the inventory and files a DNS or agent challenge for each selection.</p>
+              {connectors.length === 0 ? emptyStateFromApi({ icon: Bot, meta: connectorsMeta }) : null}
+              <div className="provider-grid">
+                {connectors.map((connector) => {
+                  const connectorId = getString(connector, ['id'], '');
+                  const providerLabel = getString(connector, ['name', 'provider'], connectorId);
+                  const scope = getString(connector, ['scope', 'config_json.scope'], getString(connector.config_json as DataItem | undefined, ['scope'], '—'));
+                  return (
+                    <div className="provider-card" key={connectorId}>
+                      <div className="pc-head">
+                        <span className="pc-mark">{providerLabel.slice(0, 2).toUpperCase()}</span>
+                        <h3>{providerLabel}</h3>
+                      </div>
+                      <p>Scope required: <span className="mono">{scope}</span></p>
+                      <p className="muted small">Status: {getString(connector, ['status', 'state'], 'unknown')}</p>
+                      <div className="pc-actions">
+                        <Button size="sm" variant="ghost" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Open inventory</Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </DetailModal>
       ) : null}
 

@@ -14,7 +14,9 @@ const cardPrimitiveStyles = `
 }
 [data-ui='card'] .card-title {
   font-family: var(--font-display);
-  letter-spacing: var(--tracking-display);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   color: var(--fg);
 }
 [data-ui='card'] .card-description {

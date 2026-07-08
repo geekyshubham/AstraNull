@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentPropsWithoutRef, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentPropsWithoutRef, type FormEvent, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import {
   Activity,
   Bot,
@@ -167,6 +167,51 @@ function formatPolicyVerdictLabel(verdict: string) {
   return POLICY_VERDICT_OPTIONS.find((option) => option.value === verdict)?.label ?? verdict.replace(/_/g, ' ');
 }
 
+/** A schedule is SOC-scheduled when its bound check is soc_gated / high-scale, or it carries an explicit gate flag. */
+function isPolicySocGated(policy: DataItem, checksById: Map<string, DataItem>): boolean {
+  const embeddedCheck = policy.check && typeof policy.check === 'object' ? (policy.check as DataItem) : {};
+  const checkId = getString(policy, ['check_id'], getString(embeddedCheck, ['check_id'], ''));
+  const catalogCheck = (checkId ? checksById.get(checkId) : undefined) ?? {};
+  const safetyClass = getString(embeddedCheck, ['safety_class'], getString(catalogCheck, ['safety_class'], ''));
+  const riskClass = getString(embeddedCheck, ['risk_class'], getString(catalogCheck, ['risk_class'], ''));
+  const vectorFamily = getString(embeddedCheck, ['vector_family'], getString(catalogCheck, ['vector_family'], ''));
+  if (safetyClass === 'soc_gated' || riskClass === 'soc_gated' || riskClass === 'prohibited') return true;
+  if (vectorFamily === 'high_scale') return true;
+  if (policy.high_scale === true || policy.soc_gated === true) return true;
+  const explicitGate = getString(policy, ['gated', 'soc_scheduled'], '').toLowerCase();
+  return explicitGate === 'true' || explicitGate === 'high_scale';
+}
+
+const POLICY_CADENCE_INTERVAL_MS: Record<string, number> = {
+  daily: 86_400_000,
+  weekly: 604_800_000,
+  monthly: 2_592_000_000
+};
+
+/** Derive a schedule's next run from real fields: explicit next_run_at, else cadence projected from the last known anchor. */
+function derivePolicyNextRun(policy: DataItem, socGated: boolean): { label: string; iso: string | null } {
+  if (socGated) return { label: 'Awaiting SOC', iso: null };
+  const explicit = getString(policy, ['next_run_at', 'next_run', 'scheduled_at'], '');
+  if (explicit) {
+    const ts = Date.parse(explicit);
+    return Number.isFinite(ts)
+      ? { label: formatDate(explicit), iso: new Date(ts).toISOString() }
+      : { label: explicit, iso: null };
+  }
+  const cadence = getString(policy, ['cadence'], 'manual');
+  if (cadence === 'manual') return { label: 'On demand', iso: null };
+  if (cadence === 'event_driven') return { label: 'On event', iso: null };
+  const interval = POLICY_CADENCE_INTERVAL_MS[cadence];
+  if (!interval) return { label: '—', iso: null };
+  const anchor = Date.parse(getString(policy, ['last_run_at', 'updated_at', 'created_at'], ''));
+  if (!Number.isFinite(anchor)) return { label: '—', iso: null };
+  let next = anchor + interval;
+  const now = Date.now();
+  while (next < now) next += interval;
+  const iso = new Date(next).toISOString();
+  return { label: formatDate(iso), iso };
+}
+
 function formatRunStatusLabel(status: string) {
   const labels: Record<string, string> = {
     planned: 'Planned',
@@ -243,14 +288,50 @@ function featureEnabled(data: PortalData, key: 'waf_posture' | 'external_discove
   return Boolean(data.deploymentFeatures?.[key]);
 }
 
+/** Row props that make a DataTable row behave like a link to a detail route. */
+function detailRowProps(
+  route: RouteId,
+  id: string,
+  label: string
+): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+  const href = buildDetailHref(route, id);
+  const navigate = () => {
+    // buildDetailHref returns `${pathname}${search}#route?id=...`; assigning that whole string to
+    // location.hash would nest it inside the fragment (e.g. `#/app#route?id=`). Navigate with the
+    // bare `route?id=...` fragment so the hash router resolves the detail route correctly.
+    const hashIndex = href.indexOf('#');
+    window.location.hash = hashIndex >= 0 ? href.slice(hashIndex + 1) : href;
+  };
+  return {
+    role: 'link',
+    tabIndex: 0,
+    style: { cursor: 'pointer' },
+    'aria-label': label,
+    onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('a, button')) return;
+      navigate();
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      navigate();
+    }
+  };
+}
+
 export function PageHeader({
   route,
   eyebrow,
+  title,
+  description,
   variant = 'default',
   actions
 }: {
   route: RouteId;
   eyebrow?: string;
+  title?: ReactNode;
+  description?: ReactNode;
   variant?: 'default' | 'detail';
   actions?: ReactNode;
 }) {
@@ -266,8 +347,8 @@ export function PageHeader({
     <div className="page-head">
       <div>
         <p className="eyebrow">{eyebrow ?? item?.group}</p>
-        <h2>{item?.label}</h2>
-        <p>{item?.description}</p>
+        <h1>{title ?? item?.label}</h1>
+        <p>{description ?? item?.description}</p>
       </div>
       {actions ? <div className="row-actions">{actions}</div> : null}
     </div>
@@ -621,10 +702,51 @@ function formatDashboardShortRelative(iso: string) {
   return `${days}d`;
 }
 
-export function DashboardPage({ data }: { data: PortalData }) {
+export function DashboardPage({
+  data,
+  config,
+  session,
+  onRefresh
+}: {
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  onRefresh: () => Promise<void>;
+}) {
   const [tab, setTab] = useState<DashboardTabId>(readDashboardTabId);
+  const [runSafeBusy, setRunSafeBusy] = useState(false);
   const tabOptions = routeTabs('dashboard').map((item) => ({ id: item.id as DashboardTabId, label: item.label }));
   const workspaceHydrating = !data.state && data.targetGroups.length === 0 && data.runs.length === 0;
+
+  // Start a bounded safe run against the first declared target group + its first target + a safe
+  // check (mirrors startSafeRun in ValidationPage). Always navigates to Test runs so the CTA is
+  // never a dead end, even when required scope is missing or the start call fails.
+  async function handleRunSafeChecks() {
+    const firstGroup = data.targetGroups[0] ?? null;
+    const safeCheck = data.checks.find((check) => getString(check, ['safety_class']) === 'safe') ?? null;
+    const targetGroupId = getString(firstGroup ?? {}, ['id'], '');
+    const checkId = getString(safeCheck ?? {}, ['check_id'], '');
+    if (targetGroupId && checkId) {
+      setRunSafeBusy(true);
+      try {
+        const detail = (await requestJson(config, session, `/v1/target-groups/${targetGroupId}`)) as DataItem;
+        const targets = Array.isArray(detail.targets) ? (detail.targets as DataItem[]) : [];
+        const targetId = getString(targets[0] ?? {}, ['id'], '');
+        if (targetId) {
+          await requestJson(config, session, '/v1/test-runs', {
+            method: 'POST',
+            body: { check_id: checkId, target_group_id: targetGroupId, target_id: targetId }
+          });
+          await onRefresh();
+        }
+      } catch {
+        // Non-fatal: fall through to the run list.
+      } finally {
+        setRunSafeBusy(false);
+      }
+    }
+    window.location.hash = 'runs';
+  }
 
   useEffect(() => {
     const onHashChange = () => {
@@ -679,18 +801,178 @@ export function DashboardPage({ data }: { data: PortalData }) {
   const lastRunTimestamp = lastRun ? String(lastRun.created_at ?? lastRun.started_at ?? '') : '';
   const lastSafeRunValue = lastRunTimestamp ? formatDashboardShortRelative(lastRunTimestamp) : '—';
   const lastRunCheckCount = lastRun ? getNumber(lastRun, ['check_count'], 0) : 0;
+  const tenantId =
+    getString(data.tenant ?? {}, ['id', 'tenant_id'], '') || (data.state?.tenant_id ?? '');
+  const tenantEyebrow = tenantId && tenantId !== '—' ? `Tenant · ${tenantId.toUpperCase()}` : 'Tenant';
+
+  function dashboardGroupVerdict(groupId: string): { label: string; tone: UiBadgeTone } {
+    const latest = [...data.runs]
+      .filter((run) => getString(run, ['target_group_id']) === groupId)
+      .filter((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))
+      .sort((left, right) =>
+        String(right.started_at ?? right.created_at ?? '').localeCompare(
+          String(left.started_at ?? left.created_at ?? '')
+        )
+      )[0];
+    let verdict = '';
+    if (latest) {
+      const raw = latest.verdict;
+      verdict =
+        typeof raw === 'string'
+          ? raw
+          : raw && typeof raw === 'object' && !Array.isArray(raw)
+            ? getString(raw as DataItem, ['verdict', 'status', 'result'], '')
+            : getString(latest, ['verdict'], '');
+    }
+    const key = verdict.trim().toLowerCase();
+    if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
+    if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
+    if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
+    return { label: 'None', tone: 'muted' };
+  }
+
+  const dashboardGroupColumns: TableColumn<DataItem>[] = [
+    { key: 'group', label: 'Group', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    { key: 'name', label: 'Name', render: (item) => getString(item, ['name', 'id'], '—') },
+    {
+      key: 'verdict',
+      label: 'Verdict',
+      render: (item) => {
+        const verdict = dashboardGroupVerdict(getString(item, ['id'], ''));
+        return <Badge tone={verdict.tone}>{verdict.label}</Badge>;
+      }
+    }
+  ];
+
+  const dashboardAgentColumns: TableColumn<DataItem>[] = [
+    { key: 'agent', label: 'Agent', render: (item) => <span className="mono">{getString(item, ['id', 'hostname', 'name'], '—')}</span> },
+    {
+      key: 'heartbeat',
+      label: 'Heartbeat',
+      render: (item) => {
+        const stamp = item.last_heartbeat_at ?? item.updated_at;
+        return <span className="muted">{stamp ? formatDashboardShortRelative(String(stamp)) : '—'}</span>;
+      }
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (item) => {
+        const status = getString(item, ['status'], 'unknown');
+        return (
+          <Badge tone={status === 'online' ? 'success' : 'warn'} title={`Agent status ${status} from agents API`}>
+            {status}
+          </Badge>
+        );
+      }
+    }
+  ];
+
+  // Correlated check count = sum of posture segment counts (pass + review + gap),
+  // mirroring ReadinessPostureDonut's resolver. Never the catalog size (data.checks.length).
+  const readinessPosture = data.state?.readiness?.posture;
+  const correlatedFromPosture =
+    readinessPosture && typeof readinessPosture === 'object'
+      ? Number(readinessPosture.pass ?? 0) + Number(readinessPosture.review ?? 0) + Number(readinessPosture.gap ?? 0)
+      : 0;
+  const correlatedCheckIds = new Set<string>();
+  for (const run of data.runs) {
+    const checkId = getString(run, ['check_id'], '');
+    if (!checkId || !['completed', 'verdicted'].includes(getString(run, ['status'], ''))) continue;
+    const rawVerdict = run.verdict;
+    const verdictValue =
+      typeof rawVerdict === 'string'
+        ? rawVerdict
+        : rawVerdict && typeof rawVerdict === 'object' && !Array.isArray(rawVerdict)
+          ? getString(rawVerdict as DataItem, ['verdict', 'status', 'result'], '')
+          : '';
+    const verdictKey = verdictValue.trim().toLowerCase();
+    if (!verdictKey || ['pending', 'planned', 'running'].includes(verdictKey)) continue;
+    correlatedCheckIds.add(checkId);
+  }
+  const correlatedChecks = correlatedFromPosture > 0 ? correlatedFromPosture : correlatedCheckIds.size;
+
+  function dashboardRunVerdict(run: DataItem): { label: string; tone: UiBadgeTone } {
+    const raw = run.verdict;
+    const verdict =
+      typeof raw === 'string'
+        ? raw
+        : raw && typeof raw === 'object' && !Array.isArray(raw)
+          ? getString(raw as DataItem, ['verdict', 'status', 'result'], '')
+          : getString(run, ['verdict'], '');
+    const key = verdict.trim().toLowerCase();
+    if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
+    if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
+    if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
+    const status = getString(run, ['status'], '');
+    if (status) return { label: formatRunStatusLabel(status), tone: runStatusBadgeTone(status) };
+    return { label: 'None', tone: 'muted' };
+  }
+
+  const dashboardFindingColumns: TableColumn<DataItem>[] = [
+    { key: 'finding', label: 'Finding', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    {
+      key: 'severity',
+      label: 'Severity',
+      render: (item) => (
+        <Badge tone={findingSeverityBadgeTone(getString(item, ['severity']))}>{getString(item, ['severity'], 'unknown')}</Badge>
+      )
+    },
+    { key: 'owner', label: 'Owner', render: (item) => <span className="muted">{getString(item, ['assignee', 'owner'], 'unassigned')}</span> }
+  ];
+
+  const dashboardRunColumns: TableColumn<DataItem>[] = [
+    { key: 'run', label: 'Run', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    {
+      key: 'verdict',
+      label: 'Verdict',
+      render: (item) => {
+        const verdict = dashboardRunVerdict(item);
+        return <Badge tone={verdict.tone}>{verdict.label}</Badge>;
+      }
+    },
+    { key: 'when', label: 'When', render: (item) => <span className="muted">{formatDate(item.created_at ?? item.started_at)}</span> }
+  ];
+
+  const dashboardEnvironmentRows = buildEnvironmentReadinessRows({
+    targetGroups: data.targetGroups,
+    runs: data.runs,
+    findings: data.findings
+  }).slice(0, 5);
+
+  const dashboardEnvironmentColumns: TableColumn<(typeof dashboardEnvironmentRows)[number]>[] = [
+    { key: 'environment', label: 'Environment', render: (row) => <span className="mono">{row.id}</span> },
+    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{row.groupCount}</span> },
+    {
+      key: 'status',
+      label: 'Status',
+      render: (row) => {
+        const tone: UiBadgeTone = row.state === 'covered' ? 'success' : row.state === 'partial evidence' ? 'warn' : 'muted';
+        const label = row.state === 'covered' ? 'Validated' : row.state === 'partial evidence' ? 'Review' : 'Needs evidence';
+        return <Badge tone={tone}>{label}</Badge>;
+      }
+    }
+  ];
 
   return (
     <div className="content">
       <PageHeader
         route="dashboard"
-        eyebrow="Readiness overview"
+        eyebrow={tenantEyebrow}
+        title="Readiness overview"
+        description="Every verdict below traces to observed probe data, agent observations, or explicit declarations."
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
+            <Button variant="secondary" size="sm" onClick={() => void onRefresh()}>
               Refresh
             </Button>
-            <Button variant="default" size="sm">
+            <Button
+              variant="default"
+              size="sm"
+              loading={runSafeBusy}
+              disabled={runSafeBusy}
+              onClick={() => void handleRunSafeChecks()}
+            >
               Run safe checks
             </Button>
           </>
@@ -743,95 +1025,113 @@ export function DashboardPage({ data }: { data: PortalData }) {
             />
           </div>
 
-          <div className="dash-grid">
+          <div className="dash-grid dash-grid--masonry">
             <Card>
               <CardHeader>
                 <CardTitle>Readiness posture</CardTitle>
-                <CardDescription>Segmented pass, review, and gap counts from correlated checks.</CardDescription>
+                <CardDescription>{correlatedChecks} checks correlated · this cycle</CardDescription>
               </CardHeader>
               <CardContent>
                 <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
               </CardContent>
             </Card>
-            <div className="dash-col">
-              <Card>
-                <CardHeader>
+            <Card>
+              <CardHeader>
+                <CardTitle>Open findings</CardTitle>
+                <AnchorButton variant="ghost" size="sm" href="#findings">Triage</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={dashboardFindingColumns}
+                  items={openFindingRows}
+                  getRowId={(item) => getString(item, ['id'], '')}
+                  getRowProps={(item) => {
+                    const id = getString(item, ['id'], '');
+                    return id ? detailRowProps('finding-detail', id, `Open finding ${id} detail`) : {};
+                  }}
+                  empty={<EmptyState icon={TriangleAlert} title="No open findings." body="Findings appear after validation runs produce evidence-backed gaps." actionHref="#findings" actionLabel="Open findings" />}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Recent runs</CardTitle>
+                  <CardDescription>safe-by-default · bounded</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#runs">All runs</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={dashboardRunColumns}
+                  items={recentRuns}
+                  getRowId={(item) => getString(item, ['id'], '')}
+                  getRowProps={(item) => {
+                    const id = getString(item, ['id'], '');
+                    return id ? detailRowProps('run-detail', id, `Open run ${id} detail`) : {};
+                  }}
+                  empty={<EmptyState icon={ListChecks} title="No test runs yet." body="Start a safe validation from Test Runs after declaring scope." actionHref="#runs" actionLabel="Open test runs" />}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <div>
                   <CardTitle>Target group status</CardTitle>
-                  <CardDescription>Top groups by criticality from target group API.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {topTargetGroups.length === 0 ? (
-                    <EmptyState icon={Target} title="No target groups yet." body="Declare target groups to map business services to validation scope." actionHref="#target-groups" actionLabel="Open target groups" />
-                  ) : (
-                    <ul className="dashboard-link-list">
-                      {topTargetGroups.map((group) => {
-                        const id = getString(group, ['id'], '');
-                        const open = data.findings.filter((finding) => getString(finding, ['target_group_id']) === id && getString(finding, ['status']) === 'open').length;
-                        return (
-                          <li key={id}>
-                            <div>
-                              <strong>{getString(group, ['name', 'id'], id)}</strong>
-                              <span className="muted">{open} open findings</span>
-                            </div>
-                            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', id)}>Open</AnchorButton>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Agent health</CardTitle>
-                  <CardDescription>Outbound-only heartbeat readout.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {topAgents.length === 0 ? (
-                    <EmptyState icon={Bot} title="No agents registered." body="Install an outbound agent after declaring target scope." actionHref="#agents" actionLabel="Open agents" />
-                  ) : (
-                    <ul className="dashboard-link-list">
-                      {topAgents.map((agent) => {
-                        const id = getString(agent, ['id'], '');
-                        return (
-                          <li key={id}>
-                            <div>
-                              <strong>{getString(agent, ['hostname', 'name', 'id'], id)}</strong>
-                              <span className="row-actions">
-                                <Badge tone={getString(agent, ['status']) === 'online' ? 'success' : 'warn'} title={`Agent status ${getString(agent, ['status'], 'unknown')} from agents API`}>{getString(agent, ['status'], 'unknown')}</Badge>
-                                <span className="muted">{formatDate(agent.last_heartbeat_at ?? agent.updated_at)}</span>
-                              </span>
-                            </div>
-                            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('agent-detail', id)}>Open</AnchorButton>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
+                  <CardDescription>declared scope</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#target-groups">All target groups</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={dashboardGroupColumns}
+                  items={topTargetGroups}
+                  getRowId={(item) => getString(item, ['id'], '')}
+                  getRowProps={(item) => {
+                    const id = getString(item, ['id'], '');
+                    return id ? detailRowProps('target-group-detail', id, `Open target group ${id} detail`) : {};
+                  }}
+                  empty={<EmptyState icon={Target} title="No target groups yet." body="Declare target groups to map business services to validation scope." actionHref="#target-groups" actionLabel="Open target groups" />}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Agent health</CardTitle>
+                <CardDescription>outbound-only</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={dashboardAgentColumns}
+                  items={topAgents}
+                  getRowId={(item) => getString(item, ['id'], '')}
+                  getRowProps={(item) => {
+                    const id = getString(item, ['id'], '');
+                    return id ? detailRowProps('agent-detail', id, `Open agent ${id} detail`) : {};
+                  }}
+                  empty={<EmptyState icon={Bot} title="No agents registered." body="Install an outbound agent after declaring target scope." actionHref="#agents" actionLabel="Open agents" />}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Environment status</CardTitle>
+                  <CardDescription>declared scope</CardDescription>
+                </div>
+                <AnchorButton variant="ghost" size="sm" href="#environments">All environments</AnchorButton>
+              </CardHeader>
+              <CardContent>
+                <DataTable
+                  columns={dashboardEnvironmentColumns}
+                  items={dashboardEnvironmentRows}
+                  getRowId={(row) => row.id}
+                  getRowProps={(row) => (row.id ? detailRowProps('environment-detail', row.id, `Open environment ${row.id} detail`) : {})}
+                  empty={<EmptyState icon={ServerCog} title="No environments yet." body="Create a declared target group with an environment ID to populate this view." actionHref="#target-groups" actionLabel="Open target groups" />}
+                />
+              </CardContent>
+            </Card>
           </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Correlation matrix</CardTitle>
-              <CardDescription>Vector coverage by declared target group.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <VectorHeatmap checks={data.checks} targetGroups={data.targetGroups} testPolicies={data.testPolicies} runs={data.runs} evidence={data.evidence} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>WAF summary</CardTitle>
-              <CardDescription>Rolled up across declared target groups. Per-target detail on the target page.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <WafSummaryPanel summary={data.wafCoverageSummary} />
-            </CardContent>
-          </Card>
           <Card>
             <CardHeader>
               <CardTitle>What to do next</CardTitle>
@@ -900,68 +1200,15 @@ export function DashboardPage({ data }: { data: PortalData }) {
               </CardContent>
             </Card>
           </div>
-          <div className="split">
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent test runs</CardTitle>
-                <CardDescription>Latest bounded validation activity with links to run detail.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {recentRuns.length === 0 ? (
-                  <EmptyState icon={ListChecks} title="No test runs yet." body="Start a safe validation from Test Runs after declaring scope." actionLabel="Open test runs" actionHref="#runs" />
-                ) : (
-                  <ul className="dashboard-link-list">
-                    {recentRuns.map((run) => {
-                      const id = getString(run, ['id'], '');
-                      const href = buildDetailHref('run-detail', id);
-                      return (
-                        <li key={id}>
-                          <div>
-                            <strong>{runDisplayLabel(data, run)}</strong>
-                            <span className="row-actions">
-                              <Badge tone={runStatusBadgeTone(getString(run, ['status']))}>{formatRunStatusLabel(getString(run, ['status']))}</Badge>
-                              <span className="muted">{formatDate(run.created_at ?? run.started_at)}</span>
-                            </span>
-                          </div>
-                          <AnchorButton size="sm" variant="secondary" href={href}>Open</AnchorButton>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Open findings</CardTitle>
-                <CardDescription>Evidence-backed gaps that still need triage or remediation.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {openFindingRows.length === 0 ? (
-                  <EmptyState icon={TriangleAlert} title="No open findings." body="Findings appear after validation runs produce evidence-backed gaps." actionLabel="Open findings" actionHref="#findings" />
-                ) : (
-                  <ul className="dashboard-link-list">
-                    {openFindingRows.map((finding) => {
-                      const id = getString(finding, ['id'], '');
-                      const href = id ? buildDetailHref('finding-detail', id) : '#findings';
-                      return (
-                        <li key={id}>
-                          <div>
-                            <strong>{getString(finding, ['title', 'id'])}</strong>
-                            <span className="row-actions">
-                              <Badge tone={findingSeverityBadgeTone(getString(finding, ['severity']))}>{getString(finding, ['severity'], 'unknown')}</Badge>
-                              <span className="muted">{getString(finding, ['assignee'], 'unassigned')}</span>
-                            </span>
-                          </div>
-                          <AnchorButton size="sm" variant="secondary" href={href}>Triage</AnchorButton>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>WAF summary</CardTitle>
+              <CardDescription>Rolled up across declared target groups. Per-target detail on the target page.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <WafSummaryPanel summary={data.wafCoverageSummary} />
+            </CardContent>
+          </Card>
           <details className="full">
             <summary>Product guardrails (defensive validation rules)</summary>
             <DefensiveRulesPanel />
@@ -1410,8 +1657,6 @@ export function TargetGroupsPage({
   const [error, setError] = useState('');
   const [tenantEnvironments, setTenantEnvironments] = useState<DataItem[]>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
-  const environments = [...new Set(data.targetGroups.map((group) => getString(group, ['environment_id'], '')).filter(Boolean))];
-  const declaredTargetTotal = data.targetGroups.reduce((sum, group) => sum + getNumber(group, ['target_count']), 0);
   const filteredGroups = environmentFilter
     ? data.targetGroups.filter((group) => getString(group, ['environment_id'], '') === environmentFilter)
     : data.targetGroups;
@@ -1593,16 +1838,6 @@ export function TargetGroupsPage({
         const owner = getString(item, ['owner', 'owner_group', 'business_owner'], '');
         return owner && owner !== '—' ? <span className="muted">{owner}</span> : <span className="muted">—</span>;
       }
-    },
-    {
-      key: 'actions',
-      label: 'Actions',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        return (
-          <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', id)}>Manage</AnchorButton>
-        );
-      }
     }
   ];
 
@@ -1693,8 +1928,10 @@ export function TargetGroupsPage({
               variant="default"
               size="sm"
               onClick={() => {
-                setCreateFormsOpen(true);
-                document.getElementById('tg-create-forms')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setCreateFormsOpen((open) => !open);
+                requestAnimationFrame(() =>
+                  document.getElementById('tg-create-forms')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                );
               }}
             >
               Create target group
@@ -1712,11 +1949,6 @@ export function TargetGroupsPage({
         </div>
       ) : null}
       <Card>
-        <PanelCardHeader
-          title="Declared target groups"
-          description="Declared business scope for validation. Archived groups are removed from this active list."
-          trailing={<Badge tone="info">{filteredGroups.length} active{environmentFilter ? ' (filtered)' : ''}</Badge>}
-        />
         <CardContent>
           <DataTable
             columns={groupColumns}
@@ -1724,23 +1956,7 @@ export function TargetGroupsPage({
             getRowId={(item) => getString(item, ['id'], '')}
             getRowProps={(item) => {
               const id = getString(item, ['id'], '');
-              const href = buildDetailHref('target-group-detail', id);
-              return {
-                role: 'link',
-                tabIndex: 0,
-                style: { cursor: 'pointer' },
-                'aria-label': `Open target group ${id} detail`,
-                onClick: (event) => {
-                  const target = event.target as HTMLElement;
-                  if (target.closest('a, button')) return;
-                  window.location.hash = href.replace(/^#/, '');
-                },
-                onKeyDown: (event) => {
-                  if (event.key !== 'Enter' && event.key !== ' ') return;
-                  event.preventDefault();
-                  window.location.hash = href.replace(/^#/, '');
-                }
-              };
+              return id ? detailRowProps('target-group-detail', id, `Open target group ${id} detail`) : {};
             }}
             empty={emptyStateFromApi({
               icon: Target,
@@ -1751,19 +1967,8 @@ export function TargetGroupsPage({
           />
         </CardContent>
       </Card>
-      <div className="metric-grid three">
-        <MetricCard label="Declared groups" value={data.targetGroups.length} sub="Customer-provided scope only" icon={Target} tone="info" />
-        <MetricCard label="Declared targets" value={declaredTargetTotal} sub="Across all active groups" icon={Network} tone={declaredTargetTotal > 0 ? 'info' : 'muted'} />
-        <MetricCard label="Environments" value={environments.length} sub="Derived from target-group records" icon={ShieldCheck} tone="muted" />
-      </div>
-      <details
-        id="tg-create-forms"
-        className="full"
-        open={createFormsOpen}
-        onToggle={(event) => setCreateFormsOpen((event.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary>Create declared target group</summary>
-        <div className="split">
+      {createFormsOpen ? (
+        <div id="tg-create-forms" className="split">
           <Card>
             <CardHeader>
               <CardTitle>Create declared target group</CardTitle>
@@ -1853,7 +2058,7 @@ export function TargetGroupsPage({
             </CardContent>
           </Card>
         </div>
-      </details>
+      ) : null}
     </div>
   );
 }
@@ -2044,6 +2249,12 @@ const REPORT_KIND_OPTIONS = [
   { value: 'internal_audit', label: 'Internal audit' }
 ];
 
+const REPORT_FORMAT_OPTIONS: SelectOption[] = [
+  { value: 'json', label: 'JSON' },
+  { value: 'markdown', label: 'Markdown' },
+  { value: 'html', label: 'HTML' }
+];
+
 export function ReportsPage({
   data,
   config,
@@ -2060,54 +2271,20 @@ export function ReportsPage({
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<ReportExportPreview | null>(null);
   const [reportKind, setReportKind] = useState('technical');
+  const [reportFormat, setReportFormat] = useState('json');
+  const [reportPeriod, setReportPeriod] = useState('last-30-days');
   const reports = data.reports;
-  const latestReport = reports[0] ?? null;
   const reportExports = data.audit.filter((entry) => getString(entry, ['action'], '') === 'report.exported').length;
   const reportColumns: TableColumn<DataItem>[] = [
+    { key: 'report', label: 'Report', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    { key: 'kind', label: 'Kind', render: (item) => <span className="mono">{getString(item, ['kind'], '—')}</span> },
     {
-      key: 'title',
-      label: 'Report',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const title = getString(item, ['title', 'id']);
-        return id
-          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('report-detail', id)}>{title}</AnchorButton>
-          : title;
-      }
+      key: 'period',
+      label: 'Period',
+      render: (item) => <span className="muted">{getString(item, ['period', 'reporting_period', 'window'], '—')}</span>
     },
-    { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{getString(item, ['kind'])}</Badge> },
-    {
-      key: 'readiness',
-      label: 'Readiness',
-      render: (item) => {
-        const score = getNestedNumber(item, ['summary', 'readiness_score'], 0);
-        return <Badge tone={scoreTone(score)}>{score}%</Badge>;
-      }
-    },
-    { key: 'findings', label: 'Open findings', render: (item) => getNestedNumber(item, ['summary', 'open_findings'], 0) },
-    { key: 'created', label: 'Created', render: (item) => formatDate(item.created_at) },
-    {
-      key: 'actions',
-      label: 'Actions',
-      render: (item) => {
-        const id = getString(item, ['id'], '');
-        const rowBusy = busy.startsWith(`export-${id}-`);
-        const rowBlocked = busy !== '' && !rowBusy;
-        return (
-          <div className="row-actions" aria-busy={rowBusy || undefined}>
-            <AnchorButton size="sm" variant="secondary" href={buildDetailHref('report-detail', id)}>Detail</AnchorButton>
-            <details className="disclosure">
-              <summary>Export</summary>
-              <div className="row-actions row-actions--spaced">
-                <Button size="sm" variant="secondary" loading={busy === `export-${id}-json`} disabled={rowBlocked} onClick={() => void exportReport(id, 'json')}>JSON</Button>
-                <Button size="sm" variant="secondary" loading={busy === `export-${id}-markdown`} disabled={rowBlocked} onClick={() => void exportReport(id, 'markdown')}>Markdown</Button>
-                <Button size="sm" variant="secondary" loading={busy === `export-${id}-html`} disabled={rowBlocked} onClick={() => void exportReport(id, 'html')}>HTML</Button>
-              </div>
-            </details>
-          </div>
-        );
-      }
-    }
+    { key: 'format', label: 'Format', render: (item) => <span className="mono">{getString(item, ['format', 'export_format'], '—')}</span> },
+    { key: 'generated', label: 'Generated', render: (item) => <span className="muted">{formatDate(item.created_at ?? item.generated_at)}</span> }
   ];
 
   async function runReportAction<T>(label: string, action: () => Promise<T>, success: string) {
@@ -2129,22 +2306,18 @@ export function ReportsPage({
 
   async function handleCreateReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const title = String(form.get('title') ?? '').trim() || 'AstraNull Readiness Summary';
-    const kind = String(form.get('kind') ?? 'technical');
+    const kind = reportKind || 'technical';
+    const format = (reportFormat || 'json') as 'json' | 'markdown' | 'html';
     const created = await runReportAction('create-report', () => requestJson(config, session, '/v1/reports', {
       method: 'POST',
-      body: { title, kind }
+      body: { title: `AstraNull ${kind} readiness report`, kind, format, period: reportPeriod }
     }), 'Report generated.');
     if (created && typeof created === 'object') {
-      formElement.reset();
-      setReportKind('technical');
       await onRefresh();
       const id = getString(created as DataItem, ['id'], '');
       if (id) {
-        setMessage('Report generated — JSON export with custody metadata started automatically.');
-        await exportReport(id, 'json');
+        setMessage(`Report generated — exporting ${format.toUpperCase()} with custody metadata.`);
+        await exportReport(id, format);
       }
     }
   }
@@ -2159,6 +2332,20 @@ export function ReportsPage({
         const payload = await response.json().catch(() => null);
         throw new Error(String(payload?.message ?? payload?.error ?? `Export returned ${response.status}`));
       }
+      const triggerDownload = (content: string, mime: string) => {
+        try {
+          const ext = format === 'markdown' ? 'md' : format;
+          const blob = new Blob([content], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${reportId}.${ext}`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+        } catch { /* download is best-effort; preview still renders */ }
+      };
       if (format === 'json' || contentType.includes('application/json')) {
         const exported = await response.json();
         const custody = getNestedItem(exported, ['custody']);
@@ -2180,6 +2367,7 @@ export function ReportsPage({
           schemaVersion: getString(custody ?? {}, ['schema_version'], ''),
           verification
         });
+        triggerDownload(JSON.stringify(exported, null, 2), 'application/json');
         await onRefresh();
         return exported;
       }
@@ -2190,6 +2378,7 @@ export function ReportsPage({
         title: getString(reports.find((report) => getString(report, ['id'], '') === reportId) ?? {}, ['title'], reportId),
         textPreview: textPayload.slice(0, 900)
       });
+      triggerDownload(textPayload, format === 'markdown' ? 'text/markdown' : 'text/html');
       await onRefresh();
       return textPayload;
     }, `Report exported as ${format}.`);
@@ -2207,81 +2396,38 @@ export function ReportsPage({
           {error || message}
         </div>
       )}
-      <div className="split">
-        <Card>
-          <CardHeader>
-            <CardTitle>Generate report</CardTitle>
-            <CardDescription>Create a tenant-scoped report from current readiness, run, finding, and compliance mapping data. Generating a report also exports JSON with custody metadata.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
-              <label className="full">
-                <span>Title</span>
-                <input name="title" placeholder="Q3 readiness evidence pack" />
-              </label>
-              <Select
-                label="Report kind"
-                name="kind"
-                value={reportKind}
-                options={REPORT_KIND_OPTIONS}
-                onChange={setReportKind}
-              />
-              <div className="form-actions full">
-                <Button type="submit" loading={busy === 'create-report'}>Generate report</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Export custody</CardTitle>
-            <CardDescription>JSON exports include custody verification; Markdown and HTML previews show the first ~900 characters only.</CardDescription>
-          </CardHeader>
-          <CardContent className={preview ? 'kv-list' : ''}>
-            {!preview ? (
-              <EmptyState icon={FileCheck2} title="No export selected." body="Generate or export a report to inspect custody metadata." />
-            ) : preview.contentSha256 ? (
-              <>
-                <div><span>Report</span><strong>{preview.title}</strong></div>
-                <div><span>Artifact</span><strong>{preview.artifactId}</strong></div>
-                <div><span>content_sha256</span><strong>{preview.contentSha256}</strong></div>
-                <div><span>Schema</span><strong>{preview.schemaVersion}</strong></div>
-                <div><span>Verification</span><Badge tone={preview.verification?.ok === true ? 'success' : 'warn'}>{preview.verification?.ok === true ? 'verified' : 'check required'}</Badge></div>
-              </>
-            ) : (
-              <>
-                <p className="muted">Preview truncated — use export buttons on the report row for the full artifact.</p>
-                <pre className="codeblock">{preview.textPreview}</pre>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
       <Card>
-        <PanelCardHeader
-          title="Generated reports"
-          description="Each row can be re-exported as JSON, Markdown, or HTML with custody audit metadata."
-          trailing={<Badge tone="info">{reports.length} records</Badge>}
-        />
-        <CardContent className="stack-tight" aria-busy={busy.startsWith('export-') || busy === 'create-report' || undefined}>
-          <p className="table-caption muted">
-            {latestReport
-              ? `Latest: ${getString(latestReport, ['kind'])} · ${formatDate(latestReport.created_at)}`
-              : 'No reports generated yet — create one from the form above.'}
-          </p>
+        <CardHeader>
+          <CardTitle>Generate report</CardTitle>
+          <CardDescription>Create a tenant-scoped report from current readiness, run, finding, and compliance mapping data. Generating a report also exports the selected format with custody metadata.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
+            <Select label="Kind" name="kind" value={reportKind} options={REPORT_KIND_OPTIONS} onChange={setReportKind} />
+            <Select label="Format" name="format" value={reportFormat} options={REPORT_FORMAT_OPTIONS} onChange={setReportFormat} />
+            <Select label="Period" name="period" value={reportPeriod} options={[{ value: 'last-7-days', label: 'Last 7 days' }, { value: 'last-30-days', label: 'Last 30 days' }, { value: 'quarter', label: 'Current quarter' }, { value: 'all-time', label: 'All time' }]} onChange={setReportPeriod} />
+            <div className="form-actions full">
+              <Button type="submit" loading={busy === 'create-report'}>Generate &amp; export</Button>
+              <span className="muted text-xs">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</span>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+      <Card>
+        <PanelCardHeader title="Recent reports" />
+        <CardContent aria-busy={busy.startsWith('export-') || busy === 'create-report' || undefined}>
           <DataTable
             columns={reportColumns}
             items={reports}
+            getRowId={(item) => getString(item, ['id'], '')}
+            getRowProps={(item) => {
+              const id = getString(item, ['id'], '');
+              return id ? detailRowProps('report-detail', id, `Open report ${id} detail`) : {};
+            }}
             empty={<EmptyState icon={FileText} title="No reports generated." body="Generate a report after validation activity to create a custody-ready evidence artifact." />}
           />
-          {/*
-            PDF export is intentionally out of scope for this slice: backend `src/services/reports.mjs`
-            supports json|markdown|html only. Immutable PDF rendering and signing remain a release-gate boundary.
-          */}
-          <p className="muted">PDF export is not available in this slice; backend report exports support JSON, Markdown, and HTML only.</p>
         </CardContent>
       </Card>
-
     </div>
   );
 }
@@ -2991,16 +3137,56 @@ export function SettingsPage({
   );
 }
 
-export function EnvironmentsPage({ data }: { data: PortalData }) {
+export function EnvironmentsPage({
+  data,
+  config,
+  session,
+  onRefresh
+}: {
+  data: PortalData;
+  config: PortalConfig;
+  session: Session;
+  onRefresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
   const rows = buildEnvironmentReadinessRows({
     targetGroups: data.targetGroups,
     runs: data.runs,
     findings: data.findings
   });
-  const avgCoverage = rows.length
-    ? Math.round(rows.reduce((sum, row) => sum + row.coverage, 0) / rows.length)
-    : 0;
-  const totalOpenFindings = rows.reduce((sum, row) => sum + row.openFindings, 0);
+
+  async function handleCreateEnvironment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const name = String(form.get('name') ?? '').trim();
+    if (!name) {
+      setError('Enter an environment name before declaring.');
+      return;
+    }
+    const description = String(form.get('description') ?? '').trim();
+    setBusy('create-environment');
+    setError('');
+    setMessage('');
+    try {
+      const result = await requestJson(config, session, '/v1/environments', {
+        method: 'POST',
+        body: { name, description }
+      });
+      setMessage(formatMutationSuccessMessage(`Declared environment ${name}.`, result));
+      formElement.reset();
+      const el = document.querySelector('#environments-create');
+      if (el instanceof HTMLDetailsElement) el.open = false;
+      await onRefresh();
+    } catch (err) {
+      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
+      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Could not declare environment.'));
+    } finally {
+      setBusy('');
+    }
+  }
 
   function environmentDisplayName(row: (typeof rows)[number]) {
     const names = row.groups
@@ -3050,65 +3236,99 @@ export function EnvironmentsPage({ data }: { data: PortalData }) {
   }
 
   const environmentColumns: TableColumn<(typeof rows)[number]>[] = [
-    {
-      key: 'id',
-      label: 'Environment',
-      render: (row) => (
-        <AnchorButton size="sm" variant="ghost" href={`#target-groups?environment_id=${encodeURIComponent(row.id)}`}>
-          {row.id}
-        </AnchorButton>
-      )
-    },
+    { key: 'id', label: 'Environment', render: (row) => <span className="mono">{row.id}</span> },
     { key: 'name', label: 'Name', render: (row) => environmentDisplayName(row) },
     { key: 'region', label: 'Region', render: (row) => <span className="muted">{environmentRegion(row)}</span> },
     { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{row.groupCount}</span> },
     { key: 'agents', label: 'Agents', render: (row) => <span className="tabular-nums">{environmentAgentCount(row.id)}</span> },
-    { key: 'last', label: 'Last validation', render: (row) => <span className="muted">{environmentLastValidation(row)}</span> },
+    {
+      key: 'findings',
+      label: 'Findings',
+      render: (row) => row.openFindings > 0
+        ? <Badge tone="danger">{row.openFindings}</Badge>
+        : <span className="muted">—</span>
+    },
     {
       key: 'status',
       label: 'Status',
       render: (row) => <Badge tone={environmentStatusTone(row)}>{environmentStatusLabel(row)}</Badge>
     },
-    {
-      key: 'open',
-      label: 'Open findings',
-      render: (row) => row.openFindings > 0
-        ? <Badge tone="danger">{row.openFindings}</Badge>
-        : <span className="muted">—</span>
-    }
+    { key: 'last', label: 'Last validation', render: (row) => <span className="muted">{environmentLastValidation(row)}</span> }
   ];
 
   return (
     <div className="content">
-      <PageHeader route="environments" />
+      <PageHeader
+        route="environments"
+        actions={
+          <Button
+            variant="default"
+            size="sm"
+            disabled={busy !== ''}
+            onClick={() => {
+              const el = document.querySelector('#environments-create');
+              if (el instanceof HTMLDetailsElement) el.open = true;
+              el?.scrollIntoView({ behavior: 'smooth' });
+            }}
+          >
+            Declare environment
+          </Button>
+        }
+      />
+      {(message || error) && (
+        <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
+      )}
       <Card>
-        <PanelCardHeader
-          title="Declared environments"
-          description="Environment IDs from declared target groups with validation evidence, agent placement, and open findings."
-          trailing={rows.length > 0 ? <Badge tone="info">{rows.length} environments</Badge> : undefined}
-        />
         <CardContent>
           <DataTable
             columns={environmentColumns}
             items={rows}
             getRowId={(row) => row.id}
+            getRowProps={(row) => (row.id ? detailRowProps('environment-detail', row.id, `Open environment ${row.id} detail`) : {})}
             empty={
               <EmptyState
                 icon={ServerCog}
                 title="No environments yet."
-                body="Create a declared target group with an environment ID to populate this view."
-                actionLabel="Open Target Groups"
-                actionHref="#target-groups"
+                body="Declare an environment below, or create a target group with an environment ID to populate this view."
+                actionLabel="Declare environment"
+                onAction={() => {
+                  const el = document.querySelector('#environments-create');
+                  if (el instanceof HTMLDetailsElement) el.open = true;
+                  el?.scrollIntoView({ behavior: 'smooth' });
+                }}
               />
             }
           />
         </CardContent>
       </Card>
-      <div className="metric-grid three">
-        <MetricCard label="Environments" value={rows.length} sub="From declared target groups" icon={ServerCog} tone="info" />
-        <MetricCard label="Avg coverage" value={`${avgCoverage}%`} sub="Groups with completed runs" icon={Activity} tone={avgCoverage >= 100 ? 'success' : avgCoverage > 0 ? 'warn' : 'muted'} />
-        <MetricCard label="Open findings" value={totalOpenFindings} sub="Across all environments" icon={TriangleAlert} tone={totalOpenFindings > 0 ? 'warn' : 'success'} />
-      </div>
+      <details id="environments-create" className="disclosure">
+        <summary>Declare environment</summary>
+        <Card>
+          <CardHeader>
+            <CardTitle>Declare a new environment</CardTitle>
+            <CardDescription>
+              Declared environments group target scope and validation evidence. No cloud credentials or IP discovery required.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="product-form" onSubmit={handleCreateEnvironment}>
+              <label>
+                <span>Environment name</span>
+                <input name="name" placeholder="Production edge" required />
+              </label>
+              <label className="full">
+                <span>Description (optional)</span>
+                <input name="description" placeholder="What this environment covers" />
+              </label>
+              <div className="form-actions full">
+                <Button type="submit" loading={busy === 'create-environment'}>
+                  Declare environment
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </details>
     </div>
   );
 }
@@ -3134,6 +3354,15 @@ export function PolicyPage({
   const [archivePolicyId, setArchivePolicyId] = useState('');
   const safeChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'safe');
   const socGatedChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'soc_gated');
+  const checksById = new Map<string, DataItem>(
+    data.checks.map((check) => [getString(check, ['check_id', 'id'], ''), check])
+  );
+  const socScheduledCount = data.testPolicies.filter((policy) => isPolicySocGated(policy, checksById)).length;
+  const upcomingRuns = data.testPolicies
+    .map((policy) => derivePolicyNextRun(policy, isPolicySocGated(policy, checksById)).iso)
+    .filter((iso): iso is string => Boolean(iso))
+    .sort((left, right) => left.localeCompare(right));
+  const nextRunLabel = upcomingRuns.length > 0 ? formatDate(upcomingRuns[0]) : '—';
   const policyCheckOptions: SelectOption[] = [
     { value: '', label: 'Select safe check' },
     ...safeChecks.map((check) => ({
@@ -3164,7 +3393,7 @@ export function PolicyPage({
   }
 
   const policyColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Policy', render: (item) => getString(item, ['id', 'policy_id']) },
+    { key: 'id', label: 'Schedule', render: (item) => getString(item, ['id', 'policy_id']) },
     {
       key: 'target',
       label: 'Target group',
@@ -3192,6 +3421,19 @@ export function PolicyPage({
       return <Badge tone={state === 'paused' ? 'warn' : 'success'}>{formatPolicyStateLabel(state)}</Badge>;
     } },
     { key: 'cadence', label: 'Cadence', render: (item) => <Badge tone="info">{formatPolicyCadenceLabel(getString(item, ['cadence']))}</Badge> },
+    {
+      key: 'next_run',
+      label: 'Next run',
+      render: (item) => {
+        const socGated = isPolicySocGated(item, checksById);
+        const next = derivePolicyNextRun(item, socGated);
+        return socGated ? (
+          <Badge tone="warn" title="High-scale schedules run only when SOC schedules them.">Awaiting SOC</Badge>
+        ) : (
+          <span className="mono muted">{next.label}</span>
+        );
+      }
+    },
     { key: 'safe_window', label: 'Safe window', render: (item) => <span className="mono muted">{formatPolicySafeWindow(item)}</span> },
     { key: 'expected', label: 'Expected verdict', render: (item) => <Badge tone={policyVerdictBadgeTone(getString(item, ['expected_verdict']))}>{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge> },
     { key: 'targets', label: 'Targets', render: (item) => getNumber(item, ['target_count']) },
@@ -3314,6 +3556,8 @@ export function PolicyPage({
     <div className="content">
       <PageHeader
         route="test-policies"
+        title="Scheduler"
+        description="Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
         actions={
           <Button
             variant="default"
@@ -3325,16 +3569,33 @@ export function PolicyPage({
               el?.scrollIntoView({ behavior: 'smooth' });
             }}
           >
-            New policy
+            New schedule
           </Button>
         }
       />
+      <div className="kpi-row">
+        <KpiCell
+          label="Active schedules"
+          value={formatNumber(data.testPolicies.length)}
+          delta={`${safeChecks.length} safe checks bindable`}
+        />
+        <KpiCell
+          label="Next run"
+          value={nextRunLabel}
+          delta={upcomingRuns.length > 0 ? `${upcomingRuns.length} upcoming` : 'No cadence scheduled'}
+        />
+        <KpiCell
+          label="SOC-scheduled"
+          value={formatNumber(socScheduledCount)}
+          delta={socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
+        />
+      </div>
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
       )}
       <Card>
         <PanelCardHeader
-          title="Safe validation policies"
+          title="Safe validation schedules"
           description={
             <>
               Scheduled bindings between declared target groups and customer-runnable safe checks.
@@ -3350,16 +3611,19 @@ export function PolicyPage({
           <DataTable
             columns={policyColumns}
             items={data.testPolicies}
+            getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
             getRowProps={(item) => {
-              const id = getString(item, ['id'], '');
+              const id = getString(item, ['id', 'policy_id'], '');
+              if (!id) return {};
               const rowBusy = busy === `patch-policy-${id}` || busy === `archive-policy-${id}`;
-              return rowBusy ? { 'aria-busy': true } : {};
+              const linkProps = detailRowProps('policy-detail', id, `Open schedule ${id} detail`);
+              return rowBusy ? { ...linkProps, 'aria-busy': true } : linkProps;
             }}
             empty={renderFriendlyEmptyState({
               icon: ClipboardList,
-              title: 'No test policies yet.',
-              body: 'Create a safe validation policy after declaring target groups and reviewing the safe check catalog.',
-              actionLabel: 'New policy',
+              title: 'No schedules yet.',
+              body: 'Create a safe validation schedule after declaring target groups and reviewing the safe check catalog.',
+              actionLabel: 'New schedule',
               onAction: () => {
                 const el = document.querySelector('#test-policies-create');
                 if (el instanceof HTMLDetailsElement) el.open = true;
@@ -3370,10 +3634,10 @@ export function PolicyPage({
         </CardContent>
       </Card>
       <details id="test-policies-create" className="disclosure">
-        <summary>New policy</summary>
+        <summary>New schedule</summary>
         <Card>
           <CardHeader>
-            <CardTitle>Create safe validation policy</CardTitle>
+            <CardTitle>Create safe validation schedule</CardTitle>
             <CardDescription>
               Bind a customer-runnable safe check to an active declared target group. SOC-gated checks remain request-only.
             </CardDescription>
@@ -3429,7 +3693,7 @@ export function PolicyPage({
               </details>
               <div className="form-actions full">
                 <Button type="submit" loading={busy === 'create-test-policy'} disabled={data.targetGroups.length === 0 || safeChecks.length === 0}>
-                  Create policy
+                  Create schedule
                 </Button>
               </div>
             </form>
@@ -3438,9 +3702,9 @@ export function PolicyPage({
       </details>
       <ConfirmModal
         open={Boolean(archivePolicyId)}
-        title={`Archive test policy ${archivePolicyId}`}
-        description={<p>Are you sure? Scheduled runs under this policy will stop and an audit entry will be written.</p>}
-        confirmLabel="Archive policy"
+        title={`Archive schedule ${archivePolicyId}`}
+        description={<p>Are you sure? Scheduled runs under this schedule will stop and an audit entry will be written.</p>}
+        confirmLabel="Archive schedule"
         busy={busy === `archive-policy-${archivePolicyId}`}
         onCancel={() => setArchivePolicyId('')}
         onConfirm={() => void archivePolicy(archivePolicyId)}

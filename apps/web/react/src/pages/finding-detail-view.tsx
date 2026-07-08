@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FileCheck2, TriangleAlert } from 'lucide-react';
+import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import { FileCheck2, ShieldCheck, Target, TriangleAlert, UserCog } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { VerifyChip } from '../lib/verify-chip';
@@ -11,9 +12,35 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
-import { Badge } from '../components/ui/badge';
+import { Badge, type BadgeProps } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { findingSlaDueAt, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
+import { MetricCard } from './page-components';
+
+type StatTone = NonNullable<BadgeProps['tone']>;
+
+function findingSeverityTone(value: string): StatTone {
+  const key = value.trim().toLowerCase();
+  if (['critical', 'high', 's1', 's2'].includes(key)) return 'danger';
+  if (['medium', 'moderate', 's3'].includes(key)) return 'warn';
+  if (['low', 'info', 's4'].includes(key)) return 'info';
+  return 'muted';
+}
+
+function findingStatusTone(value: string): StatTone {
+  const key = value.trim().toLowerCase();
+  if (key === 'closed') return 'success';
+  if (key === 'accepted_risk') return 'muted';
+  if (key === 'open') return 'warn';
+  return 'info';
+}
+
+function formatFindingLabel(value: string, fallback = '—') {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  const label = trimmed.replace(/_/g, ' ');
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -22,6 +49,33 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
   return fallback;
+}
+
+/**
+ * Whole-row click-through props to an artifact's evidence-detail route.
+ * Matches the shared `role="link"` row convention (hash + `?id=` per lib/route-params);
+ * ignores clicks that originate on nested interactive elements (e.g. the Export button).
+ */
+function evidenceRowNavProps(artifactId: string): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
+  if (!artifactId) return {};
+  const navigate = () => {
+    window.location.hash = `evidence-detail?id=${encodeURIComponent(artifactId)}`;
+  };
+  return {
+    role: 'link',
+    tabIndex: 0,
+    style: { cursor: 'pointer' },
+    'aria-label': `Open evidence detail for artifact ${artifactId}`,
+    onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
+      if ((event.target as HTMLElement).closest('a, button')) return;
+      navigate();
+    },
+    onKeyDown: (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      navigate();
+    }
+  };
 }
 
 function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
@@ -126,7 +180,27 @@ export function FindingDetailView({
   }
 
   async function verifyChain() {
-    await runAction(`verify-${entityId}`, () => requestJson(config, session, evidence?.verify_url ?? '/v1/custody/verify', { method: 'POST', body: { finding_id: entityId } }), 'Custody chain verified.');
+    await runAction(`verify-${entityId}`, async () => {
+      // The verify endpoint recomputes the SHA-256 over the export payload and compares it to
+      // the custody manifest digest, so it needs { payload, custody } — not { finding_id }.
+      // The finding export is the canonical producer of that bound pair ({ ...payload, custody }).
+      const exported = await requestJson(config, session, `/v1/findings/${entityId}/export`, { method: 'POST' }) as DataItem | null;
+      if (!exported || typeof exported !== 'object') {
+        throw new Error('Evidence export payload unavailable for verification.');
+      }
+      const { custody, ...payload } = exported;
+      if (!custody || typeof custody !== 'object') {
+        throw new Error('Custody manifest missing from evidence export.');
+      }
+      const verifyUrl = evidence?.verify_url ?? '/v1/custody/verify';
+      const result = await requestJson(config, session, verifyUrl, { method: 'POST', body: { payload, custody } }) as DataItem | null;
+      // The endpoint returns HTTP 200 even when verification fails, so inspect result.ok explicitly.
+      if (!result || result.ok !== true) {
+        const verification = (result && typeof result.verification === 'object' ? result.verification : {}) as DataItem;
+        const reason = getString(verification, ['error'], 'verification_failed');
+        throw new Error(`Custody verification failed: ${formatFindingLabel(reason)}.`);
+      }
+    }, 'Custody chain verified — SHA-256 digest matches the sealed manifest.');
   }
 
   async function exportBundle() {
@@ -175,51 +249,72 @@ export function FindingDetailView({
       <div className="page-head">
         <div>
           <p className="eyebrow">Evidence-backed finding</p>
-          <h2 className="page-title">{title}</h2>
+          <h1 className="page-title">{title}</h1>
           <p className="muted mono">{entityId}</p>
+        </div>
+        <div className="row-actions">
+          <AnchorButton size="sm" variant="secondary" href="#findings">← Findings</AnchorButton>
+          <Button size="sm" variant="default" loading={busy === `export-${entityId}`} onClick={() => void exportBundle()}>Export evidence</Button>
         </div>
       </div>
 
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
       <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Verdict and triage</CardTitle>
-          <CardDescription className="detail-status-line">
-            <Badge tone="danger" title={`Severity ${getString(entity, ['severity'], 'unknown')} from finding API`}>{getString(entity, ['severity'], 'unknown')}</Badge>
-            <span className="detail-status-sep" aria-hidden="true">·</span>
-            <Badge tone="warn" title={`Status ${getString(entity, ['status'], 'open')} from finding API`}>{getString(entity, ['status'], 'open')}</Badge>
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FindingExplanationPanel finding={entity} config={config} session={session} />
-          <div className="kv-list">
-            <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
-            <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
-          </div>
-          <form className="product-form" onSubmit={(event) => {
-            event.preventDefault();
-            const form = new FormData(event.currentTarget);
-            void patchFinding({ assignee: String(form.get('assignee') ?? '').trim(), notes: String(form.get('notes') ?? '').trim() }, 'Triage updated.');
-          }}>
-            <label><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
-            <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={getString(entity, ['notes'], '')} /></label>
-            <div className="row-actions">
-              <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Save triage</Button>
-              <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
-              <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
-              <Button size="sm" variant="ghost" onClick={() => void runAction('retest', async () => {
-                const retest = resolveFindingRetestAction(entity);
-                if (!retest) throw new Error('Retest context missing from finding API.');
-                if (retest.kind === 'safe-run') {
-                  await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: getString(entity, ['target_group_id'], ''), target_id: getString(entity, ['target_id'], '') } });
-                }
-              }, 'Retest started.')}>Retest</Button>
+      <div className="metric-grid four">
+        <MetricCard label="Severity" value={formatFindingLabel(getString(entity, ['severity'], 'unknown'))} sub="Impact class from finding API" icon={TriangleAlert} tone={findingSeverityTone(getString(entity, ['severity'], 'unknown'))} />
+        <MetricCard label="Status" value={formatFindingLabel(getString(entity, ['status'], 'open'))} sub="Triage state" icon={ShieldCheck} tone={findingStatusTone(getString(entity, ['status'], 'open'))} />
+        <MetricCard label="Target group" value={getString(entity, ['target_group_id'], '—')} sub="Declared scope" icon={Target} tone="info" />
+        <MetricCard label="Owner" value={getString(entity, ['assignee', 'rem_owner'], 'unassigned')} sub="Accountable owner" icon={UserCog} tone="muted" />
+      </div>
+
+      <div className="dash-grid">
+        <Card>
+          <CardHeader>
+            <CardTitle>Verdict explanation</CardTitle>
+            <CardDescription className="detail-status-line">
+              <Badge tone={findingSeverityTone(getString(entity, ['severity'], 'unknown'))} title={`Severity ${getString(entity, ['severity'], 'unknown')} from finding API`}>{formatFindingLabel(getString(entity, ['severity'], 'unknown'))}</Badge>
+              <span className="detail-status-sep" aria-hidden="true">·</span>
+              <Badge tone={findingStatusTone(getString(entity, ['status'], 'open'))} title={`Status ${getString(entity, ['status'], 'open')} from finding API`}>{formatFindingLabel(getString(entity, ['status'], 'open'))}</Badge>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FindingExplanationPanel finding={entity} config={config} session={session} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Triage</CardTitle>
+            <CardDescription>Assign an owner, record notes, and move the finding state.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="kv-list">
+              <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
+              <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
             </div>
-          </form>
-        </CardContent>
-      </Card>
+            <form className="product-form" onSubmit={(event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              void patchFinding({ assignee: String(form.get('assignee') ?? '').trim(), notes: String(form.get('notes') ?? '').trim() }, 'Triage updated.');
+            }}>
+              <label><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
+              <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={getString(entity, ['notes'], '')} /></label>
+              <div className="row-actions">
+                <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Save triage</Button>
+                <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
+                <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
+                <Button size="sm" variant="ghost" onClick={() => void runAction('retest', async () => {
+                  const retest = resolveFindingRetestAction(entity);
+                  if (!retest) throw new Error('Retest context missing from finding API.');
+                  if (retest.kind === 'safe-run') {
+                    await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: getString(entity, ['target_group_id'], ''), target_id: getString(entity, ['target_id'], '') } });
+                  }
+                }, 'Retest started.')}>Retest</Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
 
       <Card>
         <CardHeader><CardTitle>Affected targets</CardTitle></CardHeader>
@@ -253,10 +348,24 @@ export function FindingDetailView({
               ))}
             </ol>
           ) : null}
-          <div className="row-actions">
-            <Button size="sm" variant="ghost" onClick={() => void patchFinding({ rem_owner: remediation.remOwner }, 'Remediation owner updated.')}>Reassign owner</Button>
-            <Button size="sm" variant="secondary" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
-          </div>
+          <form className="product-form" onSubmit={(event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            const owner = String(form.get('rem_owner') ?? '').trim();
+            // Persist the remediation owner. The finding record backs the owner via `assignee`
+            // (readFindingRemediationFields falls back to it), so send rem_owner alongside
+            // assignee to keep the PATCH honest and make the reassignment survive refresh.
+            void patchFinding({ rem_owner: owner, assignee: owner }, 'Remediation owner reassigned.');
+          }}>
+            <label>
+              <span>Remediation owner</span>
+              <input key={remediation.remOwner} name="rem_owner" defaultValue={remediation.remOwner} placeholder="team or user" />
+            </label>
+            <div className="row-actions">
+              <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Reassign owner</Button>
+              <Button size="sm" variant="secondary" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
+            </div>
+          </form>
         </CardContent>
       </Card>
 
@@ -270,7 +379,16 @@ export function FindingDetailView({
         </CardHeader>
         <CardContent>
           {evidence?.artifacts?.length ? (
-            <DataTable columns={artifactColumns} items={evidence.artifacts} empty={<span className="muted">No artifacts in bundle.</span>} />
+            <>
+              <p className="muted small">Select an artifact to open its evidence detail — payload, SHA-256 digest, and custody position.</p>
+              <DataTable
+                columns={artifactColumns}
+                items={evidence.artifacts}
+                getRowId={(item) => getString(item, ['id'], '')}
+                getRowProps={(item) => evidenceRowNavProps(getString(item, ['id'], ''))}
+                empty={<span className="muted">No artifacts in bundle.</span>}
+              />
+            </>
           ) : (
             <EmptyState icon={FileCheck2} title="No evidence artifacts." body={getString(evidence?.meta, ['empty_reason'], evidence?.error ?? 'Evidence bundle not returned for this finding.')} />
           )}

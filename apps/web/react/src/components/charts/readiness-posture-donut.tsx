@@ -9,9 +9,12 @@ const SEGMENT_COLORS: Record<string, string> = {
   gap: 'var(--danger)',
 };
 
-function PostureLegendRow({ segment }: { segment: ReadinessPostureSegment }) {
+function PostureLegendRow({ segment, total }: { segment: ReadinessPostureSegment; total: number }) {
   const swatch = SEGMENT_COLORS[segment.key];
-  const title = `${segment.label} · ${segment.count} checks · ${segment.pct}%`;
+  const title = `${segment.label} · ${segment.count} of ${total} checks · ${segment.pct}%`;
+  // Prototype simplification: the Review row surfaces the count/total form (e.g. "5/50");
+  // Pass and Gap keep the percentage form. All counts stay derived from the resolver.
+  const value = segment.key === 'review' ? `${segment.count}/${total}` : `${segment.pct}%`;
 
   return (
     <div className="legend-row" title={title}>
@@ -20,8 +23,7 @@ function PostureLegendRow({ segment }: { segment: ReadinessPostureSegment }) {
       <span className="lg-bar-wrap" style={{ background: 'color-mix(in oklab, var(--fg), transparent 92%)' }}>
         <span className="lg-bar" style={{ width: `${segment.pct}%`, background: swatch }} />
       </span>
-      <span className="lg-pct">{segment.pct}%</span>
-      <b>{segment.count}</b>
+      <span className="lg-pct">{value}</span>
     </div>
   );
 }
@@ -35,7 +37,8 @@ export function ReadinessPostureDonut({
   runs: DataItem[];
   checks: DataItem[];
 }) {
-  const { segments, total, score, delta } = resolveReadinessPostureSegments(state, runs, checks);
+  const { segments, total, score } = resolveReadinessPostureSegments(state, runs, checks);
+  const correlatedCount = segments.reduce((sum, segment) => sum + segment.count, 0);
   const gradient = buildConicGradient(segments);
   const ariaLabel = segments
     .filter((segment) => segment.count > 0)
@@ -61,26 +64,19 @@ export function ReadinessPostureDonut({
         style={{ ['--gauge-gradient' as string]: gradient }}
       >
         <div className="gauge-hole">
-          <div className="gauge-score-cap">Readiness</div>
           <div className="gauge-score">
             <span className="gauge-score-value">{score ?? '—'}</span>
             {score !== null ? <span className="gauge-score-scale">/100</span> : null}
           </div>
-          {delta !== null ? (
-            <div className="gauge-score-delta" title="Change vs previous validation cycle from readiness API">
-              <span>{delta > 0 ? '+' : ''}{delta}</span>
-              <span className="gauge-score-delta-cap">vs last cycle</span>
-            </div>
-          ) : null}
         </div>
       </div>
       <div className="gauge-side">
         <div className="gauge-legend">
           {segments.map((segment) => (
-            <PostureLegendRow key={segment.key} segment={segment} />
+            <PostureLegendRow key={segment.key} segment={segment} total={total} />
           ))}
         </div>
-        <p className="muted small">{total} checks correlated · this cycle</p>
+        <p className="muted small">{correlatedCount} checks correlated · this cycle</p>
       </div>
     </div>
   );

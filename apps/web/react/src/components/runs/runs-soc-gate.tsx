@@ -8,6 +8,7 @@ import { DataTable, type TableColumn } from '../ui/table';
 import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../../lib/crud-ui';
 import { PortalLoadingSkeleton } from '../../lib/empty-from-api';
 import { buildMetadataArtifactUploadBody } from '../../lib/high-scale';
+import { sha256CanonicalJsonForCustody } from '../../lib/custody';
 import { requestJson } from '../../lib/api';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
@@ -120,6 +121,9 @@ export function RunsSocGatePanel({
   const [packRequestId, setPackRequestId] = useState('');
   const [targetGroupId, setTargetGroupId] = useState(() => getString(data.targetGroups[0] ?? {}, ['id'], ''));
   const [criticality, setCriticality] = useState('high');
+  // P0#2: customers are non-staff principals. The queue item must open the customer
+  // high-scale detail surface (HighScaleDetailView), not the staff SOC gate.
+  const isStaffPrincipal = session.principal === 'staff';
 
   const targetGroupOptions: SelectOption[] = [
     { value: '', label: 'Select declared scope' },
@@ -229,9 +233,32 @@ export function RunsSocGatePanel({
   async function uploadPackArtifact(request: DataItem) {
     const requestId = getString(request, ['id'], '');
     if (!requestId) return;
+    const filename = 'authorization-pack-metadata.json';
+    // P0#5: derive a real SHA-256 content digest over the uploaded pack bytes
+    // (the metadata-only authorization-pack payload) via crypto.subtle.digest,
+    // instead of a hard-coded placeholder digest.
+    const packContent = {
+      artifact_type: 'customer_authorization_letter',
+      request_id: requestId,
+      filename,
+      target_group_id: getString(request, ['target_group_id'], ''),
+      requested_window: request.requested_window ?? null,
+      requested_limits: request.requested_limits ?? null,
+      requested_scenario_families: request.requested_scenario_families ?? [],
+      emergency_contacts: request.emergency_contacts ?? [],
+      abort_criteria: request.abort_criteria ?? null,
+      provider_context: request.provider_context ?? null
+    };
+    let contentSha256: string;
+    try {
+      contentSha256 = await sha256CanonicalJsonForCustody(packContent);
+    } catch {
+      onError('Cannot compute the pack content digest: Web Crypto (crypto.subtle) is unavailable in this context.');
+      return;
+    }
     const body = buildMetadataArtifactUploadBody(request, 'customer_authorization_letter', {
-      filename: 'authorization-pack-metadata.json',
-      content_sha256: 'a'.repeat(64),
+      filename,
+      content_sha256: contentSha256,
       custody_id: `cust_${requestId}`
     });
     await runAction(`pack-${requestId}`, () => requestJson(config, session, `/v1/high-scale-requests/${encodeURIComponent(requestId)}/artifacts`, {
@@ -245,11 +272,27 @@ export function RunsSocGatePanel({
     {
       key: 'request',
       label: 'Request',
-      render: (item) => (
-        <AnchorButton variant="ghost" href={buildDetailHref('queue-detail', getString(item, ['id'], ''))}>
-          <code>{getString(item, ['id'])}</code>
-        </AnchorButton>
-      )
+      render: (item) => {
+        const requestId = getString(item, ['id'], '');
+        // P0#2: open the shared high-scale request detail route. queue-detail renders the
+        // customer-facing HighScaleDetailView for non-staff principals (this customer panel)
+        // and the staff SOC workspace only for staff, so customers reach their own
+        // high-scale flow instead of the staff-only "access denied" gate.
+        const href = buildDetailHref('queue-detail', requestId);
+        return (
+          <AnchorButton
+            variant="ghost"
+            href={href}
+            aria-label={
+              isStaffPrincipal
+                ? `Open SOC workspace for request ${requestId}`
+                : `Open high-scale request detail for ${requestId}`
+            }
+          >
+            <code>{getString(item, ['id'])}</code>
+          </AnchorButton>
+        );
+      }
     },
     { key: 'policy', label: 'Policy', render: (item) => <code>{getString(item, ['policy_id', 'requested_scenario_families'], 'soc_gated')}</code> },
     { key: 'group', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },

@@ -46,13 +46,86 @@ function PlacementGateRow({ gate, pass }: { gate: string; pass: boolean }) {
   );
 }
 
-function PlacementPassChip({ provenance }: { provenance: string }) {
-  return (
-    <span className="verify-chip is-verified" title={provenance} aria-label={`Placement verified. ${provenance}`}>
-      <span className="vc-dot" aria-hidden="true" />
-      last run · pass
-    </span>
-  );
+type PlacementOutcome = 'pass' | 'fail' | 'review' | 'unknown';
+
+/**
+ * Extract the real placement verdict from a test-run record. Prefers the nested
+ * verdict object (`run.verdict.verdict`), then a string verdict field. It never
+ * treats the lifecycle status (e.g. `verdicted`, `completed`) as a verdict on its
+ * own — that conflation was the P1#10 false-positive.
+ */
+function placementVerdictString(run: DataItem | null): string {
+  if (!run) return '';
+  const direct = run.verdict;
+  if (typeof direct === 'string') return direct;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    const nested = direct as DataItem;
+    const value = nested.verdict ?? nested.status;
+    if (typeof value === 'string') return value;
+  }
+  return '';
+}
+
+/** Canonical run-verdict classification (mirrors lib/readiness-posture + charts/score-trend). */
+function classifyPlacementVerdict(verdict: string): PlacementOutcome {
+  const key = verdict.trim().toLowerCase();
+  if (!key || ['pending', 'planned', 'queued', 'scheduled', 'running', 'collecting', 'in_progress'].includes(key)) {
+    return 'unknown';
+  }
+  if (['pass', 'passed', 'protected', 'edge_protected', 'allowed_as_expected', 'proven', 'success', 'ok'].includes(key)) {
+    return 'pass';
+  }
+  if (
+    ['gap', 'fail', 'failed', 'error', 'aborted', 'canceled', 'cancelled', 'timeout', 'danger', 'penetrated', 'bypassable', 'edge_exposed', 'unprotected'].includes(key)
+  ) {
+    return 'fail';
+  }
+  // review bucket: warn / inconclusive / misplaced_agent / underprotected / unknown / unrecognized.
+  return 'review';
+}
+
+/**
+ * Resolve the placement outcome from the latest placement run. `pass` is returned
+ * ONLY when the run's published verdict is a passing verdict — never from lifecycle
+ * status alone. This is the P1#10 fix: a finalized-but-failed run no longer shows pass.
+ */
+function resolvePlacementOutcome(run: DataItem | null): PlacementOutcome {
+  if (!run) return 'unknown';
+  const status = getString(run, ['status'], '').trim().toLowerCase();
+  if (['queued', 'scheduled', 'planned', 'pending', 'running', 'collecting', 'in_progress'].includes(status)) {
+    return 'unknown';
+  }
+  const verdictValue = placementVerdictString(run);
+  if (verdictValue) return classifyPlacementVerdict(verdictValue);
+  if (['canceled', 'cancelled', 'error', 'failed', 'aborted', 'timeout'].includes(status)) return 'fail';
+  // Finalized without a surfaced verdict payload → needs review, never an implicit pass.
+  return 'review';
+}
+
+function PlacementVerdictChip({ outcome, provenance }: { outcome: PlacementOutcome; provenance: string }) {
+  if (outcome === 'pass') {
+    return (
+      <span className="verify-chip is-verified" title={provenance} aria-label={`Placement verified — last run passed. ${provenance}`}>
+        <span className="vc-dot" aria-hidden="true" />
+        last run · pass
+      </span>
+    );
+  }
+  if (outcome === 'fail') {
+    return (
+      <Badge tone="danger" title={provenance} aria-label={`Placement failed on last run. ${provenance}`}>
+        last run · fail
+      </Badge>
+    );
+  }
+  if (outcome === 'review') {
+    return (
+      <Badge tone="warn" title={provenance} aria-label={`Placement needs review after last run. ${provenance}`}>
+        last run · review
+      </Badge>
+    );
+  }
+  return <VerifyChip state="pending" provenance={provenance} />;
 }
 
 export function AgentPlacementPanel({
@@ -84,11 +157,12 @@ export function AgentPlacementPanel({
     [runs]
   );
 
-  const verdict = getString(placementRun, ['verdict'], getString(placementRun, ['status'], 'pending'));
-  const pass =
-    ['pass', 'verdicted'].includes(verdict.toLowerCase()) || getString(placementRun, ['verdict']) === 'pass';
+  const outcome = resolvePlacementOutcome(placementRun);
+  const pass = outcome === 'pass';
+  const verdictValue = placementVerdictString(placementRun);
+  const lifecycleStatus = getString(placementRun, ['status'], 'pending');
   const provenance = placementRun
-    ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdict} from test-runs API.`
+    ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdictValue || '(none published)'} · status ${lifecycleStatus} · outcome ${outcome} from test-runs API.`
     : 'No placement test run recorded for this agent scope.';
 
   const runDisabled = busy || !targetGroupId;
@@ -104,7 +178,7 @@ export function AgentPlacementPanel({
           <CardDescription>Bounded protected-path canary. Metadata-only signal under custody.</CardDescription>
         </div>
         <div className="row-actions">
-          {pass ? <PlacementPassChip provenance={provenance} /> : <VerifyChip state="pending" provenance={provenance} />}
+          <PlacementVerdictChip outcome={outcome} provenance={provenance} />
           <Button
             size="sm"
             loading={running}
