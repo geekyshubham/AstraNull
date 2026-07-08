@@ -2178,7 +2178,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     } else if (t === 31) {
       if (e = e.memoizedState, e = e === null ? null : e.dehydrated, !e) throw Error(i(317));
       Oi = df(e);
-    } else t === 27 ? (t = Oi, $d(e.type) ? (e = Q, Q = null, Oi = e) : Oi = t) : Oi = Di ? uf(e.stateNode.nextSibling) : null;
+    } else t === 27 ? (t = Oi, $d(e.type) ? (e = uf, uf = null, Oi = e) : Oi = t) : Oi = Di ? Q(e.stateNode.nextSibling) : null;
     return !0;
   }
   function Li() {
@@ -2370,7 +2370,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   var fa = le(null);
   function pa() {
     var e = fa.current;
-    return e === null ? Fl.pooledCache : e;
+    return e === null ? Il.pooledCache : e;
   }
   function ma(e, t) {
     t === null ? de(fa, fa.current) : de(fa, t.pool);
@@ -2393,7 +2393,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       default:
         if (typeof t.status == "string") t.then(an, an);
         else {
-          if (e = Fl, e !== null && 100 < e.shellSuspendCounter) throw Error(i(482));
+          if (e = Il, e !== null && 100 < e.shellSuspendCounter) throw Error(i(482));
           e = t, e.status = "pending", e.then(function(e) {
             if (t.status === "pending") {
               var n = t;
@@ -2666,7 +2666,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   function Ra(e, t, n) {
     var r = e.updateQueue;
     if (r === null) return null;
-    if (r = r.shared, X & 2) {
+    if (r = r.shared, Fl & 2) {
       var i = r.pending;
       return i === null ? t.next = t : (t.next = i.next, i.next = t), r.pending = t, t = $r(e), Qr(e, null, n), t;
     }
@@ -2730,7 +2730,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       o = 0, u = l = c = null, s = a;
       do {
         var f = s.lane & -536870913, p = f !== s.lane;
-        if (p ? (Ll & f) === f : (r & f) === f) {
+        if (p ? (Rl & f) === f : (r & f) === f) {
           f !== 0 && f === oa && (Va = !0), u !== null && (u = u.next = {
             lane: 0,
             tag: s.tag,
@@ -2784,13 +2784,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   }
   var Ka = le(null), qa = le(0);
   function Ja(e, t) {
-    e = Ul, de(qa, e), de(Ka, t), Ul = e | t.baseLanes;
+    e = Wl, de(qa, e), de(Ka, t), Wl = e | t.baseLanes;
   }
   function Ya() {
-    de(qa, Ul), de(Ka, Ka.current);
+    de(qa, Wl), de(Ka, Ka.current);
   }
   function Xa() {
-    Ul = qa.current, ue(Ka), ue(qa);
+    Wl = qa.current, ue(Ka), ue(qa);
   }
   var Za = le(null), Qa = null;
   function $a(e) {
@@ -2971,7 +2971,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       var c = s = null, l = null, u = t, d = !1;
       do {
         var f = u.lane & -536870913;
-        if (f === u.lane ? (oo & f) === f : (Ll & f) === f) {
+        if (f === u.lane ? (oo & f) === f : (Rl & f) === f) {
           var p = u.revertLane;
           if (p === 0) l !== null && (l = l.next = {
             lane: 0,
@@ -3034,7 +3034,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     } else n = t();
     var s = !xr((so || a).memoizedState, n);
     if (s && (a.memoizedState = n, $s = !0), a = a.queue, ss(zo.bind(null, r, a, e), [e]), a.getSnapshot !== t || s || co !== null && co.memoizedState.tag & 1) {
-      if (r.flags |= 2048, ns(9, { destroy: void 0 }, Ro.bind(null, r, a, n, t), null), Fl === null) throw Error(i(349));
+      if (r.flags |= 2048, ns(9, { destroy: void 0 }, Ro.bind(null, r, a, n, t), null), Il === null) throw Error(i(349));
       o || oo & 127 || Lo(r, t, n);
     }
     return n;
@@ -3158,7 +3158,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   }
   function Zo(e, t) {
     if (ki) {
-      var n = Fl.formState;
+      var n = Il.formState;
       if (n !== null) {
         a: {
           var r = K;
@@ -3170,7 +3170,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
                     i = null;
                     break b;
                   }
-                  if (i = uf(i.nextSibling), i === null) {
+                  if (i = Q(i.nextSibling), i === null) {
                     i = null;
                     break b;
                   }
@@ -3178,7 +3178,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
                 a = i.data, i = a === "F!" || a === "F" ? i : null;
               }
               if (i) {
-                Oi = uf(i.nextSibling), r = i.data === "F!";
+                Oi = Q(i.nextSibling), r = i.data === "F!";
                 break a;
               }
             }
@@ -3281,7 +3281,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       ref: t,
       nextImpl: e
     }), function() {
-      if (X & 2) throw Error(i(440));
+      if (Fl & 2) throw Error(i(440));
       return t.impl.apply(void 0, arguments);
     };
   }
@@ -3329,10 +3329,10 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return n.memoizedState = [r, t], r;
   }
   function _s(e, t, n) {
-    return n === void 0 || oo & 1073741824 && !(Ll & 261930) ? e.memoizedState = t : (e.memoizedState = n, e = pu(), K.lanes |= e, Gl |= e, n);
+    return n === void 0 || oo & 1073741824 && !(Rl & 261930) ? e.memoizedState = t : (e.memoizedState = n, e = pu(), K.lanes |= e, Gl |= e, n);
   }
   function vs(e, t, n, r) {
-    return xr(n, t) ? n : Ka.current === null ? !(oo & 42) || oo & 1073741824 && !(Ll & 261930) ? ($s = !0, e.memoizedState = n) : (e = pu(), K.lanes |= e, Gl |= e, t) : (e = _s(e, n, r), xr(e, t) || ($s = !0), e);
+    return xr(n, t) ? n : Ka.current === null ? !(oo & 42) || oo & 1073741824 && !(Rl & 261930) ? ($s = !0, e.memoizedState = n) : (e = pu(), K.lanes |= e, Gl |= e, t) : (e = _s(e, n, r), xr(e, t) || ($s = !0), e);
   }
   function ys(e, t, n, r, i) {
     var a = j.p;
@@ -3448,7 +3448,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       var a = e.alternate;
       if (e.lanes === 0 && (a === null || a.lanes === 0) && (a = t.lastRenderedReducer, a !== null)) try {
         var o = t.lastRenderedState, s = a(o, n);
-        if (i.hasEagerState = !0, i.eagerState = s, xr(s, o)) return Yr(e, t, i, 0), Fl === null && Jr(), !1;
+        if (i.hasEagerState = !0, i.eagerState = s, xr(s, o)) return Yr(e, t, i, 0), Il === null && Jr(), !1;
       } catch {}
       if (n = Xr(e, t, i, r), n !== null) return mu(n, e, r), Ps(n, t, r), !0;
     }
@@ -3583,8 +3583,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         if (n === void 0) throw Error(i(407));
         n = n();
       } else {
-        if (n = t(), Fl === null) throw Error(i(349));
-        Ll & 127 || Lo(r, t, n);
+        if (n = t(), Il === null) throw Error(i(349));
+        Rl & 127 || Lo(r, t, n);
       }
       a.memoizedState = n;
       var o = {
@@ -3594,7 +3594,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       return a.queue = o, os(zo.bind(null, r, o, e), [e]), r.flags |= 2048, ns(9, { destroy: void 0 }, Ro.bind(null, r, o, n, t), null), n;
     },
     useId: function() {
-      var e = Eo(), t = Fl.identifierPrefix;
+      var e = Eo(), t = Il.identifierPrefix;
       if (ki) {
         var n = xi, r = bi;
         n = (r & ~(1 << 32 - We(r) - 1)).toString(32) + n, t = "_" + t + "R_" + n, n = po++, 0 < n && (t += "H" + n.toString(32)), t += "_";
@@ -3623,7 +3623,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     useEffectEvent: function(e) {
       var t = Eo(), n = { impl: e };
       return t.memoizedState = n, function() {
-        if (X & 2) throw Error(i(440));
+        if (Fl & 2) throw Error(i(440));
         return n.impl.apply(void 0, arguments);
       };
     }
@@ -3793,7 +3793,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       if (t = n.alternate, t !== null && Ki(t, n, a, !0), n = Za.current, n !== null) {
         switch (n.tag) {
           case 31:
-          case 13: return Qa === null ? Eu() : n.alternate === null && Wl === 0 && (Wl = 3), n.flags &= -257, n.flags |= 65536, n.lanes = a, r === ya ? n.flags |= 16384 : (t = n.updateQueue, t === null ? n.updateQueue = /* @__PURE__ */ new Set([r]) : t.add(r), Gu(e, r, a)), !1;
+          case 13: return Qa === null ? Eu() : n.alternate === null && X === 0 && (X = 3), n.flags &= -257, n.flags |= 65536, n.lanes = a, r === ya ? n.flags |= 16384 : (t = n.updateQueue, t === null ? n.updateQueue = /* @__PURE__ */ new Set([r]) : t.add(r), Gu(e, r, a)), !1;
           case 22: return n.flags |= 65536, r === ya ? n.flags |= 16384 : (t = n.updateQueue, t === null ? (t = {
             transitions: null,
             markerInstances: null,
@@ -3804,9 +3804,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       }
       return Gu(e, r, a), Eu(), !1;
     }
-    if (ki) return t = Za.current, t === null ? (r !== Mi && (t = Error(i(423), { cause: r }), Ri(fi(t, n))), e = e.current.alternate, e.flags |= 65536, a &= -a, e.lanes |= a, r = fi(r, n), a = Js(e.stateNode, r, a), Ba(e, a), Wl !== 4 && (Wl = 2)) : (!(t.flags & 65536) && (t.flags |= 256), t.flags |= 65536, t.lanes = a, r !== Mi && (e = Error(i(422), { cause: r }), Ri(fi(e, n)))), !1;
+    if (ki) return t = Za.current, t === null ? (r !== Mi && (t = Error(i(423), { cause: r }), Ri(fi(t, n))), e = e.current.alternate, e.flags |= 65536, a &= -a, e.lanes |= a, r = fi(r, n), a = Js(e.stateNode, r, a), Ba(e, a), X !== 4 && (X = 2)) : (!(t.flags & 65536) && (t.flags |= 256), t.flags |= 65536, t.lanes = a, r !== Mi && (e = Error(i(422), { cause: r }), Ri(fi(e, n)))), !1;
     var o = Error(i(520), { cause: r });
-    if (o = fi(o, n), Xl === null ? Xl = [o] : Xl.push(o), Wl !== 4 && (Wl = 2), t === null) return !0;
+    if (o = fi(o, n), Xl === null ? Xl = [o] : Xl.push(o), X !== 4 && (X = 2), t === null) return !0;
     r = fi(r, n), n = t;
     do {
       switch (n.tag) {
@@ -3924,9 +3924,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       else if (t.memoizedState !== null) t.child = e.child, t.flags |= 128, t = null;
       else throw Error(i(558));
       else if ($s || Ki(e, t, n, !1), a = (n & e.childLanes) !== 0, $s || a) {
-        if (r = Fl, r !== null && (s = st(r, n), s !== 0 && s !== o.retryLane)) throw o.retryLane = s, Zr(e, s), mu(r, e, s), Qs;
+        if (r = Il, r !== null && (s = st(r, n), s !== 0 && s !== o.retryLane)) throw o.retryLane = s, Zr(e, s), mu(r, e, s), Qs;
         Eu(), t = cc(e, t, n);
-      } else e = o.treeContext, Oi = uf(s.nextSibling), Di = t, ki = !0, Ai = null, ji = !1, e !== null && Ei(t, e), t = sc(t, r), t.flags |= 4096;
+      } else e = o.treeContext, Oi = Q(s.nextSibling), Di = t, ki = !0, Ai = null, ji = !1, e !== null && Ei(t, e), t = sc(t, r), t.flags |= 4096;
       return t;
     }
     return e = ii(e.child, {
@@ -4022,9 +4022,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           stack: null
         }), t = bc(e, t, n);
       } else if ($s || Ki(e, t, n, !1), s = (n & e.childLanes) !== 0, $s || s) {
-        if (s = Fl, s !== null && (r = st(s, n), r !== 0 && r !== l.retryLane)) throw l.retryLane = r, Zr(e, r), mu(s, e, r), Qs;
+        if (s = Il, s !== null && (r = st(s, n), r !== 0 && r !== l.retryLane)) throw l.retryLane = r, Zr(e, r), mu(s, e, r), Qs;
         sf(c) || Eu(), t = bc(e, t, n);
-      } else sf(c) ? (t.flags |= 192, t.child = e.child, t = null) : (e = l.treeContext, Oi = uf(c.nextSibling), Di = t, ki = !0, Ai = null, ji = !1, e !== null && Ei(t, e), t = vc(t, r.children), t.flags |= 4096);
+      } else sf(c) ? (t.flags |= 192, t.child = e.child, t = null) : (e = l.treeContext, Oi = Q(c.nextSibling), Di = t, ki = !0, Ai = null, ji = !1, e !== null && Ei(t, e), t = vc(t, r.children), t.flags |= 4096);
       return t;
     }
     return a ? (no(t), c = r.fallback, a = t.mode, l = e.child, u = l.sibling, r = ii(l, {
@@ -4214,7 +4214,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
                 break;
               default: e = e.nodeName === "HTML" ? e.ownerDocument.body : e;
             }
-            for (Oi = uf(e.firstChild), Di = t, ki = !0, Ai = null, ji = !0, n = Na(t, null, r, n), t.child = n; n;) n.flags = n.flags & -3 | 4096, n = n.sibling;
+            for (Oi = Q(e.firstChild), Di = t, ki = !0, Ai = null, ji = !0, n = Na(t, null, r, n), t.child = n; n;) n.flags = n.flags & -3 | 4096, n = n.sibling;
           }
           else {
             if (Li(), r === a) {
@@ -4227,8 +4227,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         }
         return t;
       case 26: return uc(e, t), e === null ? (n = Af(t.type, null, t.pendingProps, null)) ? t.memoizedState = n : ki || (n = t.type, e = t.pendingProps, r = Hd(me.current).createElement(n), r[pt] = t, r[mt] = e, Id(r, n, e), Et(r), t.stateNode = r) : t.memoizedState = Af(t.type, e.memoizedProps, t.pendingProps, e.memoizedState), null;
-      case 27: return ve(t), e === null && ki && (r = t.stateNode = pf(t.type, t.pendingProps, me.current), Di = t, ji = !0, a = Oi, $d(t.type) ? (Q = a, Oi = uf(r.firstChild)) : Oi = a), ec(e, t, t.pendingProps.children, n), uc(e, t), e === null && (t.flags |= 4194304), t.child;
-      case 5: return e === null && ki && ((a = r = Oi) && (r = rf(r, t.type, t.pendingProps, ji), r === null ? a = !1 : (t.stateNode = r, Di = t, Oi = uf(r.firstChild), ji = !1, a = !0)), a || Ni(t)), ve(t), a = t.type, o = t.pendingProps, s = e === null ? null : e.memoizedProps, r = o.children, Gd(a, o) ? r = null : s !== null && Gd(a, s) && (t.flags |= 32), t.memoizedState !== null && (a = yo(e, t, So, null, null, n), Qf._currentValue = a), uc(e, t), ec(e, t, r, n), t.child;
+      case 27: return ve(t), e === null && ki && (r = t.stateNode = pf(t.type, t.pendingProps, me.current), Di = t, ji = !0, a = Oi, $d(t.type) ? (uf = a, Oi = Q(r.firstChild)) : Oi = a), ec(e, t, t.pendingProps.children, n), uc(e, t), e === null && (t.flags |= 4194304), t.child;
+      case 5: return e === null && ki && ((a = r = Oi) && (r = rf(r, t.type, t.pendingProps, ji), r === null ? a = !1 : (t.stateNode = r, Di = t, Oi = Q(r.firstChild), ji = !1, a = !0)), a || Ni(t)), ve(t), a = t.type, o = t.pendingProps, s = e === null ? null : e.memoizedProps, r = o.children, Gd(a, o) ? r = null : s !== null && Gd(a, s) && (t.flags |= 32), t.memoizedState !== null && (a = yo(e, t, So, null, null, n), Qf._currentValue = a), uc(e, t), ec(e, t, r, n), t.child;
       case 6: return e === null && ki && ((e = n = Oi) && (n = af(n, t.pendingProps, ji), n === null ? e = !1 : (t.stateNode = n, Di = t, Oi = null, e = !0)), e || Ni(t)), null;
       case 13: return _c(e, t, n);
       case 4: return ge(t, t.stateNode.containerInfo), r = t.pendingProps, e === null ? t.child = Ma(t, null, r, n) : ec(e, t, r, n), t.child;
@@ -4243,7 +4243,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       case 19: return Cc(e, t, n);
       case 31: return lc(e, t, n);
       case 22: return ic(e, t, n, t.pendingProps);
-      case 24: return Ji(t), r = Yi(ta), e === null ? (a = pa(), a === null && (a = Fl, o = na(), a.pooledCache = o, o.refCount++, o !== null && (a.pooledCacheLanes |= n), a = o), t.memoizedState = {
+      case 24: return Ji(t), r = Yi(ta), e === null ? (a = pa(), a === null && (a = Il, o = na(), a.pooledCache = o, o.refCount++, o !== null && (a.pooledCacheLanes |= n), a = o), t.memoizedState = {
         parent: r,
         cache: a
       }, Fa(t), Hi(t, ta, a)) : ((e.lanes & n) !== 0 && (Ia(e, t), Ua(t, null, null, n), Ha()), a = e.memoizedState, o = t.memoizedState, a.parent === r ? (r = o.cache, Hi(t, ta, r), r !== a.cache && Gi(t, [ta], n, !0)) : (a = {
@@ -4428,7 +4428,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         if (ue(io), r = t.memoizedState, r === null) return Nc(t), null;
         if (a = (t.flags & 128) != 0, o = r.rendering, o === null) if (a) Mc(r, !1);
         else {
-          if (Wl !== 0 || e !== null && e.flags & 128) for (e = t.child; e !== null;) {
+          if (X !== 0 || e !== null && e.flags & 128) for (e = t.child; e !== null;) {
             if (o = ao(e), o !== null) {
               for (t.flags |= 128, Mc(r, !1), e = o.updateQueue, t.updateQueue = e, jc(t, e), t.subtreeFlags = 0, e = n, n = t.child; n !== null;) ai(n, e), n = n.sibling;
               return de(io, io.current & 1 | 2), ki && Si(t, r.treeForkCount), t.child;
@@ -5049,7 +5049,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         fl(t, e), hl(e), r & 4 && (r = e.updateQueue, r !== null && (e.updateQueue = null, dl(e, r)));
         break;
       case 13:
-        fl(t, e), hl(e), e.child.flags & 8192 && e.memoizedState !== null != (n !== null && n.memoizedState !== null) && (Z = Me()), r & 4 && (r = e.updateQueue, r !== null && (e.updateQueue = null, dl(e, r)));
+        fl(t, e), hl(e), e.child.flags & 8192 && e.memoizedState !== null != (n !== null && n.memoizedState !== null) && (Ql = Me()), r & 4 && (r = e.updateQueue, r !== null && (e.updateQueue = null, dl(e, r)));
         break;
       case 22:
         a = e.memoizedState !== null;
@@ -5450,26 +5450,26 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     cacheSignal: function() {
       return Yi(ta).controller.signal;
     }
-  }, Pl = typeof WeakMap == "function" ? WeakMap : Map, X = 0, Fl = null, Il = null, Ll = 0, Rl = 0, zl = null, Bl = !1, Vl = !1, Hl = !1, Ul = 0, Wl = 0, Gl = 0, Kl = 0, ql = 0, Jl = 0, Yl = 0, Xl = null, Zl = null, Ql = !1, Z = 0, $l = 0, eu = Infinity, tu = null, nu = null, ru = 0, iu = null, au = null, ou = 0, su = 0, cu = null, lu = null, uu = 0, du = null;
+  }, Pl = typeof WeakMap == "function" ? WeakMap : Map, Fl = 0, Il = null, Ll = null, Rl = 0, zl = 0, Bl = null, Vl = !1, Hl = !1, Ul = !1, Wl = 0, X = 0, Gl = 0, Kl = 0, ql = 0, Jl = 0, Yl = 0, Xl = null, Zl = null, Z = !1, Ql = 0, $l = 0, eu = Infinity, tu = null, nu = null, ru = 0, iu = null, au = null, ou = 0, su = 0, cu = null, lu = null, uu = 0, du = null;
   function fu() {
-    return X & 2 && Ll !== 0 ? Ll & -Ll : A.T === null ? ut() : dd();
+    return Fl & 2 && Rl !== 0 ? Rl & -Rl : A.T === null ? ut() : dd();
   }
   function pu() {
-    if (Jl === 0) if (!(Ll & 536870912) || ki) {
+    if (Jl === 0) if (!(Rl & 536870912) || ki) {
       var e = Ye;
       Ye <<= 1, !(Ye & 3932160) && (Ye = 262144), Jl = e;
     } else Jl = 536870912;
     return e = Za.current, e !== null && (e.flags |= 32), Jl;
   }
   function mu(e, t, n) {
-    (e === Fl && (Rl === 2 || Rl === 9) || e.cancelPendingCommit !== null) && (xu(e, 0), vu(e, Ll, Jl, !1)), rt(e, n), (!(X & 2) || e !== Fl) && (e === Fl && (!(X & 2) && (Kl |= n), Wl === 4 && vu(e, Ll, Jl, !1)), rd(e));
+    (e === Il && (zl === 2 || zl === 9) || e.cancelPendingCommit !== null) && (xu(e, 0), vu(e, Rl, Jl, !1)), rt(e, n), (!(Fl & 2) || e !== Il) && (e === Il && (!(Fl & 2) && (Kl |= n), X === 4 && vu(e, Rl, Jl, !1)), rd(e));
   }
   function hu(e, t, n) {
-    if (X & 6) throw Error(i(327));
+    if (Fl & 6) throw Error(i(327));
     var r = !n && (t & 127) == 0 && (t & e.expiredLanes) === 0 || $e(e, t), a = r ? ku(e, t) : Du(e, t, !0), o = r;
     do {
       if (a === 0) {
-        Vl && !r && vu(e, t, 0, !1);
+        Hl && !r && vu(e, t, 0, !1);
         break;
       } else {
         if (n = e.current.alternate, o && !_u(n)) {
@@ -5486,7 +5486,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
               a = Xl;
               var l = c.current.memoizedState.isDehydrated;
               if (l && (xu(c, s).flags |= 256), s = Du(c, s, !1), s !== 2) {
-                if (Hl && !l) {
+                if (Ul && !l) {
                   c.errorRecoveryDisabledLanes |= o, Kl |= o, a = 4;
                   break a;
                 }
@@ -5507,7 +5507,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
             case 1: throw Error(i(345));
             case 4: if ((t & 4194048) !== t) break;
             case 6:
-              vu(r, t, Jl, !Bl);
+              vu(r, t, Jl, !Vl);
               break a;
             case 2:
               Zl = null;
@@ -5516,12 +5516,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
             case 5: break;
             default: throw Error(i(329));
           }
-          if ((t & 62914560) === t && (a = Z + 300 - Me(), 10 < a)) {
-            if (vu(r, t, Jl, !Bl), Qe(r, 0, !0) !== 0) break a;
-            ou = t, r.timeoutHandle = Jd(gu.bind(null, r, n, Zl, tu, Ql, t, Jl, Kl, Yl, Bl, o, "Throttled", -0, 0), a);
+          if ((t & 62914560) === t && (a = Ql + 300 - Me(), 10 < a)) {
+            if (vu(r, t, Jl, !Vl), Qe(r, 0, !0) !== 0) break a;
+            ou = t, r.timeoutHandle = Jd(gu.bind(null, r, n, Zl, tu, Z, t, Jl, Kl, Yl, Vl, o, "Throttled", -0, 0), a);
             break a;
           }
-          gu(r, n, Zl, tu, Ql, t, Jl, Kl, Yl, Bl, o, null, -0, 0);
+          gu(r, n, Zl, tu, Z, t, Jl, Kl, Yl, Vl, o, null, -0, 0);
         }
       }
       break;
@@ -5540,8 +5540,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         waitingForViewTransition: !1,
         unsuspend: an
       }, Dl(t, a, d);
-      var m = (a & 62914560) === a ? Z - Me() : (a & 4194048) === a ? $l - Me() : 0;
-      if (m = $(d, m), m !== null) {
+      var m = (a & 62914560) === a ? Ql - Me() : (a & 4194048) === a ? $l - Me() : 0;
+      if (m = qf(d, m), m !== null) {
         ou = a, e.cancelPendingCommit = m(Iu.bind(null, e, t, a, n, r, i, o, s, c, u, d, null, f, p)), vu(e, a, o, !l);
         return;
       }
@@ -5581,32 +5581,32 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     n !== 0 && at(e, n, t);
   }
   function yu() {
-    return X & 6 ? !0 : (id(0, !1), !1);
+    return Fl & 6 ? !0 : (id(0, !1), !1);
   }
   function bu() {
-    if (Il !== null) {
-      if (Rl === 0) var e = Il.return;
-      else e = Il, Vi = Bi = null, To(e), Ea = null, Da = 0, e = Il;
+    if (Ll !== null) {
+      if (zl === 0) var e = Ll.return;
+      else e = Ll, Vi = Bi = null, To(e), Ea = null, Da = 0, e = Ll;
       for (; e !== null;) Ic(e.alternate, e), e = e.return;
-      Il = null;
+      Ll = null;
     }
   }
   function xu(e, t) {
     var n = e.timeoutHandle;
-    n !== -1 && (e.timeoutHandle = -1, Yd(n)), n = e.cancelPendingCommit, n !== null && (e.cancelPendingCommit = null, n()), ou = 0, bu(), Fl = e, Il = n = ii(e.current, null), Ll = t, Rl = 0, zl = null, Bl = !1, Vl = $e(e, t), Hl = !1, Yl = Jl = ql = Kl = Gl = Wl = 0, Zl = Xl = null, Ql = !1, t & 8 && (t |= t & 32);
+    n !== -1 && (e.timeoutHandle = -1, Yd(n)), n = e.cancelPendingCommit, n !== null && (e.cancelPendingCommit = null, n()), ou = 0, bu(), Il = e, Ll = n = ii(e.current, null), Rl = t, zl = 0, Bl = null, Vl = !1, Hl = $e(e, t), Ul = !1, Yl = Jl = ql = Kl = Gl = X = 0, Zl = Xl = null, Z = !1, t & 8 && (t |= t & 32);
     var r = e.entangledLanes;
     if (r !== 0) for (e = e.entanglements, r &= t; 0 < r;) {
       var i = 31 - We(r), a = 1 << i;
       t |= e[i], r &= ~a;
     }
-    return Ul = t, Jr(), n;
+    return Wl = t, Jr(), n;
   }
   function Su(e, t) {
-    K = null, A.H = Fs, t === ga || t === va ? (t = wa(), Rl = 3) : t === _a ? (t = wa(), Rl = 4) : Rl = t === Qs ? 8 : typeof t == "object" && t && typeof t.then == "function" ? 6 : 1, zl = t, Il === null && (Wl = 1, Ks(e, fi(t, e.current)));
+    K = null, A.H = Fs, t === ga || t === va ? (t = wa(), zl = 3) : t === _a ? (t = wa(), zl = 4) : zl = t === Qs ? 8 : typeof t == "object" && t && typeof t.then == "function" ? 6 : 1, Bl = t, Ll === null && (X = 1, Ks(e, fi(t, e.current)));
   }
   function Cu() {
     var e = Za.current;
-    return e === null ? !0 : (Ll & 4194048) === Ll ? Qa === null : (Ll & 62914560) === Ll || Ll & 536870912 ? e === Qa : !1;
+    return e === null ? !0 : (Rl & 4194048) === Rl ? Qa === null : (Rl & 62914560) === Rl || Rl & 536870912 ? e === Qa : !1;
   }
   function wu() {
     var e = A.H;
@@ -5617,19 +5617,19 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     return A.A = Nl, e;
   }
   function Eu() {
-    Wl = 4, Bl || (Ll & 4194048) !== Ll && Za.current !== null || (Vl = !0), !(Gl & 134217727) && !(Kl & 134217727) || Fl === null || vu(Fl, Ll, Jl, !1);
+    X = 4, Vl || (Rl & 4194048) !== Rl && Za.current !== null || (Hl = !0), !(Gl & 134217727) && !(Kl & 134217727) || Il === null || vu(Il, Rl, Jl, !1);
   }
   function Du(e, t, n) {
-    var r = X;
-    X |= 2;
+    var r = Fl;
+    Fl |= 2;
     var i = wu(), a = Tu();
-    (Fl !== e || Ll !== t) && (tu = null, xu(e, t)), t = !1;
-    var o = Wl;
+    (Il !== e || Rl !== t) && (tu = null, xu(e, t)), t = !1;
+    var o = X;
     a: do
       try {
-        if (Rl !== 0 && Il !== null) {
-          var s = Il, c = zl;
-          switch (Rl) {
+        if (zl !== 0 && Ll !== null) {
+          var s = Ll, c = Bl;
+          switch (zl) {
             case 8:
               bu(), o = 6;
               break a;
@@ -5638,84 +5638,84 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
             case 9:
             case 6:
               Za.current === null && (t = !0);
-              var l = Rl;
-              if (Rl = 0, zl = null, Nu(e, s, c, l), n && Vl) {
+              var l = zl;
+              if (zl = 0, Bl = null, Nu(e, s, c, l), n && Hl) {
                 o = 0;
                 break a;
               }
               break;
-            default: l = Rl, Rl = 0, zl = null, Nu(e, s, c, l);
+            default: l = zl, zl = 0, Bl = null, Nu(e, s, c, l);
           }
         }
-        Ou(), o = Wl;
+        Ou(), o = X;
         break;
       } catch (t) {
         Su(e, t);
       }
     while (1);
-    return t && e.shellSuspendCounter++, Vi = Bi = null, X = r, A.H = i, A.A = a, Il === null && (Fl = null, Ll = 0, Jr()), o;
+    return t && e.shellSuspendCounter++, Vi = Bi = null, Fl = r, A.H = i, A.A = a, Ll === null && (Il = null, Rl = 0, Jr()), o;
   }
   function Ou() {
-    for (; Il !== null;) ju(Il);
+    for (; Ll !== null;) ju(Ll);
   }
   function ku(e, t) {
-    var n = X;
-    X |= 2;
+    var n = Fl;
+    Fl |= 2;
     var r = wu(), a = Tu();
-    Fl !== e || Ll !== t ? (tu = null, eu = Me() + 500, xu(e, t)) : Vl = $e(e, t);
+    Il !== e || Rl !== t ? (tu = null, eu = Me() + 500, xu(e, t)) : Hl = $e(e, t);
     a: do
       try {
-        if (Rl !== 0 && Il !== null) {
-          t = Il;
-          var o = zl;
-          b: switch (Rl) {
+        if (zl !== 0 && Ll !== null) {
+          t = Ll;
+          var o = Bl;
+          b: switch (zl) {
             case 1:
-              Rl = 0, zl = null, Nu(e, t, o, 1);
+              zl = 0, Bl = null, Nu(e, t, o, 1);
               break;
             case 2:
             case 9:
               if (ba(o)) {
-                Rl = 0, zl = null, Mu(t);
+                zl = 0, Bl = null, Mu(t);
                 break;
               }
               t = function() {
-                Rl !== 2 && Rl !== 9 || Fl !== e || (Rl = 7), rd(e);
+                zl !== 2 && zl !== 9 || Il !== e || (zl = 7), rd(e);
               }, o.then(t, t);
               break a;
             case 3:
-              Rl = 7;
+              zl = 7;
               break a;
             case 4:
-              Rl = 5;
+              zl = 5;
               break a;
             case 7:
-              ba(o) ? (Rl = 0, zl = null, Mu(t)) : (Rl = 0, zl = null, Nu(e, t, o, 7));
+              ba(o) ? (zl = 0, Bl = null, Mu(t)) : (zl = 0, Bl = null, Nu(e, t, o, 7));
               break;
             case 5:
               var s = null;
-              switch (Il.tag) {
-                case 26: s = Il.memoizedState;
+              switch (Ll.tag) {
+                case 26: s = Ll.memoizedState;
                 case 5:
                 case 27:
-                  var c = Il;
+                  var c = Ll;
                   if (s ? Gf(s) : c.stateNode.complete) {
-                    Rl = 0, zl = null;
+                    zl = 0, Bl = null;
                     var l = c.sibling;
-                    if (l !== null) Il = l;
+                    if (l !== null) Ll = l;
                     else {
                       var u = c.return;
-                      u === null ? Il = null : (Il = u, Pu(u));
+                      u === null ? Ll = null : (Ll = u, Pu(u));
                     }
                     break b;
                   }
               }
-              Rl = 0, zl = null, Nu(e, t, o, 5);
+              zl = 0, Bl = null, Nu(e, t, o, 5);
               break;
             case 6:
-              Rl = 0, zl = null, Nu(e, t, o, 6);
+              zl = 0, Bl = null, Nu(e, t, o, 6);
               break;
             case 8:
-              bu(), Wl = 6;
+              bu(), X = 6;
               break a;
             default: throw Error(i(462));
           }
@@ -5726,97 +5726,97 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         Su(e, t);
       }
     while (1);
-    return Vi = Bi = null, A.H = r, A.A = a, X = n, Il === null ? (Fl = null, Ll = 0, Jr(), Wl) : 0;
+    return Vi = Bi = null, A.H = r, A.A = a, Fl = n, Ll === null ? (Il = null, Rl = 0, Jr(), X) : 0;
   }
   function Au() {
-    for (; Il !== null && !Ae();) ju(Il);
+    for (; Ll !== null && !Ae();) ju(Ll);
   }
   function ju(e) {
-    var t = Dc(e.alternate, e, Ul);
-    e.memoizedProps = e.pendingProps, t === null ? Pu(e) : Il = t;
+    var t = Dc(e.alternate, e, Wl);
+    e.memoizedProps = e.pendingProps, t === null ? Pu(e) : Ll = t;
   }
   function Mu(e) {
     var t = e, n = t.alternate;
     switch (t.tag) {
       case 15:
       case 0:
-        t = fc(n, t, t.pendingProps, t.type, void 0, Ll);
+        t = fc(n, t, t.pendingProps, t.type, void 0, Rl);
         break;
       case 11:
-        t = fc(n, t, t.pendingProps, t.type.render, t.ref, Ll);
+        t = fc(n, t, t.pendingProps, t.type.render, t.ref, Rl);
         break;
       case 5: To(t);
-      default: Ic(n, t), t = Il = ai(t, Ul), t = Dc(n, t, Ul);
+      default: Ic(n, t), t = Ll = ai(t, Wl), t = Dc(n, t, Wl);
     }
-    e.memoizedProps = e.pendingProps, t === null ? Pu(e) : Il = t;
+    e.memoizedProps = e.pendingProps, t === null ? Pu(e) : Ll = t;
   }
   function Nu(e, t, n, r) {
     Vi = Bi = null, To(t), Ea = null, Da = 0;
     var i = t.return;
     try {
-      if (Zs(e, i, t, n, Ll)) {
-        Wl = 1, Ks(e, fi(n, e.current)), Il = null;
+      if (Zs(e, i, t, n, Rl)) {
+        X = 1, Ks(e, fi(n, e.current)), Ll = null;
         return;
       }
     } catch (t) {
-      if (i !== null) throw Il = i, t;
-      Wl = 1, Ks(e, fi(n, e.current)), Il = null;
+      if (i !== null) throw Ll = i, t;
+      X = 1, Ks(e, fi(n, e.current)), Ll = null;
       return;
     }
-    t.flags & 32768 ? (ki || r === 1 ? e = !0 : Vl || Ll & 536870912 ? e = !1 : (Bl = e = !0, (r === 2 || r === 9 || r === 3 || r === 6) && (r = Za.current, r !== null && r.tag === 13 && (r.flags |= 16384))), Fu(t, e)) : Pu(t);
+    t.flags & 32768 ? (ki || r === 1 ? e = !0 : Hl || Rl & 536870912 ? e = !1 : (Vl = e = !0, (r === 2 || r === 9 || r === 3 || r === 6) && (r = Za.current, r !== null && r.tag === 13 && (r.flags |= 16384))), Fu(t, e)) : Pu(t);
   }
   function Pu(e) {
     var t = e;
     do {
       if (t.flags & 32768) {
-        Fu(t, Bl);
+        Fu(t, Vl);
         return;
       }
       e = t.return;
-      var n = Pc(t.alternate, t, Ul);
+      var n = Pc(t.alternate, t, Wl);
       if (n !== null) {
-        Il = n;
+        Ll = n;
         return;
       }
       if (t = t.sibling, t !== null) {
-        Il = t;
+        Ll = t;
         return;
       }
-      Il = t = e;
+      Ll = t = e;
     } while (t !== null);
-    Wl === 0 && (Wl = 5);
+    X === 0 && (X = 5);
   }
   function Fu(e, t) {
     do {
       var n = Fc(e.alternate, e);
       if (n !== null) {
-        n.flags &= 32767, Il = n;
+        n.flags &= 32767, Ll = n;
         return;
       }
       if (n = e.return, n !== null && (n.flags |= 32768, n.subtreeFlags = 0, n.deletions = null), !t && (e = e.sibling, e !== null)) {
-        Il = e;
+        Ll = e;
         return;
       }
-      Il = e = n;
+      Ll = e = n;
     } while (e !== null);
-    Wl = 6, Il = null;
+    X = 6, Ll = null;
   }
   function Iu(e, t, n, r, a, o, s, c, l) {
     e.cancelPendingCommit = null;
     do
       Vu();
     while (ru !== 0);
-    if (X & 6) throw Error(i(327));
+    if (Fl & 6) throw Error(i(327));
     if (t !== null) {
       if (t === e.current) throw Error(i(177));
-      if (o = t.lanes | t.childLanes, o |= qr, it(e, n, o, s, c, l), e === Fl && (Il = Fl = null, Ll = 0), au = t, iu = e, ou = n, su = o, cu = a, lu = r, t.subtreeFlags & 10256 || t.flags & 10256 ? (e.callbackNode = null, e.callbackPriority = 0, Xu(Ie, function() {
+      if (o = t.lanes | t.childLanes, o |= qr, it(e, n, o, s, c, l), e === Il && (Ll = Il = null, Rl = 0), au = t, iu = e, ou = n, su = o, cu = a, lu = r, t.subtreeFlags & 10256 || t.flags & 10256 ? (e.callbackNode = null, e.callbackPriority = 0, Xu(Ie, function() {
         return Hu(), null;
       })) : (e.callbackNode = null, e.callbackPriority = 0), r = (t.flags & 13878) != 0, t.subtreeFlags & 13878 || r) {
-        r = A.T, A.T = null, a = j.p, j.p = 2, s = X, X |= 4;
+        r = A.T, A.T = null, a = j.p, j.p = 2, s = Fl, Fl |= 4;
         try {
           tl(e, t, n);
         } finally {
-          X = s, j.p = a, A.T = r;
+          Fl = s, j.p = a, A.T = r;
         }
       }
       ru = 1, Lu(), Ru(), zu();
@@ -5830,8 +5830,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         n = A.T, A.T = null;
         var r = j.p;
         j.p = 2;
-        var i = X;
-        X |= 4;
+        var i = Fl;
+        Fl |= 4;
         try {
           ml(t, e);
           var a = Vd, o = H(e.containerInfo), s = a.focusedElem, c = a.selectionRange;
@@ -5864,7 +5864,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           }
           sp = !!Bd, Vd = Bd = null;
         } finally {
-          X = i, j.p = r, A.T = n;
+          Fl = i, j.p = r, A.T = n;
         }
       }
       e.current = t, ru = 2;
@@ -5878,12 +5878,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
         n = A.T, A.T = null;
         var r = j.p;
         j.p = 2;
-        var i = X;
-        X |= 4;
+        var i = Fl;
+        Fl |= 4;
         try {
           nl(e, t.alternate, t);
         } finally {
-          X = i, j.p = r, A.T = n;
+          Fl = i, j.p = r, A.T = n;
         }
       }
       ru = 3;
@@ -5926,9 +5926,9 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     try {
       j.p = 32 > n ? 32 : n, A.T = null, n = cu, cu = null;
       var o = iu, s = ou;
-      if (ru = 0, au = iu = null, ou = 0, X & 6) throw Error(i(331));
-      var c = X;
-      if (X |= 4, Al(o.current), Sl(o, o.current, s, n), X = c, id(0, !1), He && typeof He.onPostCommitFiberRoot == "function") try {
+      if (ru = 0, au = iu = null, ou = 0, Fl & 6) throw Error(i(331));
+      var c = Fl;
+      if (Fl |= 4, Al(o.current), Sl(o, o.current, s, n), Fl = c, id(0, !1), He && typeof He.onPostCommitFiberRoot == "function") try {
         He.onPostCommitFiberRoot(Ve, o);
       } catch {}
       return !0;
@@ -5962,11 +5962,11 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       var i = /* @__PURE__ */ new Set();
       r.set(t, i);
     } else i = r.get(t), i === void 0 && (i = /* @__PURE__ */ new Set(), r.set(t, i));
-    i.has(n) || (Hl = !0, i.add(n), e = Ku.bind(null, e, t, n), t.then(e, e));
+    i.has(n) || (Ul = !0, i.add(n), e = Ku.bind(null, e, t, n), t.then(e, e));
   }
   function Ku(e, t, n) {
     var r = e.pingCache;
-    r !== null && r.delete(t), e.pingedLanes |= e.suspendedLanes & n, e.warmLanes &= ~n, Fl === e && (Ll & n) === n && (Wl === 4 || Wl === 3 && (Ll & 62914560) === Ll && 300 > Me() - Z ? !(X & 2) && xu(e, 0) : ql |= n, Yl === Ll && (Yl = 0)), rd(e);
+    r !== null && r.delete(t), e.pingedLanes |= e.suspendedLanes & n, e.warmLanes &= ~n, Il === e && (Rl & n) === n && (X === 4 || X === 3 && (Rl & 62914560) === Rl && 300 > Me() - Ql ? !(Fl & 2) && xu(e, 0) : ql |= n, Yl === Rl && (Yl = 0)), rd(e);
   }
   function qu(e, t) {
     t === 0 && (t = tt()), e = Zr(e, t), e !== null && (rt(e, t), rd(e));
@@ -6013,7 +6013,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
               a = (1 << 31 - We(42 | e) + 1) - 1, a &= i & ~(o & ~s), a = a & 201326741 ? a & 201326741 | 1 : a ? a | 2 : 0;
             }
             a !== 0 && (n = !0, ld(r, a));
-          } else a = Ll, a = Qe(r, r === Fl ? a : 0, r.cancelPendingCommit !== null || r.timeoutHandle !== -1), !(a & 3) || $e(r, a) || (n = !0, ld(r, a));
+          } else a = Rl, a = Qe(r, r === Il ? a : 0, r.cancelPendingCommit !== null || r.timeoutHandle !== -1), !(a & 3) || $e(r, a) || (n = !0, ld(r, a));
           r = r.next;
         }
       while (n);
@@ -6038,7 +6038,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       var o = 31 - We(a), s = 1 << o, c = i[o];
       c === -1 ? ((s & n) === 0 || (s & r) !== 0) && (i[o] = et(s, t)) : c <= t && (e.expiredLanes |= s), a &= ~s;
     }
-    if (t = Fl, n = Ll, n = Qe(e, e === t ? n : 0, e.cancelPendingCommit !== null || e.timeoutHandle !== -1), r = e.callbackNode, n === 0 || e === t && (Rl === 2 || Rl === 9) || e.cancelPendingCommit !== null) return r !== null && r !== null && ke(r), e.callbackNode = null, e.callbackPriority = 0;
+    if (t = Il, n = Rl, n = Qe(e, e === t ? n : 0, e.cancelPendingCommit !== null || e.timeoutHandle !== -1), r = e.callbackNode, n === 0 || e === t && (zl === 2 || zl === 9) || e.cancelPendingCommit !== null) return r !== null && r !== null && ke(r), e.callbackNode = null, e.callbackPriority = 0;
     if (!(n & 3) || $e(e, n)) {
       if (t = n & -n, t === e.callbackPriority) return t;
       switch (r !== null && ke(r), lt(n)) {
@@ -6062,8 +6062,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     if (ru !== 0 && ru !== 5) return e.callbackNode = null, e.callbackPriority = 0, null;
     var n = e.callbackNode;
     if (Vu() && e.callbackNode !== n) return null;
-    var r = Ll;
-    return r = Qe(e, e === Fl ? r : 0, e.cancelPendingCommit !== null || e.timeoutHandle !== -1), r === 0 ? null : (hu(e, r, t), sd(e, Me()), e.callbackNode != null && e.callbackNode === n ? cd.bind(null, e) : null);
+    var r = Rl;
+    return r = Qe(e, e === Il ? r : 0, e.cancelPendingCommit !== null || e.timeoutHandle !== -1), r === 0 ? null : (hu(e, r, t), sd(e, Me()), e.callbackNode != null && e.callbackNode === n ? cd.bind(null, e) : null);
   }
   function ld(e, t) {
     if (Vu()) return null;
@@ -6071,7 +6071,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
   }
   function ud() {
     Zd(function() {
-      X & 6 ? Oe(Pe, ad) : od();
+      Fl & 6 ? Oe(Pe, ad) : od();
     });
   }
   function dd() {
@@ -7080,17 +7080,17 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           return e;
         default: return e;
       }
-      if (e = uf(e.nextSibling), e === null) break;
+      if (e = Q(e.nextSibling), e === null) break;
     }
     return null;
   }
   function af(e, t, n) {
     if (t === "") return null;
-    for (; e.nodeType !== 3;) if ((e.nodeType !== 1 || e.nodeName !== "INPUT" || e.type !== "hidden") && !n || (e = uf(e.nextSibling), e === null)) return null;
+    for (; e.nodeType !== 3;) if ((e.nodeType !== 1 || e.nodeName !== "INPUT" || e.type !== "hidden") && !n || (e = Q(e.nextSibling), e === null)) return null;
     return e;
   }
   function of(e, t) {
-    for (; e.nodeType !== 8;) if ((e.nodeType !== 1 || e.nodeName !== "INPUT" || e.type !== "hidden") && !t || (e = uf(e.nextSibling), e === null)) return null;
+    for (; e.nodeType !== 8;) if ((e.nodeType !== 1 || e.nodeName !== "INPUT" || e.type !== "hidden") && !t || (e = Q(e.nextSibling), e === null)) return null;
     return e;
   }
   function sf(e) {
@@ -7110,7 +7110,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       n.addEventListener("DOMContentLoaded", r), e._reactRetry = r;
     }
   }
-  function uf(e) {
+  function Q(e) {
     for (; e != null; e = e.nextSibling) {
       var t = e.nodeType;
       if (t === 1 || t === 3) break;
@@ -7121,14 +7121,14 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
     }
     return e;
   }
-  var Q = null;
+  var uf = null;
   function df(e) {
     e = e.nextSibling;
     for (var t = 0; e;) {
       if (e.nodeType === 8) {
         var n = e.data;
         if (n === "/$" || n === "/&") {
-          if (t === 0) return uf(e.nextSibling);
+          if (t === 0) return Q(e.nextSibling);
           t--;
         } else n !== "$" && n !== "$!" && n !== "$?" && n !== "$~" && n !== "&" || t++;
       }
@@ -7512,8 +7512,8 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
       e.stylesheets === null && (e.stylesheets = /* @__PURE__ */ new Map()), e.stylesheets.set(n, t), (t = n.state.preload) && !(n.state.loading & 3) && (e.count++, n = Jf.bind(e), t.addEventListener("load", n), t.addEventListener("error", n));
     }
   }
-  var qf = 0;
-  function $(e, t) {
+  var $ = 0;
+  function qf(e, t) {
     return e.stylesheets && e.count === 0 && Xf(e, e.stylesheets), 0 < e.count || 0 < e.imgCount ? function(n) {
       var r = setTimeout(function() {
         if (e.stylesheets && Xf(e, e.stylesheets), e.unsuspend) {
@@ -7521,13 +7521,13 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
           e.unsuspend = null, t();
         }
       }, 6e4 + t);
-      0 < e.imgBytes && qf === 0 && (qf = 62500 * zd());
+      0 < e.imgBytes && $ === 0 && ($ = 62500 * zd());
       var i = setTimeout(function() {
         if (e.waitingForImages = !1, e.count === 0 && (e.stylesheets && Xf(e, e.stylesheets), e.unsuspend)) {
           var t = e.unsuspend;
           e.unsuspend = null, t();
         }
-      }, (e.imgBytes > qf ? 50 : 800) + t);
+      }, (e.imgBytes > $ ? 50 : 800) + t);
       return e.unsuspend = n, function() {
         e.unsuspend = null, clearTimeout(r), clearTimeout(i);
       };
@@ -7647,7 +7647,7 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
                     var c = 1 << 31 - We(o);
                     s.entanglements[1] |= c, o &= ~c;
                   }
-                  rd(a), !(X & 6) && (eu = Me() + 500, id(0, !1));
+                  rd(a), !(Fl & 6) && (eu = Me() + 500, id(0, !1));
                 }
               }
               break;
@@ -12091,17 +12091,17 @@ function Lr({ children: e, eyebrow: t = "No-access-first · Evidence-backed · S
           /* @__PURE__ */ (0, I.jsxs)("nav", {
             className: "public-topnav-actions",
             "aria-label": "Account access",
-            children: [i ? /* @__PURE__ */ (0, I.jsx)(R, {
-              href: "/signup",
-              variant: n === "signup" ? "default" : "secondary",
-              size: "sm",
-              children: "Sign up"
-            }) : null, /* @__PURE__ */ (0, I.jsx)(R, {
+            children: [/* @__PURE__ */ (0, I.jsx)(R, {
               href: r,
-              variant: n === "login" ? "default" : "secondary",
+              variant: n === "login" ? "default" : "ghost",
               size: "sm",
               children: "Log in"
-            })]
+            }), i ? /* @__PURE__ */ (0, I.jsx)(R, {
+              href: "/signup",
+              variant: n === "login" ? "secondary" : "default",
+              size: "sm",
+              children: "Request access"
+            }) : null]
           })
         ]
       })
@@ -12579,7 +12579,6 @@ function Kr() {
 function qr({ config: e }) {
   let t = String(e.siteConfig.product_name ?? "AstraNull"), n = String(e.siteConfig.promise ?? "AstraNull proves DDoS readiness for customer-declared targets without requiring cloud credentials or automatic IP inventory discovery."), r = e.siteConfig.signup_enabled !== !1, i = e.loginUrl;
   return Ir({ title: `${t} · Prove DDoS readiness without handing over your cloud keys` }), /* @__PURE__ */ (0, I.jsx)(Lr, {
-    eyebrow: "",
     loginHref: i,
     signupEnabled: r,
     children: /* @__PURE__ */ (0, I.jsxs)("main", {
@@ -19173,7 +19172,16 @@ function Jc({ data: e, config: t, session: n, onRefresh: r }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(mc, { route: "reports" }),
+      /* @__PURE__ */ (0, I.jsx)(mc, {
+        route: "reports",
+        actions: /* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: i !== "",
+          onClick: () => void r(),
+          children: "Refresh"
+        })
+      }),
       /* @__PURE__ */ (0, I.jsxs)(hc, { children: [
         /* @__PURE__ */ (0, I.jsx)("span", {
           className: "tabular-nums",
@@ -19535,7 +19543,14 @@ function Qc({ data: e, config: t, session: n, onRefresh: r }) {
     children: [
       /* @__PURE__ */ (0, I.jsx)(mc, {
         route: "settings",
-        eyebrow: "Tenant configuration"
+        eyebrow: "Tenant configuration",
+        actions: /* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: o !== "",
+          onClick: () => void r(),
+          children: "Refresh"
+        })
       }),
       /* @__PURE__ */ (0, I.jsxs)(hc, { children: [
         q(b ?? {}, ["name"], "Organization"),
@@ -20173,7 +20188,13 @@ function $c({ data: e, config: t, session: n, onRefresh: r }) {
     children: [
       /* @__PURE__ */ (0, I.jsx)(mc, {
         route: "environments",
-        actions: /* @__PURE__ */ (0, I.jsx)(L, {
+        actions: /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [/* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: i !== "",
+          onClick: () => void r(),
+          children: "Refresh"
+        }), /* @__PURE__ */ (0, I.jsx)(L, {
           variant: "default",
           size: "sm",
           disabled: i !== "",
@@ -20182,7 +20203,7 @@ function $c({ data: e, config: t, session: n, onRefresh: r }) {
             e instanceof HTMLDetailsElement && (e.open = !0), e?.scrollIntoView({ behavior: "smooth" });
           },
           children: "Declare environment"
-        })
+        })] })
       }),
       (o || c) && /* @__PURE__ */ (0, I.jsx)("div", {
         className: c ? "form-banner error" : "form-banner neutral",
@@ -20544,7 +20565,13 @@ function el({ data: e, config: t, session: n, onRefresh: r }) {
         route: "test-policies",
         title: "Scheduler",
         description: "Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail.",
-        actions: /* @__PURE__ */ (0, I.jsx)(L, {
+        actions: /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [/* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: i !== "",
+          onClick: () => void r(),
+          children: "Refresh"
+        }), /* @__PURE__ */ (0, I.jsx)(L, {
           variant: "default",
           size: "sm",
           disabled: i !== "",
@@ -20553,7 +20580,7 @@ function el({ data: e, config: t, session: n, onRefresh: r }) {
             e instanceof HTMLDetailsElement && (e.open = !0), e?.scrollIntoView({ behavior: "smooth" });
           },
           children: "New schedule"
-        })
+        })] })
       }),
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "kpi-row",
@@ -20938,7 +20965,22 @@ function nl({ data: e, config: t, session: n, onRefresh: r }) {
     children: [
       /* @__PURE__ */ (0, I.jsx)(mc, {
         route: "integrations",
-        eyebrow: "Connectors"
+        eyebrow: "Connectors",
+        actions: /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [/* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: u !== "",
+          onClick: () => void r(),
+          children: "Refresh"
+        }), _ ? /* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "default",
+          size: "sm",
+          onClick: () => {
+            let e = document.querySelector("#integrations-create-connector");
+            e instanceof HTMLDetailsElement && (e.open = !0), e?.scrollIntoView({ behavior: "smooth" });
+          },
+          children: "Add connector"
+        }) : null] })
       }),
       /* @__PURE__ */ (0, I.jsxs)(hc, { children: [
         /* @__PURE__ */ (0, I.jsx)("span", {
@@ -21629,7 +21671,14 @@ function ll({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     children: [
       /* @__PURE__ */ (0, I.jsx)(mc, {
         route: e,
-        eyebrow: e === "internal-soc" ? "Staff SOC surface" : "Staff-only surface"
+        eyebrow: e === "internal-soc" ? "Staff SOC surface" : "Staff-only surface",
+        actions: /* @__PURE__ */ (0, I.jsx)(L, {
+          variant: "secondary",
+          size: "sm",
+          disabled: a !== "",
+          onClick: () => void i(),
+          children: "Refresh"
+        })
       }),
       (s || l) && /* @__PURE__ */ (0, I.jsx)("div", {
         className: l ? "form-banner error" : "form-banner",
@@ -22049,19 +22098,15 @@ function Sl(e) {
 function Cl(e) {
   return dl.has(e.trim().toLowerCase());
 }
-function wl(e) {
-  let t = Y(e, ["eligibility"], "");
-  return t !== "—" && t ? t : Cl(Sl(e)) ? "eligible" : "not_eligible";
-}
-function Tl(e, t) {
+function wl(e, t) {
   if (!e) return "unverified";
   let n = Y(e, ["state"], "").toLowerCase();
   return t === !0 || n === "resolved" ? "dns_verified" : n === "pending" ? "pending" : n === "expired" || n === "—" || !n ? "unverified" : n;
 }
-function El(e) {
+function Tl(e) {
   return e.length === 0 ? null : e.find((e) => Y(e, ["state"], "").toLowerCase() === "pending") || ([...e].sort((e, t) => String(Y(t, ["issued_at"], "")).localeCompare(String(Y(e, ["issued_at"], ""))))[0] ?? null);
 }
-function Dl({ loadError: e, message: t, error: n }) {
+function El({ loadError: e, message: t, error: n }) {
   return /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [e ? /* @__PURE__ */ (0, I.jsx)("div", {
     className: "form-banner error",
     role: "alert",
@@ -22072,7 +22117,7 @@ function Dl({ loadError: e, message: t, error: n }) {
     children: n || t
   }) : null] });
 }
-function Ol({ title: e, onClose: t, children: n, wide: r = !0 }) {
+function Dl({ title: e, onClose: t, children: n, wide: r = !0 }) {
   let i = (0, C.useId)(), a = (0, C.useRef)(null);
   return yl(), (0, C.useEffect)(() => {
     let e = a.current;
@@ -22104,13 +22149,18 @@ function Ol({ title: e, onClose: t, children: n, wide: r = !0 }) {
     })]
   });
 }
-function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+function Ol({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
   bl();
   let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(null), [g, _] = (0, C.useState)(null), [v, y] = (0, C.useState)([]), [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)(null), [T, E] = (0, C.useState)(!0), [D, k] = (0, C.useState)([]), [ee, ne] = (0, C.useState)(null), [ie, ae] = (0, C.useState)(null), [A, j] = (0, C.useState)([]), [oe, se] = (0, C.useState)(null), [ce, le] = (0, C.useState)(/* @__PURE__ */ new Set()), [ue, fe] = (0, C.useState)(!1), [pe, me] = (0, C.useState)(!1), [he, ge] = (0, C.useState)("fqdn"), _e = (0, C.useRef)(a);
   (0, C.useEffect)(() => {
     _e.current = a;
   }, [a]);
-  let ve = Array.isArray(e.targets) ? e.targets : [], ye = Array.isArray(n.agents) ? n.agents : [], be = Array.isArray(n.checks) ? n.checks : [], xe = Array.isArray(e.runs_recent) ? e.runs_recent : [], Se = Array.isArray(e.findings_on_group) ? e.findings_on_group : [], Ce = e.meta && typeof e.meta == "object" && !Array.isArray(e.meta) ? e.meta : null, we = String(e.target_count ?? ve.length), Te = Y(e, ["loa_state", "loa_status"], Y(e.loa, ["state"], "required")), De = Te.toLowerCase() === "signed", Oe = Array.isArray(S?.steps) ? S.steps : [], je = Y(be.find((e) => Y(e, ["safety_class"], "") === "safe") ?? null, ["check_id"], ""), Me = ve.filter((e) => Cl(Sl(e))).length, Ne = g?.challenge ?? m ?? El(v), Pe = g?.verified === !0 || Y(Ne, ["state"], "").toLowerCase() === "resolved", Fe = Tl(Ne, Pe), Ie = Y(Ne, ["id", "challenge_id"], ""), Le = Y(Ne, ["state"], "").toLowerCase(), Re = c === `dns-verify-${t}` && Fe === "pending" ? "checking" : Fe, ze = (0, C.useCallback)(() => F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership`).then((e) => {
+  let ve = Array.isArray(e.targets) ? e.targets : [], ye = Array.isArray(n.agents) ? n.agents : [], be = Array.isArray(n.checks) ? n.checks : [], xe = Array.isArray(e.runs_recent) ? e.runs_recent : [], Se = Array.isArray(e.findings_on_group) ? e.findings_on_group : [], Ce = e.meta && typeof e.meta == "object" && !Array.isArray(e.meta) ? e.meta : null, we = String(e.target_count ?? ve.length), Te = Y(e, ["loa_state", "loa_status"], Y(e.loa, ["state"], "required")), De = Te.toLowerCase() === "signed", Oe = Y(e, ["ownership_status"], "unverified"), je = [
+    "agent_verified",
+    "dns_verified",
+    "user_confirmed",
+    "verified"
+  ].includes(Oe.trim().toLowerCase()) ? "success" : Oe.trim().toLowerCase().includes("pending") ? "warn" : "muted", Me = Y(e, ["validation_mode"], "agent_assisted"), Ne = Array.isArray(S?.steps) ? S.steps : [], Pe = Y(be.find((e) => Y(e, ["safety_class"], "") === "safe") ?? null, ["check_id"], ""), Fe = ve.filter((e) => Cl(Sl(e))).length, Ie = g?.challenge ?? m ?? Tl(v), Le = g?.verified === !0 || Y(Ie, ["state"], "").toLowerCase() === "resolved", Re = wl(Ie, Le), ze = Y(Ie, ["id", "challenge_id"], ""), Be = Y(Ie, ["state"], "").toLowerCase(), Ve = c === `dns-verify-${t}` && Re === "pending" ? "checking" : Re, He = (0, C.useCallback)(() => F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership`).then((e) => {
     let t = e;
     y(Array.isArray(t.items) ? t.items : []);
   }).catch(() => y([])), [
@@ -22134,11 +22184,11 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     i,
     t
   ]), (0, C.useEffect)(() => {
-    ze();
-  }, [ze]), (0, C.useEffect)(() => {
+    He();
+  }, [He]), (0, C.useEffect)(() => {
     k(Array.isArray(n.connectors) ? n.connectors : []), ne(null);
   }, [n.connectors]), (0, C.useEffect)(() => {
-    if (Le !== "pending" || !Ie || typeof window > "u" || typeof window.matchMedia != "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (Be !== "pending" || !ze || typeof window > "u" || typeof window.matchMedia != "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     let e = Date.now(), n = window.setInterval(() => {
       if (Date.now() - e > pl) {
         window.clearInterval(n);
@@ -22146,10 +22196,10 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }
       F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership/verify`, {
         method: "POST",
-        body: { challenge_id: Ie }
+        body: { challenge_id: ze }
       }).then(async (e) => {
         let t = e;
-        _(t), t.verified === !0 && (window.clearInterval(n), await ze(), await _e.current());
+        _(t), t.verified === !0 && (window.clearInterval(n), await He(), await _e.current());
       }).catch(() => void 0);
     }, fl);
     return () => window.clearInterval(n);
@@ -22157,11 +22207,11 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     r,
     i,
     t,
-    Ie,
-    Le,
-    ze
+    ze,
+    Be,
+    He
   ]);
-  async function Be(e, t, n) {
+  async function Ue(e, t, n) {
     l(e), p(""), d("");
     try {
       await t(), d(n), await a();
@@ -22171,10 +22221,10 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       l("");
     }
   }
-  function Ve(e = "fqdn") {
+  function We(e = "fqdn") {
     ge(e), p(""), d(""), me(!0);
   }
-  async function He(e, n, o) {
+  async function Ge(e, n, o) {
     let s = n.trim();
     if (!s) {
       p("A target value is required."), d("");
@@ -22196,35 +22246,35 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       l("");
     }
   }
-  function Ue(e) {
+  function Ke(e) {
     e.preventDefault();
     let t = new FormData(e.currentTarget);
-    He("fqdn", String(t.get("value") ?? ""), String(t.get("expected_behavior") ?? ""));
+    Ge("fqdn", String(t.get("value") ?? ""), String(t.get("expected_behavior") ?? ""));
   }
-  function We(e) {
+  function qe(e) {
     e.preventDefault();
     let t = new FormData(e.currentTarget), n = String(t.get("value") ?? "").trim(), r = String(t.get("port") ?? "").trim();
-    He("ip", r ? `${n}:${r}` : n, String(t.get("expected_behavior") ?? ""));
+    Ge("ip", r ? `${n}:${r}` : n, String(t.get("expected_behavior") ?? ""));
   }
-  async function Ge(e) {
-    await Be(`dns-issue-${t}`, async () => {
+  async function Je(e) {
+    await Ue(`dns-issue-${t}`, async () => {
       let n = await F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership/issue`, {
         method: "POST",
         body: e ? { target_id: e } : {}
       }), a = n.challenge && typeof n.challenge == "object" ? n.challenge : n;
-      h(a), _(null), await ze();
+      h(a), _(null), await He();
     }, "DNS TXT challenge issued. Publish the record, then run Check now.");
   }
-  async function Ke(e) {
-    await Be(`dns-verify-${t}`, async () => {
-      let n = e || Y(Ne, ["id", "challenge_id"], "") || Y(m, ["id", "challenge_id"], ""), a = await F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership/verify`, {
+  async function Ye(e) {
+    await Ue(`dns-verify-${t}`, async () => {
+      let n = e || Y(Ie, ["id", "challenge_id"], "") || Y(m, ["id", "challenge_id"], ""), a = await F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/dns-ownership/verify`, {
         method: "POST",
         body: n ? { challenge_id: n } : {}
       });
-      _(a), await ze();
+      _(a), await He();
     }, "DNS ownership verification checked.");
   }
-  function qe(e, t) {
+  function Xe(e, t) {
     if (!t || t === "—") return;
     let n = () => {
       x(e), window.setTimeout(() => x((t) => t === e ? "" : t), 1600);
@@ -22233,7 +22283,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       navigator?.clipboard?.writeText ? navigator.clipboard.writeText(t).then(n).catch(() => void 0) : n();
     } catch {}
   }
-  function Je(e) {
+  function Ze(e) {
     let t = Y(e, ["id"], "");
     if (!t) return;
     if (Y(e, ["kind"], "").toLowerCase() !== "fqdn") {
@@ -22241,9 +22291,9 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       return;
     }
     let n = v.find((e) => Y(e, ["target_id"], "") === t && Y(e, ["state"], "").toLowerCase() === "pending");
-    n ? Ke(Y(n, ["id"], "")) : Ge(t);
+    n ? Ye(Y(n, ["id"], "")) : Je(t);
   }
-  async function Ye(e) {
+  async function Qe(e) {
     ae(e), l(`inventory-${e}`);
     try {
       let t = await F(r, i, `/v1/connectors/${encodeURIComponent(e)}/inventory`);
@@ -22254,8 +22304,8 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       l("");
     }
   }
-  async function Xe() {
-    !ie || ce.size === 0 || await Be(`import-${ie}`, async () => {
+  async function $e() {
+    !ie || ce.size === 0 || await Ue(`import-${ie}`, async () => {
       for (let e of ce) {
         let n = A.find((t) => Y(t, ["id", "value"], "") === e);
         n && await F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/targets`, {
@@ -22270,30 +22320,30 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       ae(null), j([]), le(/* @__PURE__ */ new Set());
     }, "Selected inventory rows imported.");
   }
-  async function Ze(e) {
-    if (!je) {
+  async function et(e) {
+    if (!Pe) {
       p("No customer-runnable safe check is available to run."), d("");
       return;
     }
-    await Be(`run-test-${e}`, async () => {
+    await Ue(`run-test-${e}`, async () => {
       await F(r, i, "/v1/test-runs", {
         method: "POST",
         body: {
-          check_id: je,
+          check_id: Pe,
           target_group_id: t,
           target_id: e
         }
       });
     }, "Bounded safe test run started.");
   }
-  async function Qe(e) {
+  async function tt(e) {
     e.preventDefault();
     let n = new FormData(e.currentTarget);
     if (n.get("attested") !== "on") {
       p("Attestation is required before signing LOA.");
       return;
     }
-    await Be(`loa-${t}`, async () => {
+    await Ue(`loa-${t}`, async () => {
       await F(r, i, `/v1/target-groups/${encodeURIComponent(t)}/loa`, {
         method: "POST",
         body: {
@@ -22305,7 +22355,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }), fe(!1);
     }, "LOA signed and recorded in custody ledger.");
   }
-  function $e(e) {
+  function nt(e) {
     let t = Y(e, ["id"], "");
     if (!t) return {};
     let n = () => {
@@ -22322,15 +22372,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }
     };
   }
-  let et = [
-    {
-      key: "target",
-      label: "Target",
-      render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
-        className: "mono",
-        children: Y(e, ["id"], "—")
-      })
-    },
+  let rt = [
     {
       key: "kind",
       label: "Kind",
@@ -22345,6 +22387,14 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
         className: "mono",
         children: Y(e, ["value"], "—")
+      })
+    },
+    {
+      key: "expected",
+      label: "Expected behavior",
+      render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
+        className: "mono",
+        children: Y(e, ["expected_behavior", "expected"], "—")
       })
     },
     {
@@ -22363,13 +22413,18 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }
     },
     {
-      key: "eligibility",
-      label: "Eligibility",
+      key: "last_probe",
+      label: "Last probe",
       render: (e) => {
-        let t = wl(e), n = t.startsWith("not"), r = Y(e, ["eligibility_reason"], "");
+        let t = Y(e, ["last_probe", "last_verdict"], "");
+        if (!t) return /* @__PURE__ */ (0, I.jsx)("span", {
+          className: "muted",
+          children: "—"
+        });
+        let n = t.trim().toLowerCase();
         return /* @__PURE__ */ (0, I.jsx)(z, {
-          tone: n ? "warn" : "success",
-          title: r !== "—" && r ? `Eligibility ${t}: ${r}` : `Eligibility ${t} from target API`,
+          tone: n === "pass" ? "success" : n === "gap" || n === "fail" ? "danger" : "warn",
+          title: `Last probe verdict ${t} from target API`,
           children: t
         });
       }
@@ -22378,7 +22433,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "actions",
       label: "Actions",
       render: (e) => {
-        let t = Y(e, ["id"], ""), n = Cl(Sl(e)), r = n && !!je, i = n ? je ? "Run bounded safe test" : "No customer-runnable safe check available" : "Verify to enable testing";
+        let t = Y(e, ["id"], ""), n = Cl(Sl(e)), r = n && !!Pe, i = n ? Pe ? "Run bounded safe test" : "No customer-runnable safe check available" : "Verify to enable testing";
         return /* @__PURE__ */ (0, I.jsxs)("div", {
           className: "row-end-actions",
           onClick: (e) => e.stopPropagation(),
@@ -22386,7 +22441,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             size: "sm",
             variant: "ghost",
             onClick: (t) => {
-              t.stopPropagation(), Je(e);
+              t.stopPropagation(), Ze(e);
             },
             children: "Verify"
           }), /* @__PURE__ */ (0, I.jsx)(L, {
@@ -22397,14 +22452,14 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             title: i,
             loading: c === `run-test-${t}`,
             onClick: (e) => {
-              e.stopPropagation(), Ze(t);
+              e.stopPropagation(), et(t);
             },
             children: "Run test"
           })]
         });
       }
     }
-  ], tt = [
+  ], it = [
     {
       key: "target",
       label: "Target",
@@ -22441,7 +22496,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Status",
       render: (e) => Y(e, ["status"], "open")
     }
-  ], nt = [
+  ], at = [
     {
       key: "run",
       label: "Run",
@@ -22477,7 +22532,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Agent",
       render: (e) => Y(e, ["agent_id"], "—")
     }
-  ], rt = [
+  ], ot = [
     {
       key: "record",
       label: "Record name",
@@ -22490,7 +22545,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       key: "state",
       label: "State",
       render: (e) => /* @__PURE__ */ (0, I.jsx)(ca, {
-        state: Tl(e),
+        state: wl(e),
         provenance: `DNS challenge ${Y(e, ["id"], "")} · ${Y(e, ["state"], "pending")} per ownership API`
       })
     },
@@ -22504,7 +22559,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Last checked",
       render: (e) => e.last_checked_at ? P(e.last_checked_at) : "—"
     }
-  ], it = Pe ? `TXT record resolved for ${Y(Ne, ["record_name"], "this domain")} per DNS ownership API` : `DNS ownership challenge ${Ie || "pending"} awaiting TXT resolution`;
+  ], st = Le ? `TXT record resolved for ${Y(Ie, ["record_name"], "this domain")} per DNS ownership API` : `DNS ownership challenge ${ze || "pending"} awaiting TXT resolution`;
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content stack-tight tg-detail-view",
     children: [
@@ -22531,22 +22586,22 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })]
       }),
       o ? /* @__PURE__ */ (0, I.jsx)(Ps, { rows: 2 }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Dl, {
+      /* @__PURE__ */ (0, I.jsx)(El, {
         loadError: s,
         message: u,
         error: f
       }),
       T ? /* @__PURE__ */ (0, I.jsx)(Ps, { rows: 1 }) : null,
-      !T && Oe.length === 0 ? Fs({
+      !T && Ne.length === 0 ? Fs({
         loading: T,
         icon: ke,
         meta: S?.meta && typeof S.meta == "object" ? S.meta : null
       }) : null,
-      !T && Oe.length > 0 ? /* @__PURE__ */ (0, I.jsx)("ol", {
+      !T && Ne.length > 0 ? /* @__PURE__ */ (0, I.jsx)("ol", {
         className: "verify-ladder",
         "aria-label": "Ownership verification ladder",
-        children: Oe.map((e, t) => {
-          let n = e.done === !0, r = !n && Oe.slice(0, t).every((e) => e.done === !0);
+        children: Ne.map((e, t) => {
+          let n = e.done === !0, r = !n && Ne.slice(0, t).every((e) => e.done === !0);
           return /* @__PURE__ */ (0, I.jsxs)("li", {
             className: `vl-step${n ? " is-done" : ""}${r ? " is-now" : ""}`,
             children: [/* @__PURE__ */ (0, I.jsx)("span", {
@@ -22575,40 +22630,10 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         children: [
           /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "kpi-cell",
-            children: [/* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-label",
-              children: "Group id"
-            }), /* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-value mono",
-              children: t
-            })]
-          }),
-          /* @__PURE__ */ (0, I.jsxs)("div", {
-            className: "kpi-cell",
-            children: [/* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-label",
-              children: "Environment"
-            }), /* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-value",
-              children: Y(e, ["environment_id"], "—")
-            })]
-          }),
-          /* @__PURE__ */ (0, I.jsxs)("div", {
-            className: "kpi-cell",
-            children: [/* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-label",
-              children: "Criticality"
-            }), /* @__PURE__ */ (0, I.jsx)("div", {
-              className: "kpi-value",
-              children: Y(e, ["criticality", "business_criticality"], "—")
-            })]
-          }),
-          /* @__PURE__ */ (0, I.jsxs)("div", {
-            className: "kpi-cell",
             children: [
               /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
-                children: "Total targets"
+                children: "Targets"
               }),
               /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
@@ -22617,13 +22642,28 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               /* @__PURE__ */ (0, I.jsxs)("div", {
                 className: "kpi-delta",
                 children: [
-                  Me,
+                  Fe,
                   " verified · ",
-                  Math.max(0, ve.length - Me),
+                  Math.max(0, ve.length - Fe),
                   " unverified"
                 ]
               })
             ]
+          }),
+          /* @__PURE__ */ (0, I.jsxs)("div", {
+            className: "kpi-cell",
+            children: [/* @__PURE__ */ (0, I.jsx)("div", {
+              className: "kpi-label",
+              children: "Ownership"
+            }), /* @__PURE__ */ (0, I.jsx)("div", {
+              className: "kpi-value",
+              style: { fontSize: "18px" },
+              children: /* @__PURE__ */ (0, I.jsx)(z, {
+                tone: je,
+                title: `Ownership status ${Oe} from target group API`,
+                children: Oe
+              })
+            })]
           }),
           /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "kpi-cell",
@@ -22638,6 +22678,17 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 title: `LOA state ${Te} from target group API`,
                 children: De ? "Signed" : "Required"
               })
+            })]
+          }),
+          /* @__PURE__ */ (0, I.jsxs)("div", {
+            className: "kpi-cell",
+            children: [/* @__PURE__ */ (0, I.jsx)("div", {
+              className: "kpi-label",
+              children: "Validation mode"
+            }), /* @__PURE__ */ (0, I.jsx)("div", {
+              className: "kpi-value",
+              style: { fontSize: "18px" },
+              children: Me
             })]
           })
         ]
@@ -22670,9 +22721,9 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }), /* @__PURE__ */ (0, I.jsx)(L, {
               size: "sm",
               variant: "ghost",
-              onClick: () => void Ke(),
+              onClick: () => void Ye(),
               loading: c === `dns-verify-${t}`,
-              disabled: !Ie,
+              disabled: !ze,
               children: "Review DNS status"
             })] })
           })
@@ -22687,12 +22738,12 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         " TXT record. Required before external-only checks run."
       ] })] }), /* @__PURE__ */ (0, I.jsx)(L, {
         size: "sm",
-        onClick: () => void Ge(),
+        onClick: () => void Je(),
         loading: c === `dns-issue-${t}`,
-        children: Ne ? "Re-issue challenge" : "Issue DNS challenge"
-      })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [Ne ? /* @__PURE__ */ (0, I.jsxs)("div", {
+        children: Ie ? "Re-issue challenge" : "Issue DNS challenge"
+      })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [Ie ? /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "dns-challenge",
-        "data-state": Fe,
+        "data-state": Re,
         children: [
           /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "dns-head",
@@ -22703,8 +22754,8 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               }),
               /* @__PURE__ */ (0, I.jsx)("span", { className: "spacer" }),
               /* @__PURE__ */ (0, I.jsx)(ca, {
-                state: Re,
-                provenance: it
+                state: Ve,
+                provenance: st
               })
             ]
           }),
@@ -22730,12 +22781,12 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   }),
                   /* @__PURE__ */ (0, I.jsx)("span", {
                     className: "dns-val mono",
-                    children: Y(Ne, ["record_name", "name"], "—")
+                    children: Y(Ie, ["record_name", "name"], "—")
                   }),
                   /* @__PURE__ */ (0, I.jsx)("button", {
                     type: "button",
                     className: "link-btn",
-                    onClick: () => qe("dns-name", Y(Ne, ["record_name", "name"], "")),
+                    onClick: () => Xe("dns-name", Y(Ie, ["record_name", "name"], "")),
                     "aria-label": "Copy record name",
                     children: b === "dns-name" ? "Copied" : "Copy"
                   })
@@ -22750,12 +22801,12 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   }),
                   /* @__PURE__ */ (0, I.jsx)("span", {
                     className: "dns-val mono",
-                    children: Y(Ne, ["record_value", "value"], "—")
+                    children: Y(Ie, ["record_value", "value"], "—")
                   }),
                   /* @__PURE__ */ (0, I.jsx)("button", {
                     type: "button",
                     className: "link-btn",
-                    onClick: () => qe("dns-value", Y(Ne, ["record_value", "value"], "")),
+                    onClick: () => Xe("dns-value", Y(Ie, ["record_value", "value"], "")),
                     "aria-label": "Copy record value",
                     children: b === "dns-value" ? "Copied" : "Copy"
                   })
@@ -22768,7 +22819,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   children: "TTL"
                 }), /* @__PURE__ */ (0, I.jsxs)("span", {
                   className: "dns-val mono",
-                  children: [Y(Ne, ["ttl_seconds", "ttl"], "—"), " seconds"]
+                  children: [Y(Ie, ["ttl_seconds", "ttl"], "—"), " seconds"]
                 })]
               })
             ]
@@ -22778,16 +22829,16 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             children: [
               /* @__PURE__ */ (0, I.jsx)(L, {
                 size: "sm",
-                onClick: () => void Ke(),
+                onClick: () => void Ye(),
                 loading: c === `dns-verify-${t}`,
-                disabled: !Ie || Fe === "dns_verified",
+                disabled: !ze || Re === "dns_verified",
                 children: "Check now"
               }),
               /* @__PURE__ */ (0, I.jsx)("span", {
                 className: "muted small",
-                children: Fe === "dns_verified" ? `Resolved ${P(Y(Ne, ["resolved_at"], "") || void 0)}` : Y(Ne, ["last_checked_at"], "") !== "—" && Y(Ne, ["last_checked_at"], "") ? `Last checked ${P(Ne?.last_checked_at)}` : "Last checked: not yet"
+                children: Re === "dns_verified" ? `Resolved ${P(Y(Ie, ["resolved_at"], "") || void 0)}` : Y(Ie, ["last_checked_at"], "") !== "—" && Y(Ie, ["last_checked_at"], "") ? `Last checked ${P(Ie?.last_checked_at)}` : "Last checked: not yet"
               }),
-              Fe === "pending" ? /* @__PURE__ */ (0, I.jsx)("span", {
+              Re === "pending" ? /* @__PURE__ */ (0, I.jsx)("span", {
                 className: "muted small",
                 children: "Auto-rechecks every 30s until resolved."
               }) : null
@@ -22799,14 +22850,14 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         title: "No DNS challenge issued yet",
         body: "Issue a challenge to generate the TXT record for this group's domain target, publish it at your DNS provider, then run Check now to prove ownership.",
         actionLabel: "Issue DNS challenge",
-        onAction: () => void Ge()
+        onAction: () => void Je()
       }), v.length > 0 ? /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "dns-history",
         children: [/* @__PURE__ */ (0, I.jsx)("p", {
           className: "dns-history-title",
           children: "Challenge history"
         }), /* @__PURE__ */ (0, I.jsx)(Hi, {
-          columns: rt,
+          columns: ot,
           items: v,
           getRowId: (e, t) => Y(e, ["id"], String(t)),
           empty: /* @__PURE__ */ (0, I.jsx)("span", {
@@ -22824,24 +22875,24 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         " · expected behavior declared per row · unverified targets cannot be run against"
       ] })] }), /* @__PURE__ */ (0, I.jsx)(L, {
         size: "sm",
-        onClick: () => Ve(),
+        onClick: () => We(),
         children: "Edit targets"
       })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Hi, {
-        columns: et,
+        columns: rt,
         items: ve,
         className: "tg-targets-table",
         getRowId: (e, t) => Y(e, ["id"], String(t)),
-        getRowProps: (e) => $e(e),
+        getRowProps: (e) => nt(e),
         empty: /* @__PURE__ */ (0, I.jsx)(G, {
           icon: ke,
           title: "No targets declared yet",
           body: "Declare a domain, IP, or cloud inventory selection to start validating this group. Nothing runs until a target is verified.",
           actionLabel: "+ Add Target",
-          onAction: () => Ve()
+          onAction: () => We()
         })
       }) })] }),
       /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsx)(V, { children: /* @__PURE__ */ (0, I.jsx)(H, { children: "Findings on this group" }) }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Hi, {
-        columns: tt,
+        columns: it,
         items: Se,
         empty: Fs({
           icon: Ae,
@@ -22849,7 +22900,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })
       }) })] }),
       /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsx)(V, { children: /* @__PURE__ */ (0, I.jsx)(H, { children: "Recent runs" }) }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Hi, {
-        columns: nt,
+        columns: at,
         items: xe,
         empty: Fs({
           icon: O,
@@ -22858,7 +22909,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           actionLabel: "Open test runs"
         })
       }) })] }),
-      ie ? /* @__PURE__ */ (0, I.jsx)(Ol, {
+      ie ? /* @__PURE__ */ (0, I.jsx)(Dl, {
         title: `Provider inventory · ${ie}`,
         onClose: () => ae(null),
         children: /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -22905,13 +22956,13 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               size: "sm",
               disabled: ce.size === 0 || c !== "",
               loading: c.startsWith("import-"),
-              onClick: () => void Xe(),
+              onClick: () => void $e(),
               children: "Import selected"
             })
           })]
         })
       }) : null,
-      pe ? /* @__PURE__ */ (0, I.jsxs)(Ol, {
+      pe ? /* @__PURE__ */ (0, I.jsxs)(Dl, {
         title: "Onboard a target",
         onClose: () => me(!1),
         children: [
@@ -22930,7 +22981,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               }),
               /* @__PURE__ */ (0, I.jsxs)("form", {
                 className: "product-form",
-                onSubmit: Ue,
+                onSubmit: Ke,
                 children: [
                   /* @__PURE__ */ (0, I.jsxs)("label", {
                     className: "full",
@@ -22987,7 +23038,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       type: "button",
                       variant: "secondary",
                       loading: c === `dns-issue-${t}`,
-                      onClick: () => void Ge(),
+                      onClick: () => void Je(),
                       children: "Issue DNS challenge"
                     })]
                   })
@@ -23005,8 +23056,8 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       }),
                       /* @__PURE__ */ (0, I.jsx)("span", { className: "spacer" }),
                       /* @__PURE__ */ (0, I.jsx)(ca, {
-                        state: Re,
-                        provenance: it
+                        state: Ve,
+                        provenance: st
                       })
                     ]
                   }),
@@ -23020,7 +23071,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                           children: "Name"
                         }), /* @__PURE__ */ (0, I.jsx)("span", {
                           className: "dns-val mono",
-                          children: Y(Ne, ["record_name", "name"], "—")
+                          children: Y(Ie, ["record_name", "name"], "—")
                         })]
                       }),
                       /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -23030,7 +23081,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                           children: "Value"
                         }), /* @__PURE__ */ (0, I.jsx)("span", {
                           className: "dns-val mono",
-                          children: Y(Ne, ["record_value", "value"], "—")
+                          children: Y(Ie, ["record_value", "value"], "—")
                         })]
                       }),
                       /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -23040,7 +23091,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                           children: "TTL"
                         }), /* @__PURE__ */ (0, I.jsx)("span", {
                           className: "dns-val mono",
-                          children: Y(Ne, ["ttl_seconds", "ttl"], "—")
+                          children: Y(Ie, ["ttl_seconds", "ttl"], "—")
                         })]
                       })
                     ]
@@ -23051,8 +23102,8 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       size: "sm",
                       variant: "ghost",
                       loading: c === `dns-verify-${t}`,
-                      disabled: !Ie,
-                      onClick: () => void Ke(),
+                      disabled: !ze,
+                      onClick: () => void Ye(),
                       children: "Check now"
                     }), g?.verified === !1 ? /* @__PURE__ */ (0, I.jsxs)("span", {
                       className: "muted small",
@@ -23072,7 +23123,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               }),
               /* @__PURE__ */ (0, I.jsxs)("form", {
                 className: "product-form",
-                onSubmit: We,
+                onSubmit: qe,
                 children: [
                   /* @__PURE__ */ (0, I.jsxs)("label", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "IP address" }), /* @__PURE__ */ (0, I.jsx)("input", {
                     name: "value",
@@ -23205,7 +23256,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                           size: "sm",
                           variant: "ghost",
                           loading: c === `inventory-${t}`,
-                          onClick: () => void Ye(t),
+                          onClick: () => void Qe(t),
                           children: "Open inventory"
                         })
                       })
@@ -23217,12 +23268,12 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           }) : null
         ]
       }) : null,
-      ue ? /* @__PURE__ */ (0, I.jsx)(Ol, {
+      ue ? /* @__PURE__ */ (0, I.jsx)(Dl, {
         title: `Sign LOA · ${Y(e, ["name"], t)}`,
         onClose: () => fe(!1),
         children: /* @__PURE__ */ (0, I.jsxs)("form", {
           className: "loa-body product-form",
-          onSubmit: (e) => void Qe(e),
+          onSubmit: (e) => void tt(e),
           children: [
             /* @__PURE__ */ (0, I.jsxs)("div", {
               className: "loa-doc",
@@ -23277,7 +23328,7 @@ function kl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
 }
 //#endregion
 //#region apps/web/react/src/lib/target-detail.ts
-function Al(e, t, n = "") {
+function kl(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -23285,11 +23336,11 @@ function Al(e, t, n = "") {
   }
   return n;
 }
-function jl(e, t) {
-  let n = Al(e, [t]);
+function Al(e, t) {
+  let n = kl(e, [t]);
   return n ? { empty_reason: n } : null;
 }
-async function Ml(e, t, n) {
+async function jl(e, t, n) {
   if (!n) return {
     target: null,
     verification: null,
@@ -23304,10 +23355,10 @@ async function Ml(e, t, n) {
   };
   try {
     let r = await F(e, t, `/v1/targets/${encodeURIComponent(n)}`), i = r.target && typeof r.target == "object" && !Array.isArray(r.target) ? r.target : null, a = r.verification && typeof r.verification == "object" && !Array.isArray(r.verification) ? r.verification : null, o = r.waf_posture && typeof r.waf_posture == "object" && !Array.isArray(r.waf_posture) ? r.waf_posture : null, s = Array.isArray(r.checks_applied) ? r.checks_applied : [], c = Array.isArray(r.runs_recent) ? r.runs_recent : [], l = Array.isArray(r.findings) ? r.findings : [], u = r.loa && typeof r.loa == "object" && !Array.isArray(r.loa) ? r.loa : null, d = r.counts && typeof r.counts == "object" && !Array.isArray(r.counts) ? r.counts : null, f = r.meta && typeof r.meta == "object" && !Array.isArray(r.meta) ? r.meta : null, p = {
-      runs: jl(f, "runs_empty_reason"),
-      findings: jl(f, "findings_empty_reason"),
-      checks: jl(f, "checks_empty_reason"),
-      waf: jl(f, "waf_empty_reason")
+      runs: Al(f, "runs_empty_reason"),
+      findings: Al(f, "findings_empty_reason"),
+      checks: Al(f, "checks_empty_reason"),
+      waf: Al(f, "waf_empty_reason")
     };
     return i ? {
       target: i,
@@ -23330,12 +23381,12 @@ async function Ml(e, t, n) {
       findings: l,
       loa: u,
       counts: d,
-      meta: f ?? (r.error ? { empty_reason: Al(r, ["error"]) } : null),
+      meta: f ?? (r.error ? { empty_reason: kl(r, ["error"]) } : null),
       sectionMeta: p,
       loading: !1
     };
   } catch (e) {
-    let t = e, n = t.payload && typeof t.payload == "object" && !Array.isArray(t.payload) ? t.payload : null, r = Al(n?.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : null, ["empty_reason"]) || Al(n, ["error"]) || (e instanceof Error ? e.message : "");
+    let t = e, n = t.payload && typeof t.payload == "object" && !Array.isArray(t.payload) ? t.payload : null, r = kl(n?.meta && typeof n.meta == "object" && !Array.isArray(n.meta) ? n.meta : null, ["empty_reason"]) || kl(n, ["error"]) || (e instanceof Error ? e.message : "");
     return {
       target: null,
       verification: null,
@@ -23353,7 +23404,7 @@ async function Ml(e, t, n) {
 }
 //#endregion
 //#region apps/web/react/src/pages/target-detail-view.tsx
-function Nl(e) {
+function Ml(e) {
   let t = e.trim().toLowerCase();
   return [
     "agent_verified",
@@ -23362,13 +23413,13 @@ function Nl(e) {
     "verified"
   ].includes(t) ? "success" : t === "unverified" ? "warn" : "muted";
 }
-function Pl(e, t = "—") {
+function Nl(e, t = "—") {
   let n = e.trim();
   if (!n) return t;
   let r = n.replace(/_/g, " ");
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-function X(e, t, n = "—") {
+function Pl(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -23407,7 +23458,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
         loading: !0
       },
       loading: !0
-    })), Ml(t, n, e).then((e) => {
+    })), jl(t, n, e).then((e) => {
       r || a(e);
     }), () => {
       r = !0;
@@ -23417,7 +23468,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
     n,
     e
   ]);
-  let u = i?.target ?? null, d = i?.verification ?? null, f = i?.waf_posture ?? null, p = X(u, ["eligibility"], "unknown"), m = !p.startsWith("not") && !p.startsWith("unverified"), h = X(d, ["state"], X(u, ["verification_state"], "unverified")), g = sa(u, d), _ = X(u, ["kind"], "unknown"), v = !!f || _ !== "ip" && h !== "unverified";
+  let u = i?.target ?? null, d = i?.verification ?? null, f = i?.waf_posture ?? null, p = Pl(u, ["eligibility"], "unknown"), m = !p.startsWith("not") && !p.startsWith("unverified"), h = Pl(d, ["state"], Pl(u, ["verification_state"], "unverified")), g = sa(u, d), _ = Pl(u, ["kind"], "unknown"), v = !!f || _ !== "ip" && h !== "unverified";
   async function y() {
     if (!(!m || !u)) {
       s("run-checks"), l("");
@@ -23425,12 +23476,12 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
         await F(t, n, "/v1/test-runs", {
           method: "POST",
           body: {
-            target_group_id: X(u, ["target_group_id"], ""),
+            target_group_id: Pl(u, ["target_group_id"], ""),
             target_id: e,
-            check_id: X(i?.checks_applied?.[0] ?? {}, ["check_id"], "")
+            check_id: Pl(i?.checks_applied?.[0] ?? {}, ["check_id"], "")
           }
         }), await r();
-        let o = await Ml(t, n, e);
+        let o = await jl(t, n, e);
         a(o);
       } catch (e) {
         let t = e instanceof Error ? e.message : "Failed to start bounded test run.";
@@ -23441,7 +23492,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
     }
   }
   function b() {
-    let t = X(u, ["target_group_id"], ""), n = !!u;
+    let t = Pl(u, ["target_group_id"], ""), n = !!u;
     return /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "page-head",
       children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [
@@ -23455,7 +23506,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
         }),
         /* @__PURE__ */ (0, I.jsx)("p", {
           className: "muted",
-          children: n ? `${X(u, ["value"])} · ${_}` : "Per-target validation surface."
+          children: n ? `${Pl(u, ["value"])} · ${_}` : "Per-target validation surface."
         }),
         n ? /* @__PURE__ */ (0, I.jsxs)("div", {
           className: "detail-status-line",
@@ -23472,7 +23523,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, I.jsx)(z, {
               tone: m ? "success" : "warn",
               title: `Eligibility ${p} from target API`,
-              children: Pl(p)
+              children: Nl(p)
             })
           ]
         }) : null
@@ -23526,21 +23577,21 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
       label: "Run",
       render: (e) => /* @__PURE__ */ (0, I.jsx)(Il, {
         route: "run-detail",
-        id: X(e, ["run_id", "id"], "")
+        id: Pl(e, ["run_id", "id"], "")
       })
     },
     {
       key: "policy",
       label: "Policy",
-      render: (e) => X(e, ["policy_id", "test_policy_id"], "—")
+      render: (e) => Pl(e, ["policy_id", "test_policy_id"], "—")
     },
     {
       key: "verdict",
       label: "Verdict",
       render: (e) => /* @__PURE__ */ (0, I.jsx)(z, {
         tone: "info",
-        title: `Verdict ${X(e, ["verdict", "status"], "pending")} from runs API`,
-        children: X(e, ["verdict", "status"], "pending")
+        title: `Verdict ${Pl(e, ["verdict", "status"], "pending")} from runs API`,
+        children: Pl(e, ["verdict", "status"], "pending")
       })
     },
     {
@@ -23548,7 +23599,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
       label: "Agent",
       render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
         className: "mono",
-        children: X(e, ["agent_id"], "—")
+        children: Pl(e, ["agent_id"], "—")
       })
     },
     {
@@ -23568,15 +23619,15 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
     {
       key: "severity",
       label: "Severity",
-      render: (e) => X(e, ["severity"], "unknown")
+      render: (e) => Pl(e, ["severity"], "unknown")
     },
     {
       key: "id",
       label: "Finding",
       render: (e) => /* @__PURE__ */ (0, I.jsx)(Il, {
         route: "finding-detail",
-        id: X(e, ["id"], ""),
-        label: X(e, ["title"], X(e, ["id"]))
+        id: Pl(e, ["id"], ""),
+        label: Pl(e, ["title"], Pl(e, ["id"]))
       })
     },
     {
@@ -23584,14 +23635,14 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
       label: "Target",
       render: (t) => /* @__PURE__ */ (0, I.jsx)(Il, {
         route: "target-detail",
-        id: X(t, ["target_id"], e),
-        label: X(t, ["target_value", "target"], X(u, ["value"], X(t, ["target_id"], e)))
+        id: Pl(t, ["target_id"], e),
+        label: Pl(t, ["target_value", "target"], Pl(u, ["value"], Pl(t, ["target_id"], e)))
       })
     },
     {
       key: "state",
       label: "State",
-      render: (e) => X(e, ["state", "status"], "open")
+      render: (e) => Pl(e, ["state", "status"], "open")
     },
     {
       key: "opened",
@@ -23601,38 +23652,38 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
     {
       key: "owner",
       label: "Owner",
-      render: (e) => X(e, ["owner_group", "assignee"], "unassigned")
+      render: (e) => Pl(e, ["owner_group", "assignee"], "unassigned")
     }
   ], w = [
     {
       key: "check",
       label: "Check",
-      render: (e) => X(e, ["check_id"], "—")
+      render: (e) => Pl(e, ["check_id"], "—")
     },
     {
       key: "cadence",
       label: "Cadence",
-      render: (e) => X(e, ["cadence"], "manual")
+      render: (e) => Pl(e, ["cadence"], "manual")
     },
     {
       key: "verdict",
       label: "Last verdict",
-      render: (e) => X(e, ["last_verdict"], "—")
+      render: (e) => Pl(e, ["last_verdict"], "—")
     },
     {
       key: "ran",
       label: "Last ran",
       render: (e) => P(e.last_ran_at)
     }
-  ], T = i.loa, E = X(T, ["state", "status"], "inherited"), D = [
+  ], T = i.loa, E = Pl(T, ["state", "status"], "inherited"), D = [
     "signed",
     "active",
     "valid"
-  ].includes(E.trim().toLowerCase()), k = X(T, [
+  ].includes(E.trim().toLowerCase()), k = Pl(T, [
     "custody_digest_sha256",
     "custody_digest",
     "digest"
-  ], ""), ee = X(T, ["signer_name", "signed_by"], ""), te = T?.signed_at ?? T?.updated_at, ne = u.agent_binding && typeof u.agent_binding == "object" && !Array.isArray(u.agent_binding) ? u.agent_binding : null, re = X(ne, ["agent_id"], "none"), ie = ne?.bound_at ?? ne?.last_heartbeat_at ?? ne?.updated_at, ae = d?.checked_at ?? d?.updated_at, A = X(d, ["method", "ownership_method"], _ === "fqdn" ? "DNS TXT + agent callback" : _ === "ip" ? "Agent callback" : "Declared scope"), j = X(u, ["expected_behavior", "expected"], "—"), oe = X(u, ["eligibility_reason"], m ? "Ownership verified and in scope for bounded validation." : "Verify ownership and sign the group LOA to unlock bounded validation.");
+  ], ""), ee = Pl(T, ["signer_name", "signed_by"], ""), te = T?.signed_at ?? T?.updated_at, ne = u.agent_binding && typeof u.agent_binding == "object" && !Array.isArray(u.agent_binding) ? u.agent_binding : null, re = Pl(ne, ["agent_id"], "none"), ie = ne?.bound_at ?? ne?.last_heartbeat_at ?? ne?.updated_at, ae = d?.checked_at ?? d?.updated_at, A = Pl(d, ["method", "ownership_method"], _ === "fqdn" ? "DNS TXT + agent callback" : _ === "ip" ? "Agent callback" : "Declared scope"), j = Pl(u, ["expected_behavior", "expected"], "—"), oe = Pl(u, ["eligibility_reason"], m ? "Ownership verified and in scope for bounded validation." : "Verify ownership and sign the group LOA to unlock bounded validation.");
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content stack-tight",
     children: [
@@ -23654,21 +23705,21 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Expected behavior",
-            value: Pl(X(u, ["expected_behavior", "expected"], "—")),
+            value: Nl(Pl(u, ["expected_behavior", "expected"], "—")),
             sub: "Declared expectation",
             icon: O,
             tone: "muted"
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Verification",
-            value: Pl(h),
+            value: Nl(h),
             sub: "Ownership signal from target API",
             icon: Te,
-            tone: Nl(h)
+            tone: Ml(h)
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Eligibility",
-            value: Pl(p),
+            value: Nl(p),
             sub: m ? "Eligible for bounded checks" : "Verify to enable testing",
             icon: ce,
             tone: m ? "success" : "warn"
@@ -23709,7 +23760,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
                 className: "kv",
                 children: /* @__PURE__ */ (0, I.jsx)("span", {
                   className: "mono",
-                  children: X(u, ["target_group_id"], "—")
+                  children: Pl(u, ["target_group_id"], "—")
                 })
               }) })] }),
               /* @__PURE__ */ (0, I.jsxs)("tr", { children: [/* @__PURE__ */ (0, I.jsx)("td", {
@@ -23719,7 +23770,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
                 className: "kv",
                 children: /* @__PURE__ */ (0, I.jsx)("span", {
                   className: "mono",
-                  children: X(u, ["environment_id"], "inherited")
+                  children: Pl(u, ["environment_id"], "inherited")
                 })
               }) })] }),
               /* @__PURE__ */ (0, I.jsxs)("tr", { children: [/* @__PURE__ */ (0, I.jsx)("td", {
@@ -23796,7 +23847,7 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
               className: "callout-title",
               children: [/* @__PURE__ */ (0, I.jsx)(z, {
                 tone: m ? "success" : "warn",
-                children: Pl(p)
+                children: Nl(p)
               }), " for validation"]
             }), /* @__PURE__ */ (0, I.jsx)("p", {
               className: "callout-desc",
@@ -23807,60 +23858,60 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
       }) })] }),
       v ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "WAF posture" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Per-target WAF asset from hydrator API." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [
         /* @__PURE__ */ (0, I.jsxs)("div", {
-          className: "kpi-inline",
+          className: "kpi-row",
           children: [
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Posture"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f, ["posture", "status"], "—")
+                children: Pl(f, ["posture", "status"], "—")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Drift"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f, ["drift_reason"], "none")
+                children: Pl(f, ["drift_reason"], "none")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Validation"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f?.validation, ["verdict"], "—")
+                children: Pl(f?.validation, ["verdict"], "—")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Connector"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f?.connector, ["state"], "—")
+                children: Pl(f?.connector, ["state"], "—")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Fingerprint"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f?.fingerprint, ["signature"], "—")
+                children: Pl(f?.fingerprint, ["signature"], "—")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Marker rules"
@@ -23870,30 +23921,30 @@ function Ll({ entityId: e, config: t, session: n, onRefresh: r }) {
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
-              className: "kpi",
+              className: "kpi-cell",
               children: [/* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-label",
                 children: "Origin bypass"
               }), /* @__PURE__ */ (0, I.jsx)("div", {
                 className: "kpi-value",
-                children: X(f?.origin_bypass, ["state"], "—")
+                children: Pl(f?.origin_bypass, ["state"], "—")
               })]
             })
           ]
         }),
         /* @__PURE__ */ (0, I.jsx)("p", {
           className: "muted",
-          children: X(f, ["notes"], X(f, ["summary"], "No WAF notes returned."))
+          children: Pl(f, ["notes"], Pl(f, ["summary"], "No WAF notes returned."))
         }),
         /* @__PURE__ */ (0, I.jsx)("pre", {
           className: "codeblock",
           children: JSON.stringify({
-            asset_id: X(f, ["asset_id"], ""),
-            vendor: X(f, ["vendor"], ""),
-            target: X(u, ["value"], ""),
-            target_group: X(u, ["target_group_id"], ""),
-            posture: X(f, ["posture"], ""),
-            drift_reason: X(f, ["drift_reason"], ""),
+            asset_id: Pl(f, ["asset_id"], ""),
+            vendor: Pl(f, ["vendor"], ""),
+            target: Pl(u, ["value"], ""),
+            target_group: Pl(u, ["target_group_id"], ""),
+            posture: Pl(f, ["posture"], ""),
+            drift_reason: Pl(f, ["drift_reason"], ""),
             validation: f?.validation ?? null,
             connector: f?.connector ?? null
           }, null, 2)
@@ -24025,7 +24076,7 @@ function Wl(e, t = "—") {
   let r = n.replace(/_/g, " ");
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-function Gl(e, t, n = "—") {
+function X(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -24033,14 +24084,14 @@ function Gl(e, t, n = "—") {
   }
   return n;
 }
-function Kl(e) {
+function Gl(e) {
   return Array.isArray(e) ? e.filter((e) => !!e && typeof e == "object" && !Array.isArray(e)) : null;
 }
-function ql(e) {
+function Kl(e) {
   let t = Number(e);
   return !Number.isFinite(t) || t <= 0 ? "—" : t < 1024 ? `${t} B` : t < 1024 * 1024 ? `${(t / 1024).toFixed(1)} KB` : `${(t / (1024 * 1024)).toFixed(1)} MB`;
 }
-function Jl(e, t) {
+function ql(e, t) {
   let n = e.trim().toLowerCase();
   if (n.includes("danger")) return "danger";
   if (n.includes("warn")) return "warn";
@@ -24050,7 +24101,7 @@ function Jl(e, t) {
   let r = t.trim().toLowerCase();
   return ["resolved", "delivered"].includes(r) ? "success" : r === "accepted_risk" ? "muted" : r === "in_progress" ? "info" : ["open", "remediation_pending"].includes(r) ? "warn" : "default";
 }
-function Yl(e) {
+function Jl(e) {
   if (!e) return {};
   let t = () => {
     window.location.hash = `evidence-detail?id=${encodeURIComponent(e)}`;
@@ -24068,7 +24119,7 @@ function Yl(e) {
     }
   };
 }
-function Xl(e) {
+function Yl(e) {
   if (!e) return {};
   let t = () => {
     window.location.hash = `target-detail?id=${encodeURIComponent(e)}`;
@@ -24086,7 +24137,7 @@ function Xl(e) {
     }
   };
 }
-function Zl({ loadError: e, message: t, error: n }) {
+function Xl({ loadError: e, message: t, error: n }) {
   return /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [e ? /* @__PURE__ */ (0, I.jsx)("div", {
     className: "form-banner error",
     role: "alert",
@@ -24097,8 +24148,8 @@ function Zl({ loadError: e, message: t, error: n }) {
     children: n || t
   }) : null] });
 }
-function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
-  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(null), [g, _] = (0, C.useState)([]), [v, y] = (0, C.useState)(null), b = Bl(e, n.wafActionItems), x = b.remSteps.split("|").map((e) => e.trim()).filter(Boolean), S = Gl(e, ["title", "summary"], t), w = Eo(e);
+function Zl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(null), [g, _] = (0, C.useState)([]), [v, y] = (0, C.useState)(null), b = Bl(e, n.wafActionItems), x = b.remSteps.split("|").map((e) => e.trim()).filter(Boolean), S = X(e, ["title", "summary"], t), w = Eo(e);
   (0, C.useEffect)(() => {
     let e = !1;
     return Vl(r, i, t).then((t) => {
@@ -24111,21 +24162,21 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     i,
     t
   ]), (0, C.useEffect)(() => {
-    let n = !1, a = Kl(e.affected_targets) ?? Kl(e.targets);
+    let n = !1, a = Gl(e.affected_targets) ?? Gl(e.targets);
     if (a && a.length > 0) {
       _(a);
       return;
     }
-    let o = Gl(e, ["target_group_id"], "");
+    let o = X(e, ["target_group_id"], "");
     if (!o) {
       _([]);
       return;
     }
     return F(r, i, `/v1/target-groups/${encodeURIComponent(o)}`).then((r) => {
       if (n) return;
-      let i = Kl(r.targets) ?? [], a = Gl(e, ["target_id"], ""), o = zl(t, i);
-      if (a && !o.some((e) => Gl(e, ["id"], "") === a)) {
-        let e = i.find((e) => Gl(e, ["id"], "") === a);
+      let i = Gl(r.targets) ?? [], a = X(e, ["target_id"], ""), o = zl(t, i);
+      if (a && !o.some((e) => X(e, ["id"], "") === a)) {
+        let e = i.find((e) => X(e, ["id"], "") === a);
         e && o.unshift(e);
       }
       _(o);
@@ -24178,7 +24229,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       });
       if (!o || o.ok !== !0) {
         y(!1);
-        let e = Gl(o && typeof o.verification == "object" ? o.verification : {}, ["error"], "verification_failed");
+        let e = X(o && typeof o.verification == "object" ? o.verification : {}, ["error"], "verification_failed");
         throw Error(`Custody verification failed: ${Wl(e)}.`);
       }
       y(!0);
@@ -24194,63 +24245,63 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       render: (e) => /* @__PURE__ */ (0, I.jsx)(R, {
         size: "sm",
         variant: "ghost",
-        href: Ki("target-detail", Gl(e, ["id"], "")),
-        children: Gl(e, ["value", "id"], "")
+        href: Ki("target-detail", X(e, ["id"], "")),
+        children: X(e, ["value", "id"], "")
       })
     },
     {
       key: "kind",
       label: "Kind",
-      render: (e) => Gl(e, ["kind"], "—")
+      render: (e) => X(e, ["kind"], "—")
     },
     {
       key: "value",
       label: "Value",
       render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
         className: "mono",
-        children: Gl(e, ["value"], "—")
+        children: X(e, ["value"], "—")
       })
     },
     {
       key: "verification",
       label: "Verification",
       render: (e) => /* @__PURE__ */ (0, I.jsx)(ca, {
-        state: Gl(e, ["verification_state", "verification"], "unverified"),
-        provenance: Gl(e, ["verification_title"], "Verification state from target API.")
+        state: X(e, ["verification_state", "verification"], "unverified"),
+        provenance: X(e, ["verification_title"], "Verification state from target API.")
       })
     },
     {
       key: "eligibility",
       label: "Eligibility",
-      render: (e) => Gl(e, ["eligibility"], "—")
+      render: (e) => X(e, ["eligibility"], "—")
     },
     {
       key: "verdict",
       label: "Last verdict",
-      render: (e) => Gl(e, ["last_verdict"], "—")
+      render: (e) => X(e, ["last_verdict"], "—")
     }
   ], te = [
     {
       key: "artifact",
       label: "Artifact",
-      render: (e) => Gl(e, ["id", "kind"], "—")
+      render: (e) => X(e, ["id", "kind"], "—")
     },
     {
       key: "kind",
       label: "Kind",
-      render: (e) => Gl(e, ["kind"], "—")
+      render: (e) => X(e, ["kind"], "—")
     },
     {
       key: "run",
       label: "Run",
-      render: (e) => Gl(e, ["run_id"], "—")
+      render: (e) => X(e, ["run_id"], "—")
     },
     {
       key: "sha",
       label: "SHA-256",
       render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
         className: "mono small",
-        children: Gl(e, ["sha256", "content_sha256"], "—")
+        children: X(e, ["sha256", "content_sha256"], "—")
       })
     },
     {
@@ -24263,7 +24314,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       label: "Size",
       render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
         className: "num",
-        children: ql(e.size_bytes)
+        children: Kl(e.size_bytes)
       })
     },
     {
@@ -24272,15 +24323,15 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       render: (e) => /* @__PURE__ */ (0, I.jsx)(L, {
         size: "sm",
         variant: "ghost",
-        "aria-label": `Export artifact ${Gl(e, ["id", "kind"], "artifact")}`,
+        "aria-label": `Export artifact ${X(e, ["id", "kind"], "artifact")}`,
         onClick: () => void k(),
         children: "Export"
       })
     }
-  ], ne = m?.custody_chain ?? [], re = Gl(m?.bundle, ["sha256"], ""), ie = Gl(m?.bundle, ["sealed_at"], ""), ae = v === null ? !!(re || ne.length) : v, A = [
+  ], ne = m?.custody_chain ?? [], re = X(m?.bundle, ["sha256"], ""), ie = X(m?.bundle, ["sealed_at"], ""), ae = v === null ? !!(re || ne.length) : v, A = [
     `finding: ${t}`,
-    `digest_kind: ${Gl(m?.bundle, ["custody_schema_version"], "json-key-sorted-v1")}`,
-    ...ne.length ? ["chain:", ...ne.flatMap((e) => [`  - artifact: ${Gl(e, ["kind", "step"], "artifact")}`, `    sha256: ${Gl(e, ["sha256"], "—")}`])] : [],
+    `digest_kind: ${X(m?.bundle, ["custody_schema_version"], "json-key-sorted-v1")}`,
+    ...ne.length ? ["chain:", ...ne.flatMap((e) => [`  - artifact: ${X(e, ["kind", "step"], "artifact")}`, `    sha256: ${X(e, ["sha256"], "—")}`])] : [],
     `bundle_sha256: ${re || "—"}`,
     ...ie ? [`sealed_at: ${ie}`] : [],
     `verified: ${ae}`
@@ -24320,7 +24371,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         })]
       }),
       o ? /* @__PURE__ */ (0, I.jsx)(Ps, { rows: 2 }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Zl, {
+      /* @__PURE__ */ (0, I.jsx)(Xl, {
         loadError: s,
         message: u,
         error: f
@@ -24330,28 +24381,28 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         children: [
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Severity",
-            value: Wl(Gl(e, ["severity"], "unknown")),
+            value: Wl(X(e, ["severity"], "unknown")),
             sub: "Impact class from finding API",
             icon: Ae,
-            tone: Hl(Gl(e, ["severity"], "unknown"))
+            tone: Hl(X(e, ["severity"], "unknown"))
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Status",
-            value: Wl(Gl(e, ["status"], "open")),
+            value: Wl(X(e, ["status"], "open")),
             sub: "Triage state",
             icon: Te,
-            tone: Ul(Gl(e, ["status"], "open"))
+            tone: Ul(X(e, ["status"], "open"))
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Target group",
-            value: Gl(e, ["target_group_id"], "—"),
+            value: X(e, ["target_group_id"], "—"),
             sub: "Declared scope",
             icon: ke,
             tone: "info"
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Owner",
-            value: Gl(e, ["assignee", "rem_owner"], "unassigned"),
+            value: X(e, ["assignee", "rem_owner"], "unassigned"),
             sub: "Accountable owner",
             icon: je,
             tone: "muted"
@@ -24364,9 +24415,9 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           className: "detail-status-line",
           children: [
             /* @__PURE__ */ (0, I.jsx)(z, {
-              tone: Hl(Gl(e, ["severity"], "unknown")),
-              title: `Severity ${Gl(e, ["severity"], "unknown")} from finding API`,
-              children: Wl(Gl(e, ["severity"], "unknown"))
+              tone: Hl(X(e, ["severity"], "unknown")),
+              title: `Severity ${X(e, ["severity"], "unknown")} from finding API`,
+              children: Wl(X(e, ["severity"], "unknown"))
             }),
             /* @__PURE__ */ (0, I.jsx)("span", {
               className: "detail-status-sep",
@@ -24374,9 +24425,9 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               children: "·"
             }),
             /* @__PURE__ */ (0, I.jsx)(z, {
-              tone: Ul(Gl(e, ["status"], "open")),
-              title: `Status ${Gl(e, ["status"], "open")} from finding API`,
-              children: Wl(Gl(e, ["status"], "open"))
+              tone: Ul(X(e, ["status"], "open")),
+              title: `Status ${X(e, ["status"], "open")} from finding API`,
+              children: Wl(X(e, ["status"], "open"))
             })
           ]
         })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Ii, {
@@ -24385,7 +24436,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           session: i
         }) })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Triage" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Assign an owner, record notes, and move the finding state." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [/* @__PURE__ */ (0, I.jsxs)("div", {
           className: "kv-list",
-          children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Gl(e, ["assignee"], "unassigned") })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "SLA due" }), /* @__PURE__ */ (0, I.jsxs)("strong", {
+          children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: X(e, ["assignee"], "unassigned") })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "SLA due" }), /* @__PURE__ */ (0, I.jsxs)("strong", {
             title: "SLA derived from severity hours and created_at",
             children: [w ? P(w) : "—", Do(e) ? " (breach)" : ""]
           })] })]
@@ -24402,14 +24453,14 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, I.jsxs)("label", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Assignee" }), /* @__PURE__ */ (0, I.jsx)("input", {
               name: "assignee",
-              defaultValue: Gl(e, ["assignee"], "")
+              defaultValue: X(e, ["assignee"], "")
             })] }),
             /* @__PURE__ */ (0, I.jsxs)("label", {
               className: "full",
               children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Notes" }), /* @__PURE__ */ (0, I.jsx)("textarea", {
                 name: "notes",
                 rows: 3,
-                defaultValue: Gl(e, ["notes"], "")
+                defaultValue: X(e, ["notes"], "")
               })]
             }),
             /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -24444,8 +24495,8 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                       method: "POST",
                       body: {
                         check_id: t.checkId,
-                        target_group_id: Gl(e, ["target_group_id"], ""),
-                        target_id: Gl(e, ["target_id"], "")
+                        target_group_id: X(e, ["target_group_id"], ""),
+                        target_id: X(e, ["target_id"], "")
                       }
                     });
                   }, "Retest started."),
@@ -24463,8 +24514,8 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }) : /* @__PURE__ */ (0, I.jsx)(Hi, {
         columns: ee,
         items: g,
-        getRowId: (e) => Gl(e, ["id"], ""),
-        getRowProps: (e) => Xl(Gl(e, ["id"], "")),
+        getRowId: (e) => X(e, ["id"], ""),
+        getRowProps: (e) => Yl(X(e, ["id"], "")),
         empty: /* @__PURE__ */ (0, I.jsx)("span", {
           className: "muted",
           children: "No affected targets returned."
@@ -24502,7 +24553,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   className: "rem-label",
                   children: "State"
                 }), /* @__PURE__ */ (0, I.jsx)(z, {
-                  tone: Jl(b.remStateClass, b.remState),
+                  tone: ql(b.remStateClass, b.remState),
                   title: `Remediation state ${b.remState} from finding API`,
                   children: b.remState || "—"
                 })]
@@ -24521,7 +24572,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           }),
           /* @__PURE__ */ (0, I.jsx)("p", {
             className: "muted",
-            children: b.remDescription || Gl(e, ["description", "summary"], "No remediation description returned by API.")
+            children: b.remDescription || X(e, ["description", "summary"], "No remediation description returned by API.")
           }),
           x.length > 0 ? /* @__PURE__ */ (0, I.jsx)("ol", {
             className: "rem-steps",
@@ -24589,8 +24640,8 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       }), /* @__PURE__ */ (0, I.jsx)(Hi, {
         columns: te,
         items: m.artifacts,
-        getRowId: (e) => Gl(e, ["id"], ""),
-        getRowProps: (e) => Yl(Gl(e, ["id"], "")),
+        getRowId: (e) => X(e, ["id"], ""),
+        getRowProps: (e) => Jl(X(e, ["id"], "")),
         empty: /* @__PURE__ */ (0, I.jsx)("span", {
           className: "muted",
           children: "No artifacts in bundle."
@@ -24598,7 +24649,7 @@ function Ql({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       })] }) : /* @__PURE__ */ (0, I.jsx)(G, {
         icon: ce,
         title: "No evidence artifacts.",
-        body: Gl(m?.meta, ["empty_reason"], m?.error ?? "Evidence bundle not returned for this finding.")
+        body: X(m?.meta, ["empty_reason"], m?.error ?? "Evidence bundle not returned for this finding.")
       }) })] }),
       /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Custody chain" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Scoped YAML preview from evidence hydrator." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)("pre", {
         className: "code",
@@ -24617,7 +24668,7 @@ function Z(e, t, n = "—") {
   }
   return n;
 }
-function $l(e, t, n = "—") {
+function Ql(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -24625,7 +24676,7 @@ function $l(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function eu(e, t, n = 0) {
+function $l(e, t, n = 0) {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -24633,7 +24684,7 @@ function eu(e, t, n = 0) {
   }
   return typeof r == "number" && Number.isFinite(r) ? r : n;
 }
-function tu(e, t) {
+function eu(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return [];
@@ -24641,7 +24692,7 @@ function tu(e, t) {
   }
   return Array.isArray(n) ? n : [];
 }
-function nu(e, t) {
+function tu(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -24649,14 +24700,14 @@ function nu(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-function ru(e) {
-  let t = gu(e);
+function nu(e) {
+  let t = hu(e);
   return t === "reported" ? "success" : t === "rejected" ? "danger" : "muted";
 }
-function iu(e) {
+function ru(e) {
   return e.replace(/_/g, " ");
 }
-var au = {
+var iu = {
   probe_result: "Probe result",
   agent_observation: "Agent observation",
   agent_no_observation: "Agent no observation",
@@ -24664,31 +24715,31 @@ var au = {
   run_started: "Run started",
   run_cancelled: "Run cancelled"
 };
-function ou(e) {
+function au(e) {
   let t = e.trim();
-  return t ? au[t] ?? iu(t) : "Event";
+  return t ? iu[t] ?? ru(t) : "Event";
 }
-function su(e, t) {
+function ou(e, t) {
   return Z(e.find((e) => Z(e, ["check_id"], "") === t) ?? {}, ["name", "title"], t);
 }
-var cu = {
+var su = {
   waf_posture: "WAF posture",
   external_discovery: "External discovery",
   connectors: "Connectors",
   high_scale_program: "High-scale program"
 };
-function lu(e, t) {
+function cu(e, t) {
   let n = new Blob([JSON.stringify(t, null, 2)], { type: "application/json" }), r = URL.createObjectURL(n), i = document.createElement("a");
   i.href = r, i.download = e, i.click(), URL.revokeObjectURL(r);
 }
-function uu(e) {
-  let t = eu(e, ["size_bytes"], NaN), n = Number.isFinite(t) ? t : eu(e, ["metadata", "size_bytes"], NaN);
+function lu(e) {
+  let t = $l(e, ["size_bytes"], NaN), n = Number.isFinite(t) ? t : $l(e, ["metadata", "size_bytes"], NaN);
   return !Number.isFinite(n) || n < 0 ? "" : n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
-function du(e) {
+function uu(e) {
   return e.filter(([, e]) => e && e !== "—").map(([e, t]) => `${e}: ${t}`).join("\n");
 }
-function fu({ items: e }) {
+function du({ items: e }) {
   return e.length === 0 ? /* @__PURE__ */ (0, I.jsx)("p", {
     className: "muted",
     children: "No timeline milestones recorded for this entity."
@@ -24697,35 +24748,35 @@ function fu({ items: e }) {
     children: e.map((e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: t + 1 }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("strong", { children: e.label }), /* @__PURE__ */ (0, I.jsx)("p", { children: P(e.at) })] })] }, `${e.label}-${t}`))
   });
 }
-var pu = {
+var fu = {
   scope: "Scope",
   validation: "Validation",
   posture: "Posture",
   governance: "Governance",
   staff: "Staff"
-}, mu = 6, hu = 4;
-function gu(e) {
+}, pu = 6, mu = 4;
+function hu(e) {
   return e.trim().toLowerCase().replace(/\s+/g, "_");
 }
-function _u(e, t = "—") {
+function gu(e, t = "—") {
   let n = e.trim();
   if (!n) return t;
   let r = n.replace(/_/g, " ");
   return r.charAt(0).toUpperCase() + r.slice(1);
 }
-function vu(e) {
-  let t = gu(e);
+function _u(e) {
+  let t = hu(e);
   return t === "pass" ? "success" : t === "fail" ? "danger" : t === "inconclusive" ? "warn" : "info";
 }
-function yu(e) {
-  let t = gu(e);
+function vu(e) {
+  let t = hu(e);
   return t === "active" || t === "online" ? "success" : t === "revoked" || t === "disabled" ? "danger" : t === "degraded" || t === "stale" ? "warn" : "muted";
 }
-function bu(e) {
+function yu(e) {
   return e === "proven" ? "success" : e === "needs_baseline" ? "warn" : e === "missing_agent" || e === "misplaced_risk" ? "danger" : "muted";
 }
-function xu(e) {
-  let t = gu(e);
+function bu(e) {
+  let t = hu(e);
   return [
     "approved",
     "provisioned",
@@ -24745,8 +24796,8 @@ function xu(e) {
     "recorded"
   ].includes(t) ? "info" : "muted";
 }
-function Su(e) {
-  let t = gu(e);
+function xu(e) {
+  let t = hu(e);
   return ["closed", "completed"].includes(t) ? "success" : [
     "running",
     "scheduled",
@@ -24757,12 +24808,12 @@ function Su(e) {
     "submitted"
   ].includes(t) ? "warn" : ["rejected", "failed"].includes(t) ? "danger" : "muted";
 }
-function Cu(e) {
-  let t = gu(e);
+function Su(e) {
+  let t = hu(e);
   return t === "accepted" ? "success" : t === "rejected" ? "danger" : t === "pending_review" || t === "pending" ? "warn" : "info";
 }
-function wu(e) {
-  let t = gu(e);
+function Cu(e) {
+  let t = hu(e);
   return [
     "ready",
     "published",
@@ -24774,25 +24825,25 @@ function wu(e) {
     "draft"
   ].includes(t) ? "info" : ["failed", "error"].includes(t) ? "danger" : "muted";
 }
-function Tu(e) {
-  let t = gu(e);
+function wu(e) {
+  let t = hu(e);
   return ["active", "trialing"].includes(t) ? "success" : ["past_due", "paused"].includes(t) ? "warn" : [
     "canceled",
     "cancelled",
     "suspended"
   ].includes(t) ? "danger" : "info";
 }
-function Eu(e) {
-  let t = gu(e);
+function Tu(e) {
+  let t = hu(e);
   return t === "active" ? "success" : t === "suspended" ? "danger" : t === "pending" ? "warn" : "muted";
 }
-function Du({ value: e, tone: t, fallback: n = "—" }) {
+function Eu({ value: e, tone: t, fallback: n = "—" }) {
   return /* @__PURE__ */ (0, I.jsx)(z, {
     tone: t,
-    children: _u(e, n)
+    children: gu(e, n)
   });
 }
-function Ou({ route: e, eyebrow: t }) {
+function Du({ route: e, eyebrow: t }) {
   let n = Hn.get(e), r = n?.description?.trim();
   return /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [/* @__PURE__ */ (0, I.jsx)("p", {
     className: "eyebrow",
@@ -24802,10 +24853,10 @@ function Ou({ route: e, eyebrow: t }) {
     children: r
   }) : null] });
 }
-function ku({ rows: e = mu }) {
+function Ou({ rows: e = pu }) {
   return /* @__PURE__ */ (0, I.jsx)(I.Fragment, { children: Array.from({ length: e }, (e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { className: "skeleton skeleton-text" }), /* @__PURE__ */ (0, I.jsx)("strong", { className: "skeleton skeleton-text" })] }, t)) });
 }
-var Au = {
+var ku = {
   "run-detail": {
     label: "Test runs",
     href: "#runs"
@@ -24842,7 +24893,7 @@ var Au = {
     label: "SOC console",
     href: "#internal-soc"
   }
-}, ju = [
+}, Au = [
   "run-detail",
   "agent-detail",
   "target-group-detail",
@@ -24853,10 +24904,10 @@ var Au = {
   "evidence-detail",
   "queue-detail"
 ];
-function Mu(e, t, n, r) {
+function ju(e, t, n, r) {
   if (e === "run-detail") {
     let e = Z(t, ["check_id"], "");
-    return e && r?.checks ? su(r.checks, e) : Z(t, ["check_id"], n);
+    return e && r?.checks ? ou(r.checks, e) : Z(t, ["check_id"], n);
   }
   return e === "finding-detail" ? Z(t, [
     "title",
@@ -24867,7 +24918,7 @@ function Mu(e, t, n, r) {
     "objective",
     "reason",
     "id"
-  ], n) : e === "target-detail" ? Z(t, ["value", "id"], n) : e === "agent-detail" ? Z(t, ["hostname", "name"], n) : e === "target-group-detail" ? Z(t, ["name"], n) : e === "report-detail" ? Z(t, ["title"], n) : e === "tenant-detail" ? Z(nu(t, ["tenant"]) ?? t, ["name"], n) : Z(t, [
+  ], n) : e === "target-detail" ? Z(t, ["value", "id"], n) : e === "agent-detail" ? Z(t, ["hostname", "name"], n) : e === "target-group-detail" ? Z(t, ["name"], n) : e === "report-detail" ? Z(t, ["title"], n) : e === "tenant-detail" ? Z(tu(t, ["tenant"]) ?? t, ["name"], n) : Z(t, [
     "name",
     "hostname",
     "canonical_url",
@@ -24876,8 +24927,8 @@ function Mu(e, t, n, r) {
     "id"
   ], n);
 }
-function Nu({ route: e, title: t, entityId: n }) {
-  let r = Hn.get(e), i = Au[e], a = i?.href, o = r?.group ? pu[r.group] ?? r.group : "Detail", s = i?.label ?? r?.label ?? "List";
+function Mu({ route: e, title: t, entityId: n }) {
+  let r = Hn.get(e), i = ku[e], a = i?.href, o = r?.group ? fu[r.group] ?? r.group : "Detail", s = i?.label ?? r?.label ?? "List";
   return /* @__PURE__ */ (0, I.jsxs)("p", {
     className: "muted stack-tight",
     children: [
@@ -24895,13 +24946,13 @@ function Nu({ route: e, title: t, entityId: n }) {
     ]
   });
 }
-function Pu({ route: e, entityId: t, title: n, eyebrow: r }) {
+function Nu({ route: e, entityId: t, title: n, eyebrow: r }) {
   return /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
     r ? /* @__PURE__ */ (0, I.jsx)("p", {
       className: "eyebrow",
       children: r
     }) : null,
-    /* @__PURE__ */ (0, I.jsx)(Nu, {
+    /* @__PURE__ */ (0, I.jsx)(Mu, {
       route: e,
       title: n,
       entityId: t
@@ -24913,10 +24964,10 @@ function Pu({ route: e, entityId: t, title: n, eyebrow: r }) {
     })
   ] });
 }
-function Fu({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
+function Pu({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "page-head",
-    children: [/* @__PURE__ */ (0, I.jsx)("div", { children: /* @__PURE__ */ (0, I.jsx)(Pu, {
+    children: [/* @__PURE__ */ (0, I.jsx)("div", { children: /* @__PURE__ */ (0, I.jsx)(Nu, {
       route: e,
       entityId: n,
       title: r,
@@ -24927,12 +24978,12 @@ function Fu({ route: e, eyebrow: t, entityId: n, title: r, actions: i }) {
     }) : null]
   });
 }
-function Iu({ label: e = "Loading…", variant: t = "page" }) {
+function Fu({ label: e = "Loading…", variant: t = "page" }) {
   return t === "compact" ? /* @__PURE__ */ (0, I.jsx)("div", {
     className: "kv-list",
     "aria-busy": "true",
     "aria-label": e,
-    children: /* @__PURE__ */ (0, I.jsx)(ku, { rows: 3 })
+    children: /* @__PURE__ */ (0, I.jsx)(Ou, { rows: 3 })
   }) : t === "layout" ? /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "detail-layout",
     "aria-busy": "true",
@@ -24947,7 +24998,7 @@ function Iu({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, I.jsx)(W, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, I.jsx)(ku, { rows: 4 })
+        children: /* @__PURE__ */ (0, I.jsx)(Ou, { rows: 4 })
       })]
     }), /* @__PURE__ */ (0, I.jsxs)(B, {
       density: "compact",
@@ -24960,7 +25011,7 @@ function Iu({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, I.jsx)(W, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, I.jsx)(ku, { rows: 4 })
+        children: /* @__PURE__ */ (0, I.jsx)(Ou, { rows: 4 })
       })]
     })]
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -24970,7 +25021,7 @@ function Iu({ label: e = "Loading…", variant: t = "page" }) {
     children: [/* @__PURE__ */ (0, I.jsx)("div", {
       className: "row-actions",
       "aria-hidden": "true",
-      children: Array.from({ length: hu }, (e, t) => /* @__PURE__ */ (0, I.jsx)("span", { className: "skeleton skeleton-row" }, t))
+      children: Array.from({ length: mu }, (e, t) => /* @__PURE__ */ (0, I.jsx)("span", { className: "skeleton skeleton-row" }, t))
     }), /* @__PURE__ */ (0, I.jsxs)(B, {
       density: "compact",
       children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)("span", {
@@ -24981,25 +25032,25 @@ function Iu({ label: e = "Loading…", variant: t = "page" }) {
         "aria-hidden": "true"
       })] }), /* @__PURE__ */ (0, I.jsx)(W, {
         className: "kv-list",
-        children: /* @__PURE__ */ (0, I.jsx)(ku, {})
+        children: /* @__PURE__ */ (0, I.jsx)(Ou, {})
       })]
     })]
   });
 }
-function Lu({ route: e, id: t, label: n }) {
+function Iu({ route: e, id: t, label: n }) {
   let r = (n ?? t).trim();
-  return !t || t === "—" ? /* @__PURE__ */ (0, I.jsx)("strong", { children: "—" }) : ju.includes(e) ? /* @__PURE__ */ (0, I.jsx)(R, {
+  return !t || t === "—" ? /* @__PURE__ */ (0, I.jsx)("strong", { children: "—" }) : Au.includes(e) ? /* @__PURE__ */ (0, I.jsx)(R, {
     size: "sm",
     variant: "ghost",
     href: Ki(e, t),
     children: r
   }) : /* @__PURE__ */ (0, I.jsx)("strong", { children: r });
 }
-function Ru({ label: e, children: t }) {
+function Lu({ label: e, children: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: e }), /* @__PURE__ */ (0, I.jsx)("strong", { children: t })] });
 }
-function zu({ label: e, value: t, compact: n }) {
-  return /* @__PURE__ */ (0, I.jsx)(Ru, {
+function Ru({ label: e, value: t, compact: n }) {
+  return /* @__PURE__ */ (0, I.jsx)(Lu, {
     label: e,
     children: /* @__PURE__ */ (0, I.jsx)("code", {
       className: n ? "small" : void 0,
@@ -25007,14 +25058,14 @@ function zu({ label: e, value: t, compact: n }) {
     })
   });
 }
-function Bu({ label: e, children: t }) {
+function zu({ label: e, children: t }) {
   return /* @__PURE__ */ (0, I.jsx)("pre", {
     className: "codeblock",
     "aria-label": e,
     children: t
   });
 }
-function Vu({ loadError: e, error: t, message: n, successTone: r = "default", mode: i = "split", hideMessageWhenLoadError: a = !0, children: o }) {
+function Bu({ loadError: e, error: t, message: n, successTone: r = "default", mode: i = "split", hideMessageWhenLoadError: a = !0, children: o }) {
   let s = r === "neutral" ? "form-banner neutral" : "form-banner";
   if (i === "combined") {
     let r = t || e || n;
@@ -25036,27 +25087,27 @@ function Vu({ loadError: e, error: t, message: n, successTone: r = "default", mo
     children: [t || n, o]
   }) : null] });
 }
-function Hu({ hasDetails: e, status: t, error: n, fqdn: r, ip: i }) {
+function Vu({ hasDetails: e, status: t, error: n, fqdn: r, ip: i }) {
   return e ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
     /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Probe endpoint status" }), t ? /* @__PURE__ */ (0, I.jsx)(z, {
-      tone: ru(t),
-      children: iu(t)
+      tone: nu(t),
+      children: ru(t)
     }) : /* @__PURE__ */ (0, I.jsx)("strong", { children: "—" })] }),
-    n ? /* @__PURE__ */ (0, I.jsx)(zu, {
+    n ? /* @__PURE__ */ (0, I.jsx)(Ru, {
       label: "Probe endpoint error",
       value: n
     }) : null,
-    r && r !== "—" ? /* @__PURE__ */ (0, I.jsx)(zu, {
+    r && r !== "—" ? /* @__PURE__ */ (0, I.jsx)(Ru, {
       label: "Declared FQDN",
       value: r
     }) : null,
-    i && i !== "—" ? /* @__PURE__ */ (0, I.jsx)(zu, {
+    i && i !== "—" ? /* @__PURE__ */ (0, I.jsx)(Ru, {
       label: "Declared IP",
       value: i
     }) : null
   ] }) : null;
 }
-function Uu(e, t, n, r, i) {
+function Hu(e, t, n, r, i) {
   let [a, o] = (0, C.useState)(i), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(e && !!r);
   return (0, C.useEffect)(() => {
     if (!e || !r) {
@@ -25085,7 +25136,7 @@ function Uu(e, t, n, r, i) {
     loading: l
   };
 }
-function Wu(e, t, n, r, i, a) {
+function Uu(e, t, n, r, i, a) {
   let [o, s] = (0, C.useState)(a), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(e && !!i);
   return (0, C.useEffect)(() => {
     if (!e || !i) {
@@ -25117,15 +25168,15 @@ function Wu(e, t, n, r, i, a) {
     loading: u
   };
 }
-function Gu(e) {
-  let t = e.started_at ?? e.created_at, n = $l(e, ["verdict", "finalized_at"], "") || e.completed_at || e.updated_at;
+function Wu(e) {
+  let t = e.started_at ?? e.created_at, n = Ql(e, ["verdict", "finalized_at"], "") || e.completed_at || e.updated_at;
   if (!t || !n) return "—";
   let r = new Date(String(n)).getTime() - new Date(String(t)).getTime();
   if (!Number.isFinite(r) || r < 0) return "—";
   let i = Math.round(r / 1e3), a = Math.floor(i / 60), o = i % 60;
   return a > 0 ? `${a}m ${o}s` : `${o}s`;
 }
-function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, runEvents: o, loading: s, loadError: c }) {
+function Gu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, runEvents: o, loading: s, loadError: c }) {
   let [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(""), [p, m] = (0, C.useState)(""), h = e.verdict, g = o.filter((e) => Z(e, ["signal_type"]) === "probe_result"), _ = o.filter((e) => ["agent_observation", "agent_no_observation"].includes(Z(e, ["signal_type"]))), v = n.evidence.filter((e) => Z(e, ["test_run_id"], "") === t), y = n.findings.filter((e) => Z(e, ["test_run_id"], "") === t), b = Z(e, ["status"], ""), x = [
     "planned",
     "running",
@@ -25162,13 +25213,13 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     },
     {
       label: "Verdict recorded",
-      at: $l(e, ["verdict", "finalized_at"], "") || e.completed_at
+      at: Ql(e, ["verdict", "finalized_at"], "") || e.completed_at
     }
-  ].filter((e) => e.at), D = Mu("run-detail", e, t, { checks: n.checks }), k = Z(e, ["target_group_id"], ""), ee = k ? Z(n.targetGroups.find((e) => Z(e, ["id"], "") === k) ?? {}, ["name"], k) : "—", ne = $l(e, ["verdict", "verdict"], "pending"), re = y[0] ?? null, ie = Z(e, ["policy_id", "test_policy_id"], ""), ae = Z(_[0] ?? {}, ["agent_id"], "");
+  ].filter((e) => e.at), D = ju("run-detail", e, t, { checks: n.checks }), k = Z(e, ["target_group_id"], ""), ee = k ? Z(n.targetGroups.find((e) => Z(e, ["id"], "") === k) ?? {}, ["name"], k) : "—", ne = Ql(e, ["verdict", "verdict"], "pending"), re = y[0] ?? null, ie = Z(e, ["policy_id", "test_policy_id"], ""), ae = Z(_[0] ?? {}, ["agent_id"], "");
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "run-detail",
         eyebrow: "Test run evidence",
         entityId: t,
@@ -25203,8 +25254,8 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           })] }) : null
         ] })
       }),
-      s ? /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading run detail…" }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      s ? /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading run detail…" }) : null,
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         loadError: c,
         error: p,
         message: d,
@@ -25223,22 +25274,22 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }),
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Check",
-              value: su(n.checks, Z(e, ["check_id"], "")),
+              value: ou(n.checks, Z(e, ["check_id"], "")),
               sub: Z(e, ["vector_family"], "safe check"),
               icon: ce,
               tone: "muted"
             }),
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Verdict",
-              value: _u(ne, "pending"),
-              sub: `placement ${$l(h ?? {}, ["placement_confidence", "level"], "unknown")}`,
+              value: gu(ne, "pending"),
+              sub: `placement ${Ql(h ?? {}, ["placement_confidence", "level"], "unknown")}`,
               icon: Te,
-              tone: vu(ne)
+              tone: _u(ne)
             }),
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Duration",
-              value: Gu(e),
-              sub: _u(b, "pending"),
+              value: Wu(e),
+              sub: gu(b, "pending"),
               icon: O,
               tone: "muted"
             })
@@ -25251,7 +25302,7 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             ie ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [" · policy ", /* @__PURE__ */ (0, I.jsx)("code", { children: ie })] }) : null,
             ae ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [" · agent ", /* @__PURE__ */ (0, I.jsx)("code", { children: ae })] }) : null,
             "."
-          ] })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [/* @__PURE__ */ (0, I.jsx)(fu, { items: E }), /* @__PURE__ */ (0, I.jsx)(ji, { events: o })] })] }), /* @__PURE__ */ (0, I.jsxs)("div", {
+          ] })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [/* @__PURE__ */ (0, I.jsx)(du, { items: E }), /* @__PURE__ */ (0, I.jsx)(ji, { events: o })] })] }), /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "stack-tight",
             children: [/* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Probe result" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Outside observations from bounded probes." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: g.length === 0 ? /* @__PURE__ */ (0, I.jsx)(G, {
               icon: O,
@@ -25263,8 +25314,8 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               body: "Outbound canary observations appear when agents report on this run."
             }) : /* @__PURE__ */ (0, I.jsx)("div", {
               className: "kv-list",
-              children: _.map((e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: ou(Z(e, ["signal_type"])) }), /* @__PURE__ */ (0, I.jsxs)("strong", { children: [
-                /* @__PURE__ */ (0, I.jsx)(Lu, {
+              children: _.map((e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: au(Z(e, ["signal_type"])) }), /* @__PURE__ */ (0, I.jsxs)("strong", { children: [
+                /* @__PURE__ */ (0, I.jsx)(Iu, {
                   route: "agent-detail",
                   id: Z(e, ["agent_id"], ""),
                   label: Z(e, ["agent_id"], Z(e, ["source"], "agent"))
@@ -25275,7 +25326,7 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             }) })] })]
           })]
         }),
-        /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Correlation" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Verdict = probe ∧ agent. Truth table and verdict explanation from observed facts." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [/* @__PURE__ */ (0, I.jsx)(ki, {
+        /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Correlation matrix" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Verdict = probe ∧ agent. Truth table and verdict explanation from observed facts." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [/* @__PURE__ */ (0, I.jsx)(ki, {
           detail: e,
           events: o
         }), /* @__PURE__ */ (0, I.jsx)(Ai, { detail: e })] })] }),
@@ -25293,7 +25344,7 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               "kind",
               "signal_type"
             ], "evidence"), r = Z(e, ["content_sha256", "custody_digest"], "");
-            return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: n }), /* @__PURE__ */ (0, I.jsxs)("strong", { children: [/* @__PURE__ */ (0, I.jsx)(Lu, {
+            return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: n }), /* @__PURE__ */ (0, I.jsxs)("strong", { children: [/* @__PURE__ */ (0, I.jsx)(Iu, {
               route: "evidence-detail",
               id: t,
               label: n
@@ -25316,7 +25367,7 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
             {
               key: "signal",
               label: "Signal",
-              render: (e) => ou(Z(e, ["signal_type"], "event"))
+              render: (e) => au(Z(e, ["signal_type"], "event"))
             },
             {
               key: "source",
@@ -25359,22 +25410,22 @@ function Ku({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-var qu = [
+var Ku = [
   "waf_posture",
   "external_discovery",
   "connectors",
   "high_scale_program"
 ];
-function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
-  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)("overview"), [g, _] = (0, C.useState)(null), [v, y] = (0, C.useState)(""), [b, x] = (0, C.useState)(t), [S, w] = (0, C.useState)(qu[0]), [T, E] = (0, C.useState)("true");
+function qu({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+  let [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)("overview"), [g, _] = (0, C.useState)(null), [v, y] = (0, C.useState)(""), [b, x] = (0, C.useState)(t), [S, w] = (0, C.useState)(Ku[0]), [T, E] = (0, C.useState)("true");
   (0, C.useEffect)(() => {
     x(t);
   }, [t]);
-  let D = b, O = nu(D, ["tenant"]) ?? D, k = nu(D, ["account"]), ee = nu(D, ["subscription"]) ?? g, ne = tu(D, ["users"]), re = nu(D, ["signup_request"]), ie = tu(D, ["recent_tenant_audit"]), ae = n.internalApprovalRequests.filter((t) => Z(t, ["tenant_id"], "") === e), A = Z(k, ["lifecycle_state"], "active"), j = n.agents.filter((t) => Z(t, ["tenant_id"], "") === e), se = Z(ee, [
+  let D = b, O = tu(D, ["tenant"]) ?? D, k = tu(D, ["account"]), ee = tu(D, ["subscription"]) ?? g, ne = eu(D, ["users"]), re = tu(D, ["signup_request"]), ie = eu(D, ["recent_tenant_audit"]), ae = n.internalApprovalRequests.filter((t) => Z(t, ["tenant_id"], "") === e), A = Z(k, ["lifecycle_state"], "active"), j = n.agents.filter((t) => Z(t, ["tenant_id"], "") === e), se = Z(ee, [
     "mrr",
     "monthly_recurring_revenue",
     "amount"
-  ], "") || Z(k, ["mrr", "monthly_recurring_revenue"], ""), ue = nu(ee, ["effective_entitlements"]) ?? nu(g, ["effective_entitlements"]);
+  ], "") || Z(k, ["mrr", "monthly_recurring_revenue"], ""), ue = tu(ee, ["effective_entitlements"]) ?? tu(g, ["effective_entitlements"]);
   (0, C.useEffect)(() => {
     if (!e || i.principal !== "staff") {
       _(null), y("");
@@ -25458,7 +25509,7 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "tenant-detail",
         eyebrow: "Staff tenant operations",
         entityId: e,
@@ -25483,9 +25534,9 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
         })] })
       }),
       /* @__PURE__ */ (0, I.jsxs)(hc, { children: [
-        /* @__PURE__ */ (0, I.jsx)(Du, {
+        /* @__PURE__ */ (0, I.jsx)(Eu, {
           value: A,
-          tone: Eu(A)
+          tone: Tu(A)
         }),
         " · plan ",
         Z(ee, ["plan_id"], "—"),
@@ -25503,8 +25554,8 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
         }),
         " recent audit events"
       ] }),
-      o ? /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading tenant detail…" }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      o ? /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading tenant detail…" }) : null,
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         loadError: s,
         error: f,
         message: u,
@@ -25516,7 +25567,7 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Lifecycle",
-              value: _u(A, "active"),
+              value: gu(A, "active"),
               sub: "Account state from staff administration",
               icon: Te,
               tone: A === "active" ? "success" : "warn"
@@ -25524,7 +25575,7 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Plan",
               value: Z(ee, ["plan_id"], "—"),
-              sub: _u(Z(ee, ["status"], "unknown")),
+              sub: gu(Z(ee, ["status"], "unknown")),
               icon: le,
               tone: "muted"
             }),
@@ -25590,14 +25641,14 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
             children: [/* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Account status" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Lifecycle and subscription posture for this tenant." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
               className: "kv-list",
               children: [
-                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Lifecycle" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Lifecycle" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: A,
-                  tone: Eu(A)
+                  tone: Tu(A)
                 })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Plan" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(ee, ["plan_id"], "—") })] }),
-                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Subscription status" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Subscription status" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: Z(ee, ["status"], "—"),
-                  tone: Tu(Z(ee, ["status"], ""))
+                  tone: wu(Z(ee, ["status"], ""))
                 })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Users" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: ne.length })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(O, ["name"]) })] }),
@@ -25610,12 +25661,12 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
               className: "kv-list",
               children: [
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Plan" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(ee, ["plan_id"], "—") })] }),
-                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: Z(ee, ["status"], "—"),
-                  tone: Tu(Z(ee, ["status"], ""))
+                  tone: wu(Z(ee, ["status"], ""))
                 })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Effective from" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: P(ee?.effective_from ?? ee?.created_at) })] }),
-                ue ? qu.map((e) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: cu[e] ?? e }), /* @__PURE__ */ (0, I.jsx)("strong", { children: ue[e] === !0 ? "enabled" : "disabled" })] }, e)) : /* @__PURE__ */ (0, I.jsx)("p", {
+                ue ? Ku.map((e) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: su[e] ?? e }), /* @__PURE__ */ (0, I.jsx)("strong", { children: ue[e] === !0 ? "enabled" : "disabled" })] }, e)) : /* @__PURE__ */ (0, I.jsx)("p", {
                   className: "muted",
                   children: "Subscription entitlements appear when the subscription record is available."
                 })
@@ -25624,9 +25675,9 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
           }),
           /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Provisioning signup" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Signup request that created this tenant, if recorded." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: re ? /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "kv-list",
-            children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Request ID" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: /* @__PURE__ */ (0, I.jsx)("code", { children: Z(re, ["id"]) }) })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+            children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Request ID" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: /* @__PURE__ */ (0, I.jsx)("code", { children: Z(re, ["id"]) }) })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
               value: Z(re, ["state"]),
-              tone: xu(Z(re, ["state"])),
+              tone: bu(Z(re, ["state"])),
               fallback: "recorded"
             })] })]
           }) : /* @__PURE__ */ (0, I.jsx)(G, {
@@ -25669,9 +25720,9 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
                 name: "feature",
                 value: S,
                 onChange: w,
-                options: qu.map((e) => ({
+                options: Ku.map((e) => ({
                   value: e,
-                  label: cu[e] ?? e
+                  label: su[e] ?? e
                 }))
               }),
               /* @__PURE__ */ (0, I.jsx)(cr, {
@@ -25826,11 +25877,11 @@ function Ju({ entityId: e, detail: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
+function Ju({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh: a, loading: o, loadError: s }) {
   let [c, l] = (0, C.useState)("overview"), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)(!1), [v, y] = (0, C.useState)(null), [b, x] = (0, C.useState)(!1), S = zo("agent-detail").map((e) => ({
     id: e.id,
     label: e.label
-  })), w = Z(e, ["target_group_id"], ""), T = nu(e, ["probe_endpoint"]), E = Z(e, ["probe_endpoint_status"], ""), D = Z(e, ["probe_endpoint_error"], ""), k = T ? $l(T, ["declared_fqdn"], "") : "", ee = T ? $l(T, ["declared_ip"], "") : "", ne = !!(E || D || T), re = Array.isArray(v?.reviews) ? v.reviews.find((e) => Z(e, ["target_group_id"], "") === w) : null, ie = Oa(n.audit, t), ae = [
+  })), w = Z(e, ["target_group_id"], ""), T = tu(e, ["probe_endpoint"]), E = Z(e, ["probe_endpoint_status"], ""), D = Z(e, ["probe_endpoint_error"], ""), k = T ? Ql(T, ["declared_fqdn"], "") : "", ee = T ? Ql(T, ["declared_ip"], "") : "", ne = !!(E || D || T), re = Array.isArray(v?.reviews) ? v.reviews.find((e) => Z(e, ["target_group_id"], "") === w) : null, ie = Oa(n.audit, t), ae = [
     {
       key: "action",
       label: "Action",
@@ -25863,16 +25914,16 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     {
       key: "check",
       label: "Check",
-      render: (e) => su(n.checks, Z(e, ["check_id"], ""))
+      render: (e) => ou(n.checks, Z(e, ["check_id"], ""))
     },
     {
       key: "verdict",
       label: "Agrees with probe",
       render: (e) => {
-        let t = $l(e, ["verdict", "verdict"], Z(e, ["status"], "pending"));
-        return /* @__PURE__ */ (0, I.jsx)(Du, {
+        let t = Ql(e, ["verdict", "verdict"], Z(e, ["status"], "pending"));
+        return /* @__PURE__ */ (0, I.jsx)(Eu, {
           value: t,
-          tone: vu(t),
+          tone: _u(t),
           fallback: "pending"
         });
       }
@@ -25885,7 +25936,7 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         children: P(e.updated_at ?? e.created_at)
       })
     }
-  ], se = du([
+  ], se = uu([
     ["agent_id", t],
     ["hostname", Z(e, ["hostname", "name"], "")],
     ["environment", Z(e, ["environment_id"], "")],
@@ -25956,17 +26007,17 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     children: [
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "page-head",
-        children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)(Pu, {
+        children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)(Nu, {
           route: "agent-detail",
           entityId: t,
-          title: Mu("agent-detail", e, t),
+          title: ju("agent-detail", e, t),
           eyebrow: "Outbound observer"
         }), /* @__PURE__ */ (0, I.jsxs)("p", {
           className: "muted detail-status-line",
           children: [
-            /* @__PURE__ */ (0, I.jsx)(Du, {
+            /* @__PURE__ */ (0, I.jsx)(Eu, {
               value: Z(e, ["status"], "unknown"),
-              tone: yu(Z(e, ["status"], "unknown")),
+              tone: vu(Z(e, ["status"], "unknown")),
               fallback: "unknown"
             }),
             /* @__PURE__ */ (0, I.jsx)("span", {
@@ -25986,8 +26037,8 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           })
         })]
       }),
-      o ? /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading agent detail…" }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      o ? /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading agent detail…" }) : null,
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         loadError: s,
         error: m,
         message: f
@@ -26061,7 +26112,7 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Direction" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: "egress HTTPS only" })] }),
                   /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Placement" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Ta(e) })] })
                 ]
-              }), se ? /* @__PURE__ */ (0, I.jsx)(Bu, {
+              }), se ? /* @__PURE__ */ (0, I.jsx)(zu, {
                 label: "Placement evidence record",
                 children: se
               }) : /* @__PURE__ */ (0, I.jsx)(G, {
@@ -26078,7 +26129,7 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               columns: j,
               items: A,
               getRowId: (e) => Z(e, ["id"], ""),
-              getRowProps: (e) => Qu("run-detail", Z(e, ["id"], "")),
+              getRowProps: (e) => Zu("run-detail", Z(e, ["id"], "")),
               empty: /* @__PURE__ */ (0, I.jsx)(G, {
                 icon: O,
                 title: w ? "No correlated runs yet." : "Agent not bound to a group.",
@@ -26095,7 +26146,7 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
               children: [
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Placement" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Ta(e) })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Capabilities" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: wa(e) })] }),
-                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Target group" }), w ? /* @__PURE__ */ (0, I.jsx)(Lu, {
+                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Target group" }), w ? /* @__PURE__ */ (0, I.jsx)(Iu, {
                   route: "target-group-detail",
                   id: w
                 }) : /* @__PURE__ */ (0, I.jsx)("strong", { children: "unbound" })] }),
@@ -26103,11 +26154,11 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Environment" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(e, ["environment_id"], "tenant scope") })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Last heartbeat" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: P(e.last_heartbeat_at ?? e.updated_at) })] }),
                 /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Version" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(e, ["version"], "unknown") })] }),
-                /* @__PURE__ */ (0, I.jsx)(zu, {
+                /* @__PURE__ */ (0, I.jsx)(Ru, {
                   label: "Gateway fingerprint",
                   value: Z(e, ["fingerprint"], "not registered")
                 }),
-                /* @__PURE__ */ (0, I.jsx)(Hu, {
+                /* @__PURE__ */ (0, I.jsx)(Vu, {
                   hasDetails: ne,
                   status: E,
                   error: D,
@@ -26159,13 +26210,13 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
           children: [
             /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Heartbeat freshness" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Da(e) })] }),
             /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Last heartbeat" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: P(e.last_heartbeat_at) })] }),
-            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
               value: Z(e, ["status"], "unknown"),
-              tone: yu(Z(e, ["status"], "unknown")),
+              tone: vu(Z(e, ["status"], "unknown")),
               fallback: "unknown"
             })] }),
             /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Version" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(e, ["version"], "unknown") })] }),
-            /* @__PURE__ */ (0, I.jsx)(Hu, {
+            /* @__PURE__ */ (0, I.jsx)(Vu, {
               hasDetails: ne,
               status: E,
               error: D,
@@ -26177,24 +26228,24 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
         c === "placement" ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Placement review" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Target-group placement confidence from placement reviews." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
           className: "kv-list",
           children: [
-            b ? /* @__PURE__ */ (0, I.jsx)(Iu, {
+            b ? /* @__PURE__ */ (0, I.jsx)(Fu, {
               label: "Loading placement review…",
               variant: "compact"
             }) : null,
-            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Target group" }), w ? /* @__PURE__ */ (0, I.jsx)(Lu, {
+            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Target group" }), w ? /* @__PURE__ */ (0, I.jsx)(Iu, {
               route: "target-group-detail",
               id: w
             }) : /* @__PURE__ */ (0, I.jsx)("strong", { children: "unbound" })] }),
             /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Placement status" }), /* @__PURE__ */ (0, I.jsx)("span", {
               title: ya(Z(re, ["status"], "")) || void 0,
-              children: /* @__PURE__ */ (0, I.jsx)(Du, {
+              children: /* @__PURE__ */ (0, I.jsx)(Eu, {
                 value: va(Z(re, ["status"], "unknown")),
-                tone: bu(Z(re, ["status"], "unknown")),
+                tone: yu(Z(re, ["status"], "unknown")),
                 fallback: "unknown"
               })
             })] }),
             /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Observation mode" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(re, ["observation_mode"], "—") })] }),
-            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Summary" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(re, ["summary"], $l(v, ["summary", "summary"], "Awaiting baseline traffic evidence.")) })] })
+            /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Summary" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Z(re, ["summary"], Ql(v, ["summary", "summary"], "Awaiting baseline traffic evidence.")) })] })
           ]
         })] }) : null,
         c === "audit" ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Audit trail" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Metadata-only lifecycle events for this agent." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Hi, {
@@ -26210,7 +26261,7 @@ function Yu({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
     ]
   });
 }
-function Xu({ data: e, config: t, session: n }) {
+function Yu({ data: e, config: t, session: n }) {
   let r = Gi(""), i = e.evidence, [a, o] = (0, C.useState)(i.find((e) => Z(e, ["id", "evidence_id"], "") === r) ?? null), [s, c] = (0, C.useState)(!1), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(""), [p, m] = (0, C.useState)(""), [h, g] = (0, C.useState)("");
   if ((0, C.useEffect)(() => {
     if (!r) {
@@ -26234,7 +26285,7 @@ function Xu({ data: e, config: t, session: n }) {
     i
   ]), !r) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Fu, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Pu, {
       route: "evidence-detail",
       eyebrow: "Validation · evidence artifact",
       entityId: "",
@@ -26249,14 +26300,14 @@ function Xu({ data: e, config: t, session: n }) {
   });
   if (!a && s) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "evidence-detail",
       eyebrow: "Validation · evidence artifact"
-    }), /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading evidence artifact…" })]
+    }), /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading evidence artifact…" })]
   });
   if (!a) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Fu, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Pu, {
       route: "evidence-detail",
       eyebrow: `Validation · evidence artifact · ${r}`,
       entityId: r,
@@ -26277,11 +26328,11 @@ function Xu({ data: e, config: t, session: n }) {
     "kind",
     "label",
     "signal_type"
-  ], ""), y = Z(a, ["produced_by", "source"], $l(a, ["metadata", "source"], "")), b = Z(a, ["test_run_id", "run_id"], ""), x = uu(a), S = Z(a, ["sealed_at"], Z(a, ["created_at", "timestamp"], "")), w = Z(a, ["verified"], ""), T = Z(a, [
+  ], ""), y = Z(a, ["produced_by", "source"], Ql(a, ["metadata", "source"], "")), b = Z(a, ["test_run_id", "run_id"], ""), x = lu(a), S = Z(a, ["sealed_at"], Z(a, ["created_at", "timestamp"], "")), w = Z(a, ["verified"], ""), T = Z(a, [
     "content_sha256",
     "sha256",
     "custody_digest"
-  ], $l(a, ["metadata", "sha256"], "")), E = Z(a, ["chain_position"], ""), D = Z(a, ["bundle", "bundle_id"], ""), k = Z(a, ["bundle_sha256"], ""), ee = (() => {
+  ], Ql(a, ["metadata", "sha256"], "")), E = Z(a, ["chain_position"], ""), D = Z(a, ["bundle", "bundle_id"], ""), k = Z(a, ["bundle_sha256"], ""), ee = (() => {
     let t = Z(a, ["finding_id"], "");
     if (t) return t;
     let n = e.findings.find((e) => {
@@ -26294,9 +26345,9 @@ function Xu({ data: e, config: t, session: n }) {
       if (t) return Z(t, ["id"], "");
     }
     return "";
-  })(), te = nu(a, ["metadata"]) ?? nu(a, ["payload"]) ?? nu(a, ["content"]), ne = te && Object.keys(te).length > 0 ? JSON.stringify(te, null, 2) : "", re = "Metadata only", ie = "muted";
+  })(), te = tu(a, ["metadata"]) ?? tu(a, ["payload"]) ?? tu(a, ["content"]), ne = te && Object.keys(te).length > 0 ? JSON.stringify(te, null, 2) : "", re = "Metadata only", ie = "muted";
   w === "true" || w === "verified" ? (re = "Verified", ie = "success") : T && (re = "Sealed", ie = "info");
-  let ae = du([
+  let ae = uu([
     ["artifact_id", _],
     ["kind", v],
     ["produced_by", y],
@@ -26305,7 +26356,7 @@ function Xu({ data: e, config: t, session: n }) {
     ["size", x],
     ["sealed_at", S ? P(S) : ""],
     ["verified", w]
-  ]), A = du([
+  ]), A = uu([
     ["sha256", T],
     ["digest_kind", T ? Ji : ""],
     ["chain_position", E],
@@ -26335,7 +26386,7 @@ function Xu({ data: e, config: t, session: n }) {
     f("export"), g(""), m("");
     try {
       let e = j(), t = await ea(e, n.tenant_id);
-      lu(`evidence-${_}.json`, {
+      cu(`evidence-${_}.json`, {
         payload: e,
         custody: t
       }), m("Evidence artifact exported with custody manifest.");
@@ -26348,7 +26399,7 @@ function Xu({ data: e, config: t, session: n }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "evidence-detail",
         eyebrow: `Validation · evidence artifact · ${_}`,
         entityId: _,
@@ -26382,11 +26433,11 @@ function Xu({ data: e, config: t, session: n }) {
         className: "muted small",
         children: "Sealed evidence artifact — metadata-only custody record, chain position, digest, and payload for one run artifact."
       }),
-      s ? /* @__PURE__ */ (0, I.jsx)(Iu, {
+      s ? /* @__PURE__ */ (0, I.jsx)(Fu, {
         label: "Refreshing evidence artifact…",
         variant: "compact"
       }) : null,
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         loadError: l,
         error: h,
         message: p
@@ -26426,7 +26477,7 @@ function Xu({ data: e, config: t, session: n }) {
       }),
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "dash-grid",
-        children: [/* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Artifact record" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Sealed metadata for this artifact. Absent fields are omitted." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [ae ? /* @__PURE__ */ (0, I.jsx)(Bu, {
+        children: [/* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Artifact record" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Sealed metadata for this artifact. Absent fields are omitted." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [ae ? /* @__PURE__ */ (0, I.jsx)(zu, {
           label: "Artifact record",
           children: ae
         }) : /* @__PURE__ */ (0, I.jsx)("p", {
@@ -26434,12 +26485,12 @@ function Xu({ data: e, config: t, session: n }) {
           children: "No artifact metadata recorded for this evidence id."
         }), b ? /* @__PURE__ */ (0, I.jsx)("div", {
           className: "row-actions",
-          children: /* @__PURE__ */ (0, I.jsx)(Lu, {
+          children: /* @__PURE__ */ (0, I.jsx)(Iu, {
             route: "run-detail",
             id: b,
             label: "Open originating run"
           })
-        }) : null] })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Custody & digest" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Chain position and canonical digest. Metadata-only — no raw payloads." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: A ? /* @__PURE__ */ (0, I.jsx)(Bu, {
+        }) : null] })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Custody & digest" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Chain position and canonical digest. Metadata-only — no raw payloads." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: A ? /* @__PURE__ */ (0, I.jsx)(zu, {
           label: "Custody and digest",
           children: A
         }) : /* @__PURE__ */ (0, I.jsx)(G, {
@@ -26448,7 +26499,7 @@ function Xu({ data: e, config: t, session: n }) {
           body: "This artifact has no sealed SHA-256 digest or bundle reference in the vault record."
         }) })] })]
       }),
-      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Payload" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Sealed JSON contents of this artifact (metadata-only; redacted server-side)." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: ne ? /* @__PURE__ */ (0, I.jsx)(Bu, {
+      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Payload" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Sealed JSON contents of this artifact (metadata-only; redacted server-side)." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: ne ? /* @__PURE__ */ (0, I.jsx)(zu, {
         label: "Sealed payload",
         children: ne
       }) : /* @__PURE__ */ (0, I.jsx)(G, {
@@ -26459,7 +26510,7 @@ function Xu({ data: e, config: t, session: n }) {
     ]
   });
 }
-function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
+function Xu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
   let [a, o] = (0, C.useState)("workspace"), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(""), [p, m] = (0, C.useState)(null), [h, g] = (0, C.useState)([]), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)(null), [x, S] = (0, C.useState)(!1), w = r.principal === "staff" && kn(r), T = w || r.role === "soc" && r.principal !== "staff";
   async function E(e, t = {}) {
     return w ? Pn(n, r, e, t) : F(n, r, e, t);
@@ -26497,7 +26548,7 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
       c("");
     }
   }
-  let ee = Array.isArray(e.artifacts) ? e.artifacts : [], te = nu(e, ["authorization_pack_status"]), ne = Mu("queue-detail", e, t), re = [
+  let ee = Array.isArray(e.artifacts) ? e.artifacts : [], te = tu(e, ["authorization_pack_status"]), ne = ju("queue-detail", e, t), re = [
     {
       id: "workspace",
       label: "Workspace"
@@ -26589,7 +26640,7 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
     let e = r.principal === "staff";
     return /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: "queue-detail",
         eyebrow: "SOC execution workspace"
       }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -26601,7 +26652,7 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
       })]
     });
   }
-  let se = Z(e, ["state"], ""), le = $l(e, ["authorization_pack_status", "overall"], "") === "accepted", ue = !!(y && Z(y, ["id"], "")), de = $l(e, ["scheduled_window", "window_start"], "") || $l(e, ["requested_window", "window_start"], ""), fe = $l(e, ["scheduled_window", "window_end"], "") || $l(e, ["requested_window", "window_end"], ""), pe = !!(de && fe), me = !!(Z(e, ["scope_hash"], "") || nu(e, ["scope_confirmation"])), he = Array.isArray(e.soc_approvals) ? e.soc_approvals.length : 0, ge = Su(se), _e = [
+  let se = Z(e, ["state"], ""), le = Ql(e, ["authorization_pack_status", "overall"], "") === "accepted", ue = !!(y && Z(y, ["id"], "")), de = Ql(e, ["scheduled_window", "window_start"], "") || Ql(e, ["requested_window", "window_start"], ""), fe = Ql(e, ["scheduled_window", "window_end"], "") || Ql(e, ["requested_window", "window_end"], ""), pe = !!(de && fe), me = !!(Z(e, ["scope_hash"], "") || tu(e, ["scope_confirmation"])), he = Array.isArray(e.soc_approvals) ? e.soc_approvals.length : 0, ge = xu(se), _e = [
     {
       label: "Authorization pack accepted",
       pass: le
@@ -26622,13 +26673,13 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "queue-detail",
         eyebrow: "SOC execution workspace",
         entityId: t,
         title: ne
       }),
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         error: d,
         message: l,
         hideMessageWhenLoadError: !1
@@ -26638,14 +26689,14 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
         children: [
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "State",
-            value: _u(se, "submitted"),
+            value: gu(se, "submitted"),
             sub: "Governed lifecycle state",
             icon: Te,
             tone: ge === "danger" ? "danger" : ge === "warn" ? "warn" : ge === "success" ? "success" : "info"
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Pack",
-            value: _u(Z(te ?? {}, ["overall"], "missing"), "missing"),
+            value: gu(Z(te ?? {}, ["overall"], "missing"), "missing"),
             sub: "Authorization pack review",
             icon: ce,
             tone: le ? "success" : "warn"
@@ -26692,13 +26743,13 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
       a === "workspace" ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Queue context" }), /* @__PURE__ */ (0, I.jsxs)(U, { children: ["Lifecycle actions for ", t] })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
         className: "kv-list",
         children: [
-          /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+          /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
             value: se,
-            tone: Su(se)
+            tone: xu(se)
           })] }),
-          /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Pack" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+          /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Pack" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
             value: Z(te ?? {}, ["overall"], "missing"),
-            tone: Cu(Z(te ?? {}, ["overall"], "missing")),
+            tone: Su(Z(te ?? {}, ["overall"], "missing")),
             fallback: "missing"
           })] }),
           /* @__PURE__ */ (0, I.jsxs)("div", {
@@ -26827,9 +26878,9 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
             /* @__PURE__ */ (0, I.jsxs)("div", {
               className: "row-actions",
               children: [
-                /* @__PURE__ */ (0, I.jsx)(Du, {
+                /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: Z(e, ["status"]),
-                  tone: Cu(Z(e, ["status"]))
+                  tone: Su(Z(e, ["status"]))
                 }),
                 /* @__PURE__ */ (0, I.jsx)(L, {
                   size: "sm",
@@ -26865,16 +26916,16 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
         children: "Refresh adapter status"
       }), p ? /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "kv-list",
-        children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: $l(p, ["adapter", "state"], Z(p, ["state"])) })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Traffic generated" }), /* @__PURE__ */ (0, I.jsx)(z, {
-          tone: $l(p, ["adapter", "traffic_generated"], "false") === "true" ? "warn" : "muted",
-          children: $l(p, ["adapter", "traffic_generated"], "false") === "true" ? "Yes" : "No"
+        children: [/* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "State" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: Ql(p, ["adapter", "state"], Z(p, ["state"])) })] }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Traffic generated" }), /* @__PURE__ */ (0, I.jsx)(z, {
+          tone: Ql(p, ["adapter", "traffic_generated"], "false") === "true" ? "warn" : "muted",
+          children: Ql(p, ["adapter", "traffic_generated"], "false") === "true" ? "Yes" : "No"
         })] })]
       }) : /* @__PURE__ */ (0, I.jsx)("p", {
         className: "muted",
         children: "Adapter status not loaded yet."
       })] })] }) : null,
       a === "notes" ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "SOC notes" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Thread before adding execution context." })] }), /* @__PURE__ */ (0, I.jsxs)(W, { children: [
-        _ ? /* @__PURE__ */ (0, I.jsx)(Iu, {
+        _ ? /* @__PURE__ */ (0, I.jsx)(Fu, {
           label: "Loading SOC notes…",
           variant: "compact"
         }) : null,
@@ -26911,7 +26962,7 @@ function Zu({ entity: e, entityId: t, config: n, session: r, onRefresh: i }) {
     ]
   });
 }
-function Qu(e, t) {
+function Zu(e, t) {
   if (!t) return {};
   let n = () => {
     window.location.hash = `${e}?id=${encodeURIComponent(t)}`;
@@ -26927,8 +26978,8 @@ function Qu(e, t) {
     }
   };
 }
-function $u(e) {
-  let t = gu(e);
+function Qu(e) {
+  let t = hu(e);
   return [
     "pass",
     "passed",
@@ -26954,7 +27005,7 @@ function $u(e) {
     "none"
   ].includes(t) ? "muted" : "info";
 }
-var ed = {
+var $u = {
   origin: "Origin",
   path: "Path",
   l3_l4: "L3/L4",
@@ -26966,22 +27017,22 @@ var ed = {
   operations: "Operations",
   high_scale: "High-scale"
 };
+function ed(e) {
+  return e ? $u[e] ?? ru(e) : "—";
+}
 function td(e) {
-  return e ? ed[e] ?? iu(e) : "—";
+  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : e ? ru(e) : "—";
 }
 function nd(e) {
-  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : e ? iu(e) : "—";
-}
-function rd(e) {
   let t = e.max_rate;
   if (typeof t == "number" && Number.isFinite(t) && t > 0) return `${t} RPS`;
   if (typeof t == "string" && t.trim()) return t.replace(/_/g, " ");
-  let n = $l(e, ["probe_profile", "kind"], "");
+  let n = Ql(e, ["probe_profile", "kind"], "");
   if (n === "metadata_marker" || n === "ops_readiness") return "metadata";
-  let r = eu(e, ["probe_profile", "max_requests"], NaN);
+  let r = $l(e, ["probe_profile", "max_requests"], NaN);
   return Number.isFinite(r) && r === 1 ? "metadata" : Z(e, ["bound", "rate_limit"], "metadata");
 }
-function id(e) {
+function rd(e) {
   let t = e.verdict;
   if (t && typeof t == "object" && !Array.isArray(t)) {
     let e = Z(t, [
@@ -26993,11 +27044,11 @@ function id(e) {
   }
   return Z(e, ["verdict"], "");
 }
-function ad(e, t) {
+function id(e, t) {
   let n = null;
   for (let r of e) {
     if (Z(r, ["check_id"], "") !== t || !["completed", "verdicted"].includes(Z(r, ["status"], ""))) continue;
-    let e = id(r);
+    let e = rd(r);
     if (!e) continue;
     let i = String(r.updated_at ?? r.completed_at ?? r.started_at ?? r.created_at ?? "");
     (!n || i.localeCompare(n.at) >= 0) && (n = {
@@ -27011,11 +27062,11 @@ function ad(e, t) {
     runId: n.runId
   } : null;
 }
-function od(e, t) {
+function ad(e, t) {
   let n = null;
   for (let r of e) {
     if (Z(r, ["target_group_id"], "") !== t) continue;
-    let e = id(r), i = String(r.updated_at ?? r.completed_at ?? r.started_at ?? r.created_at ?? "");
+    let e = rd(r), i = String(r.updated_at ?? r.completed_at ?? r.started_at ?? r.created_at ?? "");
     (!n || i.localeCompare(n.at) >= 0) && (n = {
       verdict: e || Z(r, ["status"], "pending"),
       runId: Z(r, ["id"], ""),
@@ -27027,7 +27078,7 @@ function od(e, t) {
     runId: n.runId
   } : null;
 }
-function sd(e) {
+function od(e) {
   let t = e.safe_windows;
   if (Array.isArray(t) && t.length > 0 && t[0] && typeof t[0] == "object") {
     let e = t[0], n = Z(e, ["day"], ""), r = Z(e, ["start"], ""), i = Z(e, ["end"], "");
@@ -27038,10 +27089,10 @@ function sd(e) {
   }
   return Z(e, ["safe_window", "window"], "—");
 }
-function cd({ entityId: e, data: t }) {
+function sd({ entityId: e, data: t }) {
   if (!e) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "environment-detail",
       eyebrow: "Declared scope"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27059,7 +27110,7 @@ function cd({ entityId: e, data: t }) {
   }).find((t) => t.id === e) ?? null;
   if (!n) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "environment-detail",
       eyebrow: "Declared scope"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27095,13 +27146,13 @@ function cd({ entityId: e, data: t }) {
     label: "Needs evidence",
     tone: "muted"
   }, l = new Set(r.map((e) => Z(e, ["id"], ""))), u = [...t.runs].filter((e) => l.has(Z(e, ["target_group_id"], ""))).sort((e, t) => String(t.updated_at ?? t.created_at ?? "").localeCompare(String(e.updated_at ?? e.created_at ?? ""))).slice(0, 6).map((e) => ({
-    label: `${su(t.checks, Z(e, ["check_id"], ""))} · ${_u(id(e) || Z(e, ["status"], "pending"))}`,
+    label: `${ou(t.checks, Z(e, ["check_id"], ""))} · ${gu(rd(e) || Z(e, ["status"], "pending"))}`,
     at: e.updated_at ?? e.created_at
   }));
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "environment-detail",
         eyebrow: "Declared scope",
         entityId: e,
@@ -27165,17 +27216,17 @@ function cd({ entityId: e, data: t }) {
               label: "Targets",
               render: (e) => /* @__PURE__ */ (0, I.jsx)("span", {
                 className: "tabular-nums",
-                children: eu(e, ["target_count"])
+                children: $l(e, ["target_count"])
               })
             },
             {
               key: "verdict",
               label: "Verdict",
               render: (e) => {
-                let n = od(t.runs, Z(e, ["id"], ""));
-                return n ? /* @__PURE__ */ (0, I.jsx)(Du, {
+                let n = ad(t.runs, Z(e, ["id"], ""));
+                return n ? /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: n.verdict,
-                  tone: $u(n.verdict),
+                  tone: Qu(n.verdict),
                   fallback: "pending"
                 }) : /* @__PURE__ */ (0, I.jsx)("span", {
                   className: "muted",
@@ -27186,7 +27237,7 @@ function cd({ entityId: e, data: t }) {
           ],
           items: r,
           getRowId: (e) => Z(e, ["id"], ""),
-          getRowProps: (e) => Qu("target-group-detail", Z(e, ["id"], "")),
+          getRowProps: (e) => Zu("target-group-detail", Z(e, ["id"], "")),
           empty: /* @__PURE__ */ (0, I.jsx)(G, {
             icon: ke,
             title: "No target groups declared.",
@@ -27218,16 +27269,16 @@ function cd({ entityId: e, data: t }) {
               {
                 key: "status",
                 label: "Status",
-                render: (e) => /* @__PURE__ */ (0, I.jsx)(Du, {
+                render: (e) => /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: Z(e, ["status"], "unknown"),
-                  tone: yu(Z(e, ["status"], "unknown")),
+                  tone: vu(Z(e, ["status"], "unknown")),
                   fallback: "unknown"
                 })
               }
             ],
             items: i,
             getRowId: (e) => Z(e, ["id"], ""),
-            getRowProps: (e) => Qu("agent-detail", Z(e, ["id"], "")),
+            getRowProps: (e) => Zu("agent-detail", Z(e, ["id"], "")),
             empty: /* @__PURE__ */ (0, I.jsx)(G, {
               icon: te,
               title: "No agents in this environment.",
@@ -27235,16 +27286,16 @@ function cd({ entityId: e, data: t }) {
               actionLabel: "Open agents",
               actionHref: "#agents"
             })
-          }) })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Validation history" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Recent runs across target groups in this environment." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(fu, { items: u }) })] })]
+          }) })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Validation history" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Recent runs across target groups in this environment." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(du, { items: u }) })] })]
         })]
       })
     ]
   });
 }
-function ld({ entityId: e, data: t }) {
+function cd({ entityId: e, data: t }) {
   if (!e) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "check-detail",
       eyebrow: "Validation"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27258,7 +27309,7 @@ function ld({ entityId: e, data: t }) {
   let n = t.checks.find((t) => Z(t, ["check_id", "id"], "") === e) ?? null;
   if (!n) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "check-detail",
       eyebrow: "Validation"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27269,14 +27320,14 @@ function ld({ entityId: e, data: t }) {
       actionHref: "#checks"
     })]
   });
-  let r = Z(n, ["vector_family", "family"], ""), i = Z(n, ["safety_class"], ""), a = rd(n), o = Z(n, ["description", "summary"], "Bounded safe check correlated with agent observation before a verdict is asserted."), s = ad(t.runs, e), c = Z(n, ["method"], i === "safe" ? `${a} · agent-corroborated` : "governed · SOC-scheduled"), l = Z(n, [
+  let r = Z(n, ["vector_family", "family"], ""), i = Z(n, ["safety_class"], ""), a = nd(n), o = Z(n, ["description", "summary"], "Bounded safe check correlated with agent observation before a verdict is asserted."), s = id(t.runs, e), c = Z(n, ["method"], i === "safe" ? `${a} · agent-corroborated` : "governed · SOC-scheduled"), l = Z(n, [
     "name",
     "check_id",
     "id"
   ], e), u = [
     `check_id: ${e}`,
     `family: ${r || "—"}`,
-    `mode: ${nd(i)}`,
+    `mode: ${td(i)}`,
     `bound: ${a}`,
     `method: ${c}`,
     `last_verdict: ${s ? s.verdict : "none"}`
@@ -27284,7 +27335,7 @@ function ld({ entityId: e, data: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "check-detail",
         eyebrow: "Validation",
         entityId: e,
@@ -27305,14 +27356,14 @@ function ld({ entityId: e, data: t }) {
         children: [
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Family",
-            value: td(r),
+            value: ed(r),
             sub: "Vector family",
             icon: xe,
             tone: "info"
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Mode",
-            value: nd(i),
+            value: td(i),
             sub: i === "soc_gated" ? "SOC request-only" : "Customer-runnable",
             icon: Te,
             tone: i === "soc_gated" ? "warn" : "success"
@@ -27326,27 +27377,27 @@ function ld({ entityId: e, data: t }) {
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Last verdict",
-            value: s ? _u(s.verdict) : "None",
+            value: s ? gu(s.verdict) : "None",
             sub: s ? "From most recent run" : "No runs yet",
             icon: ce,
-            tone: s ? $u(s.verdict) === "danger" ? "danger" : $u(s.verdict) === "warn" ? "warn" : "success" : "muted"
+            tone: s ? Qu(s.verdict) === "danger" ? "danger" : Qu(s.verdict) === "warn" ? "warn" : "success" : "muted"
           })
         ]
       }),
-      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Definition" }), /* @__PURE__ */ (0, I.jsx)(U, { children: s ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: ["last run ", /* @__PURE__ */ (0, I.jsx)(Lu, {
+      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Definition" }), /* @__PURE__ */ (0, I.jsx)(U, { children: s ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: ["last run ", /* @__PURE__ */ (0, I.jsx)(Iu, {
         route: "run-detail",
         id: s.runId
-      })] }) : "No runs recorded for this check yet." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Bu, {
+      })] }) : "No runs recorded for this check yet." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(zu, {
         label: "Check definition",
         children: u
       }) })] })
     ]
   });
 }
-function ud({ entityId: e, data: t }) {
+function ld({ entityId: e, data: t }) {
   if (!e) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "policy-detail",
       eyebrow: "Validation"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27360,7 +27411,7 @@ function ud({ entityId: e, data: t }) {
   let n = t.testPolicies.find((t) => Z(t, ["id", "policy_id"], "") === e) ?? null;
   if (!n) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "policy-detail",
       eyebrow: "Validation"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27371,7 +27422,7 @@ function ud({ entityId: e, data: t }) {
       actionHref: "#test-policies"
     })]
   });
-  let r = nu(n, ["target_group"]), i = Z(n, ["target_group_id"], Z(r ?? {}, ["id"], "")), a = Z(r ?? {}, ["name", "id"], i || "—"), o = eu(n, ["target_count"]), s = a !== "—" && o > 0 ? `${a} (${o})` : a, c = Z(n, ["cadence"], "manual"), l = sd(n), u = Z(n, ["expected_verdict"], "pass"), d = Z(n, ["owner", "created_by"], "unassigned"), f = nu(n, ["check"]), p = Z(n, ["check_id"], Z(f ?? {}, ["check_id"], "")), m = t.checks.find((e) => Z(e, ["check_id", "id"], "") === p) ?? f, h = n.soc_gated === !0 || Z(m ?? {}, ["safety_class"], "") === "soc_gated", g = Z(n, ["id", "policy_id"], e), _ = [
+  let r = tu(n, ["target_group"]), i = Z(n, ["target_group_id"], Z(r ?? {}, ["id"], "")), a = Z(r ?? {}, ["name", "id"], i || "—"), o = $l(n, ["target_count"]), s = a !== "—" && o > 0 ? `${a} (${o})` : a, c = Z(n, ["cadence"], "manual"), l = od(n), u = Z(n, ["expected_verdict"], "pass"), d = Z(n, ["owner", "created_by"], "unassigned"), f = tu(n, ["check"]), p = Z(n, ["check_id"], Z(f ?? {}, ["check_id"], "")), m = t.checks.find((e) => Z(e, ["check_id", "id"], "") === p) ?? f, h = n.soc_gated === !0 || Z(m ?? {}, ["safety_class"], "") === "soc_gated", g = Z(n, ["id", "policy_id"], e), _ = [
     `policy_id: ${e}`,
     `targets: ${s}`,
     `check: ${p || "—"}`,
@@ -27384,7 +27435,7 @@ function ud({ entityId: e, data: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "policy-detail",
         eyebrow: "Validation",
         entityId: e,
@@ -27401,7 +27452,7 @@ function ud({ entityId: e, data: t }) {
         children: [
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Cadence",
-            value: iu(c),
+            value: ru(c),
             sub: "Scheduled run cadence",
             icon: O,
             tone: "info"
@@ -27415,10 +27466,10 @@ function ud({ entityId: e, data: t }) {
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Expected verdict",
-            value: _u(u),
+            value: gu(u),
             sub: h ? "SOC-gated policy" : "Customer-runnable",
             icon: ce,
-            tone: $u(u) === "danger" ? "danger" : $u(u) === "warn" ? "warn" : $u(u) === "muted" ? "muted" : "success"
+            tone: Qu(u) === "danger" ? "danger" : Qu(u) === "warn" ? "warn" : Qu(u) === "muted" ? "muted" : "success"
           }),
           /* @__PURE__ */ (0, I.jsx)(J, {
             label: "Owner",
@@ -27429,19 +27480,19 @@ function ud({ entityId: e, data: t }) {
           })
         ]
       }),
-      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Binding" }), /* @__PURE__ */ (0, I.jsx)(U, { children: i ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: ["target group ", /* @__PURE__ */ (0, I.jsx)(Lu, {
+      /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Binding" }), /* @__PURE__ */ (0, I.jsx)(U, { children: i ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: ["target group ", /* @__PURE__ */ (0, I.jsx)(Iu, {
         route: "target-group-detail",
         id: i,
         label: a
-      })] }) : "No target group bound to this policy." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(Bu, {
+      })] }) : "No target group bound to this policy." })] }), /* @__PURE__ */ (0, I.jsx)(W, { children: /* @__PURE__ */ (0, I.jsx)(zu, {
         label: "Policy binding",
         children: _
       }) })] })
     ]
   });
 }
-function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
-  let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)([]), p = (0, C.useMemo)(() => Gi(""), [e]), m = t.targetGroups.find((e) => Z(e, ["id"], "") === p) ?? null, h = t.agents.find((e) => Z(e, ["id"], "") === p) ?? null, g = t.runs.find((e) => Z(e, ["id"], "") === p) ?? null, _ = t.internalTenants.find((e) => Z(e, ["tenant_id", "id"], "") === p) ?? null, v = t.findings.find((e) => Z(e, ["id"], "") === p) ?? null, y = t.highScale.find((e) => Z(e, ["id"], "") === p) ?? null, b = Uu(e === "target-group-detail" && !!p, n, r, `/v1/target-groups/${encodeURIComponent(p)}`, m), x = Uu(e === "run-detail" && !!p, n, r, `/v1/test-runs/${encodeURIComponent(p)}`, g), S = Uu(e === "tenant-detail" && !!p && r.principal === "staff", n, r, `/internal/admin/tenants/${encodeURIComponent(p)}`, null), w = Uu(e === "finding-detail" && !!p, n, r, `/v1/findings/${encodeURIComponent(p)}`, v), T = Wu(e === "agent-detail" && !!p, n, r, "/v1/agents", p, h), E = Wu(e === "queue-detail" && !!p, n, r, "/v1/high-scale-requests", p, y), D = e === "target-group-detail" ? b : e === "run-detail" ? x : e === "agent-detail" ? T : {
+function ud({ route: e, data: t, config: n, session: r, onRefresh: i }) {
+  let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)([]), p = (0, C.useMemo)(() => Gi(""), [e]), m = t.targetGroups.find((e) => Z(e, ["id"], "") === p) ?? null, h = t.agents.find((e) => Z(e, ["id"], "") === p) ?? null, g = t.runs.find((e) => Z(e, ["id"], "") === p) ?? null, _ = t.internalTenants.find((e) => Z(e, ["tenant_id", "id"], "") === p) ?? null, v = t.findings.find((e) => Z(e, ["id"], "") === p) ?? null, y = t.highScale.find((e) => Z(e, ["id"], "") === p) ?? null, b = Hu(e === "target-group-detail" && !!p, n, r, `/v1/target-groups/${encodeURIComponent(p)}`, m), x = Hu(e === "run-detail" && !!p, n, r, `/v1/test-runs/${encodeURIComponent(p)}`, g), S = Hu(e === "tenant-detail" && !!p && r.principal === "staff", n, r, `/internal/admin/tenants/${encodeURIComponent(p)}`, null), w = Hu(e === "finding-detail" && !!p, n, r, `/v1/findings/${encodeURIComponent(p)}`, v), T = Uu(e === "agent-detail" && !!p, n, r, "/v1/agents", p, h), E = Uu(e === "queue-detail" && !!p, n, r, "/v1/high-scale-requests", p, y), D = e === "target-group-detail" ? b : e === "run-detail" ? x : e === "agent-detail" ? T : {
     detail: null,
     error: "",
     loading: !1
@@ -27466,7 +27517,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     p,
     n,
     r
-  ]), e === "tenant-detail") return p ? r.principal === "staff" ? /* @__PURE__ */ (0, I.jsx)(Ju, {
+  ]), e === "tenant-detail") return p ? r.principal === "staff" ? /* @__PURE__ */ (0, I.jsx)(qu, {
     entityId: p,
     detail: S.detail,
     data: t,
@@ -27477,7 +27528,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: S.error
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Staff tenant operations"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27489,7 +27540,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Staff tenant operations"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27503,7 +27554,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   if (e === "finding-detail") {
     if (!p) return /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: e,
         eyebrow: "Evidence-backed finding"
       }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27517,11 +27568,11 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     let a = w.detail ?? v;
     return !a && w.loading ? /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: e,
         eyebrow: "Evidence-backed finding"
-      }), /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading finding detail…" })]
-    }) : a ? /* @__PURE__ */ (0, I.jsx)(Ql, {
+      }), /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading finding detail…" })]
+    }) : a ? /* @__PURE__ */ (0, I.jsx)(Zl, {
       entity: a,
       entityId: p,
       data: t,
@@ -27532,7 +27583,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       loadError: w.error
     }) : /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: e,
         eyebrow: "Evidence-backed finding"
       }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27551,7 +27602,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     onRefresh: i
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Declared target"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27562,24 +27613,24 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       actionHref: "#target-groups"
     })]
   });
-  if (e === "environment-detail") return /* @__PURE__ */ (0, I.jsx)(cd, {
+  if (e === "environment-detail") return /* @__PURE__ */ (0, I.jsx)(sd, {
     entityId: p,
     data: t
   });
-  if (e === "check-detail") return /* @__PURE__ */ (0, I.jsx)(ld, {
+  if (e === "check-detail") return /* @__PURE__ */ (0, I.jsx)(cd, {
     entityId: p,
     data: t
   });
-  if (e === "policy-detail") return /* @__PURE__ */ (0, I.jsx)(ud, {
+  if (e === "policy-detail") return /* @__PURE__ */ (0, I.jsx)(ld, {
     entityId: p,
     data: t
   });
-  if (e === "evidence-detail") return /* @__PURE__ */ (0, I.jsx)(Xu, {
+  if (e === "evidence-detail") return /* @__PURE__ */ (0, I.jsx)(Yu, {
     data: t,
     config: n,
     session: r
   });
-  if (e === "queue-detail") return p ? y ? /* @__PURE__ */ (0, I.jsx)(Zu, {
+  if (e === "queue-detail") return p ? y ? /* @__PURE__ */ (0, I.jsx)(Xu, {
     entity: y,
     entityId: p,
     config: n,
@@ -27587,7 +27638,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     onRefresh: i
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "SOC execution workspace"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27599,7 +27650,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "SOC execution workspace"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27612,11 +27663,11 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   });
   if (e === "target-group-detail") return p ? !k && D.loading ? /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Declared business service"
-    }), /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading target group detail…" })]
-  }) : k ? /* @__PURE__ */ (0, I.jsx)(kl, {
+    }), /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading target group detail…" })]
+  }) : k ? /* @__PURE__ */ (0, I.jsx)(Ol, {
     entity: k,
     entityId: p,
     data: t,
@@ -27627,7 +27678,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: D.error
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Declared business service"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27639,7 +27690,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Declared business service"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27695,7 +27746,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     }[e];
     return /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: e,
         eyebrow: t?.eyebrow ?? "Detail surface"
       }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27709,10 +27760,10 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   }
   if (!k && D.loading) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Entity detail"
-    }), /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading entity detail…" })]
+    }), /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading entity detail…" })]
   });
   if (!k) {
     let t = {
@@ -27727,7 +27778,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     }[e];
     return /* @__PURE__ */ (0, I.jsxs)("div", {
       className: "content",
-      children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+      children: [/* @__PURE__ */ (0, I.jsx)(Du, {
         route: e,
         eyebrow: "Entity detail"
       }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27739,7 +27790,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       })]
     });
   }
-  return e === "run-detail" ? /* @__PURE__ */ (0, I.jsx)(Ku, {
+  return e === "run-detail" ? /* @__PURE__ */ (0, I.jsx)(Gu, {
     entity: k,
     entityId: p,
     data: t,
@@ -27751,11 +27802,11 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: D.error
   }) : e === "agent-detail" ? !k && T.loading ? /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Outbound observer"
-    }), /* @__PURE__ */ (0, I.jsx)(Iu, { label: "Loading agent detail…" })]
-  }) : k ? /* @__PURE__ */ (0, I.jsx)(Yu, {
+    }), /* @__PURE__ */ (0, I.jsx)(Fu, { label: "Loading agent detail…" })]
+  }) : k ? /* @__PURE__ */ (0, I.jsx)(Ju, {
     entity: k,
     entityId: p,
     data: t,
@@ -27766,7 +27817,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     loadError: T.error
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Outbound observer"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27778,7 +27829,7 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   }) : /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: e,
       eyebrow: "Detail surface"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27790,8 +27841,8 @@ function dd({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })]
   });
 }
-function fd({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(null), [f, p] = (0, C.useState)(!1), m = (0, C.useRef)(!1), h = (0, C.useMemo)(() => Gi(""), []), g = e.reports.find((e) => Z(e, ["id"], "") === h) ?? null, _ = Uu(!!h, t, n, `/v1/reports/${encodeURIComponent(h)}`, g), v = _.detail;
+function dd({ data: e, config: t, session: n, onRefresh: r }) {
+  let [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(null), [f, p] = (0, C.useState)(!1), m = (0, C.useRef)(!1), h = (0, C.useMemo)(() => Gi(""), []), g = e.reports.find((e) => Z(e, ["id"], "") === h) ?? null, _ = Hu(!!h, t, n, `/v1/reports/${encodeURIComponent(h)}`, g), v = _.detail;
   (0, C.useEffect)(() => {
     m.current = !1;
   }, [h]), (0, C.useEffect)(() => {
@@ -27809,7 +27860,7 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
           let e = await i.json().catch(() => null);
           throw Error(String(e?.message ?? e?.error ?? `Export returned ${i.status}`));
         }
-        let a = await i.json(), o = nu(a, ["custody"]), s = nu(a, ["payload"]), c = null;
+        let a = await i.json(), o = tu(a, ["custody"]), s = tu(a, ["payload"]), c = null;
         if (o && s) {
           let e = await F(t, n, "/v1/custody/verify", {
             method: "POST",
@@ -27818,12 +27869,12 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
               custody: o
             }
           });
-          c = nu(e, ["verification"]) ?? e;
+          c = tu(e, ["verification"]) ?? e;
         }
         e || d({
           reportId: h,
           format: "json",
-          title: $l(s, ["title"], Z(v, ["title", "id"], h)),
+          title: Ql(s, ["title"], Z(v, ["title", "id"], h)),
           contentSha256: Z(o ?? {}, ["content_sha256"], ""),
           artifactId: Z(o ?? {}, ["artifact_id"], ""),
           schemaVersion: Z(o ?? {}, ["schema_version"], ""),
@@ -27864,7 +27915,7 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
         throw Error(String(e?.message ?? e?.error ?? `Export returned ${o.status}`));
       }
       if (i === "json" || s.includes("application/json")) {
-        let a = await o.json(), s = nu(a, ["custody"]), c = nu(a, ["payload"]), l = null;
+        let a = await o.json(), s = tu(a, ["custody"]), c = tu(a, ["payload"]), l = null;
         if (s && c) {
           let e = await F(t, n, "/v1/custody/verify", {
             method: "POST",
@@ -27873,12 +27924,12 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
               custody: s
             }
           });
-          l = nu(e, ["verification"]) ?? e;
+          l = tu(e, ["verification"]) ?? e;
         }
         return m.current = !0, d({
           reportId: e,
           format: i,
-          title: $l(c, ["title"], Z(v, ["title", "id"], e)),
+          title: Ql(c, ["title"], Z(v, ["title", "id"], e)),
           contentSha256: Z(s ?? {}, ["content_sha256"], ""),
           artifactId: Z(s ?? {}, ["artifact_id"], ""),
           schemaVersion: Z(s ?? {}, ["schema_version"], ""),
@@ -27908,7 +27959,7 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
   }
   if (!h) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "report-detail",
       eyebrow: "Report detail"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27921,17 +27972,17 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
   });
   if (!v && _.loading) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "report-detail",
       eyebrow: "Report detail"
-    }), /* @__PURE__ */ (0, I.jsx)(Iu, {
+    }), /* @__PURE__ */ (0, I.jsx)(Fu, {
       label: "Loading report detail…",
       variant: "layout"
     })]
   });
   if (!v) return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
-    children: [/* @__PURE__ */ (0, I.jsx)(Ou, {
+    children: [/* @__PURE__ */ (0, I.jsx)(Du, {
       route: "report-detail",
       eyebrow: "Report detail"
     }), /* @__PURE__ */ (0, I.jsx)(G, {
@@ -27942,8 +27993,8 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
       actionHref: "#reports"
     })]
   });
-  let S = u?.verification ? Z(u.verification, ["ok"], "") : "", w = eu(v, ["summary", "readiness_score"], 0), T = eu(v, ["summary", "open_findings"], 0), E = e.targetGroups.map((t) => {
-    let n = Z(t, ["id"], ""), r = e.runs.filter((e) => Z(e, ["target_group_id"], "") === n), i = e.findings.filter((e) => Z(e, ["target_group_id"], "") === n && Z(e, ["status"], "open") === "open"), a = od(e.runs, n);
+  let S = u?.verification ? Z(u.verification, ["ok"], "") : "", w = $l(v, ["summary", "readiness_score"], 0), T = $l(v, ["summary", "open_findings"], 0), E = e.targetGroups.map((t) => {
+    let n = Z(t, ["id"], ""), r = e.runs.filter((e) => Z(e, ["target_group_id"], "") === n), i = e.findings.filter((e) => Z(e, ["target_group_id"], "") === n && Z(e, ["status"], "open") === "open"), a = ad(e.runs, n);
     return {
       id: n,
       name: Z(t, ["name"], n),
@@ -27955,11 +28006,11 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "content",
     children: [
-      /* @__PURE__ */ (0, I.jsx)(Fu, {
+      /* @__PURE__ */ (0, I.jsx)(Pu, {
         route: "report-detail",
         eyebrow: "Report detail",
         entityId: h,
-        title: Mu("report-detail", v, h),
+        title: ju("report-detail", v, h),
         actions: /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
           /* @__PURE__ */ (0, I.jsx)(R, {
             size: "sm",
@@ -27985,13 +28036,13 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
           })
         ] })
       }),
-      /* @__PURE__ */ (0, I.jsx)(Vu, {
+      /* @__PURE__ */ (0, I.jsx)(Bu, {
         loadError: _.error,
         error: c,
         message: o,
         mode: "combined"
       }),
-      _.loading || f ? /* @__PURE__ */ (0, I.jsx)(Iu, {
+      _.loading || f ? /* @__PURE__ */ (0, I.jsx)(Fu, {
         label: _.loading ? "Loading report detail…" : "Loading custody preview…",
         variant: "layout"
       }) : /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
@@ -28007,10 +28058,10 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Status",
-              value: _u(Z(v, ["status"], "ready")),
+              value: gu(Z(v, ["status"], "ready")),
               sub: "Delivery status",
               icon: ce,
-              tone: wu(Z(v, ["status"], "ready")) === "success" ? "success" : "muted"
+              tone: Cu(Z(v, ["status"], "ready")) === "success" ? "success" : "muted"
             }),
             /* @__PURE__ */ (0, I.jsx)(J, {
               label: "Open findings",
@@ -28041,9 +28092,9 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
             className: "kv-list report-summary-layout",
             children: [
               /* @__PURE__ */ (0, I.jsx)(Ho, { score: w }),
-              /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+              /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Status" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
                 value: Z(v, ["status"], "ready"),
-                tone: wu(Z(v, ["status"], "ready")),
+                tone: Cu(Z(v, ["status"], "ready")),
                 fallback: "ready"
               })] }),
               /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Open findings" }), /* @__PURE__ */ (0, I.jsx)("strong", { children: T })] }),
@@ -28060,21 +28111,21 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
                 title: "Custody preview unavailable.",
                 body: "Export JSON to inspect custody metadata for this report."
               }) : u?.contentSha256 ? /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
-                /* @__PURE__ */ (0, I.jsx)(zu, {
+                /* @__PURE__ */ (0, I.jsx)(Ru, {
                   label: "Artifact",
                   value: u.artifactId ?? "—",
                   compact: !0
                 }),
-                /* @__PURE__ */ (0, I.jsx)(zu, {
+                /* @__PURE__ */ (0, I.jsx)(Ru, {
                   label: "Content digest (SHA-256)",
                   value: u.contentSha256,
                   compact: !0
                 }),
-                /* @__PURE__ */ (0, I.jsx)(Ru, {
+                /* @__PURE__ */ (0, I.jsx)(Lu, {
                   label: "Schema",
                   children: u.schemaVersion ?? "—"
                 }),
-                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Verification" }), /* @__PURE__ */ (0, I.jsx)(Du, {
+                /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Verification" }), /* @__PURE__ */ (0, I.jsx)(Eu, {
                   value: S || "verified",
                   tone: S === "false" ? "danger" : "success",
                   fallback: "verified"
@@ -28096,7 +28147,7 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
                   u.format,
                   " preview (first 900 characters)."
                 ]
-              }), /* @__PURE__ */ (0, I.jsx)(Bu, {
+              }), /* @__PURE__ */ (0, I.jsx)(zu, {
                 label: "Report export preview",
                 children: u.textPreview
               })] }) : null
@@ -28129,16 +28180,16 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
             {
               key: "verdict",
               label: "Last verdict",
-              render: (e) => /* @__PURE__ */ (0, I.jsx)(Du, {
+              render: (e) => /* @__PURE__ */ (0, I.jsx)(Eu, {
                 value: e.verdict,
-                tone: $u(e.verdict),
+                tone: Qu(e.verdict),
                 fallback: "pending"
               })
             }
           ],
           items: E,
           getRowId: (e) => e.id,
-          getRowProps: (e) => Qu("target-group-detail", e.id),
+          getRowProps: (e) => Zu("target-group-detail", e.id),
           empty: /* @__PURE__ */ (0, I.jsx)(G, {
             icon: ke,
             title: "No declared surfaces yet.",
@@ -28194,7 +28245,7 @@ function fd({ data: e, config: t, session: n, onRefresh: r }) {
 }
 //#endregion
 //#region apps/web/react/src/lib/release-evidence.ts
-function pd(e) {
+function fd(e) {
   if (!e || typeof e != "object") return null;
   for (let t of [
     "evidence_uri",
@@ -28216,7 +28267,7 @@ function pd(e) {
 }
 //#endregion
 //#region apps/web/react/src/lib/agent-release-metadata.ts
-function md(e, t, n = "—") {
+function pd(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -28224,7 +28275,7 @@ function md(e, t, n = "—") {
   }
   return n;
 }
-function hd(e, t) {
+function md(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -28232,20 +28283,20 @@ function hd(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-function gd(e) {
-  let t = e.find((e) => md(e, ["kind"]) === "agent_sbom_provenance") ?? null, n = e.find((e) => md(e, ["kind"]) === "agent_install_matrix") ?? null, r = t?.evidence && typeof t.evidence == "object" ? t.evidence : t, i = hd(r, ["package"]) ?? {}, a = hd(r, ["sbom"]) ?? {}, o = hd(r, ["provenance"]) ?? {}, s = md(n, ["release_id"], md(r, ["release_id"], md(i, ["version"], "—"))), c = md(i, ["sha256"], "—"), l = md(r, ["cosign_status", "signature_status"], t ? "metadata recorded" : "—");
+function hd(e) {
+  let t = e.find((e) => pd(e, ["kind"]) === "agent_sbom_provenance") ?? null, n = e.find((e) => pd(e, ["kind"]) === "agent_install_matrix") ?? null, r = t?.evidence && typeof t.evidence == "object" ? t.evidence : t, i = md(r, ["package"]) ?? {}, a = md(r, ["sbom"]) ?? {}, o = md(r, ["provenance"]) ?? {}, s = pd(n, ["release_id"], pd(r, ["release_id"], pd(i, ["version"], "—"))), c = pd(i, ["sha256"], "—"), l = pd(r, ["cosign_status", "signature_status"], t ? "metadata recorded" : "—");
   return {
     version: s,
     digest: c === "—" ? "—" : `sha256:${c.slice(0, 12)}…`,
     cosignStatus: l,
-    sbomUri: pd(a) ?? md(a, ["evidence_uri"], "—"),
-    provenanceUri: pd(o) ?? md(o, ["evidence_uri"], "—"),
-    packageName: md(i, ["name"], "astranull-agent")
+    sbomUri: fd(a) ?? pd(a, ["evidence_uri"], "—"),
+    provenanceUri: fd(o) ?? pd(o, ["evidence_uri"], "—"),
+    packageName: pd(i, ["name"], "astranull-agent")
   };
 }
 //#endregion
 //#region apps/web/react/src/components/agents/agent-install-matrix.tsx
-var _d = [
+var gd = [
   {
     id: "linux",
     label: "Linux one-liner"
@@ -28278,28 +28329,28 @@ var _d = [
     id: "ansible",
     label: "Ansible"
   }
-], vd = {
+], _d = {
   color: "var(--fg)",
   background: "color-mix(in oklab, var(--fg), transparent 97%)",
   borderColor: "var(--border)"
 };
-function yd(e) {
+function vd(e) {
   return `agent-install-panel-${e}`;
 }
-function bd({ label: e, children: t }) {
+function yd({ label: e, children: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: e }), t] });
 }
-function xd({ tabId: e, label: t, code: n }) {
+function bd({ tabId: e, label: t, code: n }) {
   return /* @__PURE__ */ (0, I.jsx)("pre", {
     className: "codeblock",
-    id: yd(e),
+    id: vd(e),
     role: "tabpanel",
     "aria-label": `${t} install commands`,
-    style: vd,
+    style: _d,
     children: n
   });
 }
-function Sd(e, t, n, r) {
+function xd(e, t, n, r) {
   switch (e) {
     case "linux": return `curl -fsSL ${t}/agents/install.sh \\
   | sudo ASTRANULL_API_URL="${t}" \\
@@ -28343,11 +28394,11 @@ curl -fsSL -O ${t}/agents/${r.packageName}-${r.version}.manifest.sig
     default: return "";
   }
 }
-function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsDisabled: i }) {
-  let [a, o] = (0, C.useState)("linux"), s = gd(e.releaseEvidence), c = ka(), l = t || "<BOOTSTRAP_TOKEN>", u = _d.map((e) => ({
+function Sd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsDisabled: i }) {
+  let [a, o] = (0, C.useState)("linux"), s = hd(e.releaseEvidence), c = ka(), l = t || "<BOOTSTRAP_TOKEN>", u = gd.map((e) => ({
     id: e.id,
     label: e.label
-  })), d = _d.find((e) => e.id === a) ?? _d[0], f = (0, C.useMemo)(() => Sd(a, c, l, s), [
+  })), d = gd.find((e) => e.id === a) ?? gd[0], f = (0, C.useMemo)(() => xd(a, c, l, s), [
     a,
     c,
     l,
@@ -28360,7 +28411,7 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
         className: "release-metadata-bar kv-list kv-list--compact",
         "aria-label": "Agent release metadata",
         children: [
-          /* @__PURE__ */ (0, I.jsx)(bd, {
+          /* @__PURE__ */ (0, I.jsx)(yd, {
             label: "Release",
             children: /* @__PURE__ */ (0, I.jsx)("strong", {
               className: "mono",
@@ -28368,7 +28419,7 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
               children: s.version
             })
           }),
-          /* @__PURE__ */ (0, I.jsx)(bd, {
+          /* @__PURE__ */ (0, I.jsx)(yd, {
             label: "Image digest",
             children: /* @__PURE__ */ (0, I.jsx)("strong", {
               className: "mono",
@@ -28376,14 +28427,14 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
               children: s.digest
             })
           }),
-          /* @__PURE__ */ (0, I.jsx)(bd, {
+          /* @__PURE__ */ (0, I.jsx)(yd, {
             label: "Cosign",
             children: /* @__PURE__ */ (0, I.jsx)("strong", {
               title: "Signature status from release evidence",
               children: s.cosignStatus
             })
           }),
-          /* @__PURE__ */ (0, I.jsx)(bd, {
+          /* @__PURE__ */ (0, I.jsx)(yd, {
             label: "SBOM",
             children: s.sbomUri === "—" ? /* @__PURE__ */ (0, I.jsx)("strong", { children: "—" }) : /* @__PURE__ */ (0, I.jsx)(R, {
               size: "sm",
@@ -28393,7 +28444,7 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
               children: "CycloneDX 1.5"
             })
           }),
-          /* @__PURE__ */ (0, I.jsx)(bd, {
+          /* @__PURE__ */ (0, I.jsx)(yd, {
             label: "Provenance",
             children: s.provenanceUri === "—" ? /* @__PURE__ */ (0, I.jsx)("strong", { children: "—" }) : /* @__PURE__ */ (0, I.jsx)(R, {
               size: "sm",
@@ -28420,9 +28471,9 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
         options: u,
         onChange: (e) => o(e),
         className: "tabs-wrap",
-        getPanelId: yd
+        getPanelId: vd
       }),
-      /* @__PURE__ */ (0, I.jsx)(xd, {
+      /* @__PURE__ */ (0, I.jsx)(bd, {
         tabId: a,
         label: d.label,
         code: f
@@ -28437,21 +28488,21 @@ function Cd({ data: e, tokenSecret: t, onCreateToken: n, createBusy: r, actionsD
 }
 //#endregion
 //#region apps/web/react/src/components/findings/finding-card.tsx
-function wd(e, t, n = "") {
+function Cd(e, t, n = "") {
   for (let n of t) {
     let t = e[n];
     if (t != null && t !== "") return String(t);
   }
   return n;
 }
-function Td(e) {
-  if (wd(e, ["status", "state"], "open") !== "open") return "";
+function wd(e) {
+  if (Cd(e, ["status", "state"], "open") !== "open") return "";
   if (Do(e)) return "is-danger";
   let t = Eo(e);
   return t && (t - Date.now()) / (3600 * 1e3) <= 24 ? "is-warn" : "";
 }
-function Ed(e) {
-  let t = wd(e, ["status", "state"], "open"), n = wd(e, [
+function Td(e) {
+  let t = Cd(e, ["status", "state"], "open"), n = Cd(e, [
     "rem_sla",
     "remSla",
     "sla"
@@ -28459,19 +28510,19 @@ function Ed(e) {
   if (n) return n;
   if (t !== "open") {
     let t = e.updated_at ?? e.closed_at;
-    return t ? `closed ${P(t)}` : wd(e, ["closed"], "closed");
+    return t ? `closed ${P(t)}` : Cd(e, ["closed"], "closed");
   }
   let r = Eo(e);
   return r ? Do(e) ? "overdue" : `${Math.max(0, Math.round((r - Date.now()) / (3600 * 1e3)))}h remaining` : "SLA pending";
 }
-function Dd(e) {
+function Ed(e) {
   let t = e.toLowerCase();
   return t === "critical" || t === "high" || t === "s2" || t === "s1" ? "danger" : t === "medium" || t === "s3" ? "warn" : "muted";
 }
-function Od(e) {
+function Dd(e) {
   return e === "is-danger" ? "var(--danger)" : e === "is-warn" ? "var(--warn)" : "var(--meta)";
 }
-function kd({ label: e, value: t }) {
+function Od({ label: e, value: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("span", { children: [
     /* @__PURE__ */ (0, I.jsxs)("span", {
       className: "fc-key",
@@ -28481,20 +28532,20 @@ function kd({ label: e, value: t }) {
     t
   ] });
 }
-function Ad() {
+function kd() {
   return /* @__PURE__ */ (0, I.jsx)("span", {
     className: "fc-sep",
     "aria-hidden": "true",
     children: "·"
   });
 }
-function jd({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i }) {
-  let a = wd(e, ["id"], ""), o = wd(e, ["title", "summary"], a), s = wd(e, ["severity"], "unknown"), c = wd(e, ["verdict"], ""), l = wd(e, ["status", "state"], "open"), u = wd(e, [
+function Ad({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i }) {
+  let a = Cd(e, ["id"], ""), o = Cd(e, ["title", "summary"], a), s = Cd(e, ["severity"], "unknown"), c = Cd(e, ["verdict"], ""), l = Cd(e, ["status", "state"], "open"), u = Cd(e, [
     "assignee",
     "owner",
     "rem_owner",
     "remOwner"
-  ], "unassigned"), d = wd(e, ["check_id"], ""), f = wd(t.find((e) => wd(e, ["check_id"]) === d) ?? {}, ["name", "title"], d || "check"), p = wd(e, ["target_group_id"], ""), m = wd(n.find((e) => wd(e, ["id"]) === p) ?? {}, ["name", "id"], p || "ungrouped"), h = e.created_at ?? e.opened_at, g = a ? Ki("finding-detail", a) : "#findings", _ = Td(e);
+  ], "unassigned"), d = Cd(e, ["check_id"], ""), f = Cd(t.find((e) => Cd(e, ["check_id"]) === d) ?? {}, ["name", "title"], d || "check"), p = Cd(e, ["target_group_id"], ""), m = Cd(n.find((e) => Cd(e, ["id"]) === p) ?? {}, ["name", "id"], p || "ungrouped"), h = e.created_at ?? e.opened_at, g = a ? Ki("finding-detail", a) : "#findings", _ = wd(e);
   return /* @__PURE__ */ (0, I.jsxs)("article", {
     className: `finding-card${r ? " is-active" : ""}`,
     role: "link",
@@ -28509,7 +28560,7 @@ function jd({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i 
         className: "fc-top",
         children: [
           /* @__PURE__ */ (0, I.jsx)(z, {
-            tone: Dd(s),
+            tone: Ed(s),
             title: `Severity ${s} from finding API`,
             children: s
           }),
@@ -28538,22 +28589,22 @@ function jd({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i 
           /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "fc-facets",
             children: [
-              /* @__PURE__ */ (0, I.jsx)(kd, {
+              /* @__PURE__ */ (0, I.jsx)(Od, {
                 label: "owner",
                 value: u
               }),
-              /* @__PURE__ */ (0, I.jsx)(Ad, {}),
-              /* @__PURE__ */ (0, I.jsx)(kd, {
+              /* @__PURE__ */ (0, I.jsx)(kd, {}),
+              /* @__PURE__ */ (0, I.jsx)(Od, {
                 label: "check",
                 value: f
               }),
-              /* @__PURE__ */ (0, I.jsx)(Ad, {}),
-              /* @__PURE__ */ (0, I.jsx)(kd, {
+              /* @__PURE__ */ (0, I.jsx)(kd, {}),
+              /* @__PURE__ */ (0, I.jsx)(Od, {
                 label: "group",
                 value: m
               }),
-              /* @__PURE__ */ (0, I.jsx)(Ad, {}),
-              /* @__PURE__ */ (0, I.jsx)(kd, {
+              /* @__PURE__ */ (0, I.jsx)(kd, {}),
+              /* @__PURE__ */ (0, I.jsx)(Od, {
                 label: "opened",
                 value: P(h)
               })
@@ -28561,9 +28612,9 @@ function jd({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i 
           }),
           /* @__PURE__ */ (0, I.jsx)("div", {
             className: `fc-sla mono text-xs${_ ? ` ${_}` : ""}`,
-            style: { color: Od(_) },
+            style: { color: Dd(_) },
             title: "SLA window derived from severity hours and opened timestamp",
-            children: Ed(e)
+            children: Td(e)
           })
         ]
       }),
@@ -28577,11 +28628,11 @@ function jd({ finding: e, checks: t, targetGroups: n, active: r = !1, onOpen: i 
 }
 //#endregion
 //#region apps/web/react/src/components/findings/findings-list.tsx
-var Md = [
+var jd = [
   6,
   12,
   24
-], Nd = [
+], Md = [
   {
     value: "severity",
     label: "Severity"
@@ -28603,14 +28654,14 @@ var Md = [
     label: "Title A to Z"
   }
 ];
-function Pd(e, t, n = "") {
+function Nd(e, t, n = "") {
   for (let n of t) {
     let t = e[n];
     if (t != null && t !== "") return String(t);
   }
   return n;
 }
-var Fd = {
+var Pd = {
   critical: 0,
   s1: 0,
   high: 1,
@@ -28621,11 +28672,11 @@ var Fd = {
   s4: 3,
   info: 4
 };
-function Id(e, t) {
-  let n = Pd(e, ["status", "state"], "open").toLowerCase();
+function Fd(e, t) {
+  let n = Nd(e, ["status", "state"], "open").toLowerCase();
   return t === "all" ? !0 : t === "open" ? n === "open" : t === "closed" ? n === "closed" : t === "accepted" ? n === "accepted" || n === "accepted_risk" : !0;
 }
-function Ld({ active: e, counts: t, onChange: n }) {
+function Id({ active: e, counts: t, onChange: n }) {
   return /* @__PURE__ */ (0, I.jsx)("div", {
     className: "ft-status",
     role: "tablist",
@@ -28648,11 +28699,11 @@ function Ld({ active: e, counts: t, onChange: n }) {
     }, r))
   });
 }
-function Rd(e, t) {
+function Ld(e, t) {
   let n = [...e];
   return n.sort((e, n) => {
-    if (t === "severity") return (Fd[Pd(e, ["severity"], "low").toLowerCase()] ?? 9) - (Fd[Pd(n, ["severity"], "low").toLowerCase()] ?? 9);
-    if (t === "title") return Pd(e, ["title"], "").localeCompare(Pd(n, ["title"], ""));
+    if (t === "severity") return (Pd[Nd(e, ["severity"], "low").toLowerCase()] ?? 9) - (Pd[Nd(n, ["severity"], "low").toLowerCase()] ?? 9);
+    if (t === "title") return Nd(e, ["title"], "").localeCompare(Nd(n, ["title"], ""));
     let r = String(e.created_at ?? e.opened_at ?? ""), i = String(n.created_at ?? n.opened_at ?? "");
     if (t === "oldest") return r.localeCompare(i);
     if (t === "recent") return i.localeCompare(r);
@@ -28660,7 +28711,7 @@ function Rd(e, t) {
     return a.localeCompare(o);
   }), n;
 }
-function zd({ findings: e, checks: t, targetGroups: n }) {
+function Rd({ findings: e, checks: t, targetGroups: n }) {
   let [r, i] = (0, C.useState)("open"), [a, o] = (0, C.useState)("all"), [s, c] = (0, C.useState)("all"), [l, u] = (0, C.useState)("all"), [d, f] = (0, C.useState)(""), [p, m] = (0, C.useState)(""), [h, g] = (0, C.useState)("severity"), [_, v] = (0, C.useState)(6), [y, b] = (0, C.useState)(0);
   (0, C.useEffect)(() => {
     let e = window.setTimeout(() => m(d.trim().toLowerCase()), 250);
@@ -28676,18 +28727,18 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
     h,
     _
   ]);
-  let x = (0, C.useMemo)(() => [...new Set(e.map((e) => Pd(e, ["assignee", "owner"], "unassigned")))].sort(), [e]), S = (0, C.useMemo)(() => [...new Set(e.map((e) => Pd(e, ["severity"], "unknown")))].sort(), [e]), w = (0, C.useMemo)(() => ({
-    open: e.filter((e) => Id(e, "open")).length,
-    closed: e.filter((e) => Id(e, "closed")).length,
-    accepted: e.filter((e) => Id(e, "accepted")).length,
+  let x = (0, C.useMemo)(() => [...new Set(e.map((e) => Nd(e, ["assignee", "owner"], "unassigned")))].sort(), [e]), S = (0, C.useMemo)(() => [...new Set(e.map((e) => Nd(e, ["severity"], "unknown")))].sort(), [e]), w = (0, C.useMemo)(() => ({
+    open: e.filter((e) => Fd(e, "open")).length,
+    closed: e.filter((e) => Fd(e, "closed")).length,
+    accepted: e.filter((e) => Fd(e, "accepted")).length,
     all: e.length
-  }), [e]), T = (0, C.useMemo)(() => Rd(e.filter((e) => {
-    if (!Id(e, r)) return !1;
-    let t = Pd(e, ["severity"], "unknown"), n = Pd(e, ["assignee", "owner"], "unassigned"), i = Pd(e, ["target_group_id"], "");
+  }), [e]), T = (0, C.useMemo)(() => Ld(e.filter((e) => {
+    if (!Fd(e, r)) return !1;
+    let t = Nd(e, ["severity"], "unknown"), n = Nd(e, ["assignee", "owner"], "unassigned"), i = Nd(e, ["target_group_id"], "");
     return a !== "all" && t !== a || s !== "all" && n !== s || l !== "all" && i !== l ? !1 : p ? [
-      Pd(e, ["id"]),
-      Pd(e, ["title", "summary"]),
-      Pd(e, ["check_id"]),
+      Nd(e, ["id"]),
+      Nd(e, ["title", "summary"]),
+      Nd(e, ["check_id"]),
       n,
       i
     ].join(" ").toLowerCase().includes(p) : !0;
@@ -28701,14 +28752,14 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
     h
   ]), E = Math.max(1, Math.ceil(T.length / _)), D = Math.min(y, E - 1), O = T.slice(D * _, D * _ + _), k = T.length === 0 ? 0 : D * _ + 1, ee = Math.min(T.length, (D + 1) * _);
   function te(e) {
-    e && (window.location.hash = Ki("finding-detail", e).replace(/^#/, ""));
+    e && (window.location.hash = `finding-detail?id=${encodeURIComponent(e)}`);
   }
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "findings-surface",
     children: [
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "findings-toolbar",
-        children: [/* @__PURE__ */ (0, I.jsx)(Ld, {
+        children: [/* @__PURE__ */ (0, I.jsx)(Id, {
           active: r,
           counts: w,
           onChange: i
@@ -28763,10 +28814,10 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
                 value: "all",
                 label: "All groups"
               }, ...n.map((e) => {
-                let t = Pd(e, ["id"], "");
+                let t = Nd(e, ["id"], "");
                 return {
                   value: t,
-                  label: Pd(e, ["name", "id"], t)
+                  label: Nd(e, ["name", "id"], t)
                 };
               })],
               onChange: (e) => u(e)
@@ -28775,7 +28826,7 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
               className: "ft-field",
               label: "Sort",
               value: h,
-              options: Nd,
+              options: Md,
               onChange: (e) => g(e)
             })
           ]
@@ -28792,12 +28843,12 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
         })
       }) : /* @__PURE__ */ (0, I.jsx)("div", {
         className: "findings-list findings-grid",
-        children: O.map((e) => /* @__PURE__ */ (0, I.jsx)(jd, {
+        children: O.map((e) => /* @__PURE__ */ (0, I.jsx)(Ad, {
           finding: e,
           checks: t,
           targetGroups: n,
           onOpen: te
-        }, Pd(e, ["id"], Math.random().toString(36))))
+        }, Nd(e, ["id"], Math.random().toString(36))))
       }),
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "findings-pager",
@@ -28817,7 +28868,7 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
             /* @__PURE__ */ (0, I.jsx)(cr, {
               label: "Page size",
               value: String(_),
-              options: Md.map((e) => ({
+              options: jd.map((e) => ({
                 value: String(e),
                 label: String(e)
               })),
@@ -28856,11 +28907,11 @@ function zd({ findings: e, checks: t, targetGroups: n }) {
 }
 //#endregion
 //#region apps/web/react/src/components/runs/runs-soc-gate.tsx
-var Bd = {
+var zd = {
   volumetric_metadata: "Volumetric (metadata-only catalog)",
   "500_rps_metadata": "Up to 500 RPS (metadata catalog)",
   error_rate_above_5pct: "Abort if error rate exceeds 5%"
-}, Vd = [
+}, Bd = [
   {
     value: "medium",
     label: "Medium"
@@ -28874,7 +28925,7 @@ var Bd = {
     label: "Critical"
   }
 ];
-function Hd(e, t, n = "—") {
+function Vd(e, t, n = "—") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -28882,7 +28933,7 @@ function Hd(e, t, n = "—") {
   }
   return n;
 }
-function Ud(e, t, n = "—") {
+function Hd(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -28890,24 +28941,24 @@ function Ud(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function Wd(e, t) {
-  return Hd(e.targetGroups.find((e) => Hd(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
+function Ud(e, t) {
+  return Vd(e.targetGroups.find((e) => Vd(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
 }
-function Gd(e) {
+function Wd(e) {
   let t = new Date(Date.now() + e * 60 * 60 * 1e3), n = (e) => String(e).padStart(2, "0");
   return `${t.getFullYear()}-${n(t.getMonth() + 1)}-${n(t.getDate())}T${n(t.getHours())}:${n(t.getMinutes())}`;
 }
-function Kd(e) {
+function Gd(e) {
   let t = String(e ?? "").trim();
   if (!t) return "";
   let n = new Date(t);
   return Number.isNaN(n.getTime()) ? "" : n.toISOString();
 }
-function qd(e) {
+function Kd(e) {
   let t = e.trim().toLowerCase();
   return t === "accepted" ? "success" : t === "missing" || !t || t === "—" ? "danger" : "warn";
 }
-function Jd({ label: e, value: t }) {
+function qd({ label: e, value: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", {
     className: "muted",
     children: e
@@ -28916,7 +28967,7 @@ function Jd({ label: e, value: t }) {
     children: t
   })] });
 }
-function Yd(e) {
+function Jd(e) {
   let t = e.trim().toLowerCase();
   return t === "scheduled" ? "info" : [
     "submitted",
@@ -28924,19 +28975,19 @@ function Yd(e) {
     "under_review"
   ].includes(t) ? "warn" : ["closed", "completed"].includes(t) ? "success" : "muted";
 }
-function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onError: a, busy: o, setBusy: s, requestFormOpen: c, onRequestFormOpenChange: l }) {
-  let [u, d] = (0, C.useState)(null), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(!0), [g, _] = (0, C.useState)(!1), v = c ?? g, y = l ?? _, [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)(() => Hd(e.targetGroups[0] ?? {}, ["id"], "")), [T, E] = (0, C.useState)("high"), D = n.principal === "staff", O = [{
+function Yd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onError: a, busy: o, setBusy: s, requestFormOpen: c, onRequestFormOpenChange: l }) {
+  let [u, d] = (0, C.useState)(null), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(!0), [g, _] = (0, C.useState)(!1), v = c ?? g, y = l ?? _, [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)(() => Vd(e.targetGroups[0] ?? {}, ["id"], "")), [T, E] = (0, C.useState)("high"), D = n.principal === "staff", O = [{
     value: "",
     label: "Select declared scope"
   }, ...e.targetGroups.map((e) => ({
-    value: Hd(e, ["id"]),
-    label: Hd(e, ["name", "id"])
+    value: Vd(e, ["id"]),
+    label: Vd(e, ["name", "id"])
   }))], k = (0, C.useMemo)(() => {
     let e = u ?? [], t = e.filter((e) => [
       "submitted",
       "soc_review",
       "under_review"
-    ].includes(Hd(e, ["state"], "").toLowerCase())).length, n = e.filter((e) => Hd(e, ["state"], "").toLowerCase() === "scheduled").length, r = e.filter((e) => Ud(e, ["authorization_pack_status", "overall"], "missing").toLowerCase() === "missing").length;
+    ].includes(Vd(e, ["state"], "").toLowerCase())).length, n = e.filter((e) => Vd(e, ["state"], "").toLowerCase() === "scheduled").length, r = e.filter((e) => Hd(e, ["authorization_pack_status", "overall"], "missing").toLowerCase() === "missing").length;
     return {
       total: e.length,
       submitted: t,
@@ -29002,8 +29053,8 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
         auto_stop: !0
       },
       requested_window: {
-        window_start: Kd(r.get("window_start")),
-        window_end: Kd(r.get("window_end")),
+        window_start: Gd(r.get("window_start")),
+        window_end: Gd(r.get("window_end")),
         timezone: String(r.get("timezone") ?? "UTC").trim() || "UTC"
       },
       emergency_contacts: [{
@@ -29022,13 +29073,13 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
     }), "SOC-gated request submitted for review.") && (y(!1), e.currentTarget.reset());
   }
   async function ne(e) {
-    let r = Hd(e, ["id"], "");
+    let r = Vd(e, ["id"], "");
     if (!r) return;
     let i = "authorization-pack-metadata.json", o = {
       artifact_type: "customer_authorization_letter",
       request_id: r,
       filename: i,
-      target_group_id: Hd(e, ["target_group_id"], ""),
+      target_group_id: Vd(e, ["target_group_id"], ""),
       requested_window: e.requested_window ?? null,
       requested_limits: e.requested_limits ?? null,
       requested_scenario_families: e.requested_scenario_families ?? [],
@@ -29082,15 +29133,15 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
             className: "soc-queue-summary",
             "aria-label": "SOC queue summary",
             children: [
-              /* @__PURE__ */ (0, I.jsx)(Jd, {
+              /* @__PURE__ */ (0, I.jsx)(qd, {
                 label: "In review",
                 value: k.submitted
               }),
-              /* @__PURE__ */ (0, I.jsx)(Jd, {
+              /* @__PURE__ */ (0, I.jsx)(qd, {
                 label: "Scheduled",
                 value: k.scheduled
               }),
-              /* @__PURE__ */ (0, I.jsx)(Jd, {
+              /* @__PURE__ */ (0, I.jsx)(qd, {
                 label: "Pack missing",
                 value: k.missingPack
               })
@@ -29107,12 +29158,12 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
                 key: "request",
                 label: "Request",
                 render: (e) => {
-                  let t = Hd(e, ["id"], "");
+                  let t = Vd(e, ["id"], "");
                   return D ? /* @__PURE__ */ (0, I.jsx)(R, {
                     variant: "ghost",
                     href: Ki("queue-detail", t),
                     "aria-label": `Open SOC workspace for request ${t}`,
-                    children: /* @__PURE__ */ (0, I.jsx)("code", { children: Hd(e, ["id"]) })
+                    children: /* @__PURE__ */ (0, I.jsx)("code", { children: Vd(e, ["id"]) })
                   }) : /* @__PURE__ */ (0, I.jsx)("code", {
                     title: `High-scale request ${t} · status shown inline`,
                     children: t
@@ -29122,25 +29173,25 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
               {
                 key: "policy",
                 label: "Policy",
-                render: (e) => /* @__PURE__ */ (0, I.jsx)("code", { children: Hd(e, ["policy_id", "requested_scenario_families"], "soc_gated") })
+                render: (e) => /* @__PURE__ */ (0, I.jsx)("code", { children: Vd(e, ["policy_id", "requested_scenario_families"], "soc_gated") })
               },
               {
                 key: "group",
                 label: "Target group",
-                render: (t) => Wd(e, Hd(t, ["target_group_id"]))
+                render: (t) => Ud(e, Vd(t, ["target_group_id"]))
               },
               {
                 key: "rps",
                 label: "Peak RPS",
-                render: (e) => Ud(e, ["requested_limits", "max_rate"], "—")
+                render: (e) => Hd(e, ["requested_limits", "max_rate"], "—")
               },
               {
                 key: "pack",
                 label: "Pack",
                 render: (e) => {
-                  let t = Ud(e, ["authorization_pack_status", "overall"], "missing");
+                  let t = Hd(e, ["authorization_pack_status", "overall"], "missing");
                   return /* @__PURE__ */ (0, I.jsx)(z, {
-                    tone: qd(t),
+                    tone: Kd(t),
                     title: `Pack status from authorization_pack_status.overall: ${t}`,
                     children: t
                   });
@@ -29150,9 +29201,9 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
                 key: "state",
                 label: "State",
                 render: (e) => {
-                  let t = Hd(e, ["state"]);
+                  let t = Vd(e, ["state"]);
                   return /* @__PURE__ */ (0, I.jsx)(z, {
-                    tone: Yd(t),
+                    tone: Jd(t),
                     title: `Request state from API: ${t}`,
                     children: t
                   });
@@ -29162,7 +29213,7 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
                 key: "window",
                 label: "Window",
                 render: (e) => {
-                  let t = Ud(e, ["requested_window", "window_start"], ""), n = Ud(e, ["scheduled_window", "window_start"], ""), r = n && n !== "—" ? n : t;
+                  let t = Hd(e, ["requested_window", "window_start"], ""), n = Hd(e, ["scheduled_window", "window_start"], ""), r = n && n !== "—" ? n : t;
                   return r && r !== "—" ? P(r) : "unscheduled";
                 }
               },
@@ -29170,8 +29221,8 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
                 key: "actions",
                 label: "Action",
                 render: (e) => {
-                  let t = Hd(e, ["id"], "");
-                  return Ud(e, ["authorization_pack_status", "overall"], "missing").toLowerCase() === "missing" ? /* @__PURE__ */ (0, I.jsx)(L, {
+                  let t = Vd(e, ["id"], "");
+                  return Hd(e, ["authorization_pack_status", "overall"], "missing").toLowerCase() === "missing" ? /* @__PURE__ */ (0, I.jsx)(L, {
                     size: "sm",
                     variant: "ghost",
                     loading: o === `pack-${t}`,
@@ -29229,28 +29280,28 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
           label: "Business criticality",
           name: "business_criticality",
           value: T,
-          options: Vd,
+          options: Bd,
           onChange: E,
           disabled: o !== ""
         }),
         /* @__PURE__ */ (0, I.jsxs)("label", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Window start" }), /* @__PURE__ */ (0, I.jsx)("input", {
           name: "window_start",
           type: "datetime-local",
-          defaultValue: Gd(24),
+          defaultValue: Wd(24),
           required: !0,
           disabled: o !== ""
         })] }),
         /* @__PURE__ */ (0, I.jsxs)("label", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Window end" }), /* @__PURE__ */ (0, I.jsx)("input", {
           name: "window_end",
           type: "datetime-local",
-          defaultValue: Gd(48),
+          defaultValue: Wd(48),
           required: !0,
           disabled: o !== ""
         })] }),
         /* @__PURE__ */ (0, I.jsxs)("label", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: "Max rate (catalog)" }), /* @__PURE__ */ (0, I.jsx)("input", {
           name: "max_rate",
           defaultValue: "500_rps_metadata",
-          placeholder: Bd["500_rps_metadata"],
+          placeholder: zd["500_rps_metadata"],
           required: !0,
           disabled: o !== ""
         })] }),
@@ -29312,13 +29363,13 @@ function Xd({ data: e, config: t, session: n, onRefresh: r, onMessage: i, onErro
       busy: o === `pack-${b}`,
       onCancel: () => x(""),
       onConfirm: () => {
-        let t = (u ?? []).find((e) => Hd(e, ["id"]) === b) ?? e.highScale.find((e) => Hd(e, ["id"]) === b);
+        let t = (u ?? []).find((e) => Vd(e, ["id"]) === b) ?? e.highScale.find((e) => Vd(e, ["id"]) === b);
         t && ne(t);
       }
     })
   ] });
 }
-function Zd({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, refreshBusy: r, safeRunBusy: i, safeRunDisabled: a }) {
+function Xd({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, refreshBusy: r, safeRunBusy: i, safeRunDisabled: a }) {
   return /* @__PURE__ */ (0, I.jsxs)(I.Fragment, { children: [
     /* @__PURE__ */ (0, I.jsx)(L, {
       size: "sm",
@@ -29344,7 +29395,7 @@ function Zd({ onRefresh: e, onRequestSoc: t, onStartSafeRun: n, refreshBusy: r, 
 }
 //#endregion
 //#region apps/web/react/src/lib/checks-helpers.ts
-var Qd = [
+var Zd = [
   {
     id: "all",
     label: "All"
@@ -29357,14 +29408,14 @@ var Qd = [
     id: "soc",
     label: "SOC"
   }
-], $d = /* @__PURE__ */ new Set([
+], Qd = /* @__PURE__ */ new Set([
   "origin",
   "path",
   "l7",
   "dns",
   "l3_l4"
 ]);
-function ef(e, t, n = "") {
+function $d(e, t, n = "") {
   if (!e) return n;
   for (let n of t) {
     let t = e[n];
@@ -29372,7 +29423,7 @@ function ef(e, t, n = "") {
   }
   return n;
 }
-function tf(e, t, n = "") {
+function ef(e, t, n = "") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -29380,41 +29431,41 @@ function tf(e, t, n = "") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function nf(e) {
-  let t = ef(e, ["safety_class"], "");
+function tf(e) {
+  let t = $d(e, ["safety_class"], "");
   return t === "soc_gated" || t === "soc_only";
 }
-function rf(e) {
-  return ef(e, ["safety_class"]) === "safe";
+function nf(e) {
+  return $d(e, ["safety_class"]) === "safe";
 }
-function af(e, t) {
-  return t === "safe" ? e.filter((e) => rf(e)) : t === "soc" ? e.filter((e) => nf(e)) : e;
+function rf(e, t) {
+  return t === "safe" ? e.filter((e) => nf(e)) : t === "soc" ? e.filter((e) => tf(e)) : e;
 }
-function of(e) {
-  let t = ef(e, ["vector_family"]);
+function af(e) {
+  let t = $d(e, ["vector_family"]);
   if (t === "origin") return !0;
-  let n = ef(e, ["check_id"]);
+  let n = $d(e, ["check_id"]);
   if (n.includes("origin_bypass") || n.includes("host_sni_bypass")) return !0;
-  let r = tf(e, ["probe_profile", "scenario_family"]);
+  let r = ef(e, ["probe_profile", "scenario_family"]);
   return t === "waf" && r === "origin_bypass";
 }
-function sf(e) {
-  let t = ef(e, ["vector_family"]);
+function of(e) {
+  let t = $d(e, ["vector_family"]);
   return t === "l7" || t === "waf";
 }
-function cf(e, t) {
+function sf(e, t) {
   if (t === "custom") return [];
   if (t === "recommended") {
-    let t = e.filter((e) => rf(e)), n = t.filter((e) => $d.has(ef(e, ["vector_family"])));
+    let t = e.filter((e) => nf(e)), n = t.filter((e) => Qd.has($d(e, ["vector_family"])));
     return (n.length ? n : t).slice(0, 20);
   }
-  return t === "origin-bypass" ? e.filter((e) => of(e)) : t === "l3l4" ? e.filter((e) => ef(e, ["vector_family"]) === "l3_l4") : t === "dns" ? e.filter((e) => ef(e, ["vector_family"]) === "dns") : t === "l7api" ? e.filter((e) => sf(e)) : t === "protocols" ? e.filter((e) => ["protocol", "tls"].includes(ef(e, ["vector_family"]))) : t === "high-scale" ? e.filter((e) => nf(e)) : e;
+  return t === "origin-bypass" ? e.filter((e) => af(e)) : t === "l3l4" ? e.filter((e) => $d(e, ["vector_family"]) === "l3_l4") : t === "dns" ? e.filter((e) => $d(e, ["vector_family"]) === "dns") : t === "l7api" ? e.filter((e) => of(e)) : t === "protocols" ? e.filter((e) => ["protocol", "tls"].includes($d(e, ["vector_family"]))) : t === "high-scale" ? e.filter((e) => tf(e)) : e;
 }
-function lf(e, t, n = "all") {
-  return cf(af(e, n), t);
+function cf(e, t, n = "all") {
+  return sf(rf(e, n), t);
 }
-function uf(e) {
-  let t = e.filter((e) => rf(e)).length, n = e.filter((e) => nf(e)).length;
+function lf(e) {
+  let t = e.filter((e) => nf(e)).length, n = e.filter((e) => tf(e)).length;
   return {
     all: e.length,
     safe: t,
@@ -29429,7 +29480,7 @@ function Q(e, t, n = "—") {
   }
   return n;
 }
-function df(e, t, n = "—") {
+function uf(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -29437,10 +29488,10 @@ function df(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-function ff(e) {
+function df(e) {
   return e === "safe" ? "Customer-runnable" : e === "soc_gated" ? "SOC request-only" : e.replace(/_/g, " ");
 }
-function pf(e) {
+function ff(e) {
   let t = e.verdict;
   if (t && typeof t == "object" && !Array.isArray(t)) {
     let e = Q(t, ["verdict"], "");
@@ -29448,14 +29499,14 @@ function pf(e) {
   }
   return Q(e, ["verdict", "verdict"], "");
 }
-function mf(e) {
+function pf(e) {
   let t = /* @__PURE__ */ new Map(), n = /* @__PURE__ */ new Map();
   for (let r of e) {
     let e = Q(r, ["check_id"], "");
     if (!e) continue;
     let i = Q(r, ["status"], "");
     if (!["completed", "verdicted"].includes(i)) continue;
-    let a = pf(r);
+    let a = ff(r);
     if (!a) continue;
     let o = String(r.updated_at ?? r.completed_at ?? r.started_at ?? r.created_at ?? ""), s = n.get(e) ?? "";
     (!s || o.localeCompare(s) >= 0) && (n.set(e, o), t.set(e, {
@@ -29465,17 +29516,17 @@ function mf(e) {
   }
   return t;
 }
-function hf(e) {
-  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : ff(e);
+function mf(e) {
+  return e === "safe" ? "safe" : e === "soc_gated" ? "SOC-gated" : df(e);
 }
-function gf(e) {
+function hf(e) {
   return e === "safe" ? "success" : e === "soc_gated" ? "info" : "muted";
 }
-function _f(e) {
+function gf(e) {
   let t = e.max_rate;
   if (typeof t == "number" && Number.isFinite(t) && t > 0) return `${t} RPS`;
   if (typeof t == "string" && t.trim()) return t.replace(/_/g, " ");
-  let n = df(e, ["probe_profile", "kind"], "");
+  let n = uf(e, ["probe_profile", "kind"], "");
   if (n === "metadata_marker" || n === "ops_readiness") return "metadata";
   let r = e.probe_profile;
   if (r && typeof r == "object" && !Array.isArray(r)) {
@@ -29484,7 +29535,7 @@ function _f(e) {
   }
   return "—";
 }
-function vf(e) {
+function _f(e) {
   let t = e.trim().toLowerCase();
   return t ? [
     "pass",
@@ -29507,13 +29558,13 @@ function vf(e) {
     "warn",
     "warning",
     "medium"
-  ].includes(t) ? "Review" : t === "request" ? "request" : Cf(e) : "—";
+  ].includes(t) ? "Review" : t === "request" ? "request" : Sf(e) : "—";
+}
+function vf(e) {
+  let t = _f(e);
+  return t === "Pass" ? "success" : t === "Gap" ? "danger" : t === "Review" ? "warn" : t === "request" ? "muted" : xf(e);
 }
 function yf(e) {
-  let t = vf(e);
-  return t === "Pass" ? "success" : t === "Gap" ? "danger" : t === "Review" ? "warn" : t === "request" ? "muted" : Sf(e);
-}
-function bf(e) {
   return {
     planned: "Planned",
     running: "Running",
@@ -29523,14 +29574,14 @@ function bf(e) {
     failed: "Failed"
   }[e] ?? e.replace(/_/g, " ");
 }
-function xf(e) {
+function bf(e) {
   return e === "verdicted" ? "success" : e === "running" || e === "collecting" ? "info" : e === "cancelled" || e === "failed" ? "danger" : e === "planned" ? "muted" : "warn";
 }
-function Sf(e) {
+function xf(e) {
   let t = e.toLowerCase();
   return t === "pass" || t === "ready" ? "success" : t === "fail" || t === "failed" ? "danger" : t === "partial" || t === "inconclusive" ? "warn" : t === "pending" || t === "—" || !t ? "muted" : "info";
 }
-function Cf(e) {
+function Sf(e) {
   return {
     pass: "Pass",
     fail: "Fail",
@@ -29541,20 +29592,20 @@ function Cf(e) {
     failed: "Failed"
   }[e.toLowerCase()] ?? e.replace(/_/g, " ");
 }
-function wf(e, t) {
+function Cf(e, t) {
   return t ? Q(e.find((e) => Q(e, ["id"], "") === t) ?? {}, ["name", "title"], t) : "—";
 }
-function Tf(e) {
+function wf(e) {
   let t = Date.parse(String(e.started_at ?? e.created_at ?? "")), n = Date.parse(String(e.completed_at ?? e.finalized_at ?? e.updated_at ?? ""));
   if (!Number.isFinite(t) || !Number.isFinite(n) || n <= t) return "—";
   let r = Math.round((n - t) / 1e3), i = Math.floor(r / 60), a = r % 60;
   return i <= 0 ? `${a}s` : `${i}m ${String(a).padStart(2, "0")}s`;
 }
-var Ef = /* @__PURE__ */ new Set(["running", "collecting"]);
-function Df(e) {
-  return Ef.has(e);
+var Tf = /* @__PURE__ */ new Set(["running", "collecting"]);
+function Ef(e) {
+  return Tf.has(e);
 }
-function Of(e) {
+function Df(e) {
   let t = Date.parse(String(e ?? ""));
   if (!Number.isFinite(t)) return "";
   let n = Date.now() - t;
@@ -29566,21 +29617,21 @@ function Of(e) {
   let a = Math.floor(i / 60);
   return a < 24 ? `started ${a}h ago` : `started ${Math.floor(a / 24)}d ago`;
 }
-var kf = "astranull-functional-surface-styles";
-function Af() {
-  if (typeof document > "u" || document.getElementById(kf)) return;
+var Of = "astranull-functional-surface-styles";
+function kf() {
+  if (typeof document > "u" || document.getElementById(Of)) return;
   let e = document.createElement("style");
-  e.id = kf, e.textContent = "\n.run-live-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 50%;\n  background: var(--info);\n  flex: none;\n  animation: astranull-run-live-pulse 1.5s ease-in-out infinite;\n}\n@keyframes astranull-run-live-pulse {\n  0%, 100% { opacity: 1; transform: scale(1); }\n  50% { opacity: 0.35; transform: scale(0.7); }\n}\n@media (prefers-reduced-motion: reduce) {\n  .run-live-dot { animation: none; opacity: 0.85; }\n}\n", document.head.appendChild(e);
+  e.id = Of, e.textContent = "\n.run-live-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 50%;\n  background: var(--info);\n  flex: none;\n  animation: astranull-run-live-pulse 1.5s ease-in-out infinite;\n}\n@keyframes astranull-run-live-pulse {\n  0%, 100% { opacity: 1; transform: scale(1); }\n  50% { opacity: 0.35; transform: scale(0.7); }\n}\n@media (prefers-reduced-motion: reduce) {\n  .run-live-dot { animation: none; opacity: 0.85; }\n}\n", document.head.appendChild(e);
 }
-function jf(e, t) {
+function Af(e, t) {
   let n = Q(e, ["check_id"], ""), r = t.get(n);
   if (r?.verdict) {
-    let e = vf(r.verdict);
+    let e = _f(r.verdict);
     return e === "Pass" ? "pass" : e === "Gap" ? "gap" : e === "Review" ? "review" : e === "request" ? "request" : "review";
   }
   return Q(e, ["safety_class"], "") === "soc_gated" ? "request" : "untested";
 }
-var Mf = [
+var jf = [
   {
     value: "recommended",
     label: "Recommended"
@@ -29609,7 +29660,7 @@ var Mf = [
     value: "high-scale",
     label: "High-scale (SOC)"
   }
-], Nf = [
+], Mf = [
   {
     value: "all",
     label: "All statuses"
@@ -29634,7 +29685,7 @@ var Mf = [
     value: "untested",
     label: "Untested"
   }
-], Pf = [
+], Nf = [
   {
     value: "15",
     label: "15 minutes"
@@ -29651,8 +29702,8 @@ var Mf = [
     value: "1440",
     label: "24 hours"
   }
-], Ff = "•".repeat(32);
-function If({ rows: e = 4, label: t = "Loading" }) {
+], Pf = "•".repeat(32);
+function Ff({ rows: e = 4, label: t = "Loading" }) {
   return /* @__PURE__ */ (0, I.jsx)("div", {
     className: "stack-tight",
     "aria-busy": "true",
@@ -29660,7 +29711,7 @@ function If({ rows: e = 4, label: t = "Loading" }) {
     children: Array.from({ length: e }, (e, t) => /* @__PURE__ */ (0, I.jsx)("div", { className: "skeleton skeleton-row" }, t))
   });
 }
-function Lf({ message: e, error: t, neutral: n = !1 }) {
+function If({ message: e, error: t, neutral: n = !1 }) {
   return !e && !t ? null : /* @__PURE__ */ (0, I.jsx)("div", {
     className: t ? "form-banner error" : n ? "form-banner neutral" : "form-banner",
     role: t ? "alert" : "status",
@@ -29668,11 +29719,11 @@ function Lf({ message: e, error: t, neutral: n = !1 }) {
     children: t || e
   });
 }
-function Rf({ title: e, description: t, columns: n, items: r, empty: i, loading: a = !1, loadingLabel: o = "Loading table", loadingRows: s = 3, contentClassName: c, getRowProps: l, getRowId: u }) {
+function Lf({ title: e, description: t, columns: n, items: r, empty: i, loading: a = !1, loadingLabel: o = "Loading table", loadingRows: s = 3, contentClassName: c, getRowProps: l, getRowId: u }) {
   return /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: e }), /* @__PURE__ */ (0, I.jsx)(U, { children: t })] }), /* @__PURE__ */ (0, I.jsx)(W, {
     className: c,
     "aria-busy": a || void 0,
-    children: a ? /* @__PURE__ */ (0, I.jsx)(If, {
+    children: a ? /* @__PURE__ */ (0, I.jsx)(Ff, {
       rows: s,
       label: o
     }) : /* @__PURE__ */ (0, I.jsx)(Hi, {
@@ -29684,10 +29735,10 @@ function Rf({ title: e, description: t, columns: n, items: r, empty: i, loading:
     })
   })] });
 }
-function zf(e) {
+function Rf(e) {
   return !!(e && e.closest("a, button"));
 }
-function Bf(e, t, n) {
+function zf(e, t, n) {
   if (!t) return {};
   let r = `${e}?id=${encodeURIComponent(t)}`;
   return {
@@ -29696,28 +29747,28 @@ function Bf(e, t, n) {
     style: { cursor: "pointer" },
     "aria-label": n,
     onClick: (e) => {
-      zf(e.target) || (window.location.hash = r);
+      Rf(e.target) || (window.location.hash = r);
     },
     onKeyDown: (e) => {
-      e.key !== "Enter" && e.key !== " " || zf(e.target) || (e.preventDefault(), window.location.hash = r);
+      e.key !== "Enter" && e.key !== " " || Rf(e.target) || (e.preventDefault(), window.location.hash = r);
     }
   };
 }
-function Vf(e, t, n = "") {
+function Bf(e, t, n = "") {
   return Q(e.find((e) => Q(e, ["check_id"]) === t) ?? {}, ["name"], t) || n || "View run";
 }
-function Hf(e, t = "—") {
+function Vf(e, t = "—") {
   let n = e.trim();
   return n ? n.split("_").filter(Boolean).map((e) => e.charAt(0).toUpperCase() + e.slice(1).toLowerCase()).join(" ") : t;
 }
-function Uf(e, t, n = 0) {
+function Hf(e, t, n = 0) {
   for (let n of t) {
     let t = e[n];
     if (typeof t == "number" && Number.isFinite(t)) return t;
   }
   return n;
 }
-function Wf(e, t, n = 0) {
+function Uf(e, t, n = 0) {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -29725,7 +29776,7 @@ function Wf(e, t, n = 0) {
   }
   return typeof r == "number" && Number.isFinite(r) ? r : n;
 }
-async function Gf(e, t, n, r, i, a, o) {
+async function Wf(e, t, n, r, i, a, o) {
   e(r), t(""), n("");
   try {
     let e = await i();
@@ -29737,7 +29788,7 @@ async function Gf(e, t, n, r, i, a, o) {
     e("");
   }
 }
-function Kf({ data: e, config: t, session: n, onRefresh: r }) {
+function Gf({ data: e, config: t, session: n, onRefresh: r }) {
   let [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)("60"), [g, _] = (0, C.useState)(!1), [v, y] = (0, C.useState)(!1), [b, x] = (0, C.useState)(""), [S, w] = (0, C.useState)([]), [T, E] = (0, C.useState)([]), [D, O] = (0, C.useState)(!1), k = e.agents.filter((e) => Q(e, ["status"]) === "online").length, ee = e.targetGroups[0] ?? null;
   (0, C.useEffect)(() => {
     let e = !1;
@@ -29871,7 +29922,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
       render: (e) => /* @__PURE__ */ (0, I.jsx)(z, {
         tone: "info",
         title: "Release rollout state from agent-updates",
-        children: Hf(Q(e, ["state"], "active"))
+        children: Vf(Q(e, ["state"], "active"))
       })
     },
     {
@@ -29879,7 +29930,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
       label: "Rollout",
       render: (e) => /* @__PURE__ */ (0, I.jsxs)("span", {
         className: "num tabular-nums",
-        children: [Wf(e, ["rollout", "percentage"], 100), "%"]
+        children: [Uf(e, ["rollout", "percentage"], 100), "%"]
       })
     },
     {
@@ -29931,7 +29982,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
         let t = Q(e, ["status"]);
         return /* @__PURE__ */ (0, I.jsx)(z, {
           tone: t === "active" ? "success" : "muted",
-          children: Hf(t)
+          children: Vf(t)
         });
       }
     },
@@ -29971,10 +30022,10 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
       max_registrations: 1
     }, c = Q(ee, ["environment_id"], ""), u = Q(ee, ["id"], "");
     c && (o.environment_id = c), u && (o.target_group_id = u);
-    let f = await Gf(a, l, s, "create-bootstrap-token", () => F(t, n, "/v1/bootstrap-tokens", {
+    let f = await Wf(a, l, s, "create-bootstrap-token", () => F(t, n, "/v1/bootstrap-tokens", {
       method: "POST",
       body: o
-    }), "Bootstrap token created. Copy the one-time secret now.", r) ?? {}, h = Q(f, ["secret"], df(f, ["token", "secret"], "")), g = Q(f, ["id"], df(f, ["token", "id"], ""));
+    }), "Bootstrap token created. Copy the one-time secret now.", r) ?? {}, h = Q(f, ["secret"], uf(f, ["token", "secret"], "")), g = Q(f, ["id"], uf(f, ["token", "id"], ""));
     h && (d(h), p(g), _(!1), y(!1), x(""));
   }
   async function A() {
@@ -29989,7 +30040,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
       l("No bootstrap token id was returned, so it cannot be revoked from here.");
       return;
     }
-    window.confirm("Revoke this bootstrap token? New agent registrations using it will fail.") && await Gf(a, l, s, `revoke-bootstrap-${f}`, () => F(t, n, `/v1/bootstrap-tokens/${f}/revoke`, { method: "POST" }), "Bootstrap token revoked.", r) && (y(!0), _(!1));
+    window.confirm("Revoke this bootstrap token? New agent registrations using it will fail.") && await Wf(a, l, s, `revoke-bootstrap-${f}`, () => F(t, n, `/v1/bootstrap-tokens/${f}/revoke`, { method: "POST" }), "Bootstrap token revoked.", r) && (y(!0), _(!1));
   }
   async function oe() {
     let e = await F(t, n, "/v1/agent-updates");
@@ -30000,22 +30051,22 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
     E(Array.isArray(e.items) ? e.items : []);
   }
   async function ce(e) {
-    e && window.confirm("Revoke this agent's credentials? It will stop reporting until re-registered.") && await Gf(a, l, s, `revoke-${e}`, () => F(t, n, `/v1/agents/${e}/revoke`, { method: "POST" }), "Agent revoked. Heartbeat and jobs will be rejected.", r);
+    e && window.confirm("Revoke this agent's credentials? It will stop reporting until re-registered.") && await Wf(a, l, s, `revoke-${e}`, () => F(t, n, `/v1/agents/${e}/revoke`, { method: "POST" }), "Agent revoked. Heartbeat and jobs will be rejected.", r);
   }
   async function le(e) {
-    e && window.confirm("Request rollback for this agent release? Eligible agents will move to the previous signed version.") && await Gf(a, l, s, `rollback-${e}`, () => F(t, n, `/v1/agent-updates/${e}/rollback`, { method: "POST" }), "Rollback requested for eligible agents.", async () => {
+    e && window.confirm("Request rollback for this agent release? Eligible agents will move to the previous signed version.") && await Wf(a, l, s, `rollback-${e}`, () => F(t, n, `/v1/agent-updates/${e}/rollback`, { method: "POST" }), "Rollback requested for eligible agents.", async () => {
       await oe(), await r();
     });
   }
   async function ue(e) {
-    e && window.confirm("Revoke this agent update trust key? Agents will reject updates signed with it.") && await Gf(a, l, s, `trust-revoke-${e}`, () => F(t, n, `/v1/agent-update-trust-keys/${e}/revoke`, { method: "POST" }), "Trust key revoked.", async () => {
+    e && window.confirm("Revoke this agent update trust key? Agents will reject updates signed with it.") && await Wf(a, l, s, `trust-revoke-${e}`, () => F(t, n, `/v1/agent-update-trust-keys/${e}/revoke`, { method: "POST" }), "Trust key revoked.", async () => {
       await se(), await r();
     });
   }
   async function de(e) {
     e.preventDefault();
     let i = e.currentTarget, o = new FormData(i);
-    await Gf(a, l, s, "add-trust-key", () => F(t, n, "/v1/agent-update-trust-keys", {
+    await Wf(a, l, s, "add-trust-key", () => F(t, n, "/v1/agent-update-trust-keys", {
       method: "POST",
       body: {
         name: String(o.get("name") ?? "").trim() || "agent update signing key",
@@ -30072,21 +30123,21 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
         }),
         " online"
       ] }),
-      /* @__PURE__ */ (0, I.jsx)(Lf, {
+      /* @__PURE__ */ (0, I.jsx)(If, {
         message: o,
         error: c
       }),
       /* @__PURE__ */ (0, I.jsxs)("div", {
         className: "stack",
         children: [
-          /* @__PURE__ */ (0, I.jsx)(Rf, {
+          /* @__PURE__ */ (0, I.jsx)(Lf, {
             title: "Installed agents",
             description: "Outbound-only observation agents. They call AstraNull over HTTPS. Click a row to open the agent detail.",
             columns: ne,
             items: e.agents,
             getRowProps: (e) => {
               let t = Q(e, ["id"], "");
-              return Bf("agent-detail", t, `Open agent ${Q(e, [
+              return zf("agent-detail", t, `Open agent ${Q(e, [
                 "hostname",
                 "name",
                 "id"
@@ -30109,7 +30160,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
               children: /* @__PURE__ */ (0, I.jsx)(cr, {
                 label: "Token expiry",
                 value: m,
-                options: Pf,
+                options: Nf,
                 onChange: h,
                 disabled: i !== ""
               })
@@ -30128,7 +30179,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
                   /* @__PURE__ */ (0, I.jsx)("pre", {
                     className: "codeblock",
                     "aria-label": "Bootstrap token secret",
-                    children: v ? "Token revoked." : g ? u : Ff
+                    children: v ? "Token revoked." : g ? u : Pf
                   }),
                   /* @__PURE__ */ (0, I.jsxs)("div", {
                     className: "row-actions",
@@ -30168,7 +30219,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
               })]
             }) : null]
           })] }),
-          /* @__PURE__ */ (0, I.jsx)(Cd, {
+          /* @__PURE__ */ (0, I.jsx)(Sd, {
             data: e,
             tokenSecret: u,
             onCreateToken: () => void ae(),
@@ -30177,7 +30228,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
           }),
           /* @__PURE__ */ (0, I.jsxs)("div", {
             className: "split",
-            children: [/* @__PURE__ */ (0, I.jsx)(Rf, {
+            children: [/* @__PURE__ */ (0, I.jsx)(Lf, {
               title: "Release rollout",
               description: "Tenant agent release rollouts. Agents pull signed updates over the outbound channel. Request rollback to move eligible agents to the previous signed version.",
               columns: re,
@@ -30191,7 +30242,7 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
               })
             }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Trust keys" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Ed25519 signing keys that agents trust for update manifests. Revoking a key makes agents reject updates signed with it." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
               className: "product-form stack",
-              children: [D ? /* @__PURE__ */ (0, I.jsx)(If, {
+              children: [D ? /* @__PURE__ */ (0, I.jsx)(Ff, {
                 rows: 2,
                 label: "Loading trust keys"
               }) : /* @__PURE__ */ (0, I.jsx)(Hi, {
@@ -30238,16 +30289,16 @@ function Kf({ data: e, config: t, session: n, onRefresh: r }) {
     ]
   });
 }
-function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
+function Kf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
   let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)("recommended"), [p, m] = (0, C.useState)("all"), [h, g] = (0, C.useState)("all"), [_, v] = (0, C.useState)("open"), [y, b] = (0, C.useState)(""), [x, S] = (0, C.useState)(!1), [w, T] = (0, C.useState)(!1), [E, D] = (0, C.useState)(null), [k, ee] = (0, C.useState)(() => t.evidence.length > 0), [te, ne] = (0, C.useState)(0), [re, ie] = (0, C.useState)(""), [ae, A] = (0, C.useState)("all"), [j, oe] = (0, C.useState)(""), [se, ce] = (0, C.useState)(!1), [le, ue] = (0, C.useState)(!1), [de, fe] = (0, C.useState)(""), pe = t.targetGroups[0] ?? null, me = t.checks.find((e) => Q(e, ["safety_class"]) === "safe") ?? null, he = t.runs.filter((e) => [
     "running",
     "collecting",
     "planned"
-  ].includes(Q(e, ["status"], ""))), _e = (0, C.useMemo)(() => uf(t.checks), [t.checks]), ve = (0, C.useMemo)(() => lf(t.checks, d, p), [
+  ].includes(Q(e, ["status"], ""))), _e = (0, C.useMemo)(() => lf(t.checks), [t.checks]), ve = (0, C.useMemo)(() => cf(t.checks, d, p), [
     t.checks,
     d,
     p
-  ]), ye = (0, C.useMemo)(() => mf(t.runs), [t.runs]), be = (0, C.useMemo)(() => h === "all" ? ve : ve.filter((e) => jf(e, ye) === h), [
+  ]), ye = (0, C.useMemo)(() => pf(t.runs), [t.runs]), be = (0, C.useMemo)(() => h === "all" ? ve : ve.filter((e) => Af(e, ye) === h), [
     ve,
     h,
     ye
@@ -30314,8 +30365,8 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       u("Add at least one target to the declared group before starting a run.");
       return;
     }
-    let m = Q(pe, ["name", "id"], a), h = Vf(t.checks, s);
-    window.confirm(`Start a safe validation run?\n\nTarget group: ${m}\nTarget: ${p}\nCheck: ${h}`) && await Gf(o, u, c, "start-safe-run", () => F(n, r, "/v1/test-runs", {
+    let m = Q(pe, ["name", "id"], a), h = Bf(t.checks, s);
+    window.confirm(`Start a safe validation run?\n\nTarget group: ${m}\nTarget: ${p}\nCheck: ${h}`) && await Wf(o, u, c, "start-safe-run", () => F(n, r, "/v1/test-runs", {
       method: "POST",
       body: {
         target_group_id: a,
@@ -30374,13 +30425,13 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           /* @__PURE__ */ (0, I.jsx)(cr, {
             label: "Vector family",
             value: d,
-            options: Mf,
+            options: jf,
             onChange: (e) => f(e)
           }),
           /* @__PURE__ */ (0, I.jsx)(cr, {
             label: "Safety class",
             value: p,
-            options: Qd.map((e) => ({
+            options: Zd.map((e) => ({
               value: e.id,
               label: `${e.label} (${_e[e.id]})`
             })),
@@ -30389,7 +30440,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           /* @__PURE__ */ (0, I.jsx)(cr, {
             label: "Last verdict",
             value: h,
-            options: Nf,
+            options: Mf,
             onChange: g
           })
         ]
@@ -30418,9 +30469,9 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             render: (e) => {
               let t = Q(e, ["safety_class"], "");
               return /* @__PURE__ */ (0, I.jsx)(z, {
-                tone: gf(t),
+                tone: hf(t),
                 title: "Safety class from check catalog",
-                children: hf(t)
+                children: mf(t)
               });
             }
           },
@@ -30429,7 +30480,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             label: "Bound",
             render: (e) => /* @__PURE__ */ (0, I.jsx)("code", {
               className: "traffic-path-label",
-              children: _f(e)
+              children: gf(e)
             })
           },
           {
@@ -30438,9 +30489,9 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             render: (e) => {
               let t = Q(e, ["check_id"], ""), n = Q(e, ["safety_class"], ""), r = ye.get(t);
               return r?.verdict ? /* @__PURE__ */ (0, I.jsx)(z, {
-                tone: yf(r.verdict),
+                tone: vf(r.verdict),
                 title: "Latest correlated verdict for this check",
-                children: vf(r.verdict)
+                children: _f(r.verdict)
               }) : n === "soc_gated" ? /* @__PURE__ */ (0, I.jsx)(z, {
                 tone: "muted",
                 title: "SOC-gated checks run only after SOC approval",
@@ -30455,7 +30506,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         items: be,
         getRowProps: (e) => {
           let t = Q(e, ["check_id"], "");
-          return t ? Bf("check-detail", t, `Open ${t}`) : {};
+          return t ? zf("check-detail", t, `Open ${t}`) : {};
         },
         empty: t.checks.length === 0 ? /* @__PURE__ */ (0, I.jsx)(G, {
           icon: ge,
@@ -30470,7 +30521,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     })] })]
   });
   if (e === "runs") {
-    Af();
+    kf();
     let e = [
       {
         key: "run",
@@ -30484,24 +30535,24 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       {
         key: "group",
         label: "Target group",
-        render: (e) => wf(t.targetGroups, Q(e, ["target_group_id"]))
+        render: (e) => Cf(t.targetGroups, Q(e, ["target_group_id"]))
       },
       {
         key: "checks",
         label: "Checks",
         render: (e) => {
-          let n = Uf(e, ["check_count"], -1);
+          let n = Hf(e, ["check_count"], -1);
           return n >= 0 ? /* @__PURE__ */ (0, I.jsx)("span", {
             className: "num tabular-nums",
             children: n
-          }) : Vf(t.checks, Q(e, ["check_id"]), Q(e, ["id"]));
+          }) : Bf(t.checks, Q(e, ["check_id"]), Q(e, ["id"]));
         }
       },
       {
         key: "status",
         label: "Status",
         render: (e) => {
-          let t = Q(e, ["status"], "planned"), n = Df(t), r = n ? Of(e.started_at ?? e.created_at) : "";
+          let t = Q(e, ["status"], "planned"), n = Ef(t), r = n ? Df(e.started_at ?? e.created_at) : "";
           return /* @__PURE__ */ (0, I.jsxs)("span", {
             style: {
               display: "inline-flex",
@@ -30519,9 +30570,9 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
                 className: "run-live-dot",
                 "aria-hidden": "true"
               }) : null, /* @__PURE__ */ (0, I.jsx)(z, {
-                tone: xf(t),
+                tone: bf(t),
                 title: "Run lifecycle status from API",
-                children: n ? `In progress · ${bf(t)}` : bf(t)
+                children: n ? `In progress · ${yf(t)}` : yf(t)
               })]
             }), r ? /* @__PURE__ */ (0, I.jsx)("span", {
               className: "muted",
@@ -30535,11 +30586,11 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         key: "verdict",
         label: "Verdict",
         render: (e) => {
-          let t = pf(e) || "pending";
+          let t = ff(e) || "pending";
           return /* @__PURE__ */ (0, I.jsx)(z, {
-            tone: Sf(t),
+            tone: xf(t),
             title: "Correlated run verdict",
-            children: Cf(t)
+            children: Sf(t)
           });
         }
       },
@@ -30548,7 +30599,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
         label: "Duration",
         render: (e) => /* @__PURE__ */ (0, I.jsx)("code", {
           className: "traffic-path-label",
-          children: Tf(e)
+          children: wf(e)
         })
       },
       {
@@ -30573,7 +30624,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
       children: [
         /* @__PURE__ */ (0, I.jsx)(mc, {
           route: "runs",
-          actions: /* @__PURE__ */ (0, I.jsx)(Zd, {
+          actions: /* @__PURE__ */ (0, I.jsx)(Xd, {
             onRefresh: () => void i(),
             onRequestSoc: () => ue(!0),
             onStartSafeRun: () => void Se(),
@@ -30582,7 +30633,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
             safeRunDisabled: a !== "" || !d
           })
         }),
-        /* @__PURE__ */ (0, I.jsx)(Xd, {
+        /* @__PURE__ */ (0, I.jsx)(Yd, {
           data: t,
           config: n,
           session: r,
@@ -30609,7 +30660,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           role: "note",
           children: ["Start a safe run from “Run safe checks” above once ready — ", f]
         }) : null,
-        /* @__PURE__ */ (0, I.jsx)(Lf, {
+        /* @__PURE__ */ (0, I.jsx)(If, {
           message: s,
           error: l,
           neutral: !0
@@ -30619,7 +30670,7 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           items: xe,
           getRowProps: (e) => {
             let t = Q(e, ["id"], "");
-            return Bf("run-detail", t, `Open ${t} detail`);
+            return zf("run-detail", t, `Open ${t} detail`);
           },
           empty: _o({
             icon: O,
@@ -30646,14 +30697,14 @@ function qf({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           children: "Refresh"
         })
       }),
-      /* @__PURE__ */ (0, I.jsx)(Lf, {
+      /* @__PURE__ */ (0, I.jsx)(If, {
         message: s,
         error: l,
         neutral: !0
       }),
       /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Findings" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "click a card to open the correlated verdict" })] }), /* @__PURE__ */ (0, I.jsx)(W, {
         className: "findings-surface-wrap",
-        children: /* @__PURE__ */ (0, I.jsx)(zd, {
+        children: /* @__PURE__ */ (0, I.jsx)(Rd, {
           findings: t.findings,
           checks: t.checks,
           targetGroups: t.targetGroups
@@ -30681,7 +30732,7 @@ function $(e, t, n = "—") {
   }
   return n;
 }
-function Jf(e, t) {
+function qf(e, t) {
   let n = e;
   for (let e of t) {
     if (!n || typeof n != "object" || Array.isArray(n)) return null;
@@ -30689,7 +30740,7 @@ function Jf(e, t) {
   }
   return n && typeof n == "object" && !Array.isArray(n) ? n : null;
 }
-function Yf(e, t, n = "—") {
+function Jf(e, t, n = "—") {
   let r = e;
   for (let e of t) {
     if (!r || typeof r != "object" || Array.isArray(r)) return n;
@@ -30697,7 +30748,7 @@ function Yf(e, t, n = "—") {
   }
   return r != null && r !== "" ? String(r) : n;
 }
-var Xf = [
+var Yf = [
   "finding.high_severity",
   "agent.offline",
   "safe_test.completed",
@@ -30705,7 +30756,7 @@ var Xf = [
   "report.ready",
   "bootstrap_token.created",
   "bootstrap_token.revoked"
-], Zf = {
+], Xf = {
   "finding.high_severity": "High-severity finding",
   "agent.offline": "Agent offline",
   "safe_test.completed": "Safe test completed",
@@ -30714,20 +30765,20 @@ var Xf = [
   "bootstrap_token.created": "Bootstrap token created",
   "bootstrap_token.revoked": "Bootstrap token revoked"
 };
-function Qf(e) {
-  return Zf[e] || e.split(".").map((e) => e.split("_").map((e) => e.charAt(0).toUpperCase() + e.slice(1)).join(" ")).join(" · ");
+function Zf(e) {
+  return Xf[e] || e.split(".").map((e) => e.split("_").map((e) => e.charAt(0).toUpperCase() + e.slice(1)).join(" ")).join(" · ");
 }
-function $f(e) {
+function Qf(e) {
   return !e || typeof e != "object" || Array.isArray(e) ? !1 : Object.values(e).every((e) => e === null || [
     "string",
     "number",
     "boolean"
   ].includes(typeof e));
 }
-function ep(e, t) {
+function $f(e, t) {
   return $(e.targetGroups.find((e) => $(e, ["id"], "") === t) ?? {}, ["name", "title"], t || "—");
 }
-function tp(e) {
+function ep(e) {
   return $(e, ["id", "audit_id"], "") || [
     $(e, ["created_at"], ""),
     $(e, ["action"], ""),
@@ -30735,11 +30786,11 @@ function tp(e) {
     $(e, ["resource_id"], "")
   ].join("::");
 }
-function np(e, t) {
+function tp(e, t) {
   let n = new Blob([JSON.stringify(t, null, 2)], { type: "application/json" }), r = URL.createObjectURL(n), i = document.createElement("a");
   i.href = r, i.download = e, i.click(), URL.revokeObjectURL(r);
 }
-function rp(e, t) {
+function np(e, t) {
   let n = t.trim();
   if (e === "in_app") return { destination: "" };
   if (e === "webhook") {
@@ -30754,21 +30805,21 @@ function rp(e, t) {
   }
   return e === "email" ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n) ? { destination: n } : { error: "Enter a valid email address before adding the rule." } : n ? { destination: n } : { error: "Enter a destination before adding the rule." };
 }
-function ip(e) {
+function rp(e) {
   if (!e || typeof e != "object") return "Action completed successfully.";
   let t = e;
   if ("active" in t) return t.active ? "Kill switch is now active for this tenant." : "Kill switch cleared; governed runs may resume when approved.";
-  let n = Yf(t, ["adapter", "state"], "");
-  if (n && n !== "—") return `Adapter status: ${n}${Yf(t, ["adapter", "traffic_generated"], "false") === "true" ? ", traffic generation reported" : ", no traffic generation reported"}.`;
+  let n = Jf(t, ["adapter", "state"], "");
+  if (n && n !== "—") return `Adapter status: ${n}${Jf(t, ["adapter", "traffic_generated"], "false") === "true" ? ", traffic generation reported" : ", no traffic generation reported"}.`;
   let r = $(t, ["state"], "");
   if (r && r !== "—") return `High-scale request updated — current state is ${r}.`;
   let i = $(t, ["id"], "");
   return i && i !== "—" && $(t, ["high_scale_request_id"], "") !== "—" ? `Post-test report saved (${i}).` : "SOC action completed successfully.";
 }
-function ap(e) {
+function ip(e) {
   return e === "admin" || e === "owner";
 }
-function op(e) {
+function ap(e) {
   return [
     "admin",
     "owner",
@@ -30776,7 +30827,7 @@ function op(e) {
     "auditor"
   ].includes(String(e ?? ""));
 }
-function sp(e) {
+function op(e) {
   let t = e.trim().toLowerCase();
   return [
     "closed",
@@ -30795,19 +30846,19 @@ function sp(e) {
     "draft"
   ].includes(t) ? "warn" : "muted";
 }
-function cp(e) {
+function sp(e) {
   let t = e.trim().toLowerCase();
   return t === "accepted" ? "success" : t === "missing" || t === "—" || !t ? "muted" : "warn";
 }
-function lp(e, t = "—") {
+function cp(e, t = "—") {
   let n = e.trim();
   return !n || n === "—" ? t : n.replace(/_/g, " ");
 }
-function up(e) {
+function lp(e) {
   let t = e.trim().toLowerCase();
-  return t === "accepted" ? "Accepted" : t === "missing" || !t ? "Missing" : lp(e);
+  return t === "accepted" ? "Accepted" : t === "missing" || !t ? "Missing" : cp(e);
 }
-var dp = [
+var up = [
   {
     value: "webhook",
     label: "Webhook"
@@ -30829,14 +30880,14 @@ var dp = [
     label: "In-app"
   }
 ];
-function fp(e) {
+function dp(e) {
   return e.flatMap((e) => (Array.isArray(e.delivery_attempts) ? e.delivery_attempts : []).map((t) => ({
     ...t,
     event_id: e.id,
     trigger: e.trigger
   })));
 }
-function pp(e, t) {
+function fp(e, t) {
   let n = /* @__PURE__ */ new Map(), r = (e) => {
     let t = n.get(e);
     if (t) return t;
@@ -30869,7 +30920,7 @@ function pp(e, t) {
     }
   }
   return Array.from(n.entries()).map(([e, t]) => {
-    let n = dp.find((t) => t.value === e)?.label ?? lp(e), r, i;
+    let n = up.find((t) => t.value === e)?.label ?? cp(e), r, i;
     t.dlq > 0 ? (r = "danger", i = "Dead-letter") : t.retrying > 0 ? (r = "warn", i = "Retrying") : t.delivered > 0 ? (r = "success", i = "Healthy") : (r = "muted", i = t.ruleCount > 0 ? "Idle" : "No rules");
     let a = t.detail || (t.ruleCount > 0 ? `${t.ruleCount} rule${t.ruleCount === 1 ? "" : "s"}` : "metadata-only");
     return {
@@ -30882,7 +30933,7 @@ function pp(e, t) {
     };
   }).sort((e, t) => e.label.localeCompare(t.label));
 }
-function mp({ message: e, error: t }) {
+function pp({ message: e, error: t }) {
   return !e && !t ? null : /* @__PURE__ */ (0, I.jsx)("div", {
     className: t ? "form-banner error" : "form-banner",
     role: t ? "alert" : "status",
@@ -30890,7 +30941,7 @@ function mp({ message: e, error: t }) {
     children: t || e
   });
 }
-function hp({ titleId: e, title: t, description: n, children: r }) {
+function mp({ titleId: e, title: t, description: n, children: r }) {
   return /* @__PURE__ */ (0, I.jsxs)("section", {
     className: "operation-panel",
     "aria-labelledby": e,
@@ -30903,28 +30954,28 @@ function hp({ titleId: e, title: t, description: n, children: r }) {
     })]
   });
 }
-function gp({ label: e, children: t }) {
+function hp({ label: e, children: t }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: e }), /* @__PURE__ */ (0, I.jsx)("strong", { children: t })] });
 }
-function _p({ active: e, reason: t }) {
+function gp({ active: e, reason: t }) {
   return /* @__PURE__ */ (0, I.jsxs)(B, {
     density: "compact",
     children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Kill switch" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Read-only tenant emergency-stop status. Activation and clearance require an SOC role." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
       className: "kv-list",
-      children: [/* @__PURE__ */ (0, I.jsx)(gp, {
+      children: [/* @__PURE__ */ (0, I.jsx)(hp, {
         label: "Status",
         children: /* @__PURE__ */ (0, I.jsx)(z, {
           tone: e ? "danger" : "success",
           children: e ? "Active" : "Inactive"
         })
-      }), /* @__PURE__ */ (0, I.jsx)(gp, {
+      }), /* @__PURE__ */ (0, I.jsx)(hp, {
         label: "Reason",
         children: t
       })]
     })]
   });
 }
-function vp({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, truncated: a, downloadLabel: o, onDownload: s }) {
+function _p({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, truncated: a, downloadLabel: o, onDownload: s }) {
   return /* @__PURE__ */ (0, I.jsxs)("div", {
     className: "full",
     children: [/* @__PURE__ */ (0, I.jsxs)("div", {
@@ -30955,7 +31006,7 @@ function vp({ panelId: e, expanded: t, onToggle: n, toggleLabels: r, code: i, tr
     }) : null]
   });
 }
-function yp({ rows: e = 2 }) {
+function vp({ rows: e = 2 }) {
   return /* @__PURE__ */ (0, I.jsx)("div", {
     className: "stack-tight",
     role: "status",
@@ -30964,16 +31015,24 @@ function yp({ rows: e = 2 }) {
     children: Array.from({ length: e }, (e, t) => /* @__PURE__ */ (0, I.jsx)("span", { className: "skeleton skeleton-row" }, t))
   });
 }
-var bp = ["scheduled", "approved"], xp = [
+var yp = ["scheduled", "approved"], bp = [
   "submitted",
   "under_review",
   "pending",
   "draft"
-], Sp = [
+], xp = [
   "running",
   "executing",
   "active",
   "started"
+], Sp = [
+  "activate_tenant_kill_switch",
+  "block_new_safe_runs",
+  "cancel_active_safe_runs",
+  "probe_fleet_stops_leasing",
+  "adapter_stop_path_invoked",
+  "audit_timeline_recorded",
+  "clear_and_resume_guarded"
 ];
 function Cp(e) {
   return $(e, ["state"], "").trim().toLowerCase();
@@ -30991,7 +31050,7 @@ function wp(e, t) {
   };
 }
 function Tp(e, t) {
-  let n = e.filter((e) => [...xp, ...bp].includes(Cp(e))), r = n.filter((e) => Yf(e, ["authorization_pack_status", "overall"], "missing") === "accepted").length;
+  let n = e.filter((e) => [...bp, ...yp].includes(Cp(e))), r = n.filter((e) => Jf(e, ["authorization_pack_status", "overall"], "missing") === "accepted").length;
   return [
     {
       key: "packs",
@@ -31019,7 +31078,7 @@ function Tp(e, t) {
   ];
 }
 function Ep(e) {
-  let t = $(Jf(e, ["provider_context"]), [
+  let t = $(qf(e, ["provider_context"]), [
     "provider_name",
     "provider",
     "name"
@@ -31120,7 +31179,7 @@ var kp = [
     render: (e) => e.role === "—" ? /* @__PURE__ */ (0, I.jsx)("span", {
       className: "muted",
       children: "—"
-    }) : lp(e.role)
+    }) : cp(e.role)
   }
 ];
 function Ap(e) {
@@ -31169,15 +31228,15 @@ var Np = [
     label: "Kind",
     render: (e) => /* @__PURE__ */ (0, I.jsx)(z, {
       tone: "info",
-      children: lp(e.kind, "high scale")
+      children: cp(e.kind, "high scale")
     })
   },
   {
     key: "state",
     label: "State",
     render: (e) => /* @__PURE__ */ (0, I.jsx)(z, {
-      tone: sp(e.state),
-      children: lp(e.state, "Unknown")
+      tone: op(e.state),
+      children: cp(e.state, "Unknown")
     })
   },
   {
@@ -31197,7 +31256,7 @@ var Np = [
   }
 ];
 function Pp({ data: e, config: t, session: n, onRefresh: r }) {
-  let [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)("webhook"), [v, y] = (0, C.useState)(["finding.high_severity"]), [b, x] = (0, C.useState)(!0), S = ap(n.role), w = (0, C.useMemo)(() => fp(e.notificationEvents ?? []), [e.notificationEvents]), T = w.filter((e) => $(e, ["status"]) === "delivered_provider").length, E = w.filter((e) => $(e, ["status"]) === "provider_retry_scheduled"), D = w.filter((e) => $(e, ["status"]) === "provider_failed_dlq"), O = (0, C.useMemo)(() => pp(e.notificationRules ?? [], w), [e.notificationRules, w]), k = [
+  let [i, a] = (0, C.useState)(""), [o, s] = (0, C.useState)(""), [c, l] = (0, C.useState)(""), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(""), [m, h] = (0, C.useState)(""), [g, _] = (0, C.useState)("webhook"), [v, y] = (0, C.useState)(["finding.high_severity"]), [b, x] = (0, C.useState)(!0), S = ip(n.role), w = (0, C.useMemo)(() => dp(e.notificationEvents ?? []), [e.notificationEvents]), T = w.filter((e) => $(e, ["status"]) === "delivered_provider").length, E = w.filter((e) => $(e, ["status"]) === "provider_retry_scheduled"), D = w.filter((e) => $(e, ["status"]) === "provider_failed_dlq"), O = (0, C.useMemo)(() => fp(e.notificationRules ?? [], w), [e.notificationRules, w]), k = [
     {
       key: "channel",
       label: "Channel",
@@ -31205,7 +31264,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
         let t = $(e, ["channel"]);
         return /* @__PURE__ */ (0, I.jsx)(z, {
           tone: "info",
-          children: dp.find((e) => e.value === t)?.label ?? lp(t)
+          children: up.find((e) => e.value === t)?.label ?? cp(t)
         });
       }
     },
@@ -31231,7 +31290,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
     {
       key: "trigger",
       label: "Trigger",
-      render: (e) => Qf($(e, ["trigger"]))
+      render: (e) => Zf($(e, ["trigger"]))
     },
     {
       key: "subject",
@@ -31286,13 +31345,13 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
   }
   async function ae(e) {
     e.preventDefault();
-    let r = e.currentTarget, i = new FormData(r), a = g.trim(), o = Xf.filter((e) => v.includes(e));
+    let r = e.currentTarget, i = new FormData(r), a = g.trim(), o = Yf.filter((e) => v.includes(e));
     if (o.length === 0) {
       p("Select at least one rule kind before adding the rule."), h("");
       return;
     }
     p("");
-    let s = rp(a, String(i.get("destination_preview") ?? ""));
+    let s = np(a, String(i.get("destination_preview") ?? ""));
     if ("error" in s) {
       d(s.error), h("");
       return;
@@ -31308,19 +31367,19 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
     }), `Notification rule created ${b ? "enabled" : "disabled"} (metadata-only delivery ledger).`) && (r.reset(), y(["finding.high_severity"]), x(!0));
   }
   function A(e) {
-    let t = new FormData(e), n = g.trim(), r = Xf.filter((e) => v.includes(e));
+    let t = new FormData(e), n = g.trim(), r = Yf.filter((e) => v.includes(e));
     if (r.length === 0) {
       p("Select at least one rule kind before previewing."), h("");
       return;
     }
     p("");
-    let i = rp(n, String(t.get("destination_preview") ?? ""));
+    let i = np(n, String(t.get("destination_preview") ?? ""));
     if ("error" in i) {
       d(i.error), h("");
       return;
     }
     d("");
-    let a = r.map((e) => Qf(e)).join(", "), o = n === "in_app" ? "in-app feed" : i.destination;
+    let a = r.map((e) => Zf(e)).join(", "), o = n === "in_app" ? "in-app feed" : i.destination;
     h(`Dry-run: would create ${b ? "an enabled" : "a disabled"} ${n} rule for ${r.length} trigger${r.length === 1 ? "" : "s"} (${a}) to ${o}. No ledger write.`);
   }
   async function se(e) {
@@ -31379,7 +31438,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
           })
         ]
       }),
-      /* @__PURE__ */ (0, I.jsx)(mp, {
+      /* @__PURE__ */ (0, I.jsx)(pp, {
         message: o,
         error: c
       }),
@@ -31393,7 +31452,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
             /* @__PURE__ */ (0, I.jsx)(cr, {
               label: "Delivery mode",
               value: g,
-              options: dp.map((e) => ({
+              options: up.map((e) => ({
                 value: e.value,
                 label: e.label
               })),
@@ -31414,7 +31473,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
             }),
             /* @__PURE__ */ (0, I.jsxs)("fieldset", {
               className: "full",
-              children: [/* @__PURE__ */ (0, I.jsx)("legend", { children: "Rule kinds and filters (triggers)" }), Xf.map((e) => /* @__PURE__ */ (0, I.jsxs)("label", {
+              children: [/* @__PURE__ */ (0, I.jsx)("legend", { children: "Rule kinds and filters (triggers)" }), Yf.map((e) => /* @__PURE__ */ (0, I.jsxs)("label", {
                 className: "check-row",
                 children: [/* @__PURE__ */ (0, I.jsx)("input", {
                   type: "checkbox",
@@ -31423,7 +31482,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
                   checked: v.includes(e),
                   onChange: () => ie(e),
                   disabled: i !== ""
-                }), /* @__PURE__ */ (0, I.jsx)("span", { children: Qf(e) })]
+                }), /* @__PURE__ */ (0, I.jsx)("span", { children: Zf(e) })]
               }, e))]
             }),
             f ? /* @__PURE__ */ (0, I.jsx)("p", {
@@ -31537,7 +31596,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
       }),
       /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Delivery operations" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Retry and dead-letter queue controls are metadata-only in developer validation. Preview (dry-run) simulates the operation; live actions update delivery state." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
         className: "stack-tight",
-        children: [/* @__PURE__ */ (0, I.jsxs)(hp, {
+        children: [/* @__PURE__ */ (0, I.jsxs)(mp, {
           titleId: "notification-preview-title",
           title: "Preview",
           description: "Dry-run — no ledger changes",
@@ -31556,7 +31615,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
             onClick: () => void ce(!0),
             children: "Preview DLQ redrive"
           })]
-        }), /* @__PURE__ */ (0, I.jsxs)(hp, {
+        }), /* @__PURE__ */ (0, I.jsxs)(mp, {
           titleId: "notification-live-title",
           title: "Live",
           description: "Applies changes — confirmation required",
@@ -31581,7 +31640,7 @@ function Pp({ data: e, config: t, session: n, onRefresh: r }) {
   });
 }
 function Fp({ data: e, session: t }) {
-  let [n, r] = (0, C.useState)(""), [i, a] = (0, C.useState)(!0), [o, s] = (0, C.useState)("all"), [c, l] = (0, C.useState)("all"), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(!1), m = op(t.role), h = (0, C.useMemo)(() => {
+  let [n, r] = (0, C.useState)(""), [i, a] = (0, C.useState)(!0), [o, s] = (0, C.useState)("all"), [c, l] = (0, C.useState)("all"), [u, d] = (0, C.useState)(""), [f, p] = (0, C.useState)(!1), m = ap(t.role), h = (0, C.useMemo)(() => {
     let t = /* @__PURE__ */ new Set();
     for (let n of e.audit) {
       let e = $(n, ["actor_role", "actor_user_id"], "system");
@@ -31610,7 +31669,7 @@ function Fp({ data: e, session: t }) {
   }, [e.audit]), _ = e.audit.filter((e) => {
     let t = $(e, ["action"], "").toLowerCase();
     return i && !t.includes("custody") && !t.includes("export") && !t.includes("report") || o !== "all" && $(e, ["actor_role", "actor_user_id"], "system") !== o || c !== "all" && $(e, ["action"], "") !== c ? !1 : n.trim() ? `${$(e, ["action"])} ${$(e, ["resource_type"])} ${$(e, ["resource_id"])}`.toLowerCase().includes(n.trim().toLowerCase()) : !0;
-  }), v = _.find((e) => tp(e) === u) ?? null;
+  }), v = _.find((e) => ep(e) === u) ?? null;
   (0, C.useEffect)(() => {
     p(!1);
   }, [u]);
@@ -31745,8 +31804,8 @@ function Fp({ data: e, session: t }) {
         ],
         items: _.slice().reverse(),
         selectedId: u || null,
-        getRowId: (e) => tp(e),
-        getRowProps: (e) => ({ onClick: () => d(tp(e)) }),
+        getRowId: (e) => ep(e),
+        getRowProps: (e) => ({ onClick: () => d(ep(e)) }),
         empty: S()
       }) })] }),
       v ? /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Custody and metadata drilldown" }), /* @__PURE__ */ (0, I.jsxs)(U, { children: [
@@ -31756,7 +31815,7 @@ function Fp({ data: e, session: t }) {
       ] })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
         className: "kv-list",
         children: [
-          /* @__PURE__ */ (0, I.jsxs)(gp, {
+          /* @__PURE__ */ (0, I.jsxs)(hp, {
             label: "Actor",
             children: [
               $(v, ["actor_user_id"]),
@@ -31765,37 +31824,37 @@ function Fp({ data: e, session: t }) {
               ")"
             ]
           }),
-          /* @__PURE__ */ (0, I.jsx)(gp, {
+          /* @__PURE__ */ (0, I.jsx)(hp, {
             label: "Resource",
             children: $(v, ["resource_id"])
           }),
-          /* @__PURE__ */ (0, I.jsx)(gp, {
+          /* @__PURE__ */ (0, I.jsx)(hp, {
             label: "Timestamp",
             children: P(v.timestamp ?? v.created_at)
           }),
-          $(v, ["entry_hash"], "") === "—" ? null : /* @__PURE__ */ (0, I.jsx)(gp, {
+          $(v, ["entry_hash"], "") === "—" ? null : /* @__PURE__ */ (0, I.jsx)(hp, {
             label: "Entry hash",
             children: /* @__PURE__ */ (0, I.jsx)("span", {
               className: "mono",
               children: $(v, ["entry_hash"])
             })
           }),
-          v.metadata && typeof v.metadata == "object" && !Array.isArray(v.metadata) ? $f(v.metadata) ? Object.entries(v.metadata).map(([e, t]) => /* @__PURE__ */ (0, I.jsx)(gp, {
+          v.metadata && typeof v.metadata == "object" && !Array.isArray(v.metadata) ? Qf(v.metadata) ? Object.entries(v.metadata).map(([e, t]) => /* @__PURE__ */ (0, I.jsx)(hp, {
             label: e,
             children: t === null ? "null" : String(t)
-          }, e)) : /* @__PURE__ */ (0, I.jsx)(gp, {
+          }, e)) : /* @__PURE__ */ (0, I.jsx)(hp, {
             label: "Metadata",
             children: /* @__PURE__ */ (0, I.jsx)("span", {
               className: "muted",
               children: "Structured metadata — use View raw for full JSON."
             })
-          }) : /* @__PURE__ */ (0, I.jsx)(gp, {
+          }) : /* @__PURE__ */ (0, I.jsx)(hp, {
             label: "Metadata",
             children: "none"
           }),
           v.metadata && typeof v.metadata == "object" ? (() => {
             let e = JSON.stringify(v.metadata, null, 2), t = e.length > 1800, n = $(v, ["id", "audit_id"], "audit-entry");
-            return /* @__PURE__ */ (0, I.jsx)(vp, {
+            return /* @__PURE__ */ (0, I.jsx)(_p, {
               panelId: "audit-raw-metadata-panel",
               expanded: f,
               onToggle: () => p((e) => !e),
@@ -31806,7 +31865,7 @@ function Fp({ data: e, session: t }) {
               code: e.slice(0, 1800),
               truncated: t,
               downloadLabel: "Download full metadata",
-              onDownload: () => np(`audit-metadata-${n}.json`, v.metadata)
+              onDownload: () => tp(`audit-metadata-${n}.json`, v.metadata)
             });
           })() : null
         ]
@@ -31821,7 +31880,7 @@ function Fp({ data: e, session: t }) {
 function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i = !1 }) {
   let [a, o] = (0, C.useState)(""), [s, c] = (0, C.useState)(!1), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(""), [p, m] = (0, C.useState)(""), [h, g] = (0, C.useState)(""), [_, v] = (0, C.useState)(!1), [y, b] = (0, C.useState)("");
   function x(e, t = "") {
-    m(JSON.stringify(e, null, 2)), g(ip(e)), v(!1), b(t);
+    m(JSON.stringify(e, null, 2)), g(rp(e)), v(!1), b(t);
   }
   let S = i ? n.principal === "staff" && kn(n) : n.role === "soc" && n.principal !== "staff";
   async function w(e, r = {}) {
@@ -31839,24 +31898,24 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       render: (e) => {
         let t = $(e, ["state"]);
         return /* @__PURE__ */ (0, I.jsx)(z, {
-          tone: sp(t),
-          children: lp(t, "Unknown")
+          tone: op(t),
+          children: cp(t, "Unknown")
         });
       }
     },
     {
       key: "target",
       label: "Target group",
-      render: (t) => ep(e, $(t, ["target_group_id"]))
+      render: (t) => $f(e, $(t, ["target_group_id"]))
     },
     {
       key: "pack",
       label: "Pack",
       render: (e) => {
-        let t = Yf(e, ["authorization_pack_status", "overall"], "missing");
+        let t = Jf(e, ["authorization_pack_status", "overall"], "missing");
         return /* @__PURE__ */ (0, I.jsx)(z, {
-          tone: cp(t),
-          children: up(t)
+          tone: sp(t),
+          children: lp(t)
         });
       }
     },
@@ -31864,7 +31923,7 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
       key: "actions",
       label: "Actions",
       render: (e) => {
-        let t = $(e, ["id"], ""), n = $(e, ["state"], ""), r = Yf(e, ["authorization_pack_status", "overall"], "") === "accepted";
+        let t = $(e, ["id"], ""), n = $(e, ["state"], ""), r = Jf(e, ["authorization_pack_status", "overall"], "") === "accepted";
         return /* @__PURE__ */ (0, I.jsxs)("div", {
           className: "stack-tight",
           children: [/* @__PURE__ */ (0, I.jsx)(R, {
@@ -31956,14 +32015,14 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
           body: i ? "Sign in with a staff soc_analyst or soc_lead role to use the governed high-scale execution console." : "Switch the workspace role to soc to use the governed high-scale execution console.",
           actionLabel: i ? "Open staff login" : void 0,
           actionHref: i ? "/internal/admin/login" : void 0
-        }), /* @__PURE__ */ (0, I.jsx)(_p, {
+        }), /* @__PURE__ */ (0, I.jsx)(gp, {
           active: t,
           reason: $(e.state?.kill_switch, ["reason"], "tenant-scoped emergency stop")
         })]
       })]
     });
   }
-  let k = !!(e.state?.kill_switch?.active ?? e.state?.kill_switch?.enabled), ee = $(e.state?.kill_switch, ["reason"], "tenant-scoped emergency stop"), te = e.highScale.filter((e) => bp.includes(Cp(e))).length, re = e.highScale.filter((e) => xp.includes(Cp(e))).length, ie = e.highScale.filter((e) => Sp.includes(Cp(e))).length, ae = Number(e.state?.open_findings ?? e.findings.length) || 0, A = Tp(e.highScale, {
+  let k = !!(e.state?.kill_switch?.active ?? e.state?.kill_switch?.enabled), ee = $(e.state?.kill_switch, ["reason"], "tenant-scoped emergency stop"), te = e.highScale.filter((e) => yp.includes(Cp(e))).length, re = e.highScale.filter((e) => bp.includes(Cp(e))).length, ie = e.highScale.filter((e) => xp.includes(Cp(e))).length, ae = Number(e.state?.open_findings ?? e.findings.length) || 0, A = Tp(e.highScale, {
     killSwitchActive: k,
     runningCount: ie,
     openFindings: ae
@@ -32063,7 +32122,7 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         }),
         " open findings"
       ] }),
-      /* @__PURE__ */ (0, I.jsx)(mp, {
+      /* @__PURE__ */ (0, I.jsx)(pp, {
         message: l,
         error: d
       }),
@@ -32071,39 +32130,55 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         className: "dash-grid",
         children: [/* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Kill switch" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Tenant-scoped emergency stop for governed high-scale adapter runs." })] }), /* @__PURE__ */ (0, I.jsxs)(W, {
           className: "stack-tight",
-          children: [/* @__PURE__ */ (0, I.jsxs)("div", {
-            className: "kv-list",
-            children: [/* @__PURE__ */ (0, I.jsx)(gp, {
-              label: "Status",
-              children: /* @__PURE__ */ (0, I.jsx)(z, {
-                tone: k ? "danger" : "success",
-                children: k ? "Armed" : "Clear"
-              })
-            }), /* @__PURE__ */ (0, I.jsx)(gp, {
-              label: "Reason",
-              children: ee
-            })]
-          }), /* @__PURE__ */ (0, I.jsxs)("div", {
-            className: "row-actions",
-            children: [/* @__PURE__ */ (0, I.jsx)(L, {
-              size: "sm",
-              variant: "danger",
-              loading: a === "kill-on",
-              disabled: a !== "" && a !== "kill-on",
-              onClick: () => void D(!0),
-              children: "Activate"
-            }), /* @__PURE__ */ (0, I.jsx)(L, {
-              size: "sm",
-              variant: "secondary",
-              loading: a === "kill-off",
-              disabled: a !== "" && a !== "kill-off",
-              onClick: () => void D(!1),
-              children: "Clear"
-            })]
-          })]
+          children: [
+            /* @__PURE__ */ (0, I.jsxs)("div", {
+              className: "kv-list",
+              children: [/* @__PURE__ */ (0, I.jsx)(hp, {
+                label: "Status",
+                children: /* @__PURE__ */ (0, I.jsx)(z, {
+                  tone: k ? "danger" : "success",
+                  children: k ? "Armed" : "Clear"
+                })
+              }), /* @__PURE__ */ (0, I.jsx)(hp, {
+                label: "Reason",
+                children: ee
+              })]
+            }),
+            /* @__PURE__ */ (0, I.jsxs)("div", {
+              className: "row-actions",
+              children: [/* @__PURE__ */ (0, I.jsx)(L, {
+                size: "sm",
+                variant: "danger",
+                loading: a === "kill-on",
+                disabled: a !== "" && a !== "kill-on",
+                onClick: () => void D(!0),
+                children: "Activate"
+              }), /* @__PURE__ */ (0, I.jsx)(L, {
+                size: "sm",
+                variant: "secondary",
+                loading: a === "kill-off",
+                disabled: a !== "" && a !== "kill-off",
+                onClick: () => void D(!1),
+                children: "Clear"
+              })]
+            }),
+            /* @__PURE__ */ (0, I.jsxs)("div", {
+              className: "stack-tight",
+              children: [/* @__PURE__ */ (0, I.jsx)("span", {
+                className: "muted text-xs",
+                children: "Validated 7-step arming sequence — custody-recorded on exercise."
+              }), /* @__PURE__ */ (0, I.jsx)("div", {
+                className: "timeline-list",
+                children: Sp.map((e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: t + 1 }), /* @__PURE__ */ (0, I.jsx)("div", { children: /* @__PURE__ */ (0, I.jsx)("strong", {
+                  className: "mono",
+                  children: e
+                }) })] }, e))
+              })]
+            })
+          ]
         })] }), /* @__PURE__ */ (0, I.jsxs)(B, { children: [/* @__PURE__ */ (0, I.jsxs)(V, { children: [/* @__PURE__ */ (0, I.jsx)(H, { children: "Go / No-Go" }), /* @__PURE__ */ (0, I.jsx)(U, { children: "Pre-flight gates computed from the current governed queue and tenant safety state." })] }), /* @__PURE__ */ (0, I.jsx)(W, {
           className: "kv-list",
-          children: A.map((e) => /* @__PURE__ */ (0, I.jsx)(gp, {
+          children: A.map((e) => /* @__PURE__ */ (0, I.jsx)(hp, {
             label: e.label,
             children: /* @__PURE__ */ (0, I.jsx)(z, {
               tone: e.tone,
@@ -32127,7 +32202,7 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         children: /* @__PURE__ */ (0, I.jsx)(Hi, {
           columns: T,
           items: e.highScale,
-          empty: s ? /* @__PURE__ */ (0, I.jsx)(yp, {}) : /* @__PURE__ */ (0, I.jsx)(G, {
+          empty: s ? /* @__PURE__ */ (0, I.jsx)(vp, {}) : /* @__PURE__ */ (0, I.jsx)(G, {
             icon: Te,
             title: "No high-scale requests.",
             body: "Customer requests appear here after intake and authorization-pack review."
@@ -32143,7 +32218,7 @@ function Ip({ data: e, config: t, session: n, onRefresh: r, staffSocSurface: i =
         }) : /* @__PURE__ */ (0, I.jsx)("div", {
           className: "timeline-list",
           children: ce.map((e, t) => /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsx)("span", { children: t + 1 }), /* @__PURE__ */ (0, I.jsxs)("div", { children: [/* @__PURE__ */ (0, I.jsxs)("strong", { children: [
-            lp(e.action),
+            cp(e.action),
             " · ",
             /* @__PURE__ */ (0, I.jsx)("span", {
               className: "mono",
@@ -32235,12 +32310,12 @@ function zp({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "agents" ? /* @__PURE__ */ (0, I.jsx)(Kf, {
+  }) : e === "agents" ? /* @__PURE__ */ (0, I.jsx)(Gf, {
     data: t,
     config: n,
     session: r,
     onRefresh: i
-  }) : Lp.has(e) ? /* @__PURE__ */ (0, I.jsx)(dd, {
+  }) : Lp.has(e) ? /* @__PURE__ */ (0, I.jsx)(ud, {
     route: e,
     data: t,
     config: n,
@@ -32251,7 +32326,7 @@ function zp({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     config: n,
     session: r,
     onRefresh: i
-  }) : Rp.has(e) ? /* @__PURE__ */ (0, I.jsx)(qf, {
+  }) : Rp.has(e) ? /* @__PURE__ */ (0, I.jsx)(Kf, {
     route: e,
     data: t,
     config: n,
@@ -32267,7 +32342,7 @@ function zp({ route: e, data: t, config: n, session: r, onRefresh: i }) {
     config: n,
     session: r,
     onRefresh: i
-  }) : e === "report-detail" ? /* @__PURE__ */ (0, I.jsx)(fd, {
+  }) : e === "report-detail" ? /* @__PURE__ */ (0, I.jsx)(dd, {
     data: t,
     config: n,
     session: r,

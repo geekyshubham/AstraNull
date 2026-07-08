@@ -39,6 +39,7 @@ npm-debug.log*
 debug.log
 
 # AI orchestration skills (local dev only, not product source)
+.kiro/
 .agents/
 grokorches-skill.md
 .grok-prompts/

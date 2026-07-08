@@ -1631,6 +1631,19 @@ export function SocConsolePage({
               <Button size="sm" variant="danger" loading={busy === 'kill-on'} disabled={busy !== '' && busy !== 'kill-on'} onClick={() => void setKillSwitch(true)}>Activate</Button>
               <Button size="sm" variant="secondary" loading={busy === 'kill-off'} disabled={busy !== '' && busy !== 'kill-off'} onClick={() => void setKillSwitch(false)}>Clear</Button>
             </div>
+            <div className="stack-tight">
+              <span className="muted text-xs">Validated 7-step arming sequence — custody-recorded on exercise.</span>
+              <div className="timeline-list">
+                {KILL_SWITCH_VALIDATED_SEQUENCE.map((step, index) => (
+                  <div key={step}>
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong className="mono">{step}</strong>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </CardContent>
         </Card>
         <Card>

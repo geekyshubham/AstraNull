@@ -13,8 +13,8 @@
   <script>
     (function () {
       try {
+        // Prototype is dark-first: default to dark unless the user explicitly chose light.
         var t = localStorage.getItem('astranull.theme');
-        if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
         if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
       } catch (e) {}
     })();

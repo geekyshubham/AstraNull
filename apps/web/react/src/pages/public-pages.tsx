@@ -235,10 +235,10 @@ function PublicShell({
           </a>
           {eyebrow ? <span className="public-topnav-eyebrow eyebrow">{eyebrow}</span> : null}
           <nav className="public-topnav-actions" aria-label="Account access">
+            <AnchorButton href={loginHref} variant={activeNav === 'login' ? 'default' : 'ghost'} size="sm">Log in</AnchorButton>
             {signupEnabled ? (
-              <AnchorButton href="/signup" variant={activeNav === 'signup' ? 'default' : 'secondary'} size="sm">Sign up</AnchorButton>
+              <AnchorButton href="/signup" variant={activeNav === 'login' ? 'secondary' : 'default'} size="sm">Request access</AnchorButton>
             ) : null}
-            <AnchorButton href={loginHref} variant={activeNav === 'login' ? 'default' : 'secondary'} size="sm">Log in</AnchorButton>
           </nav>
         </div>
       </header>
@@ -485,7 +485,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   });
 
   return (
-    <PublicShell eyebrow="" loginHref={loginUrl} signupEnabled={signupEnabled}>
+    <PublicShell loginHref={loginUrl} signupEnabled={signupEnabled}>
       <main className="public-wrap">
         <p className="auth-field-help">
           <a href="#how">Skip to how it works</a>

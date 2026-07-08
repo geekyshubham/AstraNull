@@ -138,12 +138,6 @@ function canRunTest(state: string) {
   return RUN_ENABLED_STATES.has(state.trim().toLowerCase());
 }
 
-function targetEligibility(item: DataItem) {
-  const explicit = getString(item, ['eligibility'], '');
-  if (explicit !== '—' && explicit) return explicit;
-  return canRunTest(targetVerificationState(item)) ? 'eligible' : 'not_eligible';
-}
-
 /** Map a DNS challenge record onto a §7.1 verification-chip state. */
 function challengeChipState(challenge: DataItem | null, verified?: boolean) {
   if (!challenge) return 'unverified';
@@ -272,6 +266,16 @@ export function TargetGroupDetailView({
   const targetCount = String(entity.target_count ?? targets.length);
   const loaState = getString(entity, ['loa_state', 'loa_status'], getString(entity.loa as DataItem | undefined, ['state'], 'required'));
   const loaSigned = loaState.toLowerCase() === 'signed';
+  // KPI row (matches prototype screen-target-group-detail): ownership + validation mode read
+  // straight off the target-group API entity (both fields exist in the dev store and Postgres,
+  // defaulting to 'unverified'/'agent_assisted').
+  const ownershipStatus = getString(entity, ['ownership_status'], 'unverified');
+  const ownershipTone = ['agent_verified', 'dns_verified', 'user_confirmed', 'verified'].includes(ownershipStatus.trim().toLowerCase())
+    ? 'success'
+    : ownershipStatus.trim().toLowerCase().includes('pending')
+      ? 'warn'
+      : 'muted';
+  const validationMode = getString(entity, ['validation_mode'], 'agent_assisted');
   const ladderSteps = Array.isArray(ladder?.steps) ? ladder.steps as DataItem[] : [];
 
   // First customer-runnable safe check — the concrete check a bounded Run test executes.
@@ -567,9 +571,9 @@ export function TargetGroupDetailView({
   }
 
   const targetColumns: TableColumn<DataItem>[] = [
-    { key: 'target', label: 'Target', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
     { key: 'kind', label: 'Kind', render: (item) => <span className="mono">{getString(item, ['kind'], '—')}</span> },
     { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
+    { key: 'expected', label: 'Expected behavior', render: (item) => <span className="mono">{getString(item, ['expected_behavior', 'expected'], '—')}</span> },
     {
       key: 'verification',
       label: 'Verification',
@@ -581,17 +585,17 @@ export function TargetGroupDetailView({
       }
     },
     {
-      key: 'eligibility',
-      label: 'Eligibility',
+      key: 'last_probe',
+      label: 'Last probe',
       render: (item) => {
-        const eligibility = targetEligibility(item);
-        const notEligible = eligibility.startsWith('not');
-        const reason = getString(item, ['eligibility_reason'], '');
-        return (
-          <Badge tone={notEligible ? 'warn' : 'success'} title={reason !== '—' && reason ? `Eligibility ${eligibility}: ${reason}` : `Eligibility ${eligibility} from target API`}>
-            {eligibility}
-          </Badge>
-        );
+        // Prototype shows the last correlated verdict per target. The target-group API does not
+        // expose a per-target probe verdict yet, so render it only when present and fall back to
+        // an explicit em dash (empty is correct — never fabricate a verdict badge).
+        const probe = getString(item, ['last_probe', 'last_verdict'], '');
+        if (!probe) return <span className="muted">—</span>;
+        const key = probe.trim().toLowerCase();
+        const tone = key === 'pass' ? 'success' : key === 'gap' || key === 'fail' ? 'danger' : 'warn';
+        return <Badge tone={tone} title={`Last probe verdict ${probe} from target API`}>{probe}</Badge>;
       }
     },
     {
@@ -715,21 +719,28 @@ export function TargetGroupDetailView({
       </ol>
       ) : null}
 
-      {/* (2) KPI row — Group id · Env · Criticality · Total targets · LOA state. */}
+      {/* (2) KPI row — Targets · Ownership · LOA · Validation mode (matches prototype screen-target-group-detail). */}
       <div className="kpi-row">
-        <div className="kpi-cell"><div className="kpi-label">Group id</div><div className="kpi-value mono">{entityId}</div></div>
-        <div className="kpi-cell"><div className="kpi-label">Environment</div><div className="kpi-value">{getString(entity, ['environment_id'], '—')}</div></div>
-        <div className="kpi-cell"><div className="kpi-label">Criticality</div><div className="kpi-value">{getString(entity, ['criticality', 'business_criticality'], '—')}</div></div>
         <div className="kpi-cell">
-          <div className="kpi-label">Total targets</div>
+          <div className="kpi-label">Targets</div>
           <div className="kpi-value">{targetCount}</div>
           <div className="kpi-delta">{verifiedTargetCount} verified · {Math.max(0, targets.length - verifiedTargetCount)} unverified</div>
+        </div>
+        <div className="kpi-cell">
+          <div className="kpi-label">Ownership</div>
+          <div className="kpi-value" style={{ fontSize: '18px' }}>
+            <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
+          </div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">LOA</div>
           <div className="kpi-value" style={{ fontSize: '18px' }}>
             <Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge>
           </div>
+        </div>
+        <div className="kpi-cell">
+          <div className="kpi-label">Validation mode</div>
+          <div className="kpi-value" style={{ fontSize: '18px' }}>{validationMode}</div>
         </div>
       </div>
 

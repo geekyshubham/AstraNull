@@ -298,14 +298,14 @@ export function TargetDetailView({
         <Card>
           <CardHeader><CardTitle>WAF posture</CardTitle><CardDescription>Per-target WAF asset from hydrator API.</CardDescription></CardHeader>
           <CardContent>
-            <div className="kpi-inline">
-              <div className="kpi"><div className="kpi-label">Posture</div><div className="kpi-value">{getString(wafPosture, ['posture', 'status'], '—')}</div></div>
-              <div className="kpi"><div className="kpi-label">Drift</div><div className="kpi-value">{getString(wafPosture, ['drift_reason'], 'none')}</div></div>
-              <div className="kpi"><div className="kpi-label">Validation</div><div className="kpi-value">{getString(wafPosture?.validation as DataItem | undefined, ['verdict'], '—')}</div></div>
-              <div className="kpi"><div className="kpi-label">Connector</div><div className="kpi-value">{getString(wafPosture?.connector as DataItem | undefined, ['state'], '—')}</div></div>
-              <div className="kpi"><div className="kpi-label">Fingerprint</div><div className="kpi-value">{getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}</div></div>
-              <div className="kpi"><div className="kpi-label">Marker rules</div><div className="kpi-value">{String(wafPosture?.marker_rules ?? '—')}</div></div>
-              <div className="kpi"><div className="kpi-label">Origin bypass</div><div className="kpi-value">{getString(wafPosture?.origin_bypass as DataItem | undefined, ['state'], '—')}</div></div>
+            <div className="kpi-row">
+              <div className="kpi-cell"><div className="kpi-label">Posture</div><div className="kpi-value">{getString(wafPosture, ['posture', 'status'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Drift</div><div className="kpi-value">{getString(wafPosture, ['drift_reason'], 'none')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Validation</div><div className="kpi-value">{getString(wafPosture?.validation as DataItem | undefined, ['verdict'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Connector</div><div className="kpi-value">{getString(wafPosture?.connector as DataItem | undefined, ['state'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Fingerprint</div><div className="kpi-value">{getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Marker rules</div><div className="kpi-value">{String(wafPosture?.marker_rules ?? '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Origin bypass</div><div className="kpi-value">{getString(wafPosture?.origin_bypass as DataItem | undefined, ['state'], '—')}</div></div>
             </div>
             <p className="muted">{getString(wafPosture, ['notes'], getString(wafPosture, ['summary'], 'No WAF notes returned.'))}</p>
             <pre className="codeblock">{JSON.stringify({

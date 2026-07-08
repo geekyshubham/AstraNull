@@ -2613,7 +2613,10 @@ export function ReportsPage({
 
   return (
     <div className="content">
-      <PageHeader route="reports" />
+      <PageHeader
+        route="reports"
+        actions={<Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>}
+      />
       <PageContextSummary>
         <span className="tabular-nums">{reports.length}</span> reports ·{' '}
         <span className="tabular-nums">{reportExports}</span> custody exports recorded
@@ -2964,7 +2967,11 @@ export function SettingsPage({
 
   return (
     <div className="content">
-      <PageHeader route="settings" eyebrow="Tenant configuration" />
+      <PageHeader
+        route="settings"
+        eyebrow="Tenant configuration"
+        actions={<Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>}
+      />
       <PageContextSummary>
         {getString(tenant ?? {}, ['name'], 'Organization')} ·{' '}
         <span className="tabular-nums">{data.secrets.length}</span> vault secrets ·{' '}
@@ -3490,18 +3497,21 @@ export function EnvironmentsPage({
       <PageHeader
         route="environments"
         actions={
-          <Button
-            variant="default"
-            size="sm"
-            disabled={busy !== ''}
-            onClick={() => {
-              const el = document.querySelector('#environments-create');
-              if (el instanceof HTMLDetailsElement) el.open = true;
-              el?.scrollIntoView({ behavior: 'smooth' });
-            }}
-          >
-            Declare environment
-          </Button>
+          <>
+            <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>
+            <Button
+              variant="default"
+              size="sm"
+              disabled={busy !== ''}
+              onClick={() => {
+                const el = document.querySelector('#environments-create');
+                if (el instanceof HTMLDetailsElement) el.open = true;
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }}
+            >
+              Declare environment
+            </Button>
+          </>
         }
       />
       {(message || error) && (
@@ -3788,18 +3798,21 @@ export function PolicyPage({
         title="Scheduler"
         description="Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
         actions={
-          <Button
-            variant="default"
-            size="sm"
-            disabled={busy !== ''}
-            onClick={() => {
-              const el = document.querySelector('#test-policies-create');
-              if (el instanceof HTMLDetailsElement) el.open = true;
-              el?.scrollIntoView({ behavior: 'smooth' });
-            }}
-          >
-            New schedule
-          </Button>
+          <>
+            <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>
+            <Button
+              variant="default"
+              size="sm"
+              disabled={busy !== ''}
+              onClick={() => {
+                const el = document.querySelector('#test-policies-create');
+                if (el instanceof HTMLDetailsElement) el.open = true;
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }}
+            >
+              New schedule
+            </Button>
+          </>
         }
       />
       <div className="kpi-row">
@@ -4142,7 +4155,28 @@ export function IntegrationPage({
 
   return (
     <div className="content">
-      <PageHeader route="integrations" eyebrow="Connectors" />
+      <PageHeader
+        route="integrations"
+        eyebrow="Connectors"
+        actions={
+          <>
+            <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>
+            {connectorsEnabled ? (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  const el = document.querySelector('#integrations-create-connector');
+                  if (el instanceof HTMLDetailsElement) el.open = true;
+                  el?.scrollIntoView({ behavior: 'smooth' });
+                }}
+              >
+                Add connector
+              </Button>
+            ) : null}
+          </>
+        }
+      />
       <PageContextSummary>
         <span className="tabular-nums">{data.connectors.length}</span> connectors ·{' '}
         <span className="tabular-nums">{data.secrets.length}</span> secret refs · WAF posture{' '}
@@ -4842,7 +4876,11 @@ export function StaffSurfacePage({
   ];
   return (
     <div className="content">
-      <PageHeader route={route} eyebrow={route === 'internal-soc' ? 'Staff SOC surface' : 'Staff-only surface'} />
+      <PageHeader
+        route={route}
+        eyebrow={route === 'internal-soc' ? 'Staff SOC surface' : 'Staff-only surface'}
+        actions={<Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => void onRefresh()}>Refresh</Button>}
+      />
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       <PageContextSummary>
         Review queue <span className="tabular-nums">{queueDepth}</span> ·{' '}

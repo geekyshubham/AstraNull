@@ -1097,7 +1097,7 @@ function RunDetailView({
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>Correlation</CardTitle>
+          <CardTitle>Correlation matrix</CardTitle>
           <CardDescription>Verdict = probe ∧ agent. Truth table and verdict explanation from observed facts.</CardDescription>
         </CardHeader>
         <CardContent>

@@ -5,7 +5,6 @@ import { Button } from '../ui/button';
 import { EmptyState } from '../ui/empty-state';
 import { Select } from '../ui/select';
 import type { DataItem } from '../../lib/types';
-import { buildDetailHref } from '../../lib/route-params';
 
 type StatusFilter = 'open' | 'closed' | 'accepted' | 'all';
 type SortKey = 'severity' | 'recent' | 'oldest' | 'sla' | 'title';
@@ -170,7 +169,11 @@ export function FindingsListView({
 
   function openFinding(id: string) {
     if (!id) return;
-    window.location.hash = buildDetailHref('finding-detail', id).replace(/^#/, '');
+    // Navigate with the bare `route?id=...` fragment. buildDetailHref returns
+    // `${pathname}${search}#finding-detail?id=...`; assigning that whole string to
+    // location.hash nests it inside the fragment (`#/app#finding-detail?id=`), which the
+    // hash router cannot resolve and silently falls back to the dashboard route.
+    window.location.hash = `finding-detail?id=${encodeURIComponent(id)}`;
   }
 
   return (
