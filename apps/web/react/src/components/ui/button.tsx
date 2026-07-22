@@ -25,16 +25,16 @@ const buttonPrimitiveStyles = `
   border-color: var(--fg);
 }
 [data-ui='button'].btn-danger {
-  border-color: color-mix(in oklab, var(--danger), var(--bg) 18%);
-  background: color-mix(in oklab, var(--danger), var(--bg) 18%);
+  border-color: var(--danger-fill);
+  background: var(--danger-fill);
 }
 [data-ui='button'].btn-danger:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--danger), var(--fg) 8%);
-  border-color: color-mix(in oklab, var(--danger), var(--fg) 8%);
+  background: var(--danger-fill-hover);
+  border-color: var(--danger-fill-hover);
 }
 [data-ui='button'].btn-danger:active:not(:disabled) {
-  background: color-mix(in oklab, var(--danger), var(--bg) 10%);
-  border-color: color-mix(in oklab, var(--danger), var(--bg) 10%);
+  background: var(--danger-fill-active);
+  border-color: var(--danger-fill-active);
 }
 @media (prefers-reduced-motion: reduce) {
   [data-ui='button'].btn {

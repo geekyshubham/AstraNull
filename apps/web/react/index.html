@@ -6,8 +6,8 @@
   <title>AstraNull</title>
   <meta name="description" content="AstraNull — no-access-first DDoS readiness validation. React + TypeScript + Vite readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
 
   <!-- Early theme init (light/dark) so there is no flash before React boots. -->
   <script>
@@ -20,11 +20,11 @@
     })();
   </script>
 
-  <!-- Space Grotesk · Inter · JetBrains Mono -->
-  <!-- impeccable-disable overused-font -- Space Grotesk, Inter, and JetBrains Mono are the committed AstraNull brand typefaces declared in PRODUCT.md + DESIGN.md. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
+  <!-- Geist · JetBrains Mono — the AstraNull "Observatory" typefaces (display+body = Geist; identity/mono = JetBrains Mono) -->
+  <!-- impeccable-disable overused-font -- Geist and JetBrains Mono are the committed AstraNull "Observatory" brand typefaces. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!--
     Boot styles. A minimal token subset (values identical to src/styles.css) paints
@@ -34,26 +34,27 @@
   -->
   <style>
     :root {
-      --boot-bg: #000;
-      --boot-fg: #f0f0f0;
-      --boot-muted: #7e8386;
-      --boot-border: rgba(214, 235, 253, .19);
-      --boot-accent: #ff801f;
-      --boot-font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+      --boot-bg: oklch(15.5% 0.005 255);
+      --boot-fg: oklch(96% 0.003 250);
+      --boot-muted: oklch(70% 0.012 250);
+      --boot-border: oklch(96% 0.003 250 / .10);
+      --boot-accent: oklch(65% 0.20 28);
+      --boot-font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
       --boot-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
     }
     [data-theme="light"] {
-      --boot-bg: #fff;
-      --boot-fg: #0b0d0f;
-      --boot-muted: #5b6066;
-      --boot-border: rgba(9, 20, 36, .14);
+      --boot-bg: oklch(97.5% 0.003 250);
+      --boot-fg: oklch(26% 0.015 260);
+      --boot-muted: oklch(48% 0.016 260);
+      --boot-border: oklch(26% 0.03 260 / .14);
+      --boot-accent: oklch(55% 0.21 28);
     }
     html, body {
       margin: 0;
       min-height: 100%;
       background: var(--boot-bg);
       color: var(--boot-fg);
-      font-family: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-family: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }

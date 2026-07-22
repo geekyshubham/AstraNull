@@ -734,8 +734,10 @@ function DetailKvMonoField({ label, value, compact }: { label: string; value: st
 }
 
 function DetailCodeBlock({ label, children }: { label: string; children: string }) {
+  // tabIndex=0 makes the horizontally-scrollable <pre> keyboard-accessible
+  // (WCAG 2.1.1 / axe scrollable-region-focusable); aria-label already names it.
   return (
-    <pre className="codeblock" aria-label={label}>
+    <pre className="codeblock" aria-label={label} tabIndex={0}>
       {children}
     </pre>
   );
@@ -835,10 +837,16 @@ function useEntityDetail<T extends DataItem>(
   const [detail, setDetail] = useState<T | null>(fallback);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(enabled && Boolean(path));
+  // `fallback` is derived (data.<list>.find(...)) so it is a NEW object identity on
+  // every render. Keeping it in the effect deps re-fires the fetch on any re-render and
+  // cancels the in-flight request, so the detail can starve and never resolve under
+  // render churn. Read it through a ref instead — deps below intentionally omit it.
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
 
   useEffect(() => {
     if (!enabled || !path) {
-      setDetail(fallback);
+      setDetail(fallbackRef.current);
       setLoading(false);
       return;
     }
@@ -851,7 +859,7 @@ function useEntityDetail<T extends DataItem>(
       })
       .catch((err) => {
         if (!cancelled) {
-          setDetail(fallback);
+          setDetail(fallbackRef.current);
           setError(err instanceof Error ? err.message : 'Could not load entity detail.');
         }
       })
@@ -861,7 +869,7 @@ function useEntityDetail<T extends DataItem>(
     return () => {
       cancelled = true;
     };
-  }, [config, session, path, enabled, fallback]);
+  }, [config, session, path, enabled]);
 
   return { detail, error, loading };
 }
@@ -880,10 +888,14 @@ function useListBackedDetail<T extends DataItem>(
   const [loading, setLoading] = useState(enabled && Boolean(entityId));
   const tenantId = options.tenantId;
   const staffSoc = Boolean(options.staffSoc);
+  // See useEntityDetail: `fallback` has a fresh identity every render, so it must not
+  // gate the fetch effect — read it through a ref and omit it from the deps below.
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
 
   useEffect(() => {
     if (!enabled || !entityId) {
-      setDetail(fallback);
+      setDetail(fallbackRef.current);
       setLoading(false);
       return;
     }
@@ -900,14 +912,14 @@ function useListBackedDetail<T extends DataItem>(
           ? (payload as { items: T[] }).items
           : [];
         const match = items.find((item) => getString(item, ['id'], '') === entityId) ?? null;
-        setDetail(match ?? fallback);
-        if (!match && !fallback) {
+        setDetail(match ?? fallbackRef.current);
+        if (!match && !fallbackRef.current) {
           setError('Entity not found in your workspace lists.');
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setDetail(fallback);
+          setDetail(fallbackRef.current);
           setError(err instanceof Error ? err.message : 'Could not load entity detail.');
         }
       })
@@ -917,7 +929,7 @@ function useListBackedDetail<T extends DataItem>(
     return () => {
       cancelled = true;
     };
-  }, [config, session, listPath, enabled, entityId, fallback, staffSoc, tenantId]);
+  }, [config, session, listPath, enabled, entityId, staffSoc, tenantId]);
 
   return { detail, error, loading };
 }

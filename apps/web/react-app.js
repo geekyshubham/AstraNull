@@ -11420,7 +11420,7 @@ var or = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, sr = Be, cr 
   e.Fragment = n, e.jsx = r, e.jsxs = r;
 })), L = (/* @__PURE__ */ o(((e, t) => {
   t.exports = lr();
-})))(), ur = "ui-button-primitive-styles", dr = "\n[data-ui='button'].btn {\n  font-family: var(--font-body);\n  cursor: pointer;\n}\n[data-ui='button'].btn:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n[data-ui='button'].btn-default:hover:not(:disabled) {\n  background: var(--fg);\n  color: var(--bg);\n  border-color: var(--fg);\n  box-shadow: 0 0 0 4px color-mix(in oklab, var(--fg), transparent 82%);\n}\n[data-ui='button'].btn-default:active:not(:disabled) {\n  background: var(--fg);\n  color: var(--bg);\n  border-color: var(--fg);\n}\n[data-ui='button'].btn-danger {\n  border-color: color-mix(in oklab, var(--danger), var(--bg) 18%);\n  background: color-mix(in oklab, var(--danger), var(--bg) 18%);\n}\n[data-ui='button'].btn-danger:hover:not(:disabled) {\n  background: color-mix(in oklab, var(--danger), var(--fg) 8%);\n  border-color: color-mix(in oklab, var(--danger), var(--fg) 8%);\n}\n[data-ui='button'].btn-danger:active:not(:disabled) {\n  background: color-mix(in oklab, var(--danger), var(--bg) 10%);\n  border-color: color-mix(in oklab, var(--danger), var(--bg) 10%);\n}\n@media (prefers-reduced-motion: reduce) {\n  [data-ui='button'].btn {\n    transition: none;\n  }\n  [data-ui='button'].btn:active:not(:disabled) {\n    transform: none;\n  }\n}\n";
+})))(), ur = "ui-button-primitive-styles", dr = "\n[data-ui='button'].btn {\n  font-family: var(--font-body);\n  cursor: pointer;\n}\n[data-ui='button'].btn:focus-visible {\n  outline: none;\n  box-shadow: var(--focus-ring);\n}\n[data-ui='button'].btn-default:hover:not(:disabled) {\n  background: var(--fg);\n  color: var(--bg);\n  border-color: var(--fg);\n  box-shadow: 0 0 0 4px color-mix(in oklab, var(--fg), transparent 82%);\n}\n[data-ui='button'].btn-default:active:not(:disabled) {\n  background: var(--fg);\n  color: var(--bg);\n  border-color: var(--fg);\n}\n[data-ui='button'].btn-danger {\n  border-color: var(--danger-fill);\n  background: var(--danger-fill);\n}\n[data-ui='button'].btn-danger:hover:not(:disabled) {\n  background: var(--danger-fill-hover);\n  border-color: var(--danger-fill-hover);\n}\n[data-ui='button'].btn-danger:active:not(:disabled) {\n  background: var(--danger-fill-active);\n  border-color: var(--danger-fill-active);\n}\n@media (prefers-reduced-motion: reduce) {\n  [data-ui='button'].btn {\n    transition: none;\n  }\n  [data-ui='button'].btn:active:not(:disabled) {\n    transform: none;\n  }\n}\n";
 function fr() {
   if (typeof document > "u" || document.getElementById(ur)) return;
   let e = document.createElement("style");
@@ -14148,6 +14148,9 @@ function Ji({ item: e, index: t, columns: n, rowId: r, isSelected: i, rowProps: 
 function Yi({ columns: e, className: t, children: n }) {
   return /* @__PURE__ */ (0, L.jsxs)(L.Fragment, { children: [/* @__PURE__ */ (0, L.jsx)("style", { children: Ki }), /* @__PURE__ */ (0, L.jsx)("div", {
     className: mn("table-wrap", t),
+    tabIndex: 0,
+    role: "region",
+    "aria-label": "Data table, scrollable",
     children: /* @__PURE__ */ (0, L.jsxs)("table", {
       className: "data-table",
       children: [/* @__PURE__ */ (0, L.jsx)(qi, { columns: e }), n]
@@ -21815,7 +21818,11 @@ function hl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
           onSubmit: (e) => {
             e.preventDefault();
             let t = String(new FormData(e.currentTarget).get("support_owner") ?? "").trim();
-            !d || !t || window.confirm(`Assign support owner "${t}" for tenant ${d}?`) && ne(`support-owner-${d}`, () => I(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}`, {
+            if (!d || !t) {
+              u("Select a tenant before assigning a support owner.");
+              return;
+            }
+            window.confirm(`Assign support owner "${t}" for tenant ${d}?`) && ne(`support-owner-${d}`, () => I(n, r, `/internal/admin/tenants/${encodeURIComponent(d)}`, {
               method: "PATCH",
               body: {
                 support_owner: t,
@@ -21844,6 +21851,7 @@ function hl({ route: e, data: t, config: n, session: r, onRefresh: i }) {
               children: /* @__PURE__ */ (0, L.jsx)(R, {
                 type: "submit",
                 loading: a.startsWith("support-owner-"),
+                disabled: !d,
                 children: "Assign support owner"
               })
             })
@@ -21994,24 +22002,24 @@ function Ml({ loadError: e, message: t, error: n }) {
     children: n || t
   }) : null] });
 }
-function Nl({ title: e, onClose: t, children: n, wide: r = !0 }) {
-  let i = (0, C.useId)(), a = (0, C.useRef)(null);
+function Nl({ title: e, onClose: t, children: n, error: r, wide: i = !0 }) {
+  let a = (0, C.useId)(), o = (0, C.useRef)(null);
   return Tl(), (0, C.useEffect)(() => {
-    let e = a.current;
+    let e = o.current;
     return e && !e.open && e.showModal(), () => {
       e?.open && e.close();
     };
   }, []), /* @__PURE__ */ (0, L.jsxs)("dialog", {
-    ref: a,
-    className: `modal-confirm detail-modal${r ? " detail-modal-wide" : ""}`,
-    "aria-labelledby": i,
+    ref: o,
+    className: `modal-confirm detail-modal${i ? " detail-modal-wide" : ""}`,
+    "aria-labelledby": a,
     onCancel: (e) => {
       e.preventDefault(), t();
     },
     children: [/* @__PURE__ */ (0, L.jsxs)("div", {
       className: "detail-modal-head",
       children: [/* @__PURE__ */ (0, L.jsx)("h3", {
-        id: i,
+        id: a,
         children: e
       }), /* @__PURE__ */ (0, L.jsx)(R, {
         size: "sm",
@@ -22020,9 +22028,13 @@ function Nl({ title: e, onClose: t, children: n, wide: r = !0 }) {
         "aria-label": "Close dialog",
         children: "Close"
       })]
-    }), /* @__PURE__ */ (0, L.jsx)("div", {
+    }), /* @__PURE__ */ (0, L.jsxs)("div", {
       className: "detail-modal-body",
-      children: n
+      children: [r ? /* @__PURE__ */ (0, L.jsx)("div", {
+        className: "form-banner error",
+        role: "alert",
+        children: r
+      }) : null, n]
     })]
   });
 }
@@ -22101,20 +22113,22 @@ function Pl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   function Ue(e = "fqdn") {
     he(e), p(""), d(""), pe(!0);
   }
-  async function We(e, n, o) {
-    let s = n.trim();
-    if (!s) {
+  async function We(e, n, o, s) {
+    let c = n.trim();
+    if (!c) {
       p("A target value is required."), d("");
       return;
     }
+    let u = s ? Object.fromEntries(Object.entries(s).filter(([, e]) => e && e.trim())) : void 0;
     l(`add-target-${e}`), p(""), d("");
     try {
       await I(r, i, `/v1/target-groups/${encodeURIComponent(t)}/targets`, {
         method: "POST",
         body: {
           kind: e,
-          value: s,
-          expected_behavior: o || null
+          value: c,
+          expected_behavior: o || null,
+          ...u && Object.keys(u).length > 0 ? { metadata: u } : {}
         }
       }), d("Target declared."), pe(!1), await a();
     } catch (e) {
@@ -22126,12 +22140,12 @@ function Pl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
   function Ge(e) {
     e.preventDefault();
     let t = new FormData(e.currentTarget);
-    We("fqdn", String(t.get("value") ?? ""), String(t.get("expected_behavior") ?? ""));
+    We("fqdn", String(t.get("value") ?? ""), String(t.get("expected_behavior") ?? ""), { agent_id: String(t.get("agent_id") ?? "") });
   }
   function Ke(e) {
     e.preventDefault();
     let t = new FormData(e.currentTarget), n = String(t.get("value") ?? "").trim(), r = String(t.get("port") ?? "").trim();
-    We("ip", r ? `${n}:${r}` : n, String(t.get("expected_behavior") ?? ""));
+    We("ip", r ? `${n}:${r}` : n, String(t.get("expected_behavior") ?? ""), { notes: String(t.get("notes") ?? "") });
   }
   async function qe(e) {
     await He(`dns-issue-${t}`, async () => {
@@ -22789,6 +22803,7 @@ function Pl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       re ? /* @__PURE__ */ (0, L.jsx)(Nl, {
         title: `Provider inventory · ${re}`,
         onClose: () => ie(null),
+        error: f,
         children: /* @__PURE__ */ (0, L.jsxs)("div", {
           className: "inv-body",
           children: [/* @__PURE__ */ (0, L.jsx)(Xi, {
@@ -22842,6 +22857,7 @@ function Pl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       fe ? /* @__PURE__ */ (0, L.jsxs)(Nl, {
         title: "Onboard a target",
         onClose: () => pe(!1),
+        error: f,
         children: [
           /* @__PURE__ */ (0, L.jsx)(Qi, {
             value: me,
@@ -23148,6 +23164,7 @@ function Pl({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
       M ? /* @__PURE__ */ (0, L.jsx)(Nl, {
         title: `Sign LOA · ${Y(e, ["name"], t)}`,
         onClose: () => ue(!1),
+        error: f,
         children: /* @__PURE__ */ (0, L.jsxs)("form", {
           className: "loa-body product-form",
           onSubmit: (e) => void et(e),
@@ -23607,6 +23624,9 @@ function Hl({ entityId: e, config: t, session: n, onRefresh: r }) {
         className: "stack-tight",
         children: [/* @__PURE__ */ (0, L.jsx)("div", {
           className: "table-wrap",
+          tabIndex: 0,
+          role: "region",
+          "aria-label": "Ownership and eligibility, scrollable",
           children: /* @__PURE__ */ (0, L.jsx)("table", {
             className: "data-table",
             children: /* @__PURE__ */ (0, L.jsxs)("tbody", { children: [
@@ -24369,10 +24389,20 @@ function ru({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                 /* @__PURE__ */ (0, L.jsx)(R, {
                   size: "sm",
                   variant: "ghost",
+                  loading: c === "retest",
                   onClick: () => void E("retest", async () => {
                     let t = Bo(e);
                     if (!t) throw Error("Retest context missing from finding API.");
-                    t.kind === "safe-run" && await I(r, i, "/v1/test-runs", {
+                    if (t.kind === "waf-validation") await I(r, i, "/v1/waf/validations", {
+                      method: "POST",
+                      body: {
+                        waf_asset_id: t.wafAssetId,
+                        modes: ["marker"]
+                      }
+                    });
+                    else if (t.kind === "cve-retest") await I(r, i, `/v1/waf/cve-pipeline/${encodeURIComponent(t.pipelineId)}/retest`, { method: "POST" });
+                    else if (t.kind === "cve-retest-url") await I(r, i, t.retestUrl, { method: "POST" });
+                    else if (t.kind === "safe-run") await I(r, i, "/v1/test-runs", {
                       method: "POST",
                       body: {
                         check_id: t.checkId,
@@ -24380,6 +24410,7 @@ function ru({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                         target_id: Xl(e, ["target_id"], "")
                       }
                     });
+                    else throw Error("Unsupported retest kind for this finding.");
                   }, "Retest started."),
                   children: "Retest"
                 })
@@ -24439,7 +24470,7 @@ function ru({ entity: e, entityId: t, data: n, config: r, session: i, onRefresh:
                   }), /* @__PURE__ */ (0, L.jsx)(B, {
                     tone: $l(b.remStateClass, b.remState),
                     title: `Remediation state ${b.remState} from finding API`,
-                    children: Yl(b.remState) || "—"
+                    children: b.remState || "—"
                   })]
                 }),
                 /* @__PURE__ */ (0, L.jsxs)("div", {
@@ -24960,6 +24991,7 @@ function Ku({ label: e, children: t }) {
   return /* @__PURE__ */ (0, L.jsx)("pre", {
     className: "codeblock",
     "aria-label": e,
+    tabIndex: 0,
     children: t
   });
 }
@@ -25006,19 +25038,49 @@ function Ju({ hasDetails: e, status: t, error: n, fqdn: r, ip: i }) {
   ] }) : null;
 }
 function Yu(e, t, n, r, i) {
-  let [a, o] = (0, C.useState)(i), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(e && !!r);
-  return (0, C.useEffect)(() => {
+  let [a, o] = (0, C.useState)(i), [s, c] = (0, C.useState)(""), [l, u] = (0, C.useState)(e && !!r), d = (0, C.useRef)(i);
+  return d.current = i, (0, C.useEffect)(() => {
     if (!e || !r) {
-      o(i), u(!1);
+      o(d.current), u(!1);
+      return;
+    }
+    let i = !1;
+    return u(!0), c(""), I(t, n, r).then((e) => {
+      i || o(e);
+    }).catch((e) => {
+      i || (o(d.current), c(e instanceof Error ? e.message : "Could not load entity detail."));
+    }).finally(() => {
+      i || u(!1);
+    }), () => {
+      i = !0;
+    };
+  }, [
+    t,
+    n,
+    r,
+    e
+  ]), {
+    detail: a,
+    error: s,
+    loading: l
+  };
+}
+function Xu(e, t, n, r, i, a, o = {}) {
+  let [s, c] = (0, C.useState)(a), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(e && !!i), p = o.tenantId, m = !!o.staffSoc, h = (0, C.useRef)(a);
+  return h.current = a, (0, C.useEffect)(() => {
+    if (!e || !i) {
+      c(h.current), f(!1);
       return;
     }
     let a = !1;
-    return u(!0), c(""), I(t, n, r).then((e) => {
-      a || o(e);
+    return f(!0), u(""), (m ? Hn(t, n, r, { tenantId: p }) : I(t, n, r)).then((e) => {
+      if (a) return;
+      let t = (Array.isArray(e.items) ? e.items : []).find((e) => Z(e, ["id"], "") === i) ?? null;
+      c(t ?? h.current), !t && !h.current && u("Entity not found in your workspace lists.");
     }).catch((e) => {
-      a || (o(i), c(e instanceof Error ? e.message : "Could not load entity detail."));
+      a || (c(h.current), u(e instanceof Error ? e.message : "Could not load entity detail."));
     }).finally(() => {
-      a || u(!1);
+      a || f(!1);
     }), () => {
       a = !0;
     };
@@ -25027,39 +25089,7 @@ function Yu(e, t, n, r, i) {
     n,
     r,
     e,
-    i
-  ]), {
-    detail: a,
-    error: s,
-    loading: l
-  };
-}
-function Xu(e, t, n, r, i, a, o = {}) {
-  let [s, c] = (0, C.useState)(a), [l, u] = (0, C.useState)(""), [d, f] = (0, C.useState)(e && !!i), p = o.tenantId, m = !!o.staffSoc;
-  return (0, C.useEffect)(() => {
-    if (!e || !i) {
-      c(a), f(!1);
-      return;
-    }
-    let o = !1;
-    return f(!0), u(""), (m ? Hn(t, n, r, { tenantId: p }) : I(t, n, r)).then((e) => {
-      if (o) return;
-      let t = (Array.isArray(e.items) ? e.items : []).find((e) => Z(e, ["id"], "") === i) ?? null;
-      c(t ?? a), !t && !a && u("Entity not found in your workspace lists.");
-    }).catch((e) => {
-      o || (c(a), u(e instanceof Error ? e.message : "Could not load entity detail."));
-    }).finally(() => {
-      o || f(!1);
-    }), () => {
-      o = !0;
-    };
-  }, [
-    t,
-    n,
-    r,
-    e,
     i,
-    a,
     m,
     p
   ]), {

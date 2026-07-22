@@ -1,62 +1,81 @@
 :root {
-  --void-black: #000000;
-  --frost-border: rgba(214, 235, 253, 0.19);
-  --orange-accent: #ff801f;
+  /* ═══════════════════════════════════════════════════════════════════
+     AstraNull "Observatory" design system — DARK (default).
+     Refined dark, modern minimal. Deep charcoal canvas (not pure black),
+     frost hairline borders, off-white type, ONE restrained signal-red
+     accent + an instrument-cyan reserved for the readiness/"live" moment.
+     Calm · rigorous · defensible. All color via tokens (oklch + frost
+     alphas); variable NAMES are preserved so the whole stylesheet re-skins.
+     ═══════════════════════════════════════════════════════════════════ */
+  --void-black: oklch(15.5% 0.005 255);          /* darkest base — page canvas (near-black charcoal, cool undertone) */
+  --frost-border: oklch(96% 0.003 250 / 0.10);   /* semi-transparent white frost — reads as structure on charcoal */
+  --orange-accent: oklch(65% 0.20 28);           /* signal red — the one chromatic moment (name kept for continuity) */
   --bg: var(--void-black);
-  --surface: #000000;
-  --surface-raised: #000000;
-  --fg: #f0f0f0;
-  --fg-2: #a1a4a5;
-  --text-secondary: #a1a4a5;
-  --muted: #7e8386;
-  --meta: #74797c;
+  --surface: oklch(18.5% 0.005 255);             /* cards, raised panels — lift off the canvas */
+  --surface-raised: oklch(22% 0.006 255);        /* hover / nested raised */
+  --fg: oklch(96% 0.003 250);                    /* primary text — off-white, not pure white */
+  --fg-2: oklch(78% 0.012 250);                  /* secondary text */
+  --text-secondary: oklch(78% 0.012 250);
+  --muted: oklch(74% 0.012 250);                 /* captions, subtext — AA (≥4.5:1) on surface-2 */
+  --meta: oklch(64% 0.012 250);                  /* faint mono meta */
   --border: var(--frost-border);
-  --border-soft: rgba(217, 237, 254, 0.145);
-  --border-strong: rgba(214, 235, 253, 0.34);
+  --border-soft: oklch(96% 0.003 250 / 0.07);
+  --border-strong: oklch(96% 0.003 250 / 0.16);
   --accent: var(--orange-accent);
-  --accent-on: #000000;
-  --on-danger: #ffffff;
-  --accent-hover: color-mix(in oklab, var(--accent), white 10%);
-  --accent-active: color-mix(in oklab, var(--accent), black 12%);
-  --success: #11ff99;
-  --warn: #ffc53d;
-  --danger: #ff2047;
-  --info: var(--accent);
-  --proof-surface: color-mix(in oklab, var(--fg), transparent 97%);
-  --proof-pending-surface: color-mix(in oklab, var(--fg), transparent 96%);
+  --accent-on: oklch(14% 0.02 28);               /* dark label on red fill */
+  --on-danger: oklch(99% 0.01 28);
+  /* Solid danger fill for destructive BUTTONS — decoupled from --danger so it
+     can be deep enough to clear WCAG AA (≥4.5:1) against the near-white
+     --on-danger label, while --danger itself stays bright for status text/dots
+     on dark surfaces. oklch(50% 0.19 25) ≈ 5.1:1 with white. */
+  --danger-fill:       oklch(45% 0.185 25);      /* ~5.2:1 with white --on-danger label (AA) */
+  --danger-fill-hover: oklch(49% 0.185 25);
+  --danger-fill-active: oklch(41% 0.185 25);
+  --accent-hover: oklch(70% 0.18 28);
+  --accent-active: oklch(60% 0.20 28);
+  --accent-soft: oklch(65% 0.20 28 / 0.16);      /* glow / chip background */
+  /* instrument cyan — reserved for the readiness / "live" moment (continuity w/ mockups) */
+  --signal: oklch(82% 0.13 198);
+  --signal-soft: oklch(82% 0.13 198 / 0.16);
+  --success: oklch(78% 0.16 152);
+  --warn: oklch(80% 0.15 75);
+  --danger: oklch(70% 0.20 25);
+  --info: var(--signal);
+  --proof-surface: color-mix(in oklab, var(--fg), transparent 96%);
+  --proof-pending-surface: color-mix(in oklab, var(--fg), transparent 95%);
   --proof-active-row: color-mix(in oklab, var(--accent), transparent 92%);
-  --code-surface: color-mix(in oklab, var(--fg), transparent 97%);
+  --code-surface: color-mix(in oklab, var(--fg), transparent 96%);
   --overlay-backdrop: color-mix(in oklab, var(--bg), transparent 35%);
   --overlay-scrim: color-mix(in oklab, var(--fg), transparent 68%);
-  --topbar-bg: color-mix(in oklab, var(--bg), transparent 12%);
+  --topbar-bg: var(--glass-strong);
   --selection-bg: color-mix(in oklab, var(--accent), transparent 72%);
   --selection-fg: var(--fg);
-  --scrollbar-thumb: color-mix(in oklab, var(--fg), transparent 74%);
-  --scrollbar-thumb-hover: color-mix(in oklab, var(--fg), transparent 62%);
+  --scrollbar-thumb: color-mix(in oklab, var(--fg), transparent 82%);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--fg), transparent 70%);
   --scrollbar-track: transparent;
-  --status-fill-mix: 93%;
+  --status-fill-mix: 84%;
   --status-border-mix: 70%;
   --surface-elevated: var(--surface-raised);
-  --mask-opaque: #000000;
+  --mask-opaque: oklch(15.5% 0.005 255);
   --motion-fast: 150ms;
-  --motion-base: 200ms;
-  --motion-ui: 200ms;
+  --motion-base: 220ms;
+  --motion-ui: 220ms;
   --motion-ease: cubic-bezier(0.2, 0, 0, 1);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
-  --font-body: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+  --font-body: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --text-xs: 12px;
   --text-sm: 14px;
   --text-base: 16px;
   --text-lg: 20px;
   --text-xl: 24px;
-  --text-2xl: 36px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 16px;
+  --text-2xl: 32px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
   --radius-pill: 9999px;
-  --tracking-display: -0.04em;
+  --tracking-display: -0.025em;
   --tracking-caps: 0.06em;
   --elev-ring: 0 0 0 1px var(--border);
   --space-1: 4px;
@@ -70,12 +89,17 @@
   --space-12: 48px;
   --icon-sm: 14px;
   --icon-md: 18px;
-  --elev-raised: 0 1px 2px 0 rgb(0 0 0 / 40%), 0 1px 3px 0 rgb(0 0 0 / 50%);
-  --surface-2: color-mix(in oklab, var(--void-black), var(--fg) 5%);
-  --surface-3: color-mix(in oklab, var(--void-black), var(--fg) 8%);
-  --card-shadow: inset 0 1px 0 0 color-mix(in oklab, var(--fg), transparent 90%), 0 10px 30px -16px rgb(0 0 0 / 80%);
-  --card-shadow-hover: inset 0 1px 0 0 color-mix(in oklab, var(--fg), transparent 80%), 0 18px 42px -18px rgb(0 0 0 / 88%);
-  --focus-ring: 0 0 0 2px var(--accent);
+  --elev-raised: 0 1px 0 0 oklch(96% 0.003 250 / 0.04) inset, 0 0 0 1px var(--border);
+  --surface-2: oklch(22% 0.006 255);
+  --surface-3: oklch(25% 0.007 255);
+  --card-shadow: 0 1px 0 0 oklch(96% 0.003 250 / 0.04) inset, 0 0 0 1px var(--border), 0 10px 30px -18px oklch(0% 0 0 / 0.6);
+  --card-shadow-hover: 0 1px 0 0 oklch(96% 0.003 250 / 0.06) inset, 0 0 0 1px var(--border-strong), 0 18px 42px -18px oklch(0% 0 0 / 0.7);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+  /* glassmorphism — frosted surfaces over the aurora (nav / selective panels) */
+  --glass: oklch(18% 0.005 255 / 0.72);
+  --glass-strong: oklch(18% 0.005 255 / 0.86);
+  --glass-border: oklch(96% 0.003 250 / 0.12);
+  --glass-blur: blur(18px) saturate(150%);
   color-scheme: dark;
   color: var(--fg);
   background: var(--bg);
@@ -83,33 +107,48 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --surface-raised: #f6f7f9;
-  --fg: #0b0d0f;
-  --fg-2: #44484d;
-  --text-secondary: #44484d;
-  --muted: #5b6066;
-  --meta: #6b7075; /* was #767b81 (4.27:1); darkened to 5.00:1 on white for AA body/meta text (light theme) */
-  --frost-border: rgba(9, 20, 36, 0.14);
-  --border: rgba(9, 20, 36, 0.14);
-  --border-soft: rgba(9, 20, 36, 0.08);
-  --border-strong: rgba(9, 20, 36, 0.24);
-  --accent-on: #ffffff;
-  --accent-hover: color-mix(in oklab, var(--accent), black 8%);
-  --accent-active: color-mix(in oklab, var(--accent), black 16%);
-  --on-danger: #ffffff;
-  --success: #0a9d63;
-  --warn: #b45309;
-  --danger: #d61f43;
-  --info: var(--accent);
+  /* ═══════════════════════════════════════════════════════════════════
+     "Observatory Light" — cool daylight console. Paper-white surfaces,
+     cool-slate ink, hairline slate borders, the SAME signal-red accent +
+     instrument cyan, both deepened for AA contrast on white. Real soft
+     shadows replace the dark frost-lift (shadows are invisible on charcoal
+     but structure on white). No warm beige/cream. Calm · rigorous.
+     ═══════════════════════════════════════════════════════════════════ */
+  --void-black: oklch(97.5% 0.003 250);          /* faint cool paper — cards lift off it */
+  --bg: oklch(97.5% 0.003 250);
+  --surface: oklch(100% 0 0);                    /* pure white cards */
+  --surface-raised: oklch(96% 0.004 250);        /* hover / nested */
+  --fg: oklch(26% 0.015 260);                    /* cool slate ink — never pure black */
+  --fg-2: oklch(40% 0.016 260);
+  --text-secondary: oklch(40% 0.016 260);
+  --muted: oklch(48% 0.016 260);
+  --meta: oklch(52% 0.016 260);
+  --frost-border: oklch(26% 0.03 260 / 0.12);
+  --border: oklch(26% 0.03 260 / 0.12);          /* slate hairline (frost is dark-only) */
+  --border-soft: oklch(26% 0.03 260 / 0.08);
+  --border-strong: oklch(26% 0.03 260 / 0.22);
+  --accent: oklch(55% 0.21 28);                  /* deepened so a white label clears AA */
+  --accent-on: oklch(99% 0.01 28);
+  --accent-hover: oklch(49% 0.21 28);
+  --accent-active: oklch(44% 0.21 28);
+  --accent-soft: oklch(55% 0.21 28 / 0.12);
+  --on-danger: oklch(99% 0.01 28);
+  --signal: oklch(52% 0.12 220);                 /* deepened so the instrument reads on white */
+  --signal-soft: oklch(52% 0.12 220 / 0.12);
+  --success: oklch(52% 0.15 152);
+  --warn: oklch(60% 0.15 65);
+  --danger: oklch(53% 0.21 25);                  /* bright enough for danger text/dots on white */
+  --danger-fill:       oklch(45% 0.19 25);        /* solid destructive-button fill — AA (≥4.5:1) with white label */
+  --danger-fill-hover: oklch(41% 0.19 25);
+  --danger-fill-active: oklch(38% 0.19 25);
+  --info: var(--signal);
   --proof-surface: color-mix(in oklab, var(--fg), transparent 96%);
   --proof-pending-surface: color-mix(in oklab, var(--fg), transparent 94%);
   --proof-active-row: color-mix(in oklab, var(--accent), transparent 90%);
   --code-surface: color-mix(in oklab, var(--surface-raised), var(--fg) 4%);
   --overlay-backdrop: color-mix(in oklab, var(--fg), transparent 52%);
   --overlay-scrim: color-mix(in oklab, var(--fg), transparent 58%);
-  --topbar-bg: color-mix(in oklab, var(--surface-raised), transparent 6%);
+  --topbar-bg: var(--glass-strong);
   --selection-bg: color-mix(in oklab, var(--accent), transparent 82%);
   --selection-fg: var(--fg);
   --scrollbar-thumb: color-mix(in oklab, var(--fg), transparent 78%);
@@ -118,12 +157,16 @@
   --status-border-mix: 58%;
   --surface-elevated: var(--surface-raised);
   --elev-ring: 0 0 0 1px var(--border);
-  --elev-raised: 0 1px 2px rgb(9 20 36 / 8%), 0 4px 12px rgb(9 20 36 / 6%);
-  --surface-2: var(--surface);
-  --surface-3: var(--surface-raised);
-  --card-shadow: 0 1px 2px rgb(9 20 36 / 6%), 0 10px 28px -14px rgb(9 20 36 / 16%);
-  --card-shadow-hover: 0 2px 6px rgb(9 20 36 / 8%), 0 18px 40px -16px rgb(9 20 36 / 22%);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --elev-raised: 0 0 0 1px var(--border), 0 1px 2px oklch(26% 0.04 260 / 0.05), 0 5px 14px -8px oklch(26% 0.04 260 / 0.14);
+  --surface-2: oklch(96% 0.004 250);
+  --surface-3: oklch(93% 0.005 250);
+  --card-shadow: 0 0 0 1px var(--border), 0 1px 2px oklch(26% 0.04 260 / 0.05), 0 5px 14px -8px oklch(26% 0.04 260 / 0.14);
+  --card-shadow-hover: 0 0 0 1px var(--border-strong), 0 2px 6px oklch(26% 0.04 260 / 0.07), 0 18px 38px -18px oklch(26% 0.04 260 / 0.24);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+  /* frosted white over the pale daylight aurora */
+  --glass: oklch(100% 0 0 / 0.62);
+  --glass-strong: oklch(100% 0 0 / 0.78);
+  --glass-border: oklch(26% 0.03 260 / 0.10);
   color-scheme: light;
 }
 
@@ -141,6 +184,7 @@ body,
 }
 
 body {
+  position: relative;
   overflow-x: hidden;
   min-width: 320px;
   color: var(--fg);
@@ -148,7 +192,42 @@ body {
   font-size: var(--text-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* ─── Observatory aurora ─────────────────────────────────────────────
+   Page-wide fixed wash every frosted surface (topbar, glass cards)
+   refracts. Charcoal-dark = saturated instrument aurora; light theme
+   dials it down to a pale daylight version. z-index:-1 keeps it behind
+   the app shell without needing a stacking context on #root. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 52% at 80% 6%,  oklch(60% 0.19 27 / 0.18), transparent 70%),
+    radial-gradient(46% 56% at 10% 28%, oklch(56% 0.16 355 / 0.14), transparent 72%),
+    radial-gradient(42% 46% at 72% 78%, oklch(62% 0.15 45 / 0.11), transparent 70%),
+    radial-gradient(46% 50% at 18% 92%, oklch(58% 0.17 10 / 0.10), transparent 72%);
+  filter: blur(22px);
+}
+:root[data-theme="light"] body::before {
+  background:
+    radial-gradient(42% 52% at 80% 6%,  oklch(72% 0.14 27 / 0.10), transparent 70%),
+    radial-gradient(46% 56% at 10% 28%, oklch(75% 0.10 355 / 0.08), transparent 72%),
+    radial-gradient(42% 46% at 72% 78%, oklch(82% 0.09 210 / 0.09), transparent 70%),
+    radial-gradient(46% 50% at 18% 92%, oklch(80% 0.10 20 / 0.07), transparent 72%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  body::before { animation: aurora-drift 34s var(--ease-standard) infinite alternate; }
+}
+@keyframes aurora-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(0, -1.5%, 0) scale(1.06); }
 }
 
 ::selection {
@@ -793,8 +872,11 @@ th {
 }
 
 .btn-danger {
-  border-color: color-mix(in oklab, var(--danger), black 18%);
-  background: color-mix(in oklab, var(--danger), black 18%);
+  /* Uses the dedicated --danger-fill (deeper than --danger) so the near-white
+     --on-danger label clears WCAG AA (≥4.5:1); --danger itself stays bright for
+     status text/dots on dark surfaces. */
+  border-color: var(--danger-fill);
+  background: var(--danger-fill);
   color: var(--on-danger);
 }
 
@@ -830,13 +912,13 @@ th {
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--danger), white 8%);
-  border-color: color-mix(in oklab, var(--danger), white 8%);
+  background: var(--danger-fill-hover);
+  border-color: var(--danger-fill-hover);
 }
 
 .btn-danger:active:not(:disabled) {
-  background: color-mix(in oklab, var(--danger), black 10%);
-  border-color: color-mix(in oklab, var(--danger), black 10%);
+  background: var(--danger-fill-active);
+  border-color: var(--danger-fill-active);
 }
 
 .btn:active:not(:disabled) {
@@ -883,8 +965,8 @@ th {
 }
 
 .btn-danger:disabled {
-  border-color: color-mix(in oklab, var(--danger), transparent 25%);
-  background: color-mix(in oklab, var(--danger), transparent 82%);
+  border-color: color-mix(in oklab, var(--danger-fill), transparent 25%);
+  background: color-mix(in oklab, var(--danger-fill), transparent 15%);
   color: var(--on-danger);
 }
 
@@ -1585,6 +1667,8 @@ select.select:focus,
 .gauge-fill-animate {
   stroke-linecap: round;
   transition: stroke-dashoffset 600ms var(--motion-ease);
+  /* Observatory instrument glow — the one precision-instrument flourish */
+  filter: drop-shadow(0 0 6px color-mix(in oklab, currentColor, transparent 45%));
 }
 
 .gauge-fill-success {
@@ -1601,9 +1685,10 @@ select.select:focus,
 
 .gauge-score {
   fill: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 34px;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 .gauge-label {

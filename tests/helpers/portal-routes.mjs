@@ -10,6 +10,10 @@ export const PORTAL_DETAIL_ENTITY_IDS = Object.freeze({
   'report-detail': 'rpt_checkout_baseline',
   'tenant-detail': PORTAL_BASELINE_IDS.tenantId,
   'queue-detail': 'hsr_checkout_scheduled',
+  'environment-detail': PORTAL_BASELINE_IDS.environmentId,
+  'check-detail': 'origin.leak_scan.safe',
+  'policy-detail': 'pol_checkout',
+  'evidence-detail': 'art_probe_checkout_1',
 });
 
 /** Customer-visible sidebar routes from `navigation.ts` NAV_ITEMS (excludes staff). */
@@ -47,6 +51,10 @@ export const DETAIL_ROUTE_IDS = Object.freeze([
   'report-detail',
   'tenant-detail',
   'queue-detail',
+  'environment-detail',
+  'check-detail',
+  'policy-detail',
+  'evidence-detail',
 ]);
 
 /** Public routes from docs/ux/14 §3.2. */

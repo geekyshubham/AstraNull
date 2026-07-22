@@ -158,6 +158,7 @@ export function addTarget(ctx, groupId, body) {
   );
   if (!group) return null;
   const id = newId('target');
+  const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
   const record = {
     id,
     tenant_id: ctx.tenantId,
@@ -167,6 +168,10 @@ export function addTarget(ctx, groupId, body) {
     expected_behavior: body.expected_behavior ?? null,
     created_at: new Date().toISOString(),
   };
+  // Mirror the Postgres adapter: persist optional onboard metadata
+  // (e.g. agent_id binding, IP notes) under `metadata` so both backends
+  // round-trip the same shape. Only attach when non-empty.
+  if (Object.keys(metadata).length > 0) record.metadata = metadata;
   getStore().targets.push(record);
   audit({
     tenant_id: ctx.tenantId,

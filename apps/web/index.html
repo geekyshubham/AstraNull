@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AstraNull</title>
-  <meta name="description" content="AstraNull — no-access-first DDoS readiness validation. Sign up for reviewed access or log in to the readiness console." />
+  <meta name="description" content="AstraNull — No-access-first DDoS readiness validation. Sign up for reviewed access or log in to the readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
 
   <!-- Early theme init (light/dark) so there is no flash before React boots. -->
   <script>
@@ -20,11 +20,11 @@
     })();
   </script>
 
-  <!-- Space Grotesk · Inter · JetBrains Mono -->
-  <!-- impeccable-disable overused-font -- Space Grotesk, Inter, and JetBrains Mono are the committed AstraNull brand typefaces declared in PRODUCT.md + DESIGN.md. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
+  <!-- Geist · JetBrains Mono — the AstraNull "Observatory" typefaces (display+body = Geist; identity/mono = JetBrains Mono) -->
+  <!-- impeccable-disable overused-font -- Geist and JetBrains Mono are the committed AstraNull "Observatory" brand typefaces. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!--
     Boot styles. A minimal token subset (identical values to the compiled
@@ -34,32 +34,33 @@
   -->
   <style id="boot-styles">
     :root {
-      --bg: #000;
-      --surface: #000;
-      --fg: #f0f0f0;
-      --fg-2: #a1a4a5;
-      --muted: #7e8386;
-      --border: rgba(214, 235, 253, .19);
-      --border-strong: #d6ebfd57;
-      --accent: #ff801f;
-      --accent-on: #000;
-      --danger: #ff2047;
-      --font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
-      --font-body: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --bg: oklch(15.5% 0.005 255);
+      --surface: oklch(18.5% 0.005 255);
+      --fg: oklch(96% 0.003 250);
+      --fg-2: oklch(78% 0.012 250);
+      --muted: oklch(70% 0.012 250);
+      --border: oklch(96% 0.003 250 / .10);
+      --border-strong: oklch(96% 0.003 250 / .16);
+      --accent: oklch(65% 0.20 28);
+      --accent-on: oklch(14% 0.02 28);
+      --danger: oklch(70% 0.20 25);
+      --font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+      --font-body: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
       --motion-fast: .15s;
       --motion-ease: cubic-bezier(.2, 0, 0, 1);
     }
     [data-theme="light"] {
-      --bg: #fff;
-      --surface: #fff;
-      --fg: #0b0d0f;
-      --fg-2: #44484d;
-      --muted: #5b6066;
-      --border: #09142424;
-      --border-strong: #0914243d;
-      --accent-on: #fff;
-      --danger: #d61f43;
+      --bg: oklch(97.5% 0.003 250);
+      --surface: oklch(100% 0 0);
+      --fg: oklch(26% 0.015 260);
+      --fg-2: oklch(40% 0.016 260);
+      --muted: oklch(48% 0.016 260);
+      --border: oklch(26% 0.03 260 / .12);
+      --border-strong: oklch(26% 0.03 260 / .22);
+      --accent: oklch(55% 0.21 28);
+      --accent-on: oklch(99% 0.01 28);
+      --danger: oklch(53% 0.21 25);
     }
 
     html, body {
@@ -258,10 +259,10 @@
 
   <!--
     Load the compiled stylesheet non-render-blocking (origin-absolute, so it
-    resolves on nested routes like /app and /internal/admin that the server
-    aliases to this same shell). Injecting it here — rather than a render-
-    blocking <link> in <head> — lets the inline boot styles above paint the
-    splash instantly instead of waiting on the 83 KB bundle stylesheet.
+    resolves on the nested app routes that the server aliases to this same
+    shell). Injecting it here — rather than a render-blocking <link> in
+    <head> — lets the inline boot styles above paint the splash instantly
+    instead of waiting on the 83 KB bundle stylesheet.
   -->
   <script>
     (function () {

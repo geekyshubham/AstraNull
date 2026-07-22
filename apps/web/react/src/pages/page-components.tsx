@@ -4,7 +4,6 @@ import {
   Bot,
   CheckCircle2,
   ClipboardList,
-  Clock3,
   FileCheck2,
   FileText,
   KeyRound,
@@ -12,8 +11,6 @@ import {
   ListChecks,
   Network,
   PlugZap,
-  RadioTower,
-  ScanSearch,
   ServerCog,
   ShieldCheck,
   Siren,
@@ -40,22 +37,13 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
-import {
-  ONBOARDING_HEARTBEAT_POLL_MS,
-  ONBOARDING_PLACEMENT_TEST_CHECK_ID,
-  agentHasRecentHeartbeat,
-  extractPlacementDiagnosticsFromReadiness,
-  placementTestComplete,
-  resolveOnboardingHeartbeatState,
-  summarizeOnboardingPlacementConfidenceHint
-} from '../lib/onboarding';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
 import { buildEnvironmentReadinessRows } from '../lib/environments';
 import { buildDetailHref } from '../lib/route-params';
 import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
-import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
-import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, scoreTone } from '../lib/utils';
+import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
+import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel } from '../lib/utils';
 
 function getString(item: DataItem, keys: string[], fallback = '—') {
   for (const key of keys) {
@@ -1386,361 +1374,6 @@ export function DashboardPage({
   );
 }
 
-export function OnboardingPage({
-  data,
-  config,
-  session,
-  onRefresh
-}: {
-  data: PortalData;
-  config: PortalConfig;
-  session: Session;
-  onRefresh: () => Promise<void>;
-}) {
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [tokenSecret, setTokenSecret] = useState('');
-  const [heartbeatSkipped, setHeartbeatSkipped] = useState(false);
-  const [pollStartedAt, setPollStartedAt] = useState<number | null>(null);
-  const [polledAgents, setPolledAgents] = useState<DataItem[] | null>(null);
-  const [heartbeatPollError, setHeartbeatPollError] = useState('');
-  const firstGroup = data.targetGroups[0] ?? null;
-  const firstTargetId = getString(firstGroup ?? {}, ['first_target_id'], '');
-  const safeCheck = data.checks.find((check) => getString(check, ['safety_class']) === 'safe') ?? data.checks[0] ?? null;
-  const placementDiagnostics = extractPlacementDiagnosticsFromReadiness(data.state?.readiness as DataItem | undefined);
-  const agentsForHeartbeat = polledAgents ?? data.agents;
-  const heartbeatState = resolveOnboardingHeartbeatState(agentsForHeartbeat, {
-    pollStartedAt: pollStartedAt ?? undefined
-  });
-  const placementHint = summarizeOnboardingPlacementConfidenceHint(
-    heartbeatState.agents[0] ?? agentsForHeartbeat[0] ?? null,
-    placementDiagnostics
-  );
-  const placementDone = placementTestComplete(data.runs);
-  const heartbeatVerified = heartbeatSkipped
-    || agentsForHeartbeat.some((agent) => agentHasRecentHeartbeat(agent));
-  const steps = [
-    ['Environment', declaredEnvironmentComplete(data)],
-    ['Target group', declaredTargetGroupComplete(data)],
-    ['Bootstrap token', data.bootstrapTokens.length > 0 || Boolean(tokenSecret)],
-    ['Agent heartbeat', heartbeatVerified],
-    ['Placement test', placementDone],
-    ['First safe run', data.runs.some((run) =>
-      getString(run, ['check_id']) !== ONBOARDING_PLACEMENT_TEST_CHECK_ID
-      && ['completed', 'verdicted', 'running'].includes(getString(run, ['status']))
-    )]
-  ] as const;
-
-  const shouldPollHeartbeat = Boolean(tokenSecret || data.bootstrapTokens.length > 0)
-    && !heartbeatSkipped
-    && heartbeatState.status !== 'online'
-    && heartbeatState.status !== 'timeout';
-
-  useEffect(() => {
-    if (!shouldPollHeartbeat) return undefined;
-    const startedAt = pollStartedAt ?? Date.now();
-    if (pollStartedAt === null) setPollStartedAt(startedAt);
-
-    async function pollAgents() {
-      try {
-        const payload = await requestJson(config, session, '/v1/agents') as { items?: DataItem[] };
-        const items = Array.isArray(payload.items) ? payload.items : [];
-        setPolledAgents(items);
-        setHeartbeatPollError('');
-        const state = resolveOnboardingHeartbeatState(items, { pollStartedAt: startedAt });
-        if (state.status === 'online' || state.status === 'timeout') {
-          await onRefresh();
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Agent heartbeat poll failed.';
-        setHeartbeatPollError(`${message} Retrying every ${ONBOARDING_HEARTBEAT_POLL_MS / 1000}s.`);
-      }
-    }
-
-    void pollAgents();
-    const timer = window.setInterval(() => {
-      void pollAgents();
-    }, ONBOARDING_HEARTBEAT_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [config, session, onRefresh, pollStartedAt, shouldPollHeartbeat]);
-
-  async function runOnboardingAction<T>(label: string, action: () => Promise<T>, success: string) {
-    setBusy(label);
-    setError('');
-    setMessage('');
-    try {
-      const result = await action();
-      setMessage(success);
-      await onRefresh();
-      return result;
-    } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Onboarding action failed.'));
-      return null;
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function handleCreateScope(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const created = await runOnboardingAction('onboard-create-group', async () => {
-      const group = await requestJson(config, session, '/v1/target-groups', {
-        method: 'POST',
-        body: {
-          name: String(form.get('name') ?? 'Onboarding group').trim(),
-          environment_id: String(form.get('environment_id') ?? 'env_onboarding').trim(),
-          timezone: 'UTC'
-        }
-      }) as DataItem;
-      const groupId = getString(group, ['id'], '');
-      if (String(form.get('target_value') ?? '').trim()) {
-        await requestJson(config, session, `/v1/target-groups/${groupId}/targets`, {
-          method: 'POST',
-          body: {
-            kind: 'fqdn',
-            value: String(form.get('target_value') ?? '').trim()
-          }
-        });
-      }
-      return group;
-    }, 'Declared target group and optional first target created.');
-    if (created) event.currentTarget.reset();
-  }
-
-  async function createBootstrapToken() {
-    const created = await runOnboardingAction('onboard-create-token', () => requestJson(config, session, '/v1/bootstrap-tokens', {
-      method: 'POST',
-      body: {
-        name: 'onboarding-install',
-        environment_id: getString(firstGroup, ['environment_id'], 'env_demo'),
-        ...(getString(firstGroup, ['id'], '') ? { target_group_id: getString(firstGroup, ['id'], '') } : {}),
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        max_registrations: 1
-      }
-    }), 'Bootstrap token created. Copy the one-time secret now.');
-    const secret = getString(created as DataItem, ['secret'], getNestedString(created as DataItem, ['token', 'secret'], ''));
-    if (secret) setTokenSecret(secret);
-  }
-
-  async function resolveFirstTargetId(targetGroupId: string) {
-    let targetId = firstTargetId;
-    if (!targetId) {
-      const detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
-      const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
-      targetId = getString(targets[0] ?? {}, ['id'], '');
-    }
-    return targetId;
-  }
-
-  async function handleStartRun() {
-    const targetGroupId = getString(firstGroup, ['id'], '');
-    const checkId = getString(safeCheck ?? {}, ['check_id'], '');
-    if (!targetGroupId || !checkId) {
-      setError('Create a target group and ensure a safe check exists before starting a run.');
-      return;
-    }
-    const targetId = await resolveFirstTargetId(targetGroupId);
-    if (!targetId) {
-      setError('Add at least one declared target before starting a safe validation run.');
-      return;
-    }
-    await runOnboardingAction('onboard-start-run', () => requestJson(config, session, '/v1/test-runs', {
-      method: 'POST',
-      body: { target_group_id: targetGroupId, target_id: targetId, check_id: checkId }
-    }), 'Safe validation run started from onboarding.');
-  }
-
-  async function handleStartPlacementTest() {
-    const targetGroupId = getString(firstGroup, ['id'], '');
-    if (!targetGroupId) {
-      setError('Create a target group before starting the placement test.');
-      return;
-    }
-    const targetId = await resolveFirstTargetId(targetGroupId);
-    if (!targetId) {
-      setError('Add at least one declared target before starting the placement test.');
-      return;
-    }
-    await runOnboardingAction('onboard-start-placement-test', () => requestJson(config, session, '/v1/test-runs', {
-      method: 'POST',
-      body: {
-        target_group_id: targetGroupId,
-        target_id: targetId,
-        check_id: ONBOARDING_PLACEMENT_TEST_CHECK_ID
-      }
-    }), 'Placement test run started — inspect observations on Test Runs when complete.');
-  }
-
-  const installToken = tokenSecret || '<BOOTSTRAP_TOKEN>';
-  const heartbeatSeconds = Math.floor((heartbeatState.elapsedMs ?? 0) / 1000);
-  return (
-    <div className="content">
-      <PageHeader route="target-groups" eyebrow="Guided setup" />
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
-      <Card>
-        <CardHeader>
-          <CardTitle>First validation path</CardTitle>
-          <CardDescription>One environment, one target group, one outbound agent, one bounded validation run.</CardDescription>
-        </CardHeader>
-        <CardContent className="step-grid">
-          {steps.flatMap(([label, complete], stepIndex) => (complete ? [] : [(
-            <div className="step-card" key={label}>
-              <span>{stepIndex + 1}</span>
-              <strong>{label}</strong>
-              <p>Not started</p>
-            </div>
-          )]))}
-          {steps.some(([, complete]) => complete) ? (
-            <details className="full">
-              <summary>{steps.filter(([, complete]) => complete).length} completed step(s)</summary>
-              <div className="step-grid">
-                {steps.filter(([, complete]) => complete).map(([label]) => (
-                  <div className="step-card done" key={label}>
-                    <span aria-hidden><CheckCircle2 size={16} aria-hidden /></span>
-                    <strong>{label}</strong>
-                    <p>Complete</p>
-                  </div>
-                ))}
-              </div>
-            </details>
-          ) : null}
-        </CardContent>
-      </Card>
-      <div className="split">
-        <Card>
-          <CardHeader>
-            <CardTitle>Create declared scope</CardTitle>
-            <CardDescription>Step 1: create the first target group and optional FQDN target.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="product-form" onSubmit={handleCreateScope} aria-busy={busy === 'onboard-create-group' || undefined}>
-              <fieldset disabled={busy !== ''}>
-              <label><span>Group name</span><input name="name" defaultValue="Onboarding origin group" required /></label>
-              <label>
-                <span>Environment ID</span>
-                <input name="environment_id" defaultValue="env_onboarding" placeholder="production" required />
-              </label>
-              <p className="muted full">Opaque environment slug stored on the target group — see <AnchorButton href="#environments" variant="ghost" size="sm">Environments</AnchorButton> for readiness by environment.</p>
-              <label className="full"><span>First target (optional)</span><input name="target_value" placeholder="origin.example.com" /></label>
-              <div className="form-actions full"><Button type="submit" loading={busy === 'onboard-create-group'}>Create target group</Button></div>
-              </fieldset>
-            </form>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Bootstrap token and safe run</CardTitle>
-            <CardDescription>Step 2–3: issue install token, then start the first bounded validation run.</CardDescription>
-          </CardHeader>
-          <CardContent className="product-form">
-            <div className="form-actions full">
-              <Button loading={busy === 'onboard-create-token'} disabled={busy !== ''} onClick={() => void createBootstrapToken()}>Create bootstrap token</Button>
-              <Button variant="secondary" loading={busy === 'onboard-start-run'} disabled={busy !== '' || !firstGroup || !safeCheck} onClick={() => void handleStartRun()}>Start safe validation run</Button>
-            </div>
-            {tokenSecret ? (
-              <>
-                <pre className="codeblock">{`curl -fsSL ${typeof window !== 'undefined' ? window.location.origin : ''}/agents/install.sh \\
-  | sudo ASTRANULL_API_URL="${typeof window !== 'undefined' ? window.location.origin : ''}" \\
-       ASTRANULL_BOOTSTRAP_TOKEN="${installToken}" bash`}</pre>
-                <p className="muted">One-time token shown. It will not be displayed again after refresh.</p>
-              </>
-            ) : (
-              <p className="muted">Create a bootstrap token to reveal the one-time install command.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Agent heartbeat verification</CardTitle>
-          <CardDescription>Checks for a fresh agent heartbeat every {ONBOARDING_HEARTBEAT_POLL_MS / 1000}s after a bootstrap token is issued.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {heartbeatState.status === 'online' ? (
-            <div className="onboarding-heartbeat-panel onboarding-heartbeat-panel--online">
-              <p className="onboarding-heartbeat-status onboarding-heartbeat-status--online">
-                Agent online — last heartbeat {getString(heartbeatState.agents[0] ?? {}, ['last_heartbeat_at'], 'received')}.
-              </p>
-              <p className="muted onboarding-placement-hint"><strong>Placement confidence:</strong> {placementHint}</p>
-              <p className="muted">Proceed to the optional placement test or start the first safe validation.</p>
-            </div>
-          ) : heartbeatState.status === 'timeout' ? (
-            <div className="onboarding-heartbeat-panel onboarding-heartbeat-panel--timeout">
-              <EmptyState
-                icon={Clock3}
-                title="Heartbeat timeout reached."
-                body="No fresh agent heartbeat was observed within the onboarding window. Continue without an agent or regenerate the bootstrap token."
-                actionLabel="Open Agents (install)"
-                actionHref="#agents"
-              />
-              {!heartbeatSkipped ? (
-                <div className="form-actions">
-                  <Button
-                    variant="secondary"
-                    disabled={busy !== ''}
-                    onClick={() => {
-                      if (!window.confirm('Continue without an agent? Inside observations will be missing and readiness correlation will be degraded.')) return;
-                      setHeartbeatSkipped(true);
-                    }}
-                  >
-                    Continue without agent
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="onboarding-heartbeat-panel onboarding-heartbeat-panel--waiting" aria-busy="true">
-              <p className="onboarding-heartbeat-status onboarding-heartbeat-status--waiting" aria-live="polite">
-                <span className="onboarding-heartbeat-spinner" aria-hidden="true" />
-                <Badge tone="info">Listening</Badge>
-                {heartbeatState.status === 'stale'
-                  ? 'Agent registered but heartbeat is stale — waiting for a fresh heartbeat…'
-                  : 'Waiting for agent heartbeat…'}
-              </p>
-              <div className="skeleton-row" aria-hidden="true">
-                <div className="skeleton skeleton-text" />
-                <div className="skeleton skeleton-text" />
-              </div>
-              <p className="muted">Listening for agent heartbeats every {ONBOARDING_HEARTBEAT_POLL_MS / 1000}s (elapsed {heartbeatSeconds}s).</p>
-              {heartbeatPollError ? <div className="form-banner error">{heartbeatPollError}</div> : null}
-              <p className="muted onboarding-placement-hint"><strong>Placement confidence:</strong> {placementHint}</p>
-              <div className="row-actions onboarding-troubleshoot">
-                <span className="muted">Agent not connecting?</span>
-                <AnchorButton size="sm" variant="secondary" href="#agents">Open Agents (install)</AnchorButton>
-                <Button size="sm" variant="secondary" loading={busy === 'onboard-create-token'} disabled={busy !== ''} onClick={() => void createBootstrapToken()}>Create bootstrap token</Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Placement test</CardTitle>
-          <CardDescription>Runs a bounded protected-path canary check — metadata only, no exploit payloads.</CardDescription>
-        </CardHeader>
-        <CardContent className="product-form">
-          {placementDone ? (
-            <p className="muted onboarding-placement-done">Placement test run started — inspect observations on Test Runs when complete.</p>
-          ) : (
-            <>
-              <Button loading={busy === 'onboard-start-placement-test'} disabled={busy !== '' || !firstGroup} onClick={() => void handleStartPlacementTest()}>Start placement test</Button>
-              <p className="muted">Optional — skip if you will run the first safe validation immediately after heartbeat verification.</p>
-            </>
-          )}
-          <div className="callout-list">
-            <CalloutNote icon={RadioTower} tone="info">Install where the agent can observe target traffic.</CalloutNote>
-            <CalloutNote icon={Clock3} tone="warn">Run a safe canary before relying on verdicts.</CalloutNote>
-            <CalloutNote icon={FileCheck2}>Evidence vault records the placement signal.</CalloutNote>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
 export function TargetGroupsPage({
   data,
   config,
@@ -2177,132 +1810,6 @@ export function TargetGroupsPage({
           </div>
         </form>
       </FormModal>
-    </div>
-  );
-}
-
-export function ValidationPage({
-  route,
-  data,
-  config,
-  session,
-  onRefresh
-}: {
-  route: RouteId;
-  data: PortalData;
-  config: PortalConfig;
-  session: Session;
-  onRefresh: () => Promise<void>;
-}) {
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const source = route === 'checks' ? data.checks : route === 'runs' ? data.runs : data.findings;
-  const emptyIcon = route === 'findings' ? TriangleAlert : ListChecks;
-  const firstGroup = data.targetGroups[0] ?? null;
-  const safeCheck = data.checks.find((check) => getString(check, ['safety_class']) === 'safe') ?? null;
-
-  async function runValidationAction<T>(label: string, action: () => Promise<T>, success: string) {
-    setBusy(label);
-    setError('');
-    setMessage('');
-    try {
-      const result = await action();
-      setMessage(success);
-      await onRefresh();
-      return result;
-    } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Validation action failed.'));
-      return null;
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function startSafeRun() {
-    const targetGroupId = getString(firstGroup, ['id'], '');
-    const checkId = getString(safeCheck ?? {}, ['check_id'], '');
-    if (!targetGroupId || !checkId) {
-      setError('Declare a target group and safe check before starting a run.');
-      return;
-    }
-    const detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
-    const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
-    const targetId = getString(targets[0] ?? {}, ['id'], '');
-    if (!targetId) {
-      setError('Add at least one target to the declared group before starting a run.');
-      return;
-    }
-    await runValidationAction('start-safe-run', () => requestJson(config, session, '/v1/test-runs', {
-      method: 'POST',
-      body: { target_group_id: targetGroupId, target_id: targetId, check_id: checkId }
-    }), 'Safe validation run started.');
-  }
-
-  async function patchFinding(id: string, body: Record<string, unknown>, success: string) {
-    if (!id) return;
-    await runValidationAction(`finding-${id}`, () => requestJson(config, session, `/v1/findings/${id}`, {
-      method: 'PATCH',
-      body
-    }), success);
-  }
-
-  const columns: TableColumn<DataItem>[] = [
-    { key: 'name', label: 'Item', render: (item) => getString(item, ['name', 'title', 'check_id', 'id']) },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status', 'verdict'], 'ready') === 'open' ? 'warn' : 'success'}>{getString(item, ['status', 'verdict'], 'ready')}</Badge> },
-    { key: 'type', label: 'Type', render: (item) => getString(item, ['family', 'kind', 'severity', 'safety_class'], 'safe validation') },
-    { key: 'time', label: 'Time', render: (item) => formatDate(item.created_at ?? item.started_at ?? item.updated_at) },
-    ...(route === 'findings' ? [{
-      key: 'actions',
-      label: 'Actions',
-      render: (item: DataItem) => {
-        const id = getString(item, ['id'], '');
-        return (
-          <div className="row-actions">
-            <Button size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void patchFinding(id, { status: 'accepted_risk' }, 'Finding marked accepted risk.')}>Accept risk</Button>
-            <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void patchFinding(id, { status: 'closed' }, 'Finding closed.')}>Close</Button>
-          </div>
-        );
-      }
-    }] as TableColumn<DataItem>[] : [])
-  ];
-
-  return (
-    <div className="content">
-      <PageHeader route={route} />
-      <div className="metric-grid three">
-        <MetricCard label="Checks" value={data.checks.length} sub="Bounded safe catalog" icon={ListChecks} tone="info" />
-        <MetricCard label="Runs" value={data.runs.length} sub="Probe plus agent correlation" icon={Activity} tone="success" />
-        <MetricCard label="Evidence" value={data.evidence.length} sub="Custody-ready records" icon={FileCheck2} tone="muted" />
-      </div>
-      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
-      {route === 'runs' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Start safe validation</CardTitle>
-            <CardDescription>Creates a bounded run against the first declared target in the first active target group.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button loading={busy === 'start-safe-run'} disabled={busy !== '' || !firstGroup || !safeCheck} onClick={() => void startSafeRun()}>
-              Start safe run
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle>{ROUTE_BY_ID.get(route)?.label}</CardTitle>
-          <CardDescription>Verdicts should always explain what was observed and what evidence supports the outcome.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={columns}
-            items={source}
-            empty={<EmptyState icon={emptyIcon} title="No evidence-backed records yet." body="Run a safe validation after target group and agent setup. High-scale validation remains request-only for customers." actionLabel="Open target groups" actionHref="#target-groups" />}
-          />
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -4843,7 +4350,10 @@ export function StaffSurfacePage({
               <form className="product-form" onSubmit={(event) => {
                 event.preventDefault();
                 const owner = String(new FormData(event.currentTarget).get('support_owner') ?? '').trim();
-                if (!entitlementTenantId || !owner) return;
+                if (!entitlementTenantId || !owner) {
+                  setError('Select a tenant before assigning a support owner.');
+                  return;
+                }
                 if (!window.confirm(`Assign support owner "${owner}" for tenant ${entitlementTenantId}?`)) return;
                 void runStaffAction(`support-owner-${entitlementTenantId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}`, {
                   method: 'PATCH',
@@ -4858,7 +4368,7 @@ export function StaffSurfacePage({
                   onChange={setEntitlementTenantId}
                 />
                 <label className="full"><span>Support owner</span><input name="support_owner" placeholder="owner@customer.example" required /></label>
-                <div className="form-actions full"><Button type="submit" loading={busy.startsWith('support-owner-')}>Assign support owner</Button></div>
+                <div className="form-actions full"><Button type="submit" loading={busy.startsWith('support-owner-')} disabled={!entitlementTenantId}>Assign support owner</Button></div>
               </form>
             </CardContent>
           </Card>

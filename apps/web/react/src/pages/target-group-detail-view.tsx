@@ -187,11 +187,13 @@ function DetailModal({
   title,
   onClose,
   children,
+  error,
   wide = true
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  error?: string;
   wide?: boolean;
 }) {
   const titleId = useId();
@@ -222,7 +224,13 @@ function DetailModal({
           Close
         </Button>
       </div>
-      <div className="detail-modal-body">{children}</div>
+      <div className="detail-modal-body">
+        {/* In-modal error banner: the page-level DetailStatusBanners sit behind the
+            native <dialog>'s top-layer backdrop, so validation/request errors raised
+            while the modal is open were invisible. Surface them here instead. */}
+        {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+        {children}
+      </div>
     </dialog>
   );
 }
@@ -388,20 +396,35 @@ export function TargetGroupDetailView({
     setShowOnboardModal(true);
   }
 
-  async function addTarget(kind: string, value: string, expectedBehavior: string) {
+  async function addTarget(
+    kind: string,
+    value: string,
+    expectedBehavior: string,
+    metadata?: Record<string, string>
+  ) {
     const trimmed = value.trim();
     if (!trimmed) {
       setError('A target value is required.');
       setMessage('');
       return;
     }
+    // Only send metadata keys that carry a value — keeps the persisted
+    // metadata_json clean (no empty agent_id / notes entries).
+    const cleanedMetadata = metadata
+      ? Object.fromEntries(Object.entries(metadata).filter(([, v]) => v && v.trim()))
+      : undefined;
     setBusy(`add-target-${kind}`);
     setError('');
     setMessage('');
     try {
       await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
         method: 'POST',
-        body: { kind, value: trimmed, expected_behavior: expectedBehavior || null }
+        body: {
+          kind,
+          value: trimmed,
+          expected_behavior: expectedBehavior || null,
+          ...(cleanedMetadata && Object.keys(cleanedMetadata).length > 0 ? { metadata: cleanedMetadata } : {})
+        }
       });
       setMessage('Target declared.');
       setShowOnboardModal(false);
@@ -416,7 +439,12 @@ export function TargetGroupDetailView({
   function submitFqdnTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    void addTarget('fqdn', String(form.get('value') ?? ''), String(form.get('expected_behavior') ?? ''));
+    void addTarget(
+      'fqdn',
+      String(form.get('value') ?? ''),
+      String(form.get('expected_behavior') ?? ''),
+      { agent_id: String(form.get('agent_id') ?? '') }
+    );
   }
 
   function submitIpTarget(event: FormEvent<HTMLFormElement>) {
@@ -424,7 +452,12 @@ export function TargetGroupDetailView({
     const form = new FormData(event.currentTarget);
     const ip = String(form.get('value') ?? '').trim();
     const port = String(form.get('port') ?? '').trim();
-    void addTarget('ip', port ? `${ip}:${port}` : ip, String(form.get('expected_behavior') ?? ''));
+    void addTarget(
+      'ip',
+      port ? `${ip}:${port}` : ip,
+      String(form.get('expected_behavior') ?? ''),
+      { notes: String(form.get('notes') ?? '') }
+    );
   }
 
   async function issueDnsChallenge(targetId?: string) {
@@ -904,7 +937,7 @@ export function TargetGroupDetailView({
       </Card>
 
       {inventoryProvider ? (
-        <DetailModal title={`Provider inventory · ${inventoryProvider}`} onClose={() => setInventoryProvider(null)}>
+        <DetailModal title={`Provider inventory · ${inventoryProvider}`} onClose={() => setInventoryProvider(null)} error={error}>
             <div className="inv-body">
               <DataTable
                 columns={[
@@ -941,7 +974,7 @@ export function TargetGroupDetailView({
       ) : null}
 
       {showOnboardModal ? (
-        <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)}>
+        <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)} error={error}>
           <Tabs
             value={onboardTab}
             options={ONBOARD_TAB_OPTIONS}
@@ -1062,7 +1095,7 @@ export function TargetGroupDetailView({
       ) : null}
 
       {showLoaModal ? (
-        <DetailModal title={`Sign LOA · ${getString(entity, ['name'], entityId)}`} onClose={() => setShowLoaModal(false)}>
+        <DetailModal title={`Sign LOA · ${getString(entity, ['name'], entityId)}`} onClose={() => setShowLoaModal(false)} error={error}>
             <form className="loa-body product-form" onSubmit={(event) => void submitLoa(event)}>
               <div className="loa-doc">
                 <h4>Authorization artifact</h4>

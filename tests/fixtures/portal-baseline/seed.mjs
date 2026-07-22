@@ -206,7 +206,22 @@ export function buildPortalBaselineStore() {
         created_by: 'usr_owner',
       },
     ],
-    testPolicies: [{ id: 'pol_checkout', tenant_id: ids.tenantId, name: 'Checkout policy' }],
+    testPolicies: [{
+      id: 'pol_checkout',
+      tenant_id: ids.tenantId,
+      name: 'Checkout policy',
+      // target_group_id + a customer-runnable check are required for listTestPolicies
+      // (src/services/testPolicies.mjs) to surface the policy — it filters to active
+      // target groups. Without these the policy is silently excluded and policy-detail
+      // renders "Policy not found."
+      target_group_id: ids.targetGroupId,
+      check_id: 'origin.leak_scan.safe',
+      cadence: 'daily',
+      expected_verdict: 'pass',
+      state: 'active',
+      safe_windows: [],
+      created_at: FROZEN,
+    }],
     bootstrapTokens: [],
     serviceAccounts: [],
     agents: [
@@ -264,7 +279,23 @@ export function buildPortalBaselineStore() {
         owner_group: 'edge-sre',
       },
     ],
-    reports: [],
+    reports: [{
+      id: 'rpt_checkout_baseline',
+      tenant_id: ids.tenantId,
+      kind: 'executive',
+      title: 'Checkout readiness summary',
+      status: 'ready',
+      summary: {
+        readiness_score: 82,
+        readiness_factors: [],
+        open_findings: 1,
+        recent_runs: [{ id: 'run_checkout_1', status: 'completed', check_id: 'origin.leak_scan.safe' }],
+        compliance: {},
+      },
+      run_ids: ['run_checkout_1'],
+      created_at: FROZEN,
+      created_by: 'usr_owner',
+    }],
     highScaleRequests: [
       {
         id: 'hsr_checkout_scheduled',

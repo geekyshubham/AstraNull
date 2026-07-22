@@ -102,7 +102,9 @@ function DataTableChrome<T>({
   return (
     <>
       <style>{DATA_TABLE_STYLES}</style>
-      <div className={cn('table-wrap', className)}>
+      {/* tabIndex=0 makes the horizontally-scrollable region keyboard-accessible
+          (WCAG 2.1.1 / axe scrollable-region-focusable). role+label name it. */}
+      <div className={cn('table-wrap', className)} tabIndex={0} role="region" aria-label="Data table, scrollable">
         <table className="data-table">
           <TableHeaderRow columns={columns} />
           {children}

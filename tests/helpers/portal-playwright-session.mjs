@@ -76,7 +76,12 @@ export function resolvePortalRouteUrl(routeId, baseUrl, options = {}) {
     return `${baseUrl}/internal/soc`;
   }
   if (routeId === 'queue-detail') {
-    return `${baseUrl}/internal/soc#${hash}`;
+    // Staff-SOC detail requires an execution tenant scope: buildSocCustomerHeaders
+    // (lib/api.ts) throws without one, so the queue fetch never fires. Real cross-tenant
+    // SOC "Open" links carry ?tenant=…; mirror that here (getRouteTenantId reads it).
+    const tenant = options.tenantId ?? PORTAL_BASELINE_IDS.tenantId;
+    const sep = hash.includes('?') ? '&' : '?';
+    return `${baseUrl}/internal/soc#${hash}${sep}tenant=${encodeURIComponent(tenant)}`;
   }
   return `${baseUrl}/app#${hash}`;
 }

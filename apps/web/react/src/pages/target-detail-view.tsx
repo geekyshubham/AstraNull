@@ -262,7 +262,7 @@ export function TargetDetailView({
         <CardHeader><CardTitle>Ownership + eligibility</CardTitle><CardDescription>{ownershipMethod}</CardDescription></CardHeader>
         <CardContent>
           <div className="stack-tight">
-            <div className="table-wrap">
+            <div className="table-wrap" tabIndex={0} role="region" aria-label="Ownership and eligibility, scrollable">
               <table className="data-table">
                 <tbody>
                   <tr><td className="muted">Ownership method</td><td><div className="kv"><span className="mono">{ownershipMethod}</span></div></td></tr>

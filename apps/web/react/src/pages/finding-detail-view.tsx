@@ -394,11 +394,22 @@ export function FindingDetailView({
                 <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Save triage</Button>
                 <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
                 <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
-                <Button size="sm" variant="ghost" onClick={() => void runAction('retest', async () => {
+                <Button size="sm" variant="ghost" loading={busy === 'retest'} onClick={() => void runAction('retest', async () => {
                   const retest = resolveFindingRetestAction(entity);
                   if (!retest) throw new Error('Retest context missing from finding API.');
-                  if (retest.kind === 'safe-run') {
+                  // Every kind resolveFindingRetestAction can return must dispatch a real
+                  // request; otherwise runAction reports a false "Retest started." success.
+                  // Mirrors retestFinding() in detail-pages.tsx.
+                  if (retest.kind === 'waf-validation') {
+                    await requestJson(config, session, '/v1/waf/validations', { method: 'POST', body: { waf_asset_id: retest.wafAssetId, modes: ['marker'] } });
+                  } else if (retest.kind === 'cve-retest') {
+                    await requestJson(config, session, `/v1/waf/cve-pipeline/${encodeURIComponent(retest.pipelineId)}/retest`, { method: 'POST' });
+                  } else if (retest.kind === 'cve-retest-url') {
+                    await requestJson(config, session, retest.retestUrl, { method: 'POST' });
+                  } else if (retest.kind === 'safe-run') {
                     await requestJson(config, session, '/v1/test-runs', { method: 'POST', body: { check_id: retest.checkId, target_group_id: getString(entity, ['target_group_id'], ''), target_id: getString(entity, ['target_id'], '') } });
+                  } else {
+                    throw new Error('Unsupported retest kind for this finding.');
                   }
                 }, 'Retest started.')}>Retest</Button>
               </div>
@@ -441,7 +452,7 @@ export function FindingDetailView({
               <div className="finding-remediation-meta">
                 <div className="rem-cell"><span className="rem-label">Action</span><span className="rem-value mono">{remediation.remAction || '—'}</span></div>
                 <div className="rem-cell"><span className="rem-label">Owner</span><span className="rem-value">{remediation.remOwner || '—'}</span></div>
-                <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Remediation state ${remediation.remState} from finding API`}>{formatFindingLabel(remediation.remState) || '—'}</Badge></div>
+                <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Remediation state ${remediation.remState} from finding API`}>{remediation.remState || '—'}</Badge></div>
                 <div className="rem-cell"><span className="rem-label">SLA</span><span className="rem-value">{remediation.remSla || '—'}</span></div>
               </div>
               {remediation.remDescription ? (

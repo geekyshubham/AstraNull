@@ -82,4 +82,35 @@ describe('target group service CRUD', () => {
     assert.equal(deleted.deleted, true);
     assert.equal(getTargetGroup(ctx, group.id).targets.length, 0);
   });
+
+  it('persists optional onboard metadata (agent_id binding, notes) on add', () => {
+    const group = createTargetGroup(ctx, { name: 'Onboard metadata' });
+
+    // FQDN onboard form binds a target to a specific agent.
+    const bound = addTarget(ctx, group.id, {
+      kind: 'fqdn',
+      value: 'origin.example.com',
+      expected_behavior: 'block_at_edge',
+      metadata: { agent_id: 'agt_edge_1' },
+    });
+    assert.deepEqual(bound.metadata, { agent_id: 'agt_edge_1' });
+
+    // IP onboard form captures a free-text note.
+    const noted = addTarget(ctx, group.id, {
+      kind: 'ip',
+      value: '203.0.113.10:443',
+      expected_behavior: 'absorb_at_origin',
+      metadata: { notes: 'Origin behind CDN · single-AZ' },
+    });
+    assert.deepEqual(noted.metadata, { notes: 'Origin behind CDN · single-AZ' });
+
+    // A target added without metadata must not carry an empty metadata object.
+    const plain = addTarget(ctx, group.id, { kind: 'fqdn', value: 'plain.example.com' });
+    assert.equal(plain.metadata, undefined);
+
+    // All three survive the round-trip through getTargetGroup.
+    const reloaded = getTargetGroup(ctx, group.id).targets;
+    assert.equal(reloaded.find((t) => t.value === 'origin.example.com').metadata.agent_id, 'agt_edge_1');
+    assert.equal(reloaded.find((t) => t.value === '203.0.113.10:443').metadata.notes, 'Origin behind CDN · single-AZ');
+  });
 });

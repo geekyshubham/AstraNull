@@ -18,6 +18,12 @@ const TEST_ENV = {
   ASTRANULL_AUTH_MODE: 'dev-headers',
   ASTRANULL_NO_PERSIST: '1',
   ASTRANULL_WAF_POSTURE_ENABLED: '1',
+  // Portal E2E drives many route navigations against ONE shared server; each nav
+  // fires ~15 parallel /v1 calls via fetchPortalData, so a full-suite run bursts past
+  // the default 600-req/60s limiter and starts getting 429s (empty lists → spurious
+  // "not found"). The limiter is not under test here; disable it for the test server.
+  // Config only forbids this when NODE_ENV=production (set to 'test' above).
+  ASTRANULL_RATE_LIMIT_DISABLED: '1',
 };
 
 /** @type {{ server: import('node:http').Server | null, baseUrl: string | null, port: number | null }} */
