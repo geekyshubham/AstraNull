@@ -217,6 +217,17 @@ function resolveDomainTier(domainId, records = [], manifest = null) {
     if (!hasValue(custodyUri) || !CUSTODY_URI_RE.test(String(custodyUri))) {
       manifestGaps.push('custody_uri_invalid');
     }
+    // A live_external attestation must point at real retained artifacts. The manifest
+    // template ships `retained_artifact_refs: []` as a "fill this in before launch"
+    // marker; an empty (or all-blank) list means the operator never retained the
+    // underlying IdP/KMS/provider/deploy/signoff artifact, so the domain has not
+    // actually been externally verified and must not count as live_external.
+    const retainedRefs = manifestEntry.retained_artifact_refs;
+    const hasRetainedArtifact = Array.isArray(retainedRefs)
+      && retainedRefs.some((ref) => hasValue(ref));
+    if (!hasRetainedArtifact) {
+      manifestGaps.push('retained_artifact_refs_missing');
+    }
     if (manifestGaps.length > 0 || !liveEvidence.ready) {
       return {
         tier: 'metadata_only',

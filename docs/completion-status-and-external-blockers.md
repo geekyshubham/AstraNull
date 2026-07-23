@@ -7,6 +7,55 @@
 > partners, hardware, or legal artifacts). "100% of everything" is not achievable from the
 > repo alone — the items in section C require operational/business closeout.
 
+## A0. Readiness-gate correctness fix (2026-07-23 pass)
+
+> Added by a focused production-readiness pass. This is a **correctness fix to the
+> readiness machinery itself**, not a new feature.
+
+**Defect:** the external production-verification gate
+(`src/contracts/externalProductionVerification.mjs`) counted an *unfilled* manifest
+template as fully `live_external`-verified. `buildLiveExternalVerificationManifestTemplate()`
+emits `retained_artifact_refs: []` as a fill-me-in marker, and the committed
+`output/external-production-verification.json` shipped those empties — so the gate
+reported `external_verification.complete: true` / `customer_production_ready: true`
+on domains where **no real external artifact had been retained**. For a platform whose
+core rule is "evidence over assumptions," a gate that greenlights customer launch on
+zero retained artifacts is a real defect.
+
+**Fix:** `resolveDomainTier` now requires at least one non-empty `retained_artifact_refs`
+entry before a domain can reach `live_external` (new blocker
+`manifest_retained_artifact_refs_missing`; the gate fails closed otherwise). The gate's
+genuine content checks were already sound (KMS provider must not be a placeholder,
+container image must be sha256-digest-pinned, rollback must be exercised, MFA required,
+e2e matrix passed) — only the retained-artifact check was missing.
+
+**Blast radius / verification:** live fixture
+(`tests/fixtures/externalProductionVerificationLive.mjs`) now populates
+`retained_artifact_refs` to simulate a real operator; regression test added
+(`tests/unit/external-production-verification.test.mjs` — "does not count an unfilled
+manifest template as live_external"). Full suite green: 2,304 unit + 284 integration +
+21 e2e + 6 contract node tests, 34 a11y (0 axe critical/serious across 34 routes),
+51 browser e2e journeys, portal lint clean. Server boots and serves `/v1/state`;
+`/health` returns 200. Regenerating the committed artifacts with the corrected gate
+now honestly reports `external_verification.complete: false` /
+`customer_production_ready: false` (`production_ready: true` still reflects the
+legitimately-closed in-repo scaffold gates — code, tests, docs).
+
+**Consequence for section C:** the gate now enforces what this document already
+states — `customer_production_ready` cannot go true until the section-C external
+artifacts are genuinely retained. It can no longer be satisfied by an unedited template.
+
+**Postgres path verified (2026-07-23):** ran `scripts/db-migrate-test.mjs` against a
+real local PostgreSQL 16.14 (ephemeral throwaway DB) — all 37 migrations applied
+cleanly (latest `0037_test_policies`); idempotent second pass skipped every migration.
+Tenant-isolation RLS design confirmed correct: schema uses `ENABLE`+`FORCE ROW LEVEL
+SECURITY` on every tenant table with explicit `tenant_isolation_*` policies, and the
+runtime role must be the non-superuser `astranull_app` (`db/docker/01-app-role.sql`).
+A superuser connection bypasses RLS by Postgres design — not a product defect. The
+full `postgres-acceptance.mjs` staging-evidence run still needs the two-role Docker
+stack (`npm run postgres:local:up`) to provision `astranull_app` grants; the migration
+correctness and RLS design are verified independently of that.
+
 ## A. Completed and verified this pass
 
 All verified with `make verify` (lint ok; unit + integration + e2e pass; safety-check ok; tenant-query-audit 0 findings) plus `npm run web:typecheck` + `npm run web:build` for UI. Default `npm test` is offline (excludes `capability-probes-live-dns.test.mjs`); public AXFR live I/O is supplemental via `npm run test:live-dns` (also run post–step 6 by `scripts/capture-probe-verification-evidence.mjs`).
@@ -80,7 +129,7 @@ These recur as `External:` under many `[x]` rows. They are operational/business 
 - Customer legal/ownership artifacts, provider approval custody, SOC staging review; live agent placement mode matrix; target-env migrations + concurrency-under-load signoff; safe-vector live fleet matrix + SOC/security signoff.
 
 **QA**
-- Playwright browser/accessibility matrix (needs browser binaries + running stack; `make verify` uses fetch-based smoke only).
+- Playwright browser/accessibility matrix (needs browser binaries + running stack; `make verify` uses fetch-based smoke only). **Update 2026-07-23:** executed locally this pass with Playwright 1.61 + Chromium against the running portal — 34 a11y route scans (0 axe critical/serious) and 51 browser e2e journeys all passed. Remaining work is wiring this into standard/CI verification with provisioned browser binaries, not proving it passes.
 
 ### What would unblock section C
 Provisioned staging/prod infrastructure, real provider/partner contracts and credentials, an enterprise IdP tenant, KMS/HSM, a package-hosting + signing pipeline, and recorded legal/SOC/security signoffs — then attach the evidence via the existing `npm run release:*:evidence` CLIs and re-run `npm run release:gap-audit` / `release:external-verify`.
