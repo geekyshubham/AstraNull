@@ -157,6 +157,26 @@ describe('external production verification contract', () => {
     assert.equal(manifest.domains.enterprise_idp_mfa.tier, 'live_external');
   });
 
+  it('does not count an unfilled manifest template as live_external', () => {
+    // The bare template ships retained_artifact_refs: [] as a fill-me-in marker.
+    // Even with fully live evidence records, a manifest whose operator never
+    // retained real artifacts must fall back to metadata_only and block launch.
+    const records = liveExternalEvidenceRecords();
+    const unfilledManifest = buildLiveExternalVerificationManifestTemplate({
+      releaseId: 'rel-live-external-2026-07-04',
+      operatorReference: 'operator://security/release-lead',
+      createdAt: '2026-07-04T00:00:00.000Z',
+    });
+    const report = aggregateExternalProductionVerification(records, { manifest: unfilledManifest });
+    assert.equal(report.complete, false);
+    assert.equal(report.live_external_count, 0);
+    assert.ok(report.domains.every((domain) => domain.tier === 'metadata_only'));
+    assert.ok(
+      report.domains.every((domain) =>
+        domain.blockers.includes('manifest_retained_artifact_refs_missing')),
+    );
+  });
+
   it('verify script exit code is 1 until live external verification completes', () => {
     const incomplete = aggregateExternalProductionVerification([], { manifest: null });
     const complete = aggregateExternalProductionVerification(

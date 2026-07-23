@@ -85,9 +85,16 @@ export function liveExternalEvidenceRecords(releaseId = 'rel-live-external-2026-
 }
 
 export function liveExternalVerificationManifest(releaseId = 'rel-live-external-2026-07-04') {
-  return buildLiveExternalVerificationManifestTemplate({
+  const template = buildLiveExternalVerificationManifestTemplate({
     releaseId,
     operatorReference: 'operator://security/release-lead',
     createdAt: '2026-07-04T00:00:00.000Z',
   });
+  // Simulate an operator who has actually retained the external artifacts. The
+  // bare template ships empty retained_artifact_refs as a fill-me-in marker; a
+  // real live_external attestation must reference at least one retained artifact.
+  for (const [domainId, entry] of Object.entries(template.domains)) {
+    entry.retained_artifact_refs = [`retained://external/${domainId}/${releaseId}`];
+  }
+  return template;
 }
