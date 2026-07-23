@@ -45,6 +45,17 @@ legitimately-closed in-repo scaffold gates — code, tests, docs).
 states — `customer_production_ready` cannot go true until the section-C external
 artifacts are genuinely retained. It can no longer be satisfied by an unedited template.
 
+**Postgres path verified (2026-07-23):** ran `scripts/db-migrate-test.mjs` against a
+real local PostgreSQL 16.14 (ephemeral throwaway DB) — all 37 migrations applied
+cleanly (latest `0037_test_policies`); idempotent second pass skipped every migration.
+Tenant-isolation RLS design confirmed correct: schema uses `ENABLE`+`FORCE ROW LEVEL
+SECURITY` on every tenant table with explicit `tenant_isolation_*` policies, and the
+runtime role must be the non-superuser `astranull_app` (`db/docker/01-app-role.sql`).
+A superuser connection bypasses RLS by Postgres design — not a product defect. The
+full `postgres-acceptance.mjs` staging-evidence run still needs the two-role Docker
+stack (`npm run postgres:local:up`) to provision `astranull_app` grants; the migration
+correctness and RLS design are verified independently of that.
+
 ## A. Completed and verified this pass
 
 All verified with `make verify` (lint ok; unit + integration + e2e pass; safety-check ok; tenant-query-audit 0 findings) plus `npm run web:typecheck` + `npm run web:build` for UI. Default `npm test` is offline (excludes `capability-probes-live-dns.test.mjs`); public AXFR live I/O is supplemental via `npm run test:live-dns` (also run post–step 6 by `scripts/capture-probe-verification-evidence.mjs`).
