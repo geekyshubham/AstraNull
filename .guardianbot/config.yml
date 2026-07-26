@@ -70,7 +70,7 @@ image:
     ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
     ASTRANULL_BUNDLED_STAGING_OIDC: "1"
     ASTRANULL_PUBLIC_BASE_URL: https://astranull-qteog.ondigitalocean.app
-    ASTRANULL_PROBE_MODE: disabled
+    ASTRANULL_PROBE_MODE: simulation
     ASTRANULL_SECRET_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
 dast:
   allowedOrigin: https://astranull-qteog.ondigitalocean.app
