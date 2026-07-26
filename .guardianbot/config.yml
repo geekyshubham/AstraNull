@@ -1,0 +1,69 @@
+schemaVersion: 1.0.0
+workflowVersion: a1a5640b4aa30bf393777e420b3c9049739af7e7
+repository:
+  defaultBranch: main
+  releaseBranches:
+    - main
+  languages:
+    - css
+    - dockerfile
+    - html
+    - javascript
+    - makefile
+    - shell
+    - typescript
+  relatedRepositories: []
+review:
+  automatic: true
+  drafts: manual
+  incremental: true
+  maxInlineComments: 8
+  categories:
+    - security
+    - logic
+    - reliability
+    - concurrency
+    - performance
+    - contract
+    - testing
+  highRiskPaths:
+    - "**/auth/**"
+    - "**/security/**"
+    - "**/migrations/**"
+    - .github/workflows/**
+    - "**/Dockerfile*"
+    - "**/*secret*"
+    - "**/*tenant*"
+  contextDocuments:
+    - README.md
+    - CONTRIBUTING.md
+    - SECURITY.md
+    - .github/CODEOWNERS
+  excludedPaths:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/*.min.js"
+scanners:
+  mode: report-only
+  semgrep: true
+  trivy: true
+  suppressions: []
+image:
+  dockerfile: ops/digitalocean/Dockerfile
+  context: .
+  platform: linux/amd64
+  registry: ghcr.io/geekyshubham/astranull
+  healthPath: /health
+  readinessPath: /ready
+  sbomFormat: cyclonedx-json
+  dependentServices:
+    - postgres
+    - redis
+dast:
+  allowedOrigin: https://astranull-qteog.ondigitalocean.app
+  openapi: /docs/api/waf-posture-openapi.json
+  authenticationProfile: control-plane://profiles/astranull-staging
+  sessionAssertionPath: /v1/waf/assets
+  excludedRoutes: []
