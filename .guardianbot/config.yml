@@ -1,5 +1,5 @@
 schemaVersion: 1.0.0
-workflowVersion: ee0f92f0ac31bd802c6185130bb85d3fba4d0616
+workflowVersion: 5f8e47623076705bb4876b6c33b98a618c7409a3
 repository:
   defaultBranch: main
   releaseBranches:
@@ -70,8 +70,12 @@ image:
     ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
     ASTRANULL_BUNDLED_STAGING_OIDC: "1"
     ASTRANULL_PUBLIC_BASE_URL: https://astranull-qteog.ondigitalocean.app
-    ASTRANULL_PROBE_MODE: simulation
+    ASTRANULL_PROBE_MODE: signed-worker
     ASTRANULL_SECRET_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+    ASTRANULL_HIGH_SCALE_ADAPTER_MODE: disabled
+    ASTRANULL_AGENT_IDENTITY_MODE: bearer
+  ephemeralEnvironment:
+    - ASTRANULL_PROBE_WORKER_SECRET
 dast:
   allowedOrigin: https://astranull-qteog.ondigitalocean.app
   openapi: /docs/api/waf-posture-openapi.json
