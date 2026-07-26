@@ -21,13 +21,13 @@ permissions:
 jobs:
   guardianbot-security-gate:
     name: guardianbot/security-gate
-    uses: geekyshubham/guardianbot/.github/workflows/reusable-security.yml@5f8e47623076705bb4876b6c33b98a618c7409a3
+    uses: geekyshubham/guardianbot/.github/workflows/reusable-security.yml@724fd8f2e9699a6246037ab4ea145ff40b9a0d2e
     with:
       config-path: .guardianbot/config.yml
 
   guardianbot-image:
     name: guardianbot/image-security
-    uses: geekyshubham/guardianbot/.github/workflows/reusable-image.yml@5f8e47623076705bb4876b6c33b98a618c7409a3
+    uses: geekyshubham/guardianbot/.github/workflows/reusable-image.yml@724fd8f2e9699a6246037ab4ea145ff40b9a0d2e
     with:
       dockerfile: "ops/digitalocean/Dockerfile"
       context: "."
