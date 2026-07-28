@@ -1,0 +1,150 @@
+schemaVersion: 1.0.0
+workflowVersion: bf0c2310b9dfe3b565554a3ec31f83a0ac967cd9
+repository:
+  defaultBranch: main
+  releaseBranches:
+    - main
+  languages:
+    - css
+    - dockerfile
+    - html
+    - javascript
+    - makefile
+    - shell
+    - typescript
+  packageManagers:
+    - pnpm
+  lockfiles:
+    - pnpm-lock.yaml
+  relatedRepositories: []
+paths:
+  source:
+    - apps/web/react/src/**
+    - apps/web/react/src/lib/**
+    - scripts/lib/**
+    - src/**
+    - src/lib/**
+  test: &a2
+    - "**/*.spec.*"
+    - "**/*.test.*"
+    - tests/**
+  generated: []
+  vendored: []
+  excluded: &a1
+    - "**/*.generated.*"
+    - "**/*.map"
+    - "**/*.min.js"
+    - "**/.build/**"
+    - "**/.next/**"
+    - "**/Carthage/**"
+    - "**/Pods/**"
+    - "**/build/**"
+    - "**/coverage/**"
+    - "**/dist/**"
+    - "**/node_modules/**"
+    - "**/vendor/**"
+review:
+  automatic: true
+  drafts: manual
+  incremental: true
+  manual: true
+  targetBranches:
+    - main
+  maxInlineComments: 8
+  categories:
+    - security
+    - logic
+    - reliability
+    - concurrency
+    - performance
+    - contract
+    - testing
+  highRiskPaths:
+    - "**/auth/**"
+    - "**/security/**"
+    - "**/migrations/**"
+    - .github/workflows/**
+    - "**/Dockerfile*"
+    - "**/Containerfile*"
+    - "**/*secret*"
+    - "**/*tenant*"
+  contextDocuments:
+    - README.md
+  excludedPaths: *a1
+  pathRules:
+    - name: tests
+      paths: *a2
+      categories:
+        - testing
+        - logic
+      instructions:
+        - Check that changed behavior has deterministic coverage and meaningful assertions.
+    - name: documentation
+      paths:
+        - "**/*.md"
+        - docs/**
+      categories:
+        - contract
+        - maintainability
+      instructions:
+        - Keep documented behavior, examples, and operational instructions aligned with the
+          implementation.
+    - name: security-sensitive
+      paths:
+        - "**/*auth*"
+        - "**/*secret*"
+        - "**/*tenant*"
+        - "**/Dockerfile*"
+        - "**/migrations/**"
+        - "**/security/**"
+        - .github/workflows/**
+      categories:
+        - security
+        - logic
+        - reliability
+      instructions:
+        - Review trust boundaries, authorization, secret handling, and safe failure behavior.
+runner:
+  executionEnvironment: github-hosted
+  testCommands:
+    - pnpm test
+  buildCommands: []
+scanners:
+  mode: report-only
+  semgrep: true
+  trivy: true
+  suppressions: []
+image:
+  name: geekyshubham/astranull
+  dockerfile: ops/digitalocean/Dockerfile
+  context: .
+  platform: linux/amd64
+  buildArguments: {}
+  smokeProfile: multi-service
+  registry: ghcr.io/geekyshubham/astranull
+  healthPath: /health
+  readinessPath: /ready
+  containerPort: 3000
+  ports:
+    - name: http
+      containerPort: 3000
+      protocol: tcp
+    - name: port-8080
+      containerPort: 8080
+      protocol: tcp
+  signing:
+    mode: keyless
+    workflow: .github/workflows/guardianbot.yml
+    ref: refs/heads/main
+  sbomFormat: cyclonedx-json
+  sbomRetentionDays: 30
+  dependentServices:
+    - postgres
+    - redis
+  testCommand: pnpm test
+  deployment:
+    environment: staging
+    requireImmutableDigest: true
+    requireSignature: true
+    requireSbom: true
+dast: null
