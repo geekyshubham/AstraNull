@@ -1,5 +1,5 @@
 schemaVersion: 1.0.0
-workflowVersion: 6e241a4355d84e375be3322fd5ca03970b5f7459
+workflowVersion: 70df177cd0cbdadf97f819bcdfc13a1e16216ce5
 repository:
   defaultBranch: main
   releaseBranches:
@@ -138,6 +138,19 @@ image:
   dependentServices:
     - postgres
     - redis
+  runtimeEnvironment:
+    ASTRANULL_DATABASE_URL: postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
+    ASTRANULL_PUBLIC_BASE_URL: https://guardianbot.invalid
+    ASTRANULL_PERSISTENCE_MODE: postgres
+    ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
+    ASTRANULL_BUNDLED_STAGING_OIDC: "1"
+    ASTRANULL_AUTH_MODE: oidc-jwt
+    ASTRANULL_PROBE_MODE: signed-worker
+    ASTRANULL_HIGH_SCALE_ADAPTER_MODE: disabled
+    ASTRANULL_AGENT_IDENTITY_MODE: bearer
+  ephemeralEnvironment:
+    - ASTRANULL_SECRET_ENCRYPTION_KEY
+    - ASTRANULL_PROBE_WORKER_SECRET
   migrationCommand: node scripts/migrate-postgres.mjs
   testCommand: node --check src/index.mjs && node --check scripts/railway-staging-start.mjs
   deployment:
@@ -145,4 +158,15 @@ image:
     requireImmutableDigest: true
     requireSignature: true
     requireSbom: true
-dast: null
+dast:
+  allowedOrigin: https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  allowedOrigins:
+    - https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  openapi: docs/api/guardianbot-dast-openapi.json
+  openapiSource: repository-file
+  authenticationProfile: control-plane://profiles/astranull-staging
+  sessionAssertionPath: /v1/checks
+  profiles:
+    deploySmoke: authenticated-baseline
+    nightly: authenticated-full
+  excludedRoutes: []
