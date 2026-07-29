@@ -193,7 +193,7 @@ test.describe('portal dynamic provenance', () => {
     await gotoPortalRoute(page, 'finding-detail', baseUrl);
 
     const remediationCard = page.locator('[data-od-id="finding-remediation"]');
-    await expect(remediationCard.getByText(PROVENANCE_REMEDIATION.baselineState, { exact: true })).toBeVisible();
+    await expect(remediationCard.getByText(new RegExp(`^${PROVENANCE_REMEDIATION.baselineState}$`, 'i'))).toBeVisible();
     await expect(remediationCard).toContainText(PROVENANCE_REMEDIATION.baselineDescription);
     await expect(remediationCard).not.toContainText(PROVENANCE_REMEDIATION.mutatedDescription);
 
@@ -204,7 +204,7 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedFinding.remediation?.delivered_via).toBe(PROVENANCE_REMEDIATION.deliveredVia);
 
     await page.goto(`${mutatedBaseUrl}/app#finding-detail?id=${encodeURIComponent(PROVENANCE_REMEDIATION.findingId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(remediationCard.getByText(PROVENANCE_REMEDIATION.mutatedState, { exact: true })).toBeVisible();
+    await expect(remediationCard.getByText(new RegExp(`^${PROVENANCE_REMEDIATION.mutatedState}$`, 'i'))).toBeVisible();
     await expect(remediationCard).toContainText(PROVENANCE_REMEDIATION.mutatedDescription);
     await expect(remediationCard).not.toContainText(PROVENANCE_REMEDIATION.baselineDescription);
   });

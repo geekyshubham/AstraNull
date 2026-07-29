@@ -8113,12 +8113,12 @@ var e = Object.create, t = Object.defineProperty, n = Object.getOwnPropertyDescr
 ]), A = D("check", [["path", {
   d: "M20 6 9 17l-5-5",
   key: "1gmf2c"
-}]]), re = D("chevron-left", [["path", {
-  d: "m15 18-6-6 6-6",
-  key: "1wnfg3"
-}]]), ie = D("chevron-down", [["path", {
+}]]), re = D("chevron-down", [["path", {
   d: "m6 9 6 6 6-6",
   key: "qrunsl"
+}]]), ie = D("chevron-left", [["path", {
+  d: "m15 18-6-6 6-6",
+  key: "1wnfg3"
 }]]), j = D("chevron-right", [["path", {
   d: "m9 18 6-6-6-6",
   key: "mthhwq"
@@ -8731,7 +8731,7 @@ function Be() {
   return r;
 }
 //#endregion
-//#region node_modules/tailwind-merge/dist/bundle-mjs.mjs
+//#region node_modules/.pnpm/tailwind-merge@3.6.0/node_modules/tailwind-merge/dist/bundle-mjs.mjs
 var Ve = (e, t) => {
   let n = Array(e.length + t.length);
   for (let t = 0; t < e.length; t++) n[t] = e[t];
@@ -11371,10 +11371,10 @@ function ar(e, t, n = {}) {
   if (rr.has(t)) return i === "staff";
   if (ir.has(t)) return i === "staff" && tr.has(a);
   let o = nr[t];
-  return !o || er(r, o);
+  return o ? er(r, o) : !0;
 }
 //#endregion
-//#region node_modules/class-variance-authority/dist/index.mjs
+//#region node_modules/.pnpm/class-variance-authority@0.7.1/node_modules/class-variance-authority/dist/index.mjs
 var or = (e) => typeof e == "boolean" ? `${e}` : e === 0 ? "0" : e, sr = Be, cr = (e, t) => (n) => {
   if (t?.variants == null) return sr(e, n?.class, n?.className);
   let { variants: r, defaultVariants: i } = t, a = Object.keys(r).map((e) => {
@@ -11579,7 +11579,7 @@ function hr({ label: e, name: t, value: n, options: r, onChange: i, className: a
           children: [/* @__PURE__ */ (0, L.jsx)(mr, {
             label: h?.label ?? "",
             description: h?.description
-          }), /* @__PURE__ */ (0, L.jsx)(ie, {
+          }), /* @__PURE__ */ (0, L.jsx)(re, {
             size: 16,
             "aria-hidden": "true"
           })]
@@ -11745,7 +11745,7 @@ function Sr({ route: e, session: t, data: n, onRouteChange: r, onRoleChange: i, 
     }
   }), m = Xn.get(e) ?? Jn[0], h = t.tenant_id ?? n.state?.tenant_id ?? "unknown", g = n.state?.environment ?? "", _ = (0, C.useMemo)(() => {
     let e = t.role ?? "admin";
-    return Jn.filter((n) => !n.id.endsWith("-detail") && ar(e, n.id, {
+    return Jn.filter((n) => n.id.endsWith("-detail") ? !1 : ar(e, n.id, {
       principal: t.principal,
       staffRole: t.staff_role
     }));
@@ -11778,7 +11778,7 @@ function Sr({ route: e, session: t, data: n, onRouteChange: r, onRoleChange: i, 
       return t;
     });
   }
-  let w = f ? "Expand sidebar" : "Collapse sidebar", T = f ? j : re;
+  let w = f ? "Expand sidebar" : "Collapse sidebar", T = f ? j : ie;
   return /* @__PURE__ */ (0, L.jsxs)("div", {
     className: mn("app-shell", f && "sidebar-collapsed"),
     children: [
@@ -14148,6 +14148,7 @@ function Ji({ item: e, index: t, columns: n, rowId: r, isSelected: i, rowProps: 
 function Yi({ columns: e, className: t, children: n }) {
   return /* @__PURE__ */ (0, L.jsxs)(L.Fragment, { children: [/* @__PURE__ */ (0, L.jsx)("style", { children: Ki }), /* @__PURE__ */ (0, L.jsx)("div", {
     className: mn("table-wrap", t),
+    tabIndex: 0,
     children: /* @__PURE__ */ (0, L.jsxs)("table", {
       className: "data-table",
       children: [/* @__PURE__ */ (0, L.jsx)(qi, { columns: e }), n]
@@ -14573,7 +14574,7 @@ function La(e, t = Date.now()) {
 function Ra(e, t) {
   return e.filter((e) => {
     let n = Aa(e, ["resource_type"], ""), r = Aa(e, ["action"], ""), i = Aa(e, ["resource_id"], "");
-    return n === "agent" || r.startsWith("agent.") || r.startsWith("agent_update.") ? !t || i === t || ja(e, ["metadata", "agent_id"]) === t : !1;
+    return n === "agent" || r.startsWith("agent.") || r.startsWith("agent_update.") ? t ? i === t || ja(e, ["metadata", "agent_id"]) === t : !0 : !1;
   });
 }
 function za() {
@@ -15633,7 +15634,7 @@ function Ko(e) {
   let t = e.provider_context;
   if (!t || typeof t != "object" || Array.isArray(t)) return !1;
   let n = t;
-  return n.requires_provider_approval === !0 || String(n.provider_name ?? n.provider ?? n.name ?? "").trim().length > 0;
+  return n.requires_provider_approval === !0 ? !0 : String(n.provider_name ?? n.provider ?? n.name ?? "").trim().length > 0;
 }
 function qo(e) {
   let t = [...Vo];
@@ -17278,7 +17279,7 @@ function Qs({ groups: e, selectedIds: t, onChange: n, disabled: r = !1, label: i
               onRemove: d
             }, t);
           })
-        }), /* @__PURE__ */ (0, L.jsx)(ie, {
+        }), /* @__PURE__ */ (0, L.jsx)(re, {
           className: "tg-picker-chevron",
           size: 12,
           "aria-hidden": "true"
@@ -29044,7 +29045,7 @@ var qd = {
 };
 function Jd(e, t) {
   let n = Kd(e, ["status", "state"], "open").toLowerCase();
-  return t === "all" ? !0 : t === "open" ? n === "open" : t === "closed" ? n === "closed" : t !== "accepted" || n === "accepted" || n === "accepted_risk";
+  return t === "all" ? !0 : t === "open" ? n === "open" : t === "closed" ? n === "closed" : t === "accepted" ? n === "accepted" || n === "accepted_risk" : !0;
 }
 function Yd({ active: e, counts: t, onChange: n }) {
   return /* @__PURE__ */ (0, L.jsx)("div", {
@@ -29105,13 +29106,13 @@ function Zd({ findings: e, checks: t, targetGroups: n }) {
   }), [e]), T = (0, C.useMemo)(() => Xd(e.filter((e) => {
     if (!Jd(e, r)) return !1;
     let t = Kd(e, ["severity"], "unknown"), n = Kd(e, ["assignee", "owner"], "unassigned"), i = Kd(e, ["target_group_id"], "");
-    return a !== "all" && t !== a || s !== "all" && n !== s || l !== "all" && i !== l ? !1 : !p || [
+    return a !== "all" && t !== a || s !== "all" && n !== s || l !== "all" && i !== l ? !1 : p ? [
       Kd(e, ["id"]),
       Kd(e, ["title", "summary"]),
       Kd(e, ["check_id"]),
       n,
       i
-    ].join(" ").toLowerCase().includes(p);
+    ].join(" ").toLowerCase().includes(p) : !0;
   }), h), [
     e,
     r,
@@ -32023,7 +32024,7 @@ function Xp({ data: e, session: t }) {
     }))];
   }, [e.audit]), _ = e.audit.filter((e) => {
     let t = $(e, ["action"], "").toLowerCase();
-    return i && !t.includes("custody") && !t.includes("export") && !t.includes("report") || o !== "all" && $(e, ["actor_role", "actor_user_id"], "system") !== o || c !== "all" && $(e, ["action"], "") !== c ? !1 : !n.trim() || `${$(e, ["action"])} ${$(e, ["resource_type"])} ${$(e, ["resource_id"])}`.toLowerCase().includes(n.trim().toLowerCase());
+    return i && !t.includes("custody") && !t.includes("export") && !t.includes("report") || o !== "all" && $(e, ["actor_role", "actor_user_id"], "system") !== o || c !== "all" && $(e, ["action"], "") !== c ? !1 : n.trim() ? `${$(e, ["action"])} ${$(e, ["resource_type"])} ${$(e, ["resource_id"])}`.toLowerCase().includes(n.trim().toLowerCase()) : !0;
   }), v = _.find((e) => up(e) === u) ?? null;
   (0, C.useEffect)(() => {
     p(!1);

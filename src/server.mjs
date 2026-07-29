@@ -16,6 +16,7 @@ import * as breakGlass from './services/breakGlass.mjs';
 import * as subscriptions from './services/subscriptions.mjs';
 import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
+import { exchangeGuardianBotDastSession } from './services/guardianbotDastSession.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
 import { readArtifactUploadBody } from './lib/authorizationArtifactLedger.mjs';
 import { HttpBodyError, json, parseUrl, readBodyText, readJsonBody, serveStatic, text } from './lib/http.mjs';
@@ -597,6 +598,17 @@ export function createServer(options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/metrics') {
         text(res, 200, metricsPlaintext());
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/guardianbot/session') {
+        const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+        const result = exchangeGuardianBotDastSession({
+          authorization: req.headers.authorization,
+          body,
+          env,
+        });
+        json(res, result.status, result.body);
         return;
       }
 
