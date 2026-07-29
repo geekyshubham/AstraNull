@@ -138,6 +138,19 @@ image:
   dependentServices:
     - postgres
     - redis
+  runtimeEnvironment:
+    ASTRANULL_DATABASE_URL: postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
+    ASTRANULL_PUBLIC_BASE_URL: https://guardianbot.invalid
+    ASTRANULL_PERSISTENCE_MODE: postgres
+    ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
+    ASTRANULL_BUNDLED_STAGING_OIDC: "1"
+    ASTRANULL_AUTH_MODE: oidc-jwt
+    ASTRANULL_PROBE_MODE: signed-worker
+    ASTRANULL_HIGH_SCALE_ADAPTER_MODE: disabled
+    ASTRANULL_AGENT_IDENTITY_MODE: bearer
+  ephemeralEnvironment:
+    - ASTRANULL_SECRET_ENCRYPTION_KEY
+    - ASTRANULL_PROBE_WORKER_SECRET
   migrationCommand: node scripts/migrate-postgres.mjs
   testCommand: node --check src/index.mjs && node --check scripts/railway-staging-start.mjs
   deployment:
