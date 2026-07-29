@@ -102,7 +102,7 @@ function DataTableChrome<T>({
   return (
     <>
       <style>{DATA_TABLE_STYLES}</style>
-      <div className={cn('table-wrap', className)}>
+      <div className={cn('table-wrap', className)} tabIndex={0}>
         <table className="data-table">
           <TableHeaderRow columns={columns} />
           {children}
