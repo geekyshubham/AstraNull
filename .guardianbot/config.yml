@@ -1,5 +1,5 @@
 schemaVersion: 1.0.0
-workflowVersion: 6e241a4355d84e375be3322fd5ca03970b5f7459
+workflowVersion: 70df177cd0cbdadf97f819bcdfc13a1e16216ce5
 repository:
   defaultBranch: main
   releaseBranches:
@@ -145,4 +145,15 @@ image:
     requireImmutableDigest: true
     requireSignature: true
     requireSbom: true
-dast: null
+dast:
+  allowedOrigin: https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  allowedOrigins:
+    - https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  openapi: docs/api/guardianbot-dast-openapi.json
+  openapiSource: repository-file
+  authenticationProfile: control-plane://profiles/astranull-staging
+  sessionAssertionPath: /v1/state
+  profiles:
+    deploySmoke: authenticated-baseline
+    nightly: authenticated-full
+  excludedRoutes: []
