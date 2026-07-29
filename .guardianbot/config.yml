@@ -124,12 +124,9 @@ image:
   registry: ghcr.io/geekyshubham/astranull
   healthPath: /health
   readinessPath: /ready
-  containerPort: 3000
+  containerPort: 8080
   ports:
     - name: http
-      containerPort: 3000
-      protocol: tcp
-    - name: port-8080
       containerPort: 8080
       protocol: tcp
   signing:
@@ -141,7 +138,8 @@ image:
   dependentServices:
     - postgres
     - redis
-  testCommand: pnpm test
+  migrationCommand: node scripts/migrate-postgres.mjs
+  testCommand: node --check src/index.mjs && node --check scripts/railway-staging-start.mjs
   deployment:
     environment: staging
     requireImmutableDigest: true
