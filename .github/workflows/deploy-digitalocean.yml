@@ -1,8 +1,9 @@
-name: Deploy DigitalOcean
+name: Legacy manual DigitalOcean deploy
 
+# GuardianBot owns automatic signed, SBOM-attested, immutable-digest promotion.
+# Keep this workflow only as an explicit operator fallback so it cannot race the
+# centrally verified deployment path on pushes to main.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
