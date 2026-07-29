@@ -8,6 +8,8 @@ on:
     branches: ["main"]
   schedule:
     - cron: "23 2 * * *"
+    - cron: "*/15 * * * *"
+    - cron: "47 2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -22,7 +24,7 @@ jobs:
       security-events: write
       actions: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@6e241a4355d84e375be3322fd5ca03970b5f7459
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@70df177cd0cbdadf97f819bcdfc13a1e16216ce5
     with:
       config-path: .guardianbot/config.yml
 
@@ -33,7 +35,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@6e241a4355d84e375be3322fd5ca03970b5f7459
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@70df177cd0cbdadf97f819bcdfc13a1e16216ce5
     with:
       dockerfile: "ops/digitalocean/Dockerfile"
       context: "."
@@ -42,17 +44,47 @@ jobs:
       readiness-path: "/ready"
       container-port: 8080
       dependent-services: "postgres,redis"
-      ephemeral-env-keys: "ASTRANULL_SECRET_ENCRYPTION_KEY,ASTRANULL_PROBE_WORKER_SECRET"
+      ephemeral-env-keys: ""
       runtime-env: |
-          ASTRANULL_DATABASE_URL=postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
-          ASTRANULL_PUBLIC_BASE_URL=https://guardianbot.invalid
-          ASTRANULL_PERSISTENCE_MODE=postgres
-          ASTRANULL_DEPLOYMENT_PROFILE=hosted-staging
-          ASTRANULL_BUNDLED_STAGING_OIDC=1
-          ASTRANULL_AUTH_MODE=oidc-jwt
-          ASTRANULL_PROBE_MODE=signed-worker
-          ASTRANULL_HIGH_SCALE_ADAPTER_MODE=disabled
-          ASTRANULL_AGENT_IDENTITY_MODE=bearer
+          # No runtime environment values configured.
       migration-command: "node scripts/migrate-postgres.mjs"
       smoke-command: "node --check src/index.mjs && node --check scripts/railway-staging-start.mjs"
       push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+
+  guardianbot-dast-smoke:
+    name: guardianbot/dast-smoke
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *')
+    permissions:
+      contents: read
+      id-token: write
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@70df177cd0cbdadf97f819bcdfc13a1e16216ce5
+    with:
+      target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
+      openapi: "docs/api/guardianbot-dast-openapi.json"
+      openapi-source: "repository-file"
+      authentication-profile: "control-plane://profiles/astranull-staging"
+      session-assertion-path: "/v1/state"
+      excluded-routes: "[]"
+      scan-profile: "authenticated-baseline"
+      minutes: 15
+
+  guardianbot-dast-nightly:
+    name: guardianbot/dast-nightly
+    if: github.event_name == 'schedule' && github.event.schedule == '47 2 * * *'
+    permissions:
+      contents: read
+      id-token: write
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@70df177cd0cbdadf97f819bcdfc13a1e16216ce5
+    with:
+      target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
+      openapi: "docs/api/guardianbot-dast-openapi.json"
+      openapi-source: "repository-file"
+      authentication-profile: "control-plane://profiles/astranull-staging"
+      session-assertion-path: "/v1/state"
+      excluded-routes: "[]"
+      scan-profile: "authenticated-full"
+      minutes: 45
+
