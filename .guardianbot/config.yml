@@ -152,7 +152,7 @@ dast:
   openapi: docs/api/guardianbot-dast-openapi.json
   openapiSource: repository-file
   authenticationProfile: control-plane://profiles/astranull-staging
-  sessionAssertionPath: /v1/state
+  sessionAssertionPath: /v1/checks
   profiles:
     deploySmoke: authenticated-baseline
     nightly: authenticated-full

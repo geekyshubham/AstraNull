@@ -33,10 +33,10 @@
         }
       }
     },
-    "/v1/state": {
+    "/v1/checks": {
       "get": {
-        "operationId": "getAuthenticatedState",
-        "summary": "Read the authenticated staging state",
+        "operationId": "getAuthenticatedChecks",
+        "summary": "Read the authenticated staging check catalog",
         "security": [
           {
             "bearerAuth": []
@@ -44,7 +44,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Authenticated state returned."
+            "description": "Authenticated check catalog returned."
           },
           "401": {
             "description": "Authentication is missing or invalid."
