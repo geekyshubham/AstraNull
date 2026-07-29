@@ -44,8 +44,7 @@ jobs:
       dependent-services: "postgres,redis"
       ephemeral-env-keys: "ASTRANULL_SECRET_ENCRYPTION_KEY,ASTRANULL_PROBE_WORKER_SECRET"
       runtime-env: |
-          ASTRANULL_DATABASE_URL=postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot
-          ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED=0
+          ASTRANULL_DATABASE_URL=postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
           ASTRANULL_PUBLIC_BASE_URL=https://guardianbot.invalid
           ASTRANULL_PERSISTENCE_MODE=postgres
           ASTRANULL_DEPLOYMENT_PROFILE=hosted-staging
@@ -57,4 +56,3 @@ jobs:
       migration-command: "node scripts/migrate-postgres.mjs"
       smoke-command: "node --check src/index.mjs && node --check scripts/railway-staging-start.mjs"
       push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
