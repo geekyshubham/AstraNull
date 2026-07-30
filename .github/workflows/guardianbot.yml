@@ -24,7 +24,7 @@ jobs:
       security-events: write
       actions: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@9a898934fa62ad9fcaab290a83c0d287e2d35967
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@152649be5a86862f619a86d60598fc25bafb0429
     with:
       config-path: .guardianbot/config.yml
 
@@ -35,7 +35,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@9a898934fa62ad9fcaab290a83c0d287e2d35967
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@152649be5a86862f619a86d60598fc25bafb0429
     with:
       dockerfile: "ops/digitalocean/Dockerfile"
       context: "."
@@ -70,7 +70,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@9a898934fa62ad9fcaab290a83c0d287e2d35967
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@152649be5a86862f619a86d60598fc25bafb0429
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
@@ -87,7 +87,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@9a898934fa62ad9fcaab290a83c0d287e2d35967
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@152649be5a86862f619a86d60598fc25bafb0429
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
