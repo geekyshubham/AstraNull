@@ -24,7 +24,7 @@ jobs:
       security-events: write
       actions: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@ac52fb8123b5897d8c9f67b0d3ff8ca95289a5cb
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@6d04f85ef5cf1c6865300f0125ef8875c6c42afb
     with:
       config-path: .guardianbot/config.yml
 
@@ -35,7 +35,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@ac52fb8123b5897d8c9f67b0d3ff8ca95289a5cb
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@6d04f85ef5cf1c6865300f0125ef8875c6c42afb
     with:
       dockerfile: "ops/digitalocean/Dockerfile"
       context: "."
@@ -46,6 +46,7 @@ jobs:
       dependent-services: "postgres,redis"
       ephemeral-env-keys: "ASTRANULL_SECRET_ENCRYPTION_KEY,ASTRANULL_PROBE_WORKER_SECRET"
       policy-mode: "report-only"
+      promotion-mode: "verified-default-branch"
       runtime-env: |
           ASTRANULL_DATABASE_URL=postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
           ASTRANULL_PUBLIC_BASE_URL=https://guardianbot.invalid
@@ -58,7 +59,7 @@ jobs:
           ASTRANULL_AGENT_IDENTITY_MODE=bearer
       migration-command: "node scripts/migrate-postgres.mjs"
       smoke-command: "node --check src/index.mjs && node --check scripts/railway-staging-start.mjs"
-      push: false
+      push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 
   guardianbot-dast-smoke:
@@ -69,7 +70,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@ac52fb8123b5897d8c9f67b0d3ff8ca95289a5cb
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@6d04f85ef5cf1c6865300f0125ef8875c6c42afb
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
@@ -86,7 +87,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@ac52fb8123b5897d8c9f67b0d3ff8ca95289a5cb
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@6d04f85ef5cf1c6865300f0125ef8875c6c42afb
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
