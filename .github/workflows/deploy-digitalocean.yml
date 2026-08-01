@@ -119,6 +119,10 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "ghcr.io/geekyshubham/astranull@${IMAGE_DIGEST}"
 
+      # Every ${VAR} in .do/app.yaml must be listed here. app_action REPLACES the whole app
+      # spec, so a placeholder with no matching env var is substituted with an empty string
+      # (or left as the literal `${VAR}`) and silently overwrites whatever the live app had.
+      # tests/unit/deploy-spec-placeholders.test.mjs fails the build if the two drift.
       - name: Deploy to App Platform
         uses: digitalocean/app_action/deploy@v2
         env:
@@ -126,6 +130,10 @@ jobs:
           GHCR_CREDENTIALS: ${{ secrets.GHCR_CREDENTIALS }}
           ASTRANULL_SECRET_ENCRYPTION_KEY: ${{ secrets.ASTRANULL_SECRET_ENCRYPTION_KEY }}
           ASTRANULL_PROBE_WORKER_SECRET: ${{ secrets.ASTRANULL_PROBE_WORKER_SECRET }}
+          # Omitting this deployed an unfilled `${...}` template as the OIDC signing key: the
+          # container then failed closed on startup, the rollout was rejected, and the previous
+          # revision kept serving the git-published key that this rotation exists to retire.
+          ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON: ${{ secrets.ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON }}
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           app_spec_location: .do/app.yaml
