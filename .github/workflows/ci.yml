@@ -8,9 +8,17 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned, not `@v4`: a major tag is a mutable pointer the action owner can
+      # retarget (see tj-actions/changed-files, March 2025). The trailing comment is the
+      # version at that SHA and is what dependabot rewrites. The deploy workflow explains
+      # the full reasoning; CI runs on every push and PR, so it is the widest trigger
+      # surface in the repo even though it holds no deploy credentials.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      # node-version here is a runtime guard, not a preference: tests/unit/runtime-version-pin.test.mjs
+      # fails if this drifts off the allowed majors, so CI cannot silently start testing a
+      # different (or end-of-life) line than the Dockerfiles build on.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 

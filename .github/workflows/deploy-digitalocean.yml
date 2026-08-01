@@ -14,13 +14,25 @@ concurrency:
 permissions:
   contents: read
 
+# Every third-party action below is pinned to a full commit SHA, not a `@vN` tag.
+# A major tag is a moving pointer the action owner controls and can retarget at any
+# time — that is precisely how tj-actions/changed-files was compromised in March 2025.
+# It matters more here than anywhere else in the repo because the deploy job holds
+# DIGITALOCEAN_ACCESS_TOKEN, GHCR_CREDENTIALS and ASTRANULL_SECRET_ENCRYPTION_KEY, and
+# carries id-token: write. A retargeted tag would run with all of that AND could mint a
+# cosign signature under this repository's own OIDC identity, so the verify step below
+# would still pass on a poisoned image: the signature chain is only as trustworthy as
+# the actions that build it. The trailing `# vN.N.N` comment is the human-readable
+# version at that SHA and is what dependabot (.github/dependabot.yml) rewrites on bump.
+# Pins are deliberately held at the CURRENT majors — bumping majors in a workflow whose
+# only execution path is a manual production deploy has no cheap dry run.
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -73,17 +85,17 @@ jobs:
       # token as its signing identity instead of holding a private key.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       # Required by the `sbom:` and `provenance:` inputs on the build step below.
       # Without it buildx uses the default `docker` driver, which cannot produce
@@ -91,11 +103,11 @@ jobs:
       # supported for the docker driver" before any layer is pushed. This action
       # switches to the docker-container driver, which supports them.
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build and push container image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ops/digitalocean/Dockerfile
@@ -133,7 +145,7 @@ jobs:
       # (or left as the literal `${VAR}`) and silently overwrites whatever the live app had.
       # tests/unit/deploy-spec-placeholders.test.mjs fails the build if the two drift.
       - name: Deploy to App Platform
-        uses: digitalocean/app_action/deploy@v2
+        uses: digitalocean/app_action/deploy@cc55bc9b848d25f9c1c9f831cf843fbab3fbfb15 # v2.0.11
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           GHCR_CREDENTIALS: ${{ secrets.GHCR_CREDENTIALS }}

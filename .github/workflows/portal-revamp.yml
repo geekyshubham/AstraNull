@@ -31,9 +31,12 @@ jobs:
       matrix:
         suite: [unit, contract, integration, e2e, portal-scale, lint, a11y, db-migrate]
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned rather than `@v4` for the same reason as the other two workflows: a
+      # major tag can be retargeted by its owner, and this job runs on pull_request, so
+      # it executes code from branches that have not been reviewed yet.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
