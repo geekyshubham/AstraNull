@@ -19,7 +19,24 @@ describe('deriveClientKey', () => {
     assert.equal(key, 'ip:10.0.0.5');
   });
 
-  it('uses the first X-Forwarded-For hop when trustProxyHeaders is true', () => {
+  it('ignores X-Real-IP even when trustProxyHeaders is true', () => {
+    // A single-valued header carries no positional information, so an edge-written value is
+    // indistinguishable from one the caller sent. There is no safe way to consume it.
+    const key = deriveClientKey(
+      {
+        headers: { 'x-real-ip': '203.0.113.9' },
+        socket: { remoteAddress: '10.0.0.5' },
+      },
+      { trustProxyHeaders: true },
+    );
+    assert.equal(key, 'ip:10.0.0.5', 'x-real-ip must never become the bucket key');
+  });
+
+  /**
+   * Proxies APPEND the peer they received from, so with one balancer in front the client address is
+   * the LAST entry. Reading the first entry instead is the spoofable case covered below.
+   */
+  it('uses the hop the trusted proxy appended, counted from the right', () => {
     const key = deriveClientKey(
       {
         headers: { 'x-forwarded-for': '203.0.113.1, 198.51.100.2' },
@@ -27,7 +44,88 @@ describe('deriveClientKey', () => {
       },
       { trustProxyHeaders: true },
     );
-    assert.equal(key, 'ip:203.0.113.1');
+    assert.equal(key, 'ip:198.51.100.2');
+  });
+
+  it('cannot be spoofed by a caller-supplied X-Forwarded-For prefix', () => {
+    // The attack the old leftmost read enabled: the caller sends its own XFF, the balancer appends
+    // the real address, and a leftmost read keys on whatever the caller chose. Rotating that value
+    // mints a fresh bucket per request and switches the limiter off — worse than one shared bucket,
+    // which at least still counts. All three forged prefixes must collapse to the same real key.
+    const keys = ['evil-1', '203.0.113.7', 'a, b, c'].map((forged) =>
+      deriveClientKey(
+        {
+          headers: { 'x-forwarded-for': `${forged}, 198.51.100.2` },
+          socket: { remoteAddress: '127.0.0.1' },
+        },
+        { trustProxyHeaders: true },
+      ));
+    assert.deepEqual(
+      keys,
+      ['ip:198.51.100.2', 'ip:198.51.100.2', 'ip:198.51.100.2'],
+      'a caller must not be able to choose its own rate-limit bucket',
+    );
+  });
+
+  it('honours a longer trusted chain via trustedProxyHops', () => {
+    // client → CDN → LB → app: both appended, so the client is two from the right.
+    const key = deriveClientKey(
+      {
+        headers: { 'x-forwarded-for': 'forged, 203.0.113.5, 198.51.100.2' },
+        socket: { remoteAddress: '127.0.0.1' },
+      },
+      { trustProxyHeaders: true, trustedProxyHops: 2 },
+    );
+    assert.equal(key, 'ip:203.0.113.5');
+  });
+
+  it('falls back to the socket address when the chain is shorter than the trusted hop count', () => {
+    // The request did not traverse the expected proxies (or hops is misconfigured). Reading further
+    // left would land on caller-supplied data, so degrade to the collapsed-but-unspoofable key.
+    const key = deriveClientKey(
+      {
+        headers: { 'x-forwarded-for': '203.0.113.1' },
+        socket: { remoteAddress: '127.0.0.1' },
+      },
+      { trustProxyHeaders: true, trustedProxyHops: 3 },
+    );
+    assert.equal(key, 'ip:127.0.0.1');
+  });
+
+  it('treats a non-positive or non-integer hop count as a single hop', () => {
+    for (const hops of [0, -2, 1.5, Number.NaN, undefined]) {
+      const key = deriveClientKey(
+        {
+          headers: { 'x-forwarded-for': 'forged, 198.51.100.2' },
+          socket: { remoteAddress: '127.0.0.1' },
+        },
+        { trustProxyHeaders: true, trustedProxyHops: hops },
+      );
+      assert.equal(key, 'ip:198.51.100.2', `hops=${String(hops)} must not read left of the last hop`);
+    }
+  });
+
+  it('handles a repeated header delivered as an array', () => {
+    // Node exposes a repeated x-forwarded-for as string[]; the chain must still read left-to-right.
+    const key = deriveClientKey(
+      {
+        headers: { 'x-forwarded-for': ['forged', '198.51.100.2'] },
+        socket: { remoteAddress: '127.0.0.1' },
+      },
+      { trustProxyHeaders: true },
+    );
+    assert.equal(key, 'ip:198.51.100.2');
+  });
+
+  it('ignores blank entries when counting hops', () => {
+    const key = deriveClientKey(
+      {
+        headers: { 'x-forwarded-for': 'forged, , 198.51.100.2, ' },
+        socket: { remoteAddress: '127.0.0.1' },
+      },
+      { trustProxyHeaders: true },
+    );
+    assert.equal(key, 'ip:198.51.100.2');
   });
 
   it('falls back to socket remoteAddress when trustProxyHeaders is true but headers absent', () => {
@@ -39,6 +137,17 @@ describe('deriveClientKey', () => {
       { trustProxyHeaders: true },
     );
     assert.equal(key, 'ip:::1');
+  });
+
+  it('falls back to the socket address for an empty forwarding header', () => {
+    const key = deriveClientKey(
+      {
+        headers: { 'x-forwarded-for': '   ' },
+        socket: { remoteAddress: '10.1.2.3' },
+      },
+      { trustProxyHeaders: true },
+    );
+    assert.equal(key, 'ip:10.1.2.3');
   });
 });
 

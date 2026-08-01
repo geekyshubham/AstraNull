@@ -448,6 +448,23 @@ export function loadRuntimeConfig(env = process.env) {
 
   const rateLimitDisabled = env.ASTRANULL_RATE_LIMIT_DISABLED === '1';
   const rateLimitTrustProxyHeaders = env.ASTRANULL_TRUST_PROXY_HEADERS === '1';
+  /**
+   * How many proxies in front of this process append to `x-forwarded-for`.
+   *
+   * Only meaningful with ASTRANULL_TRUST_PROXY_HEADERS=1. Conforming proxies append the peer they
+   * received from, so the real client sits `hops` entries from the RIGHT — see deriveClientKey for
+   * why reading the leftmost entry instead makes the limiter fully spoofable.
+   *
+   * Default 1 (a single load balancer). Setting this too LOW collapses callers into one bucket
+   * (unfair, still not spoofable); too HIGH reads caller-supplied entries (spoofable), so the
+   * conservative direction is the default. Capped at 10 because a longer trusted chain is far more
+   * likely a typo than a real topology.
+   */
+  const rateLimitTrustedProxyHops = parsePositiveInt(
+    env.ASTRANULL_TRUSTED_PROXY_HOPS,
+    'ASTRANULL_TRUSTED_PROXY_HOPS',
+    { min: 1, max: 10, fallback: 1 },
+  );
 
   const rateLimitWindowMs = parsePositiveInt(
     env.ASTRANULL_RATE_LIMIT_WINDOW_MS,
@@ -552,6 +569,7 @@ export function loadRuntimeConfig(env = process.env) {
       maxRequests: rateLimitMaxRequests,
       disabled: rateLimitDisabled,
       trustProxyHeaders: rateLimitTrustProxyHeaders,
+      trustedProxyHops: rateLimitTrustedProxyHops,
     },
     secretEncryptionKey,
     secretEncryptionConfigured,

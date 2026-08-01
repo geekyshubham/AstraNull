@@ -49,7 +49,8 @@ A fixed-window limiter applies to all `/v1/*` and `/internal/*` requests before 
 | `ASTRANULL_RATE_LIMIT_WINDOW_MS` | `60000` | `1000`–`3600000` | Window length in milliseconds. |
 | `ASTRANULL_RATE_LIMIT_MAX_REQUESTS` | `600` | `1`–`100000` | Max requests per client key per window. |
 | `ASTRANULL_RATE_LIMIT_DISABLED` | off | — | `=1` allowed only outside `NODE_ENV=production`; production startup **fails closed** if set. |
-| `ASTRANULL_TRUST_PROXY_HEADERS` | `false` | — | When `=1`, client key uses `x-forwarded-for` / `x-real-ip`. Enable **only** behind a trusted reverse proxy that strips spoofed inbound headers. |
+| `ASTRANULL_TRUST_PROXY_HEADERS` | `false` | — | When `=1`, the client key is read from `x-forwarded-for`. `x-real-ip` is never used: it carries no positional information, so an edge-written value cannot be told apart from a caller-supplied one. Enable **only** behind a proxy that appends the real client address. |
+| `ASTRANULL_TRUSTED_PROXY_HOPS` | `1` | `1`–`10` | Number of proxies in front of the API that append to `x-forwarded-for`. Only used with `ASTRANULL_TRUST_PROXY_HEADERS=1`. The client address is taken this many entries from the **right**, because conforming proxies append. Setting it too low collapses callers into one bucket (unfair, not spoofable); too high reads caller-supplied entries (**spoofable**), so prefer under-counting when unsure. |
 
 When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }` and a `Retry-After` header (seconds). Counter `api_rate_limited_total` increments. Gateway/WAF limits and staging load/abuse evidence remain **production release blockers** (see checklist).
 

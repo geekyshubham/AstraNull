@@ -118,6 +118,32 @@ describe('runtime auth config', () => {
     assert.equal(loadRuntimeConfig().rateLimit.trustProxyHeaders, true);
   });
 
+  /**
+   * The hop count decides which `x-forwarded-for` entry becomes the rate-limit bucket key.
+   *
+   * Too high reaches into caller-supplied entries and makes the limiter spoofable, so the default
+   * is the conservative 1 and the value is bounded. See deriveClientKey for the full reasoning.
+   */
+  it('defaults trustedProxyHops to one and bounds ASTRANULL_TRUSTED_PROXY_HOPS', () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.ASTRANULL_TRUSTED_PROXY_HOPS;
+    assert.equal(loadRuntimeConfig().rateLimit.trustedProxyHops, 1);
+
+    process.env.ASTRANULL_TRUSTED_PROXY_HOPS = '2';
+    assert.equal(loadRuntimeConfig().rateLimit.trustedProxyHops, 2);
+
+    // Rejected rather than silently clamped: a wrong hop count is a security-relevant
+    // misconfiguration, and quietly substituting a different one would hide it.
+    for (const bad of ['0', '-1', '11', '1.5', 'two']) {
+      process.env.ASTRANULL_TRUSTED_PROXY_HOPS = bad;
+      assert.throws(
+        () => loadRuntimeConfig(),
+        /ASTRANULL_TRUSTED_PROXY_HOPS/,
+        `ASTRANULL_TRUSTED_PROXY_HOPS=${bad} must be refused`,
+      );
+    }
+  });
+
   it('allows disabling rate limit outside production', () => {
     process.env.NODE_ENV = 'test';
     process.env.ASTRANULL_RATE_LIMIT_DISABLED = '1';

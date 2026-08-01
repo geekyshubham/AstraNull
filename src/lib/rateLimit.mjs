@@ -32,28 +32,64 @@ const DEFAULT_MAX_KEYS = 100_000;
  * KNOWN DEPLOYMENT LIMITATION: with `trustProxyHeaders` off behind a load
  * balancer, every connection presents the balancer's address, so all callers
  * share a single bucket. That is a real fairness problem (one noisy tenant can
- * spend the limit for everybody), but it is a CONFIGURATION issue, not something
- * this function can fix safely: the only trustworthy source of the real client
- * IP is a forwarding header, and trusting that header when the deployment does
- * not guarantee it is overwritten at the edge reintroduces spoofable keys.
- * Remediation is to enable `ASTRANULL_TRUST_PROXY_HEADERS=1` in deployments
- * whose edge overwrites `X-Forwarded-For`. Per-tenant fairness beyond that
- * belongs in a post-auth limiter keyed by the verified tenant.
+ * spend the limit for everybody), but it is a CONFIGURATION issue: the only
+ * source of the real client IP is a forwarding header, and a header is only
+ * trustworthy at positions written by infrastructure you control.
+ *
+ * WHICH POSITION IS TRUSTWORTHY — this is the whole subtlety:
+ *
+ * Conforming proxies APPEND the address of the peer they received from. So for
+ * `client → LB → app` the LB appends the client, giving `XFF: client`. A client
+ * that sends its own `XFF: evil` first produces `XFF: evil, client` — the
+ * LEFTMOST entry is attacker-chosen and the RIGHTMOST entries are the ones your
+ * own infrastructure wrote. Reading `split(',')[0]` therefore hands the limiter
+ * a key the attacker picks: they rotate it per request, every bucket is fresh,
+ * and the limiter is effectively off. That is strictly worse than the collapsed
+ * single bucket, which at least still counts.
+ *
+ * So the real client sits at `list.length - trustedProxyHops`, counted from the
+ * right past the entries your infrastructure appended.
+ *
+ * The error directions are deliberately asymmetric:
+ *   - hops too LOW  → index lands on a trusted proxy's own address. Callers
+ *     collapse into one bucket: today's fairness problem, still not spoofable.
+ *   - hops too HIGH → index reaches into caller-supplied entries, which is the
+ *     spoofable case above.
+ * Under-counting is safe and over-counting is not, so the default is 1 (a single
+ * balancer) and a short list degrades to the socket address rather than reaching
+ * left into attacker-controlled territory.
+ *
+ * `x-real-ip` is deliberately NOT consulted. It carries a single value with no
+ * positional information, so there is no way to tell an edge-written value from
+ * one the caller supplied — exactly the ambiguity the hop count resolves for
+ * `x-forwarded-for`.
+ *
+ * Per-tenant fairness beyond this belongs in a post-auth limiter keyed by the
+ * verified tenant.
  *
  * @param {{ headers?: Record<string, unknown>, socket?: { remoteAddress?: string } }} req
- * @param {{ trustProxyHeaders?: boolean }} [options]
+ * @param {{ trustProxyHeaders?: boolean, trustedProxyHops?: number }} [options]
  */
-export function deriveClientKey(req, { trustProxyHeaders = false } = {}) {
+export function deriveClientKey(req, { trustProxyHeaders = false, trustedProxyHops = 1 } = {}) {
   if (trustProxyHeaders) {
     const forwarded = req.headers?.['x-forwarded-for'];
-    if (forwarded) {
-      const first = String(forwarded).split(',')[0].trim();
-      if (first) return `ip:${first}`;
-    }
-    const realIp = req.headers?.['x-real-ip'];
-    if (realIp) {
-      const trimmed = String(realIp).trim();
-      if (trimmed) return `ip:${trimmed}`;
+    if (forwarded != null && forwarded !== '') {
+      // Node delivers a repeated header as an array; joining recovers the full
+      // left-to-right chain so hop counting stays correct either way.
+      const chain = Array.isArray(forwarded) ? forwarded.join(',') : String(forwarded);
+      const list = chain.split(',').map((entry) => entry.trim()).filter(Boolean);
+      const hops = Number.isInteger(trustedProxyHops) && trustedProxyHops >= 1
+        ? trustedProxyHops
+        : 1;
+      const index = list.length - hops;
+      // A negative index means the chain is shorter than the trusted hop count: the request did not
+      // traverse the expected proxies, or `hops` is misconfigured. Either way, fall through to the
+      // socket address rather than reading further left into caller-supplied entries.
+      //
+      // `index >= 0` is stated for intent, not for effect: JS has no negative array indexing, so
+      // `list[-1]` is already undefined and the `list[index]` check alone would fall through. Do not
+      // read this clause as the thing keeping a short chain out — the truthiness check is.
+      if (index >= 0 && list[index]) return `ip:${list[index]}`;
     }
   }
   const addr = req.socket?.remoteAddress ?? 'unknown';

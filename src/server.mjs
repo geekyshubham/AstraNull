@@ -747,6 +747,7 @@ export function createServer(options = {}) {
       if (isProbePath && probeRateLimiter) {
         const probeKey = deriveClientKey(req, {
           trustProxyHeaders: runtimeConfig.rateLimit.trustProxyHeaders,
+          trustedProxyHops: runtimeConfig.rateLimit.trustedProxyHops,
         });
         const decision = probeRateLimiter.check(probeKey);
         if (!decision.allowed) {
@@ -872,6 +873,7 @@ export function createServer(options = {}) {
       if (url.pathname.startsWith('/v1') || url.pathname.startsWith('/internal')) {
         const clientKey = deriveClientKey(req, {
           trustProxyHeaders: runtimeConfig.rateLimit.trustProxyHeaders,
+          trustedProxyHops: runtimeConfig.rateLimit.trustedProxyHops,
         });
         if (rateLimiter) {
           const decision = rateLimiter.check(clientKey);
