@@ -95,7 +95,10 @@ services:
       - key: ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON
         scope: RUN_TIME
         type: SECRET
-        value: ${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}
+        # Single quotes are REQUIRED — see the matching note in .do/app.yaml. Substitution
+        # is textual, so unquoted YAML parses the fixture's leading `{` as a flow mapping
+        # and App Platform rejects the spec (envs.value must be a string).
+        value: '${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}'
       - key: ASTRANULL_PUBLIC_LOGIN_URL
         scope: RUN_TIME
         value: /login

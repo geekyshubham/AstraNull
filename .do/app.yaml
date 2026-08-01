@@ -91,7 +91,14 @@ services:
       - key: ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON
         scope: RUN_TIME
         type: SECRET
-        value: ${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}
+        # Single quotes are REQUIRED. Substitution is textual, so this becomes
+        # `value: {"issuer_suffix":...}` — and unquoted YAML reads a leading `{` as a flow
+        # mapping, not a string. App Platform then rejects the whole spec with "cannot
+        # unmarshal object into Go struct field AppVariableDefinition.services.envs.value
+        # of type string" (run 30693505011). Single quotes also keep the JSON's `"` and the
+        # PEM's escaped `\n` literal. A literal apostrophe in the value would need YAML
+        # doubling; the generated fixture contains none.
+        value: '${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}'
       - key: ASTRANULL_PUBLIC_LOGIN_URL
         scope: RUN_TIME
         value: /login

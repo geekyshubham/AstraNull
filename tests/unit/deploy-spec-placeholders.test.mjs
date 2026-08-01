@@ -23,11 +23,43 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+/** The spec the deploy action actually applies. */
 const SPEC_PATH = '.do/app.yaml';
+/**
+ * Both app specs. `.do/app.yaml` deploys the prebuilt image; `ops/digitalocean/app.yaml` is the
+ * build-from-source variant. They declare the same env contract and drift silently, so the
+ * value-shape rules below are asserted against both.
+ */
+const SPEC_PATHS = [SPEC_PATH, 'ops/digitalocean/app.yaml'];
 const WORKFLOW_PATH = '.github/workflows/deploy-digitalocean.yml';
 const DEPLOY_STEP_NAME = 'Deploy to App Platform';
 
 const read = (relative) => readFileSync(path.join(repoRoot, relative), 'utf8');
+
+/**
+ * The full YAML block for one `- key: NAME` env entry, comments included.
+ *
+ * The entry runs until the next line indented at or above the `-` marker, so `scope:`, `type:`,
+ * `value:` and any interleaved comments all belong to it.
+ *
+ * @returns {string | null} null when the spec does not declare the key at all.
+ */
+function envEntry(specText, key) {
+  const lines = specText.split('\n');
+  const startIndex = lines.findIndex((line) =>
+    new RegExp(`^\\s*-\\s+key:\\s*${key}\\s*$`).test(line));
+  if (startIndex === -1) return null;
+
+  const markerIndent = lines[startIndex].indexOf('-');
+  const block = [lines[startIndex]];
+  for (let i = startIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    if (line.search(/\S/) <= markerIndent) break;
+    block.push(line);
+  }
+  return block.join('\n');
+}
 
 /**
  * Placeholders the deploy step must supply from `env:`.
@@ -101,12 +133,38 @@ describe('digitalocean deploy spec placeholders', () => {
 
   it('sources the OIDC signing key from a secret, never a literal', () => {
     // The whole point of the rotation: the key must not be readable in the repo.
-    const entry = /- key: ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON\n([\s\S]{0,200}?)(?=\n\s+- key:|\n\S)/
-      .exec(spec);
-    assert.ok(entry, `${SPEC_PATH} must declare ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON`);
-    assert.match(entry[1], /type: SECRET/);
-    assert.match(entry[1], /value: \$\{ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON\}/);
-    assert.doesNotMatch(entry[1], /PRIVATE KEY/);
+    for (const relative of SPEC_PATHS) {
+      const entry = envEntry(read(relative), 'ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON');
+      assert.ok(entry, `${relative} must declare ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON`);
+      assert.match(entry, /type: SECRET/, relative);
+      assert.doesNotMatch(entry, /PRIVATE KEY/, relative);
+    }
+  });
+
+  /**
+   * The fixture is JSON, so substitution yields a value starting with `{`.
+   *
+   * app_action substitutes textually, and unquoted YAML parses a leading `{` as a flow
+   * mapping rather than a string. App Platform then rejects the entire spec:
+   *
+   *   cannot unmarshal object into Go struct field
+   *   AppVariableDefinition.services.envs.value of type string
+   *
+   * That killed deploy run 30693505011 after the image had already been built, signed and
+   * pushed. Single quotes make it a YAML string and keep the JSON's `"` and the PEM's
+   * escaped `\n` literal.
+   */
+  it('single-quotes any placeholder whose value is JSON', () => {
+    for (const relative of SPEC_PATHS) {
+      const entry = envEntry(read(relative), 'ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON');
+      const valueLine = entry.split('\n').find((line) => /^\s*value:/.test(line)) ?? '';
+      assert.match(
+        valueLine,
+        /value:\s*'\$\{ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON\}'\s*$/,
+        `${relative}: the fixture placeholder must be single-quoted, or App Platform parses `
+        + 'the substituted JSON as a YAML mapping and rejects the spec.',
+      );
+    }
   });
 
   it('never inlines private key material in either spec', () => {
