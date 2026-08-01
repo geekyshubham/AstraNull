@@ -92,7 +92,10 @@ export async function runControlPlaneProcess(options = {}) {
   // How long to keep serving while reporting NOT ready, so the load balancer can
   // take this instance out of rotation before it stops accepting connections.
   // Defaults to one DigitalOcean health-check period (15s, per
-  // ops/digitalocean/app.yaml). Clamped to half the shutdown grace so the drain
+  // ops/digitalocean/app.yaml). That default is only meaningful because BOTH
+  // `/ready` and `/health` report the drain: the specs point health_check at
+  // `/health`, so while only `/ready` observed the flag this delay bought nothing
+  // on App Platform. Clamped to half the shutdown grace so the drain
   // can never consume the budget that app.close() needs — otherwise the
   // grace-exceeded timer would hard-exit the process mid-close and drop
   // in-flight requests, which is the opposite of a graceful drain.

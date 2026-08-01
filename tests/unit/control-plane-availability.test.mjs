@@ -136,8 +136,31 @@ describe('/ready readiness caching', () => {
     const res = await request(baseUrl, 'GET', '/ready');
     assert.equal(res.status, 503);
     assert.equal(res.json.reason, 'draining');
-    // Still serving other traffic during the drain window.
+    // Still serving real customer traffic during the drain window: the point of
+    // the delay is to keep answering in-flight work while the balancer removes
+    // this instance. Asserted against an actual API route, not against a probe.
+    assert.equal(
+      (await request(baseUrl, 'GET', '/v1/environments', { headers: demoHeaders('viewer') })).status,
+      200,
+    );
+  });
+
+  it('reports the drain on /health, the path the orchestrator actually polls', async () => {
+    freshStore();
+    const baseUrl = listen(
+      createServer({ env: { ...process.env, ASTRANULL_NO_PERSIST: '1' } }),
+    );
+
     assert.equal((await request(baseUrl, 'GET', '/health')).status, 200);
+
+    beginDraining();
+
+    // Both App Platform specs point health_check at /health, so a drain only
+    // visible on /ready never reaches the component that routes traffic: the
+    // balancer would keep sending new work to a process committed to exiting.
+    const res = await request(baseUrl, 'GET', '/health');
+    assert.equal(res.status, 503, '/health must observe the drain flag');
+    assert.equal(res.json.reason, 'draining');
   });
 });
 
@@ -297,6 +320,86 @@ describe('probe endpoints are rate limited but not starved', () => {
       sawLimited = statuses.includes(429);
     }
     assert.ok(sawLimited, '/health must not be exempt from rate limiting');
+  });
+
+  it('does not let a /ready flood throttle the restart probe', async () => {
+    freshStore();
+    const baseUrl = listen(
+      createServer({
+        env: {
+          ...process.env,
+          ASTRANULL_NO_PERSIST: '1',
+          // One-hour window for the same reason as the test above: the whole flood
+          // must land in a single bucket or no 429 is ever produced.
+          ASTRANULL_RATE_LIMIT_WINDOW_MS: '3600000',
+          ASTRANULL_RATE_LIMIT_MAX_REQUESTS: '600',
+        },
+      }),
+    );
+
+    // Exhaust the OTHER probe bucket. Establishing that it is exhaustible is what
+    // makes the /health assertion below meaningful rather than vacuous.
+    let readyLimited = false;
+    for (let batch = 0; batch < 16 && !readyLimited; batch++) {
+      const statuses = await Promise.all(
+        Array.from({ length: 100 }, () => request(baseUrl, 'GET', '/ready').then((r) => r.status)),
+      );
+      readyLimited = statuses.includes(429);
+    }
+    assert.ok(readyLimited, 'the /ready budget must be exhaustible or this test proves nothing');
+
+    // The actual property: /health holds its own budget. While one bucket was
+    // shared, ~20 anonymous req/s of /ready drained it, the orchestrator's next
+    // five /health polls got 429, and App Platform restarted the only instance —
+    // a remote unauthenticated restart loop that also wiped the limiter state.
+    const health = await request(baseUrl, 'GET', '/health');
+    assert.equal(health.status, 200, 'a /ready flood must not 429 /health');
+    assert.equal(health.json.status, 'ok');
+  });
+
+  it('rate limits the unauthenticated credential-exchange POST', async () => {
+    freshStore();
+    const baseUrl = listen(
+      createServer({
+        env: {
+          ...process.env,
+          ASTRANULL_NO_PERSIST: '1',
+          ASTRANULL_RATE_LIMIT_WINDOW_MS: '3600000',
+          ASTRANULL_RATE_LIMIT_MAX_REQUESTS: '600',
+        },
+      }),
+    );
+
+    // The exchange is not configured here, so the handler's own answer is 404.
+    // That is the point: the limiter must sit ABOVE the handler, so the 429 has to
+    // displace the 404 rather than appear after it.
+    const first = await request(baseUrl, 'POST', '/guardianbot/session', {
+      headers: { Authorization: 'Bearer wrong-exchange-token' },
+      body: { schemaVersion: '1.0.0' },
+    });
+    assert.equal(first.status, 404);
+
+    const statuses = [first.status];
+    // 200 attempts is far above the credential budget but far BELOW the probe
+    // budget (>=1200/window), so reaching a 429 inside this loop also proves the
+    // route is not riding on a probe-sized allowance.
+    for (let i = 0; i < 200 && !statuses.includes(429); i++) {
+      const res = await request(baseUrl, 'POST', '/guardianbot/session', {
+        headers: { Authorization: 'Bearer wrong-exchange-token' },
+        body: { schemaVersion: '1.0.0' },
+      });
+      statuses.push(res.status);
+    }
+    // A credential-minting surface must have a request budget. Its bucket is
+    // deliberately tight (tens per window), unlike the generous probe buckets.
+    assert.ok(
+      statuses.includes(429),
+      'POST /guardianbot/session must not sit above every limiter',
+    );
+    assert.ok(
+      statuses.indexOf(429) <= 100,
+      `the credential budget must be tight, not probe-sized (first 429 at ${statuses.indexOf(429)})`,
+    );
   });
 });
 

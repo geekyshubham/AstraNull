@@ -530,6 +530,60 @@ const HEALTH_FAILURE_THRESHOLD = 3;
  */
 const PROBE_RATE_LIMIT_MIN_MAX_REQUESTS = 1_200;
 
+/**
+ * `/health` gets its OWN bucket, separate from `/ready`, `/metrics` and JWKS.
+ *
+ * Why the split, given they are all "probes": the shared bucket made the restart
+ * probe collateral damage of a flood against a DIFFERENT endpoint. `/health` is
+ * the path the orchestrator polls (health_check http_path in both App Platform
+ * specs, period_seconds 15, failure_threshold 5, instance_count 1), and the
+ * limiter gate sits above the handler, so ~20 anonymous req/s of `/ready` used to
+ * drain the shared allowance and the next five orchestrator polls got 429 — an
+ * unauthenticated remote restart loop, which also wipes the in-memory limiter
+ * state on every restart. The cost profiles are unrelated too: `/health` only
+ * peeks a cached verdict (no I/O) while `/ready` awaits a database round-trip.
+ *
+ * Sizing, and this floor is load-bearing: it MUST NOT be below
+ * PROBE_RATE_LIMIT_MIN_MAX_REQUESTS. Neither App Platform spec sets
+ * ASTRANULL_RATE_LIMIT_MAX_REQUESTS, so the 600 default applies live; a smaller
+ * floor here would hand `/health` a 600 ceiling where the pre-split shared
+ * bucket gave it 1200, making a flood aimed DIRECTLY at the restart probe about
+ * twice as cheap as before the split. Isolating a bucket must not shrink it.
+ * Matching the probe floor keeps the change a strict improvement: the indirect
+ * path is closed and the direct path is no worse.
+ *
+ * The real cadence is one poll per 15s, i.e. 4 per default 60s window, so 1200
+ * is ~300x headroom — far more than the orchestrator needs, but the number is
+ * chosen for the no-regression property above rather than for tightness. A
+ * tighter bucket here buys nothing: `/health` peeks a cached verdict and does no
+ * I/O, so there is no unbounded work to protect.
+ *
+ * RESIDUAL, stated plainly: `/health` must not be exempt from limiting — that
+ * exemption was the original hole and is pinned by
+ * tests/unit/control-plane-availability.test.mjs ('/health must not be exempt
+ * from rate limiting'). A finite limit means a flood aimed DIRECTLY at `/health`
+ * can still exhaust this bucket, because the pre-auth key collapses to the load
+ * balancer's address until ASTRANULL_TRUST_PROXY_HEADERS is enabled. What the
+ * split fixes is the much cheaper indirect path: traffic to any other probe
+ * endpoint can no longer spend the restart probe's allowance.
+ */
+// Derived from the probe floor rather than restated as a literal, so the
+// no-regression invariant cannot drift if that floor is ever raised.
+const HEALTH_RATE_LIMIT_MIN_MAX_REQUESTS = PROBE_RATE_LIMIT_MIN_MAX_REQUESTS;
+
+/**
+ * Budget for the unauthenticated credential-exchange POST
+ * (`/guardianbot/session`). Tight on purpose: the legitimate caller performs one
+ * exchange per CI run, so a per-window allowance in the low tens is generous
+ * while still bounding an offline guessing loop against the exchange token.
+ *
+ * The route was already hard to abuse — the comparison is timing-safe, the minted
+ * token is capped at role `viewer` with a 60-900s TTL, and it 404s unless three
+ * env vars are set (they are not set on the live deployment). This is about the
+ * missing request budget, not about a live break.
+ */
+const CREDENTIAL_EXCHANGE_RATE_LIMIT_MAX_REQUESTS = 30;
+
 const DEFAULT_MAX_CONNECTIONS = 1_024;
 const DEFAULT_HEADERS_TIMEOUT_MS = 15_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -715,6 +769,38 @@ export function createServer(options = {}) {
         ),
       });
 
+  // ...and a third bucket for `/health` alone, so a flood against `/ready`,
+  // `/metrics` or JWKS cannot spend the restart probe's allowance. See
+  // HEALTH_RATE_LIMIT_MIN_MAX_REQUESTS for why the restart probe needs isolating
+  // from the other probes and not merely from the API budget.
+  const healthRateLimiter = runtimeConfig.rateLimit.disabled
+    ? null
+    : createFixedWindowRateLimiter({
+        windowMs: runtimeConfig.rateLimit.windowMs,
+        maxRequests: Math.max(
+          runtimeConfig.rateLimit.maxRequests,
+          HEALTH_RATE_LIMIT_MIN_MAX_REQUESTS,
+        ),
+      });
+
+  // The credential-exchange POST gets its own DELIBERATELY TIGHT bucket. It is
+  // the only unauthenticated route that mints a bearer, so unlike the probe
+  // buckets its correct size is small: a legitimate caller performs one exchange
+  // per CI run. `Math.min` rather than `Math.max` because raising the API limit
+  // must never loosen a credential surface, while lowering it should still
+  // tighten this one. It is kept out of the probe bucket on purpose: GuardianBot
+  // reaches both this route and the probes from the same egress address, so
+  // sharing a bucket would let its own health traffic spend the exchange budget.
+  const credentialExchangeRateLimiter = runtimeConfig.rateLimit.disabled
+    ? null
+    : createFixedWindowRateLimiter({
+        windowMs: runtimeConfig.rateLimit.windowMs,
+        maxRequests: Math.min(
+          runtimeConfig.rateLimit.maxRequests,
+          CREDENTIAL_EXCHANGE_RATE_LIMIT_MAX_REQUESTS,
+        ),
+      });
+
   const readinessCache = options.readinessCache ?? createReadinessCache({
     runtimeConfig,
     runtimeHealth,
@@ -737,19 +823,35 @@ export function createServer(options = {}) {
     const url = parseUrl(req);
 
     try {
+      // `/health` is deliberately NOT part of isProbePath any more. It is still
+      // rate limited — just against its own bucket — because exempting the
+      // restart probe was the original hole and must stay closed.
+      const isRestartProbePath = req.method === 'GET' && url.pathname === '/health';
       const isProbePath = req.method === 'GET'
-        && (url.pathname === '/health'
-          || url.pathname === '/ready'
+        && (url.pathname === '/ready'
           || url.pathname === '/metrics'
           || url.pathname === '/.well-known/jwks.json');
+      // Separate predicate rather than folding this into isProbePath: this is a
+      // POST that mints a credential, so calling it a "probe" would misname the
+      // allowlist and invite the next reader to widen it.
+      const isCredentialExchangePath = req.method === 'POST'
+        && url.pathname === '/guardianbot/session';
 
-      // Limiter gate now sits ABOVE the infra handlers, not below them.
-      if (isProbePath && probeRateLimiter) {
-        const probeKey = deriveClientKey(req, {
+      // Pre-auth limiter gate. It sits ABOVE the infra handlers, not below them,
+      // so an unauthenticated flood is rejected before it can do any work.
+      const preAuthRateLimiter = isRestartProbePath
+        ? healthRateLimiter
+        : isProbePath
+          ? probeRateLimiter
+          : isCredentialExchangePath
+            ? credentialExchangeRateLimiter
+            : null;
+      if (preAuthRateLimiter) {
+        const preAuthKey = deriveClientKey(req, {
           trustProxyHeaders: runtimeConfig.rateLimit.trustProxyHeaders,
           trustedProxyHops: runtimeConfig.rateLimit.trustedProxyHops,
         });
-        const decision = probeRateLimiter.check(probeKey);
+        const decision = preAuthRateLimiter.check(preAuthKey);
         if (!decision.allowed) {
           incMetric('api_rate_limited_total');
           respondRateLimited(res, decision.retryAfterSeconds);
@@ -759,6 +861,33 @@ export function createServer(options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/health') {
         incMetric('http_requests_total');
+        // Drain is reported here, not only on /ready, because /health is the path
+        // the orchestrator actually polls (health_check http_path in both App
+        // Platform specs). While only /ready observed the flip, the drain window
+        // was decorative on App Platform: the balancer kept routing new work to an
+        // instance that had already committed to exiting, which is exactly the
+        // "pull me out of rotation first" behaviour startup.mjs sizes its 15s
+        // delay for.
+        //
+        // Why a 503 here cannot cause a spurious restart: `draining` is only set
+        // on the shutdown path (beginDraining() is called from the SIGTERM/SIGINT
+        // handler in startup.mjs, which then always closes and exits, backed by a
+        // hard grace timer). So this branch never reports 503 for an instance that
+        // intends to keep running — the failure it announces is real and already
+        // decided. It also cannot trip the restart threshold in practice: five
+        // consecutive 15s polls is ~75s, far longer than the 15s drain before the
+        // process exits on its own.
+        //
+        // The no-I/O property of this handler is preserved: this reads a
+        // module-level boolean, it does not await anything.
+        if (draining) {
+          json(res, 503, {
+            status: 'draining',
+            service: 'astranull',
+            reason: 'draining',
+          });
+          return;
+        }
         // Non-blocking read of the cached verdict. /health is the RESTART probe,
         // so it must never await a database call: a probe that hangs on a wedged
         // DB looks identical to a dead process and gets the instance killed.
