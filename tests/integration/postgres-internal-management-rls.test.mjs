@@ -218,6 +218,136 @@ describe('postgres internal management platform-scope RLS', () => {
     );
   });
 
+  /**
+   * Approval read and write had to be fixed together, and this is the test that proves it.
+   *
+   * Before the fix, getApprovalRequest read `internal_approval_requests` over a bare pool. Under
+   * FORCE RLS with no context the 0021 policy's `tenant_id = current_setting('app.tenant_id', true)`
+   * is NULL rather than true, so a tenant-attributed approval was INVISIBLE — while
+   * listApprovalRequests and getInternalOverview's pending count already used platform scope and
+   * listed it. Staff saw a pending approval and got 404 on opening it.
+   *
+   * The write cannot use platform scope: migration 0038's policies are FOR SELECT only, so an
+   * UPDATE under platform scope affects 0 rows. It runs in the row's own tenant transaction
+   * instead, which is why the tenant id is threaded from the read into the write.
+   */
+  it('staff can read and decide a tenant-attributed approval, and cannot cross tenants', async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) {
+      t.skip(availability.reason);
+      return;
+    }
+
+    await withEphemeralPostgres(
+      async (ownerPool, { databaseName }) => {
+        await assertRlsPoliciesExist(ownerPool, ['platform_scope_read_internal_approval_requests']);
+
+        const tenantA = 'ten_appr_a';
+        const tenantB = 'ten_appr_b';
+        const insertApproval = `
+          INSERT INTO internal_approval_requests (id, tenant_id, kind, subject_ref, state)
+          VALUES ($1, $2, 'high_scale_validation', $3, 'submitted')
+        `;
+
+        for (const tenantId of [tenantA, tenantB]) {
+          await withTenantContext(ownerPool, tenantId, async (client) => {
+            await client.query(`INSERT INTO tenants (id, name) VALUES ($1, $1)`, [tenantId]);
+            await client.query(insertApproval, [`appr_${tenantId}`, tenantId, `tgt_${tenantId}`]);
+          });
+        }
+        // A platform-level approval, which was readable even before the fix. It is the control:
+        // if the fix regressed to "no context", this row would keep passing while the tenant rows
+        // failed, so asserting both directions is what makes the test meaningful.
+        await ownerPool.query(insertApproval, ['appr_platform', null, 'tgt_platform']);
+
+        await withAppRoleRepository(ownerPool, databaseName, async ({ appPool, repo, services }) => {
+          // --- READ: the tenant-attributed row must be visible to a staff lookup ---
+          const fetched = await repo.getApprovalRequest(`appr_${tenantA}`);
+          assert.ok(
+            fetched,
+            'getApprovalRequest must see a tenant-attributed approval (it 404d before the fix)',
+          );
+          assert.equal(fetched.tenant_id, tenantA);
+          assert.ok(
+            await repo.getApprovalRequest('appr_platform'),
+            'platform-level approval must remain readable',
+          );
+          // Consistency with the list the staff console renders: the row it lists is the row it
+          // can open. That divergence was the actual defect.
+          const listed = (await repo.listApprovalRequests({ state: 'submitted' })).map((r) => r.id);
+          assert.ok(listed.includes(`appr_${tenantA}`), 'listed and fetchable must agree');
+
+          // --- WRITE: fails CLOSED when the tenant id is not carried ---
+          const unscoped = await repo.decideApprovalRequest(`appr_${tenantA}`, {
+            state: 'approved',
+            decision: 'approve',
+            reason: null,
+            reviewer_staff_id: 'staff_1',
+            decided_at: new Date().toISOString(),
+          });
+          assert.equal(
+            unscoped,
+            null,
+            'omitting tenantId must affect no rows: the platform_internal sentinel cannot see it',
+          );
+
+          // --- WRITE: a DIFFERENT tenant's id must not reach this row ---
+          const crossTenant = await repo.decideApprovalRequest(
+            `appr_${tenantA}`,
+            {
+              state: 'approved',
+              decision: 'approve',
+              reason: null,
+              reviewer_staff_id: 'staff_1',
+              decided_at: new Date().toISOString(),
+            },
+            { tenantId: tenantB },
+          );
+          assert.equal(crossTenant, null, 'RLS must refuse a write scoped to the wrong tenant');
+
+          // --- WRITE: the row's own tenant id lands, through the full service adapter ---
+          const decided = await services.decideApprovalRequest(
+            { staffId: 'staff_1', staffRole: 'internal_admin' },
+            `appr_${tenantA}`,
+            { decision: 'approve', reason: 'capacity confirmed' },
+          );
+          assert.ok(decided?.request, `decide must succeed, got ${JSON.stringify(decided)}`);
+          assert.equal(decided.request.state, 'approved');
+          assert.equal(decided.request.tenant_id, tenantA);
+
+          // Deciding twice must report not-pending rather than crashing on a null row: the state
+          // guard refuses the second write, which is also what a lost race looks like.
+          const again = await services.decideApprovalRequest(
+            { staffId: 'staff_2', staffRole: 'internal_admin' },
+            `appr_${tenantA}`,
+            { decision: 'approve', reason: 'duplicate' },
+          );
+          assert.deepEqual(again, { error: 'approval_not_pending' });
+
+          // Tenant B's own approval must be untouched by all of the above.
+          const untouched = await repo.getApprovalRequest(`appr_${tenantB}`);
+          assert.equal(untouched.state, 'submitted', 'tenant B approval must not be decided');
+
+          // --- REGRESSION: isolation must still hold in the tenant direction ---
+          await withTenantContextAsAppRole(appPool, tenantB, async (client) => {
+            const leaked = await client.query(
+              `SELECT id FROM internal_approval_requests WHERE tenant_id = $1`,
+              [tenantA],
+            );
+            assert.equal(leaked.rows.length, 0, 'tenant B must not read tenant A approvals');
+            const escalated = await client.query(
+              `UPDATE internal_approval_requests SET state = 'rejected' WHERE id = $1 RETURNING id`,
+              [`appr_${tenantA}`],
+            );
+            assert.equal(escalated.rows.length, 0, 'tenant B must not write tenant A approvals');
+          });
+        });
+      },
+      process.env,
+      { databaseName: undefined },
+    );
+  });
+
   it('overlapping approvals provision exactly one tenant and the loser gets a conflict', async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {

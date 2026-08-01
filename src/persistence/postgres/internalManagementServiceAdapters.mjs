@@ -456,7 +456,16 @@ export function createPostgresInternalManagementServices(repositories) {
         reason: body.reason ?? null,
         reviewer_staff_id: staffId(ctx),
         decided_at: new Date().toISOString(),
-      });
+      // The read runs in platform scope but the write must run in the row's OWN tenant
+      // transaction (0038 grants platform scope FOR SELECT only), so the id has to be carried
+      // across. It scopes the UPDATE; it is never written as a column value.
+      }, { tenantId: existing.tenant_id ?? null });
+      // A null result means the UPDATE matched no row. The state was checked above, so the live
+      // cause is a lost race: another reviewer decided this request between the read and the
+      // write, and the `state = ANY('submitted','under_review')` guard correctly refused the
+      // second write. Report that as not-pending (409) rather than dereferencing null below,
+      // which would answer 500 to a request the database handled exactly right.
+      if (!updated) return { error: 'approval_not_pending' };
       await repo.appendInternalAudit(auditEntry(ctx, `staff.approval.${decision}d`, {
         tenant_id: updated.tenant_id ?? null,
         resource_type: 'internal_approval_request',

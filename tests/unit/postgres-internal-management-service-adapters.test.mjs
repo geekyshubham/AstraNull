@@ -140,6 +140,96 @@ describe('Postgres internal management service adapter', () => {
     assert.ok(repo.audits.some((a) => a.action === 'tenant.provisioned_from_signup'));
   });
 
+  /**
+   * The lost-race branch of decideApprovalRequest, which no other test can reach.
+   *
+   * The adapter reads the row, checks its state, then issues a guarded
+   * `UPDATE ... WHERE state = ANY('submitted','under_review')`. If another reviewer decides the
+   * request in between, that UPDATE matches nothing and the repository returns null — correctly,
+   * because the database refused a second decision on an already-decided request.
+   *
+   * Deciding twice sequentially does NOT exercise this: the state check sees 'approved' and returns
+   * approval_not_pending before the UPDATE runs. Only interleaving reaches it, so the fake returns a
+   * still-pending row from the read and null from the write — exactly what the race produces.
+   * Without the guard the adapter dereferences null (`updated.tenant_id`) and answers 500 to a
+   * request the database handled exactly right.
+   */
+  it('reports a lost decide race as not-pending instead of dereferencing a null row', async () => {
+    const repo = createRepo();
+    let writeAttempts = 0;
+    repo.getApprovalRequest = async (id) => ({
+      id,
+      tenant_id: 'ten_race',
+      kind: 'high_scale_validation',
+      state: 'submitted',
+    });
+    // The guarded UPDATE matched no row: a competing reviewer won.
+    repo.decideApprovalRequest = async () => {
+      writeAttempts += 1;
+      return null;
+    };
+
+    const svc = createPostgresInternalManagementServices({ internalManagement: repo });
+    const result = await svc.decideApprovalRequest(
+      { staffId: 'staff_1', staffRole: 'internal_admin' },
+      'appr_race',
+      { decision: 'approve', reason: 'capacity confirmed' },
+    );
+
+    assert.deepEqual(result, { error: 'approval_not_pending' });
+    assert.equal(writeAttempts, 1, 'the write must be attempted, not short-circuited by the read');
+    assert.equal(
+      repo.audits.length,
+      0,
+      'a decision that never landed must not be recorded in the audit log',
+    );
+  });
+
+  it('carries the approval row tenant id into the write, which RLS requires', async () => {
+    // Platform scope is SELECT-only (migration 0038), so the UPDATE runs in the row's own tenant
+    // transaction. If the adapter stops threading the id, the write silently affects no row.
+    const repo = createRepo();
+    const scopes = [];
+    repo.getApprovalRequest = async (id) => ({
+      id, tenant_id: 'ten_scoped', kind: 'high_scale_validation', state: 'submitted',
+    });
+    repo.decideApprovalRequest = async (id, patch, scope) => {
+      scopes.push(scope);
+      return { id, tenant_id: 'ten_scoped', kind: 'high_scale_validation', ...patch };
+    };
+
+    const svc = createPostgresInternalManagementServices({ internalManagement: repo });
+    const result = await svc.decideApprovalRequest(
+      { staffId: 'staff_1', staffRole: 'internal_admin' },
+      'appr_scoped',
+      { decision: 'approve' },
+    );
+
+    assert.equal(result.request.state, 'approved');
+    assert.deepEqual(scopes, [{ tenantId: 'ten_scoped' }], 'the row tenant id must scope the write');
+  });
+
+  it('scopes a platform-level approval with a null tenant id rather than omitting it', async () => {
+    const repo = createRepo();
+    const scopes = [];
+    repo.getApprovalRequest = async (id) => ({
+      id, tenant_id: null, kind: 'high_scale_validation', state: 'submitted',
+    });
+    repo.decideApprovalRequest = async (id, patch, scope) => {
+      scopes.push(scope);
+      return { id, tenant_id: null, kind: 'high_scale_validation', ...patch };
+    };
+
+    const svc = createPostgresInternalManagementServices({ internalManagement: repo });
+    await svc.decideApprovalRequest(
+      { staffId: 'staff_1', staffRole: 'internal_admin' },
+      'appr_platform',
+      { decision: 'reject', reason: 'out of scope' },
+    );
+
+    assert.deepEqual(scopes, [{ tenantId: null }], 'a platform-level row must pass an explicit null');
+  });
+
   it('patches subscriptions with effective entitlements and audits the change', async () => {
     const repo = createRepo();
     const svc = createPostgresInternalManagementServices({ internalManagement: repo });

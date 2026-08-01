@@ -783,49 +783,83 @@ export function createInternalManagementRepository(pool) {
       return rows.map(mapApproval);
     },
 
-    async decideApprovalRequest(id, patch) {
-      // tenant-query-audit: allow — fails CLOSED, not open. Measured against the real 0021 policy as
-      // a non-BYPASSRLS role with no tenant context: this UPDATE affects 0 rows for a
-      // tenant-attributed approval, and only succeeds for a NULL-tenant one. No cross-tenant write.
-      //
-      // Why it is not simply wrapped in queryPlatform() the way listInternalAudit is: migration 0038
-      // grants platform scope `FOR SELECT` only, so platform scope authorizes no UPDATE at all.
-      // A correct fix needs the tenant's own transaction (whose id comes from getApprovalRequest,
-      // which has the same visibility limit) or a new platform write policy — a schema change that
-      // should be designed deliberately rather than bolted on here.
-      //
-      // Impact today is latent: no `INSERT INTO internal_approval_requests` exists anywhere in
-      // src/, so nothing in the application creates approval rows, tenant-attributed or otherwise.
-      // Tracked separately rather than silently half-fixed.
-      const { rows } = await pool.query(
-        `UPDATE internal_approval_requests SET
-           state = $2,
-           decision = $3,
-           reason = $4,
-           reviewer_staff_id = $5,
-           decided_at = $6::timestamptz,
-           updated_at = $6::timestamptz
-         WHERE id = $1 AND state = ANY($7::text[])
-         RETURNING *`,
-        [id, patch.state, patch.decision, patch.reason, patch.reviewer_staff_id, patch.decided_at, ['submitted', 'under_review']],
-      );
-      return mapApproval(rows[0] ?? null);
+    /**
+     * Decide an approval request, scoped to the row's OWN tenant.
+     *
+     * `tenantId` is the scoping key, not a column to write: it must be the `tenant_id` of the
+     * existing row (from getApprovalRequest), and it is never assigned by this UPDATE.
+     *
+     * Why the tenant's transaction rather than platform scope: migration 0038 grants platform
+     * scope `FOR SELECT` only. Measured against the real 0021 + 0038 policies as the
+     * non-superuser NOBYPASSRLS app role, an UPDATE of a tenant-attributed row affects
+     *   - 0 rows under platform scope (0038 authorizes no write at all),
+     *   - 0 rows with no context (`tenant_id = NULL` is NULL, not true),
+     *   - 0 rows under a DIFFERENT tenant's context,
+     *   - 1 row under its own tenant's context.
+     * So RLS itself is what prevents the cross-tenant write here; carrying the id is what makes
+     * the legitimate write possible. That is why this needs no new platform write policy — adding
+     * one would widen writes to a scope no staff action requires.
+     *
+     * Omitting `tenantId` for a tenant-attributed row still fails CLOSED: queryNullableTenant
+     * falls back to the `platform_internal` sentinel, under which the row is invisible, the
+     * UPDATE affects 0 rows and this returns null. Callers must treat null as "not decided".
+     *
+     * @param {string} id
+     * @param {{ state: string, decision: string, reason: string | null,
+     *           reviewer_staff_id: string | null, decided_at: string }} patch
+     * @param {{ tenantId?: string | null }} [scope] tenant_id of the existing row, null if platform-level
+     */
+    async decideApprovalRequest(id, patch, scope = {}) {
+      return queryNullableTenant(pool, scope.tenantId ?? null, async (client) => {
+        // tenant-query-audit: allow — this UPDATE IS tenant-scoped, by the enclosing
+        // queryNullableTenant transaction: both of its branches set a non-empty `app.tenant_id`
+        // (the tenant's own id, or the `platform_internal` sentinel), so the statement never runs
+        // with the setting unset. The gate cannot see it because scoping arrives through a
+        // repository-local helper rather than a `withTenantContext` call it recognises.
+        //
+        // The helper name is deliberately NOT taught to the gate. `queryNullableTenant` is declared
+        // at module level, so its declaration header can survive the enclosing-scope walk and would
+        // then credit any later query in this file for a wrapper it never entered — the borrowed-
+        // scoping fail-open that scripts/postgres-tenant-query-audit.mjs was just fixed to close.
+        // One reviewed marker at the one call site is narrower than a pattern that can be borrowed.
+        const { rows } = await client.query(
+          `UPDATE internal_approval_requests SET
+             state = $2,
+             decision = $3,
+             reason = $4,
+             reviewer_staff_id = $5,
+             decided_at = $6::timestamptz,
+             updated_at = $6::timestamptz
+           WHERE id = $1 AND state = ANY($7::text[])
+           RETURNING *`,
+          [id, patch.state, patch.decision, patch.reason, patch.reviewer_staff_id, patch.decided_at, ['submitted', 'under_review']],
+        );
+        return mapApproval(rows[0] ?? null);
+      });
     },
 
     async getApprovalRequest(id) {
-      // tenant-query-audit: allow — lookup by primary key on a bare pool connection. NOT a
-      // cross-tenant read: internal_approval_requests is FORCE RLS and its 0021 policy is
-      // `tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true)`. Measured against
-      // that exact policy as a non-BYPASSRLS role with no tenant context set: only the NULL-tenant
-      // row is visible, and a tenant-attributed row is invisible (`tenant_id = NULL` is NULL, not
-      // true). So this fails CLOSED.
+      // tenant-query-audit: allow — deliberate staff-scope read by primary key, in the same
+      // platform scope listApprovalRequests already uses. Platform scope is exactly right for a
+      // read: migration 0038's `platform_scope_read_*` policies are FOR SELECT only, so this
+      // grants visibility without granting any write.
       //
-      // It is however functionally incomplete, and deliberately left that way for now — see the
-      // note on decideApprovalRequest below. Fixing this SELECT alone would be WORSE than leaving
-      // it: internalManagementServiceAdapters.decideApprovalRequest feeds this row into the UPDATE,
-      // which cannot be platform-scoped, then reads `updated.tenant_id` — turning today's silent
-      // no-op into a TypeError. The two have to change together.
-      const { rows } = await pool.query('SELECT * FROM internal_approval_requests WHERE id = $1', [id]);
+      // A bare pool.query here used to fail CLOSED but INCOHERENTLY: under FORCE RLS with no
+      // context, `tenant_id = current_setting('app.tenant_id', true)` is NULL rather than true, so
+      // only the NULL-tenant row was visible. listApprovalRequests and getInternalOverview's
+      // pending_approval_requests count DO use platform scope, so the staff console listed a
+      // tenant-attributed approval and counted it as pending, then answered 404 when staff tried
+      // to open or decide it.
+      //
+      // Read and write had to change together, and did: decideApprovalRequest now takes the row's
+      // tenant_id (above) because platform scope authorizes no UPDATE. Fixing only this SELECT
+      // would have fed a now-visible row into a write that still could not land, and the caller
+      // then dereferenced the null result.
+      const rows = await queryPlatform(
+        pool,
+        'SELECT * FROM internal_approval_requests WHERE id = $1',
+        [id],
+      );
       return mapApproval(rows[0] ?? null);
     },
 
