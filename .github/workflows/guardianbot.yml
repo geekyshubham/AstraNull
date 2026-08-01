@@ -24,7 +24,7 @@ jobs:
       security-events: write
       actions: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@f2a7f5410bd5d8b140378a7c722b74ba0b455727
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-security.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
     with:
       config-path: .guardianbot/config.yml
 
@@ -35,7 +35,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@f2a7f5410bd5d8b140378a7c722b74ba0b455727
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
     with:
       dockerfile: "ops/digitalocean/Dockerfile"
       context: "."
@@ -52,21 +52,6 @@ jobs:
           ASTRANULL_PUBLIC_BASE_URL=https://guardianbot.invalid
           ASTRANULL_PERSISTENCE_MODE=postgres
           ASTRANULL_DEPLOYMENT_PROFILE=hosted-staging
-          # Bundled staging OIDC is OFF for the smoke container, and the three values it
-          # would otherwise derive are supplied explicitly instead.
-          #
-          # Enabling it makes startup load the token-signing fixture, and that fixture is
-          # deliberately absent from the image (gitignored + .dockerignore) because it used
-          # to be a git-committed private key in a public repo. With it enabled the
-          # container would refuse to boot, the /health probe would never pass, and image
-          # promotion would be rejected on every push to main.
-          #
-          # The signing key cannot be supplied here either: this file is public, and
-          # ephemeral-env-keys generates random values, which cannot form a JSON fixture.
-          # The smoke container only probes /health and /ready, so it never mints a token
-          # and does not need a real key. Production supplies the fixture as a platform
-          # secret, so the bundled path is still exercised where it actually runs — but note
-          # this gate therefore does NOT cover bundled-OIDC token minting.
           ASTRANULL_BUNDLED_STAGING_OIDC=0
           ASTRANULL_OIDC_ISSUER=https://guardianbot.invalid/staging-oidc
           ASTRANULL_OIDC_AUDIENCE=astranull-hosted-staging
@@ -88,7 +73,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@f2a7f5410bd5d8b140378a7c722b74ba0b455727
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
@@ -105,7 +90,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@f2a7f5410bd5d8b140378a7c722b74ba0b455727
+    uses: Geekyshubham/guardianbot/.github/workflows/reusable-dast.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
     with:
       target-origin: "https://guardianbot-astranull-stage-sisf9.ondigitalocean.app"
       openapi: "docs/api/guardianbot-dast-openapi.json"
