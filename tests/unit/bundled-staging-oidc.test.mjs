@@ -131,4 +131,103 @@ describe('bundled staging OIDC', () => {
     assert.equal(config.agentIdentityMode, 'bearer');
     assert.equal(config.authMode, 'oidc-jwt');
   });
+
+  /**
+   * A half-finished IdP cutover is a fail-OPEN, and nothing used to stop it booting.
+   *
+   * The bundled mint route stamps tokens with whatever ASTRANULL_OIDC_ISSUER/_AUDIENCE resolve
+   * to — it does not pin them to the fixture's own identity. Verification separately follows
+   * ASTRANULL_OIDC_JWKS_URL, which falls back to this app's own /.well-known/jwks.json, i.e.
+   * the fixture's public key. Set the first two at a real IdP and forget the third and an
+   * UNAUTHENTICATED route mints tokens carrying the real IdP's `iss`, signed by our fixture
+   * key, which the app then accepts: anonymous impersonation of the corporate IdP.
+   */
+  describe('bundled fixture vs real IdP contradiction', () => {
+    const DO_HOST = 'https://astranull-qteog.ondigitalocean.app';
+
+    /** The live App Platform env, minus the OIDC variables under test. */
+    const productionEnv = (extra) => ({
+      NODE_ENV: 'production',
+      ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
+      ASTRANULL_DATABASE_URL: 'postgresql://user:pass@localhost:5432/astranull',
+      ASTRANULL_PERSISTENCE_MODE: 'postgres',
+      ASTRANULL_AUTH_MODE: 'oidc-jwt',
+      ASTRANULL_PROBE_MODE: 'signed-worker',
+      ASTRANULL_PROBE_WORKER_SECRET: 'hosted-staging-probe-worker-secret-32c',
+      ASTRANULL_AGENT_IDENTITY_MODE: 'bearer',
+      ASTRANULL_HIGH_SCALE_ADAPTER_MODE: 'disabled',
+      ASTRANULL_SECRET_ENCRYPTION_KEY:
+        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      ...extra,
+    });
+
+    it('boots the live .do/app.yaml shape, where all three OIDC vars are set explicitly', () => {
+      // The check must not be "issuer must be unset": both specs DO set it, pointing at this
+      // app's own endpoints. Requiring it unset would refuse the running configuration.
+      const config = loadRuntimeConfig(productionEnv({
+        ASTRANULL_BUNDLED_STAGING_OIDC: '1',
+        ASTRANULL_PUBLIC_BASE_URL: DO_HOST,
+        ASTRANULL_OIDC_ISSUER: `${DO_HOST}/staging-oidc`,
+        ASTRANULL_OIDC_JWKS_URL: `${DO_HOST}/.well-known/jwks.json`,
+        ASTRANULL_OIDC_AUDIENCE: 'astranull-hosted-staging',
+      }));
+      assert.equal(config.bundledStagingOidc, true);
+    });
+
+    it('boots when the issuer origin differs from the public base URL', () => {
+      // ops/digitalocean/app.yaml serves astranull.site while its issuer names the
+      // ondigitalocean.app hostname of the same app. So the invariant cannot be
+      // "issuer must match ASTRANULL_PUBLIC_BASE_URL" — only that the issuer and the key
+      // which validates it belong together.
+      const config = loadRuntimeConfig(productionEnv({
+        ASTRANULL_BUNDLED_STAGING_OIDC: '1',
+        ASTRANULL_PUBLIC_BASE_URL: 'https://astranull.site',
+        ASTRANULL_OIDC_ISSUER: `${DO_HOST}/staging-oidc`,
+        ASTRANULL_OIDC_JWKS_URL: `${DO_HOST}/.well-known/jwks.json`,
+        ASTRANULL_OIDC_AUDIENCE: 'astranull-hosted-staging',
+      }));
+      assert.equal(config.bundledStagingOidc, true);
+    });
+
+    it('refuses to start when the issuer is a real IdP but JWKS_URL was forgotten', () => {
+      // The dangerous shape. JWKS falls back to our own host, so fixture-signed tokens
+      // bearing the real IdP's issuer would verify.
+      assert.throws(
+        () => loadRuntimeConfig(productionEnv({
+          ASTRANULL_BUNDLED_STAGING_OIDC: '1',
+          ASTRANULL_PUBLIC_BASE_URL: DO_HOST,
+          ASTRANULL_OIDC_ISSUER: 'https://idp.example.com/',
+          ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
+        })),
+        /ASTRANULL_BUNDLED_STAGING_OIDC=1 mints tokens stamped with ASTRANULL_OIDC_ISSUER/,
+      );
+    });
+
+    it('refuses to start when a real IdP is configured but the fixture flag is left on', () => {
+      assert.throws(
+        () => loadRuntimeConfig(productionEnv({
+          ASTRANULL_BUNDLED_STAGING_OIDC: '1',
+          ASTRANULL_PUBLIC_BASE_URL: DO_HOST,
+          ASTRANULL_OIDC_ISSUER: 'https://idp.example.com/',
+          ASTRANULL_OIDC_JWKS_URL: 'https://login.microsoftonline.com/tid/discovery/v2.0/keys',
+          ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
+        })),
+        /Set ASTRANULL_BUNDLED_STAGING_OIDC=0 when adopting a real identity provider/,
+      );
+    });
+
+    it('accepts the completed cutover as a pure config change, with the mint route off', () => {
+      // The whole point: adopting a real IdP needs no code edit. Clearing the flag also does
+      // not disturb the deployment profile, because both specs declare it explicitly.
+      const config = loadRuntimeConfig(productionEnv({
+        ASTRANULL_PUBLIC_BASE_URL: DO_HOST,
+        ASTRANULL_OIDC_ISSUER: 'https://idp.example.com/',
+        ASTRANULL_OIDC_JWKS_URL: 'https://login.microsoftonline.com/tid/discovery/v2.0/keys',
+        ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
+      }));
+      assert.equal(config.bundledStagingOidc, false, 'the unauthenticated mint must be off');
+      assert.equal(config.bundledStagingStaffLogin, false);
+      assert.equal(config.deploymentProfile, 'hosted-staging', 'profile must not shift');
+    });
+  });
 });

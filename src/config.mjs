@@ -525,6 +525,54 @@ export function loadRuntimeConfig(env = process.env) {
   );
 
   const bundledStagingOidc = env.ASTRANULL_BUNDLED_STAGING_OIDC === '1';
+  if (bundledStagingOidc && authMode === 'oidc-jwt') {
+    /**
+     * Refuse a half-finished IdP cutover, which is a fail-OPEN if it boots.
+     *
+     * With the bundled fixture enabled, `POST /v1/auth/bundled-staging-login` mints tokens and
+     * stamps them with whatever `ASTRANULL_OIDC_ISSUER` / `_AUDIENCE` resolve to — it does not
+     * pin them to the fixture's own identity. Verification separately follows
+     * `ASTRANULL_OIDC_JWKS_URL`, which falls back to OUR `/.well-known/jwks.json`, i.e. the
+     * fixture's public key (src/lib/bundledStagingOidc.mjs).
+     *
+     * So an operator who points ISSUER and AUDIENCE at a real IdP but forgets JWKS_URL gets a
+     * deployment where an UNAUTHENTICATED route mints tokens carrying the real IdP's `iss` and
+     * `aud`, signed by our fixture key, and the app accepts them. That is anonymous
+     * impersonation of the corporate identity provider. Verified by construction: with
+     * ISSUER=https://idp.example.com/ and no JWKS_URL, the minted token's `iss` was
+     * https://idp.example.com/ while jwksUrl stayed on our own host.
+     *
+     * The check is an ORIGIN match, deliberately not "issuer must be unset": both App Platform
+     * specs DO set all three variables explicitly, pointing at this app's own endpoints, and
+     * requiring them to be unset would refuse the live configuration. Origins may legitimately
+     * differ from ASTRANULL_PUBLIC_BASE_URL — ops/digitalocean/app.yaml serves astranull.site
+     * while its issuer names the ondigitalocean.app hostname of the same app — so the invariant
+     * is only that the issuer and the key that validates it belong together.
+     *
+     * Correct cutover: set ASTRANULL_BUNDLED_STAGING_OIDC=0 (or drop it) in the same change
+     * that points the OIDC variables at the real IdP. That needs no code edit; clearing the
+     * flag does not disturb the deployment profile, because both specs declare it explicitly.
+     */
+    const sameOrigin = (a, b) => {
+      try {
+        return new URL(a).origin === new URL(b).origin;
+      } catch {
+        // An unparseable URL is already rejected by the oidc validation above; do not turn a
+        // parse failure here into a second, more confusing error.
+        return true;
+      }
+    };
+    if (oidc?.issuer && oidc?.jwksUrl && !sameOrigin(oidc.issuer, oidc.jwksUrl)) {
+      throw new Error(
+        'Refusing to start: ASTRANULL_BUNDLED_STAGING_OIDC=1 mints tokens stamped with '
+        + `ASTRANULL_OIDC_ISSUER (${oidc.issuer}) while ASTRANULL_OIDC_JWKS_URL (${oidc.jwksUrl}) `
+        + 'resolves to a different origin. The unauthenticated bundled-staging login would then '
+        + "issue tokens bearing that issuer's identity, signed by the bundled fixture key. Set "
+        + 'ASTRANULL_BUNDLED_STAGING_OIDC=0 when adopting a real identity provider, or point '
+        + 'both variables at the same origin.',
+      );
+    }
+  }
   /**
    * Whether the bundled fixture may mint STAFF principals.
    *
