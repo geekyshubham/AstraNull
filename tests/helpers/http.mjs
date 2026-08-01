@@ -29,6 +29,33 @@ export async function request(baseUrl, method, path, { headers = {}, body, rawBo
   };
 }
 
+/**
+ * Shut a test server down completely, awaiting the close.
+ *
+ * Resource hygiene, not a bug fix. A file like server-postgres-mode.test.mjs binds ~66
+ * servers in one process; `server.close()` un-awaited leaves the listener and any
+ * ESTABLISHED keep-alive sockets outliving the test that created them, so descriptors
+ * accumulate for the rest of the run. `closeAllConnections()` destroys the sockets
+ * `close()` deliberately leaves serving, and awaiting the callback means the port is
+ * actually released before the next test binds.
+ *
+ * Explicitly NOT a fix for the intermittent wrong-status failures in that file. That was
+ * the hypothesis this helper was written under, and it was measured and refuted: the
+ * failure rate was 3/150 before and 3/150 after, and it survives both
+ * `--test-concurrency=1` and a forced `Connection: close`. Do not cite this helper as
+ * having fixed a flake.
+ *
+ * Resolves rather than rejects when the server was never listening: ERR_SERVER_NOT_RUNNING
+ * in cleanup is not a test failure, and rejecting there would mask the real assertion.
+ */
+export async function closeServer(server) {
+  if (!server) return;
+  server.closeAllConnections?.();
+  await new Promise((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
 export function demoHeaders(role = 'admin', tenant = 'ten_demo', user = 'usr_admin') {
   return {
     'x-tenant-id': tenant,

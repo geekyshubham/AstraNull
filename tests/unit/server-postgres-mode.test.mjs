@@ -5,7 +5,7 @@ import { isHighScaleRoute, isPostgresUnwiredRoute } from '../../src/lib/postgres
 import { probeWorkerAuthHeaders } from '../../src/services/probeCoordinator.mjs';
 import { createServer } from '../../src/server.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
-import { demoHeaders, request, staffHeaders } from '../helpers/http.mjs';
+import { closeServer, demoHeaders, request, staffHeaders } from '../helpers/http.mjs';
 
 const PROBE_WORKER_SECRET = 'postgres-probe-worker-secret-32chars!!';
 
@@ -66,8 +66,8 @@ describe('createServer postgres mode — route wiring', () => {
   let server;
   let baseUrl;
 
-  afterEach(() => {
-    server?.close();
+  afterEach(async () => {
+    await closeServer(server);
     server = undefined;
   });
 
@@ -1965,8 +1965,8 @@ describe('createServer postgres mode — probe worker routes', () => {
   let server;
   let baseUrl;
 
-  afterEach(() => {
-    server?.close();
+  afterEach(async () => {
+    await closeServer(server);
     server = undefined;
   });
 
@@ -2109,8 +2109,8 @@ describe('createServer postgres mode — readiness', () => {
   let server;
   let baseUrl;
 
-  afterEach(() => {
-    server?.close();
+  afterEach(async () => {
+    await closeServer(server);
     server = undefined;
   });
 
