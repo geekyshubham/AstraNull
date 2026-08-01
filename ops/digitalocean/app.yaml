@@ -81,6 +81,24 @@ services:
       - key: ASTRANULL_OIDC_AUDIENCE
         scope: RUN_TIME
         value: astranull-hosted-staging
+      # REQUIRED, and coupled to config.mjs `requireExplicitRoleMap`. Keep in sync with .do/app.yaml.
+      #
+      # Production resolves roles ONLY through this map. Without it every token is rejected
+      # (pickRole skips unmapped candidates → invalid_role) and all login breaks on the next
+      # deploy. So this entry and that flag have to ship together.
+      #
+      # The map is identity because the bundled fixture emits platform role names directly.
+      # Verified against the shipped verifier: the resulting accept/deny set is identical to the
+      # old unmapped behaviour for every platform role, so this changes nothing for customers —
+      # it exists so the staff path can fail closed.
+      #
+      # Deliberately NO ASTRANULL_OIDC_STAFF_ROLE_MAP. Leaving it unset is what stops a
+      # `staff_role` claim from resolving to platform staff authority — including tokens minted
+      # before the staff-login mint was closed. Adding an identity staff map here would reopen
+      # that hole. Staff roles must come from a real IdP.
+      - key: ASTRANULL_OIDC_ROLE_MAP
+        scope: RUN_TIME
+        value: 'owner:owner,admin:admin,engineer:engineer,soc:soc,auditor:auditor,viewer:viewer'
       # OPERATOR ACTION REQUIRED — the token-signing keypair. Keep in sync with .do/app.yaml.
       #
       # This was a git-committed file (ops/staging/bundled-oidc-fixture.json) in a PUBLIC

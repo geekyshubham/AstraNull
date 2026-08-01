@@ -383,7 +383,30 @@ export function loadRuntimeConfig(env = process.env) {
       jwksFetchTimeoutMs,
       rolePrefix: rolePrefix || null,
       roleMap,
-      requireExplicitRoleMap: nodeEnv === 'production' && !isHostedStagingDeployment(env),
+      /**
+       * Production requires every role to be resolved through an explicit map — including the
+       * hosted-staging profile, which used to be exempt.
+       *
+       * The exemption existed so the bundled fixture's self-asserted `role` claim would resolve
+       * without any map configured. That also meant a `staff_role` claim resolved the same way: an
+       * attacker-chosen claim value became platform staff authority. Closing the mint
+       * (bundledStagingStaffLogin) stopped new staff tokens being issued, but tokens minted before
+       * that fix still verified, because pickStaffRole accepted the raw claim. With this enabled and
+       * no ASTRANULL_OIDC_STAFF_ROLE_MAP configured, staff role resolution fails closed and those
+       * tokens stop verifying.
+       *
+       * Do NOT add a staff role map to the deploy specs to "complete" this. An identity staff map
+       * makes a `staff_role` claim authoritative again, which is the exact hole above. Staff
+       * authority belongs to a real IdP; unset is the fail-closed state.
+       *
+       * COUPLING: enabling this alone rejects every token on the customer path too — pickRole skips
+       * unmapped candidates, so with an empty map no role resolves and all login breaks. Both deploy
+       * specs therefore set ASTRANULL_OIDC_ROLE_MAP in the same change. Verified against the shipped
+       * verifier: with that map the customer accept/deny set is byte-identical to the old exempt
+       * behaviour across every platform role and 17 near-miss claim values, so the customer half is
+       * a precondition, not a behaviour change. The staff half is the security delta.
+       */
+      requireExplicitRoleMap: nodeEnv === 'production',
     };
   }
 

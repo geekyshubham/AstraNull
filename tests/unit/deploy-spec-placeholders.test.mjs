@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { ROLES } from '../../src/contracts/roles.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** The spec the deploy action actually applies. */
@@ -170,6 +171,65 @@ describe('digitalocean deploy spec placeholders', () => {
   it('never inlines private key material in either spec', () => {
     for (const relative of [SPEC_PATH, 'ops/digitalocean/app.yaml']) {
       assert.doesNotMatch(read(relative), /-----BEGIN [A-Z ]*PRIVATE KEY-----/, relative);
+    }
+  });
+
+  /** The `value:` of an env entry, with YAML's optional surrounding quotes removed. */
+  function envValue(specText, key) {
+    const entry = envEntry(specText, key);
+    if (entry == null) return null;
+    const line = entry.split('\n').find((candidate) => /^\s*value:/.test(candidate));
+    if (!line) return null;
+    return line.replace(/^\s*value:\s*/, '').trim().replace(/^'(.*)'$/, '$1').replace(/^"(.*)"$/, '$1');
+  }
+
+  /**
+   * The role map is load-bearing for login, not cosmetic.
+   *
+   * `config.mjs` sets `requireExplicitRoleMap` whenever NODE_ENV=production — including the
+   * hosted-staging profile, which used to be exempt. `pickRole` then skips every candidate that the
+   * map does not name, so with this entry missing NO token resolves a role and every sign-in fails
+   * with `invalid_role`. Deleting it from a spec is therefore a full auth outage on the next deploy,
+   * and the deploy would look green: startup does not read the map, so /health and /ready still pass.
+   */
+  it('maps every platform role in both specs, because production resolves roles only through the map', () => {
+    for (const relative of SPEC_PATHS) {
+      const raw = envValue(read(relative), 'ASTRANULL_OIDC_ROLE_MAP');
+      assert.ok(
+        raw,
+        `${relative} must set ASTRANULL_OIDC_ROLE_MAP. Production enables requireExplicitRoleMap, `
+        + 'so without it pickRole resolves nothing and every login fails with invalid_role.',
+      );
+      const mapped = new Set(
+        raw.split(',').map((entry) => entry.split(':')[1]?.trim()).filter(Boolean),
+      );
+      const missing = ROLES.filter((role) => !mapped.has(role));
+      assert.deepEqual(
+        missing,
+        [],
+        `${relative}: ASTRANULL_OIDC_ROLE_MAP omits ${missing.join(', ')} — users holding those `
+        + 'roles could not sign in.',
+      );
+    }
+  });
+
+  /**
+   * The staff map's ABSENCE is the control, so this guards against "completing" the config.
+   *
+   * Staff authority over /internal/admin is not tenant-scoped. With no staff map configured and
+   * requireExplicitRoleMap on, `pickStaffRole` refuses every `staff_role` claim — which is what
+   * retires the staff bearers minted before the bundled staff-login mint was closed. Adding an
+   * identity staff map here would make an attacker-chosen claim value authoritative again and
+   * reopen exactly that hole. Staff roles must come from a real IdP instead.
+   */
+  it('sets no staff role map in either spec, keeping staff role resolution fail-closed', () => {
+    for (const relative of SPEC_PATHS) {
+      assert.equal(
+        envEntry(read(relative), 'ASTRANULL_OIDC_STAFF_ROLE_MAP'),
+        null,
+        `${relative} must NOT set ASTRANULL_OIDC_STAFF_ROLE_MAP: it would let a staff_role token `
+        + 'claim resolve to platform staff authority, reopening the anonymous internal_admin path.',
+      );
     }
   });
 });

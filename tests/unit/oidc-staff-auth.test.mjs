@@ -332,10 +332,14 @@ describe('verifyOidcStaffBearerToken — staff claim isolation from customer rol
     });
   });
 
-  it('accepts an unmapped staff_role when requireExplicitRoleMap is disabled (hosted-staging parity)', async () => {
+  it('accepts an unmapped staff_role when requireExplicitRoleMap is disabled (non-production only)', async () => {
     await withJwks(async (jwksUrl) => {
-      // Mirrors the bundled hosted-staging login: role + staff_role claims,
-      // requireExplicitRoleMap=false, no staff role map configured.
+      // requireExplicitRoleMap=false with no staff role map: raw claims resolve.
+      //
+      // This is NOT the deployed shape any more. Production enables the flag regardless of
+      // deployment profile, so a hosted-staging deployment refuses exactly this token — that
+      // refusal is what retires the staff bearers minted before the bundled staff-login mint was
+      // closed. What remains covered here is local/dev and E2E, where the flag stays off.
       const cfg = staffOidcConfig(jwksUrl, { requireExplicitRoleMap: false });
       const token = signRs256Jwt({
         iss: ISSUER,

@@ -302,6 +302,39 @@ describe('runtime auth config', () => {
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_OIDC_ROLE_MAP/);
   });
 
+  /**
+   * The hosted-staging profile no longer exempts production from explicit role mapping.
+   *
+   * That exemption let the bundled fixture's self-asserted claims resolve with no map configured.
+   * It applied to `staff_role` as well, so an attacker-chosen claim became platform staff authority
+   * over /internal/admin. Closing the mint stopped new staff tokens being issued, but ones minted
+   * earlier still verified, because pickStaffRole accepted the raw claim. With this enabled and no
+   * staff role map configured, staff role resolution fails closed and those tokens stop verifying.
+   *
+   * The deployed spec is exactly NODE_ENV=production + ASTRANULL_DEPLOYMENT_PROFILE=hosted-staging,
+   * which is the combination the old condition exempted — so it is the one worth pinning.
+   */
+  it('requires explicit role mapping in production even under the hosted-staging profile', () => {
+    process.env.NODE_ENV = 'production';
+    baseOidcEnv();
+    process.env.ASTRANULL_OIDC_JWKS_URL = 'https://idp.example/jwks';
+    process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
+    process.env.ASTRANULL_DATABASE_URL = 'postgres://astranull:test@127.0.0.1:5432/astranull';
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
+    process.env.ASTRANULL_DEPLOYMENT_PROFILE = 'hosted-staging';
+
+    assert.equal(loadRuntimeConfig().oidc.requireExplicitRoleMap, true);
+
+    // Unchanged: production with no profile already required it.
+    delete process.env.ASTRANULL_DEPLOYMENT_PROFILE;
+    assert.equal(loadRuntimeConfig().oidc.requireExplicitRoleMap, true);
+
+    // Non-production stays permissive so local runs and E2E keep working without a map.
+    process.env.NODE_ENV = 'development';
+    process.env.ASTRANULL_DEPLOYMENT_PROFILE = 'hosted-staging';
+    assert.equal(loadRuntimeConfig().oidc.requireExplicitRoleMap, false);
+  });
+
   it('rejects malformed OIDC MFA policy env values', () => {
     process.env.NODE_ENV = 'test';
     baseOidcEnv();
