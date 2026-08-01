@@ -47,9 +47,6 @@ jobs:
       ephemeral-env-keys: "ASTRANULL_SECRET_ENCRYPTION_KEY,ASTRANULL_PROBE_WORKER_SECRET"
       policy-mode: "report-only"
       promotion-mode: "verified-default-branch"
-      # Image smoke must not enable bundled staging OIDC: the fixture is not in the
-      # image, so ASTRANULL_BUNDLED_STAGING_OIDC=1 fails closed at boot. Supply
-      # explicit issuer/audience/JWKS placeholders instead (no signing fixture).
       runtime-env: |
           ASTRANULL_DATABASE_URL=postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
           ASTRANULL_PUBLIC_BASE_URL=https://guardianbot.invalid
