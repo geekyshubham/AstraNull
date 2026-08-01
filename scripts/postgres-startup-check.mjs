@@ -2,7 +2,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
-import { closePgPool, createPgPool, pingPostgres, resolvePgPoolConfig } from '../src/persistence/postgres/pool.mjs';
+import {
+  checkRoleRlsPosture,
+  closePgPool,
+  createPgPool,
+  pingPostgres,
+  resolvePgPoolConfig,
+} from '../src/persistence/postgres/pool.mjs';
 import {
   assertLatestMigrationApplied,
   getLatestMigrationVersion,
@@ -120,7 +126,15 @@ async function runStartupCheck(pool, { migrate }) {
 
   await assertLatestMigrationApplied(pool, latest);
 
-  return { latest, results, migrationsMutated: migrate };
+  // Tenant isolation is only as strong as the connected role: a superuser or
+  // BYPASSRLS role makes every tenant_isolation_* policy inert while /health and
+  // /ready still pass. Warn-only for now (see checkRoleRlsPosture) — this
+  // preflight must surface the posture, not gate the deploy on an unverified
+  // assumption about the live role. Runs after migrations so the applied schema
+  // (and therefore table ownership) is the state being described.
+  const rolePosture = await checkRoleRlsPosture(pool);
+
+  return { latest, results, migrationsMutated: migrate, rolePosture };
 }
 
 async function main() {
@@ -141,7 +155,7 @@ async function main() {
   let pool;
   try {
     pool = createPgPool(process.env);
-    const { latest, results, migrationsMutated } = await runStartupCheck(pool, {
+    const { latest, results, migrationsMutated, rolePosture } = await runStartupCheck(pool, {
       migrate: config.migrate,
     });
     const summary = summarizeMigrationResults(results);
@@ -151,6 +165,12 @@ async function main() {
     console.log(`  ping: ok`);
     console.log(`  latest_version: ${latest}`);
     console.log(`  migrations_mode: ${migrationsMutated ? 'apply_then_verify' : 'verify_only'}`);
+    if (rolePosture) {
+      // Role name only — never any part of the connection string.
+      console.log(`  db_role: ${rolePosture.role}`);
+      console.log(`  db_role_bypasses_rls: ${rolePosture.bypassesRls ?? 'unknown'}`);
+      console.log(`  db_role_owns_tables: ${rolePosture.ownsTables ?? 'unknown'}`);
+    }
     if (config.poolLabels) {
       console.log(`  pool_max: ${config.poolLabels.max}`);
       console.log(`  pool_idle_timeout_ms: ${config.poolLabels.idleTimeoutMillis}`);
