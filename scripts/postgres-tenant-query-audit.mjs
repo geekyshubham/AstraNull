@@ -314,22 +314,59 @@ export function hasTenantPredicate(sql) {
   return TENANT_PREDICATE_RES.some((re) => re.test(sql));
 }
 
+/**
+ * Blank out comment bodies so PROSE cannot satisfy a scoping check.
+ *
+ * Every heuristic below looks for evidence of tenant scoping as raw text, and `contextBefore`
+ * included comments — so a comment that merely MENTIONED `withTenantContext`, `app.tenant_id`, or
+ * `tenant_id = $1` silenced the check for the next query. Found the hard way: the justification
+ * comments written for the two queries this gate legitimately allows referenced all three tokens,
+ * and removing their `tenant-query-audit: allow` markers changed nothing, because the surrounding
+ * prose was doing the silencing. Any developer explaining tenant scoping in a comment would have
+ * had the same effect, which makes it a fail-open in the gate rather than a one-off mistake.
+ *
+ * Replaces content with spaces rather than deleting it, so offsets and line structure survive for
+ * anything downstream that measures them.
+ *
+ * The allow marker is deliberately checked BEFORE this runs: that one is meant to be a comment.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripCommentBodies(text) {
+  const blank = (match) => match.replace(/[^\n]/g, ' ');
+  return text
+    // Block comments first: a `//` inside one must not be treated as a line comment.
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/\/\/[^\n]*/g, blank)
+    // SQL line comments, for query text carrying its own commentary.
+    .replace(/--[^\n]*/g, blank);
+}
+
 export function hasTenantContext(sql, table, contextBefore) {
+  // Checked on the RAW context: this marker is an explicit, reviewed opt-out and is supposed to be
+  // a comment. Everything after this point reads comment-stripped text instead.
   if (ALLOW_COMMENT_RE.test(contextBefore)) return true;
-  if (CROSS_TENANT_ENUMERATION_RE.test(sql) && !/\bwithTenantContext\b/.test(contextBefore)) {
+
+  // Prose must not count as scoping. Stripping can only REMOVE apparent evidence, so the failure
+  // direction is a finding on correct code (loud, caught in CI) rather than a silent pass.
+  const code = stripCommentBodies(contextBefore);
+  const sqlCode = stripCommentBodies(sql);
+
+  if (CROSS_TENANT_ENUMERATION_RE.test(sql) && !/\bwithTenantContext\b/.test(code)) {
     return false;
   }
   if (hasTenantPredicate(sql) && !CROSS_TENANT_ENUMERATION_RE.test(sql)) return true;
   if (/app\.tenant_id|set_config\s*\(\s*['"]app\.tenant_id['"]|current_setting\s*\(\s*['"]app\.tenant_id['"]/i.test(
-    `${contextBefore}\n${sql}`,
+    `${code}\n${sqlCode}`,
   )) {
     return true;
   }
-  if (/\bwithTenantContext\b/.test(contextBefore)) return true;
-  if (/\btenant_id\s*=\s*\$/i.test(contextBefore)) return true;
-  if (/['"]tenant_id\s*=\s*\$1['"]/.test(contextBefore)) return true;
-  if (/\['tenant_id\s*=\s*\$1'\]/.test(contextBefore)) return true;
-  if (/\bconditions\s*=\s*\[[^\]]*tenant_id\s*=\s*\$1/.test(contextBefore)) return true;
+  if (/\bwithTenantContext\b/.test(code)) return true;
+  if (/\btenant_id\s*=\s*\$/i.test(code)) return true;
+  if (/['"]tenant_id\s*=\s*\$1['"]/.test(code)) return true;
+  if (/\['tenant_id\s*=\s*\$1'\]/.test(code)) return true;
+  if (/\bconditions\s*=\s*\[[^\]]*tenant_id\s*=\s*\$1/.test(code)) return true;
   if (table === 'tenants' && /\bWHERE\s+id\s*=\s*\$/i.test(sql)) return true;
   return false;
 }
@@ -385,15 +422,76 @@ export function extractSingleQuotedQueryRegions(source) {
   return regions;
 }
 
+/**
+ * Text preceding a query, with completed sibling blocks removed.
+ *
+ * A flat `source.slice(startIndex - N, startIndex)` window credits scoping that belongs to an
+ * entirely different function. Measured before this existed: an unscoped
+ * `pool.query('SELECT * FROM findings ORDER BY created_at DESC')` is correctly flagged on its own,
+ * but goes UNFLAGGED when any earlier function in the file used `withTenantContext` or ran a query
+ * carrying `tenant_id = $1` within the window. That is a false negative in a gate whose whole job is
+ * catching cross-tenant reads — it passed a query returning every tenant's rows.
+ *
+ * So walk backwards instead of slicing. Maintaining brace depth means a balanced `{...}` block that
+ * has already closed before the query is a SIBLING scope and is dropped wholesale, while an
+ * unmatched `{` is an ancestor scope opening and is kept along with the header that introduced it.
+ * That keeps `withTenantContext(pool, tenantId, async (client) => {` — real scoping the query is
+ * genuinely inside — and discards the closed function next door.
+ *
+ * HEURISTIC, deliberately: this counts braces without parsing, so a brace inside a string literal,
+ * a regex, or a comment can skew the depth. The failure directions are not symmetric, which is why
+ * a heuristic is acceptable here. Keeping too LITTLE context reports a finding on correct code —
+ * loud, and caught by CI immediately. Keeping too MUCH reproduces the false negative above, which is
+ * silent. Since dropped siblings only ever REMOVE text that a flat window would have included, the
+ * bias is toward the loud direction.
+ *
+ * @param {string} source
+ * @param {number} startIndex
+ * @returns {string}
+ */
+export function enclosingScopeContext(source, startIndex) {
+  // Bounds the backwards walk. Larger than the kept-context cap because dropped sibling blocks do
+  // not count toward it: a query after several long functions still has to reach its own header.
+  const SCAN_BUDGET = 200_000;
+  const scanStart = Math.max(0, startIndex - SCAN_BUDGET);
+  /** @type {string[]} */
+  const kept = [];
+  let keptLength = 0;
+  let depth = 0;
+
+  for (let i = startIndex - 1; i >= scanStart; i -= 1) {
+    const char = source[i];
+    if (char === '}') {
+      // Walking backwards, a closing brace opens a sibling block: skip until it balances.
+      depth += 1;
+      continue;
+    }
+    if (char === '{') {
+      if (depth > 0) {
+        depth -= 1;
+        continue;
+      }
+      // Unmatched: an ancestor scope's opening brace. Keep it and the header before it.
+      kept.push(char);
+      keptLength += 1;
+      if (keptLength >= CONTEXT_BEFORE_CHARS) break;
+      continue;
+    }
+    if (depth > 0) continue;
+    kept.push(char);
+    keptLength += 1;
+    if (keptLength >= CONTEXT_BEFORE_CHARS) break;
+  }
+
+  return kept.reverse().join('');
+}
+
 function auditSqlRegions(filePath, source, regions) {
   /** @type {Array<{ file: string, line: number, check: string, table: string, query_label: string }>} */
   const findings = [];
 
   for (const region of regions) {
-    const contextBefore = source.slice(
-      Math.max(0, region.startIndex - CONTEXT_BEFORE_CHARS),
-      region.startIndex,
-    );
+    const contextBefore = enclosingScopeContext(source, region.startIndex);
     TENANT_TABLE_RE.lastIndex = 0;
     let match = TENANT_TABLE_RE.exec(region.content);
     while (match) {

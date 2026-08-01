@@ -668,6 +668,23 @@ export function createPortalRevampRepository(pool) {
 
     async listSignupQueueEvents(requestId, options = {}) {
       const maxChars = Number(options.truncateMessageChars) || 500;
+      // tenant-query-audit: allow — signup events are PRE-tenant: they are written while a signup
+      // request is still being reviewed, so tenant_id is NULL and there is no tenant to scope to.
+      // The lookup key is the request_id the caller already holds. This runs on a bare pool
+      // connection deliberately; wrapping it in withTenantContext would require a tenant that does
+      // not exist yet.
+      //
+      // Safety does not rest on this comment. signup_queue_events is ENABLE + FORCE ROW LEVEL
+      // SECURITY (0031) and its policy (0036) is
+      //   tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true)
+      // Measured against that exact policy as a non-superuser role without BYPASSRLS: with no
+      // tenant context set, ONLY the tenant_id IS NULL row is visible — rows belonging to a tenant
+      // stay hidden, because `tenant_id = NULL` is NULL rather than true. Setting app.tenant_id
+      // then adds exactly that tenant's rows and no others.
+      //
+      // The containment therefore depends on the application's database role being neither a
+      // superuser nor BYPASSRLS; both bypass RLS unconditionally and would turn this into a
+      // cross-tenant read. That role is provisioned outside this repo.
       const { rows } = await pool.query(
         `SELECT * FROM signup_queue_events WHERE request_id = $1 ORDER BY created_at ASC`,
         [requestId],

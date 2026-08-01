@@ -240,6 +240,14 @@ function signupUpdateParams(id, next, expectedStates) {
  * @param {import('pg').PoolClient} client
  */
 async function insertTenantProvisioningRows(client, { tenant, environment, user, account, subscription, grants }) {
+  // tenant-query-audit: allow — every statement in this function is scoped, but by the CALLER, not
+  // here. The function takes an already-open transaction client; both callers (approveSignupRequest
+  // and the provisioning retry path) run `set_config('app.tenant_id', payload.tenant.id, true)`
+  // before calling, which is the contract stated in the JSDoc above.
+  //
+  // Safety does not rest on this comment: the target tables are FORCE ROW LEVEL SECURITY with
+  // WITH CHECK on the tenant setting, so an unscoped caller does not silently write cross-tenant
+  // rows — the INSERT is rejected by the database.
   await client.query(
     `INSERT INTO tenants (id, name, privacy_settings, created_at)
      VALUES ($1, $2, $3::jsonb, $4::timestamptz)`,
@@ -518,6 +526,14 @@ export function createInternalManagementRepository(pool) {
       const [signups, blocked, approvals, highScale, tenants] = await withPlatformScope(
         pool,
         async (client) => {
+          // tenant-query-audit: allow — these are staff-console aggregates ACROSS tenants, which is
+          // the whole point of the overview; there is no tenant to scope them to.
+          //
+          // Safety does not rest on this comment. withPlatformScope() sets app.platform_scope=on and
+          // clears app.tenant_id, both transaction-local (set_config(..., true)), so the reads are
+          // authorized only by the platform_scope_read_* policies from migration 0038. Those are
+          // FOR SELECT only and additionally require app.tenant_id to be unset, so this path cannot
+          // write and cannot be reached from an ordinary tenant-scoped transaction.
           const run = async (sql, params = []) => (await client.query(sql, params)).rows;
           return [
             await run(`SELECT count(*)::int AS count FROM signup_requests WHERE state = ANY($1::text[])`, [['submitted', 'under_review', 'approved']]),
@@ -768,6 +784,19 @@ export function createInternalManagementRepository(pool) {
     },
 
     async decideApprovalRequest(id, patch) {
+      // tenant-query-audit: allow — fails CLOSED, not open. Measured against the real 0021 policy as
+      // a non-BYPASSRLS role with no tenant context: this UPDATE affects 0 rows for a
+      // tenant-attributed approval, and only succeeds for a NULL-tenant one. No cross-tenant write.
+      //
+      // Why it is not simply wrapped in queryPlatform() the way listInternalAudit is: migration 0038
+      // grants platform scope `FOR SELECT` only, so platform scope authorizes no UPDATE at all.
+      // A correct fix needs the tenant's own transaction (whose id comes from getApprovalRequest,
+      // which has the same visibility limit) or a new platform write policy — a schema change that
+      // should be designed deliberately rather than bolted on here.
+      //
+      // Impact today is latent: no `INSERT INTO internal_approval_requests` exists anywhere in
+      // src/, so nothing in the application creates approval rows, tenant-attributed or otherwise.
+      // Tracked separately rather than silently half-fixed.
       const { rows } = await pool.query(
         `UPDATE internal_approval_requests SET
            state = $2,
@@ -784,6 +813,18 @@ export function createInternalManagementRepository(pool) {
     },
 
     async getApprovalRequest(id) {
+      // tenant-query-audit: allow — lookup by primary key on a bare pool connection. NOT a
+      // cross-tenant read: internal_approval_requests is FORCE RLS and its 0021 policy is
+      // `tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true)`. Measured against
+      // that exact policy as a non-BYPASSRLS role with no tenant context set: only the NULL-tenant
+      // row is visible, and a tenant-attributed row is invisible (`tenant_id = NULL` is NULL, not
+      // true). So this fails CLOSED.
+      //
+      // It is however functionally incomplete, and deliberately left that way for now — see the
+      // note on decideApprovalRequest below. Fixing this SELECT alone would be WORSE than leaving
+      // it: internalManagementServiceAdapters.decideApprovalRequest feeds this row into the UPDATE,
+      // which cannot be platform-scoped, then reads `updated.tenant_id` — turning today's silent
+      // no-op into a TypeError. The two have to change together.
       const { rows } = await pool.query('SELECT * FROM internal_approval_requests WHERE id = $1', [id]);
       return mapApproval(rows[0] ?? null);
     },
@@ -808,6 +849,14 @@ export function createInternalManagementRepository(pool) {
       // Audit integrity: internal_audit_log is FORCE RLS. Without platform scope every
       // tenant-attributed entry was silently dropped, so the staff console showed an
       // incomplete audit trail (only rows with tenant_id IS NULL survived).
+      //
+      // tenant-query-audit: allow — the staff audit console reads across tenants by design, so
+      // there is no tenant_id predicate to add. `tenant_id = $N` above is appended only when the
+      // caller passes a filter, and is an optional narrowing, not the isolation control.
+      // Safety does not rest on this comment: queryPlatform() runs inside withPlatformScope(),
+      // which sets app.platform_scope and clears app.tenant_id, both transaction-local
+      // (set_config(..., true)), so RLS still governs the read through the SELECT-only
+      // platform_scope_read_* policies and the scope cannot leak onto a pooled connection.
       const rows = await queryPlatform(
         pool,
         `SELECT * FROM internal_audit_log
