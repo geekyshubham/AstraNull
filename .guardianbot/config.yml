@@ -143,7 +143,10 @@ image:
     ASTRANULL_PUBLIC_BASE_URL: https://guardianbot.invalid
     ASTRANULL_PERSISTENCE_MODE: postgres
     ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
-    ASTRANULL_BUNDLED_STAGING_OIDC: "1"
+    ASTRANULL_BUNDLED_STAGING_OIDC: "0"
+    ASTRANULL_OIDC_ISSUER: https://guardianbot.invalid/staging-oidc
+    ASTRANULL_OIDC_AUDIENCE: astranull-hosted-staging
+    ASTRANULL_OIDC_JWKS_URL: https://guardianbot.invalid/.well-known/jwks.json
     ASTRANULL_AUTH_MODE: oidc-jwt
     ASTRANULL_PROBE_MODE: signed-worker
     ASTRANULL_HIGH_SCALE_ADAPTER_MODE: disabled
