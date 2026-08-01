@@ -259,9 +259,32 @@ function decorateStaffLoginShell(html) {
     );
 }
 
+/**
+ * Path segments that mean "there is no file here", as opposed to "reading it failed".
+ *
+ * ENOENT is the ordinary miss. ENOTDIR is a path routed through a file (`/index.html/x`),
+ * EISDIR is a directory, ENAMETOOLONG is a path the filesystem will never hold — all of
+ * them are legitimately 404, and none of them indicate anything wrong with the server.
+ *
+ * Every OTHER errno (EACCES, EMFILE, EIO, ...) means the file may well exist and we simply
+ * could not read it. Those must not be reported as 404 — see the catch block below.
+ */
+const NOT_A_SERVABLE_FILE = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ENAMETOOLONG']);
+
 export async function serveStatic(req, res, url, runtimeConfig) {
   const aliases = buildStaticRouteAliases(runtimeConfig);
-  const pathname = decodeURIComponent(url.pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    // decodeURIComponent throws URIError on a malformed escape (`/%ZZ`). Unhandled, that
+    // escaped this function entirely and hit the dispatcher's catch-all, which logged a
+    // server-fault stack with a correlation id and answered 500 — so any unauthenticated
+    // caller could flood the error log and be told the SERVER was broken. A malformed
+    // percent-escape is a bad request, so say so and log nothing.
+    text(res, 400, 'Bad Request');
+    return true;
+  }
   let rel = pathname;
   if (aliases[rel]) {
     rel = aliases[rel];
@@ -307,7 +330,23 @@ export async function serveStatic(req, res, url, runtimeConfig) {
     });
     res.end(body);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // The response is already committed (this threw from writeHead/end, not from the read),
+    // so there is no status left to choose. Report it handled rather than letting the
+    // dispatcher attempt a second write on a sent response — that would throw inside its
+    // own catch block and lose the diagnostic entirely.
+    if (res.headersSent) return true;
+
+    // "No such file" is a genuine miss: fall through so the dispatcher's catch-all answers
+    // 404 as before.
+    if (NOT_A_SERVABLE_FILE.has(err?.code)) return false;
+
+    // Anything else (EACCES, EMFILE, EIO, ...) means the file may exist and we could not
+    // read it. Returning false here reported that as 404, indistinguishable from a real
+    // miss: a permissions or fd-exhaustion fault on a shipped asset looked to operators
+    // like a routing bug, with nothing logged. Rethrow so the dispatcher logs the stack
+    // against a correlation id and answers 500 — the response body still exposes nothing
+    // but that id.
+    throw err;
   }
 }
