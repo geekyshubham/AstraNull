@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+// The real shipped derivation, imported rather than re-implemented. See the note above the
+// coverage suite for why this file used to hold a copy and what that copy hid.
+import {
+  VECTOR_FAMILIES,
+  checkMatchesFamily,
+  familyCheckIds,
+  familyCoverage,
+  itemCheckId,
+  itemTargetGroupId,
+} from '../../apps/web/react/src/lib/vector-coverage.mjs';
 
 const ROOT = process.cwd();
 const REACT_SRC = path.join(ROOT, 'apps/web/react/src');
@@ -79,29 +89,16 @@ describe('portal has no fabricated runtime fallbacks (audit FT-PROV)', () => {
 });
 
 /**
- * Mirrors familyCoverage() from components/charts/vector-heatmap.tsx so the coverage
- * derivation is exercised as behavior (node:test cannot import the tsx directly).
+ * The coverage derivation, exercised through the module the portal actually renders from.
+ *
+ * This suite used to re-implement `familyCoverage`, `itemCheckId` and `itemTargetGroupId`
+ * locally, because `node --test` cannot load the `.tsx` they lived in. The copy had already
+ * drifted: it resolved ids from `check_id`/`checkId` only, while the shipped version also falls
+ * back to nested `check.check_id` and `target_group.id`. Those shapes were therefore handled in
+ * production and asserted nowhere, and these tests would have kept passing regardless of what
+ * the heatmap did. The logic now lives in `lib/vector-coverage.mjs`, imported by both the `.tsx`
+ * and this file, so that class of drift cannot recur.
  */
-function itemTargetGroupId(item) {
-  return String(item.target_group_id ?? item.targetGroupId ?? '');
-}
-function itemCheckId(item) {
-  return String(item.check_id ?? item.checkId ?? '');
-}
-function familyCoverage({ checkIds, groupId, testPolicies, runs, evidence }) {
-  if (!groupId || checkIds.size === 0) {
-    return { status: 'no-data', policyCount: 0, runCount: 0, evidenceCount: 0 };
-  }
-  const policyCount = testPolicies.filter((p) => itemTargetGroupId(p) === groupId && checkIds.has(itemCheckId(p))).length;
-  const runCount = runs.filter((r) => itemTargetGroupId(r) === groupId && checkIds.has(itemCheckId(r))).length;
-  const evidenceCount = evidence.filter((e) => itemTargetGroupId(e) === groupId && checkIds.has(itemCheckId(e))).length;
-  let status = 'none';
-  if (evidenceCount > 0) status = 'evidence';
-  else if (runCount > 0) status = 'run';
-  else if (policyCount > 0) status = 'policy';
-  return { status, policyCount, runCount, evidenceCount };
-}
-
 describe('vector heatmap coverage derives from real data only', () => {
   const checkIds = new Set(['chk_1']);
   const gid = 'grp_1';
@@ -141,5 +138,102 @@ describe('vector heatmap coverage derives from real data only', () => {
     const cov = familyCoverage({ checkIds, groupId: gid, testPolicies: [otherPolicy], runs: [], evidence: [] });
     assert.equal(cov.status, 'none');
     assert.equal(cov.policyCount, 0);
+  });
+
+  it('counts records that carry ids in camelCase or nested objects', () => {
+    // These four shapes all ship from different sources (raw API rows, hydrated portal state,
+    // expanded joins). A record whose id fails to resolve silently drops out of every count,
+    // which renders as "no coverage" rather than as a shape mismatch — so each shape that the
+    // resolver accepts needs to be observably counted.
+    const shapes = [
+      { target_group_id: gid, check_id: 'chk_1' },
+      { targetGroupId: gid, checkId: 'chk_1' },
+      { target_group: { id: gid }, check: { check_id: 'chk_1' } },
+      { target_group: { id: gid }, checkId: 'chk_1' },
+    ];
+    for (const record of shapes) {
+      const cov = familyCoverage({ checkIds, groupId: gid, testPolicies: [record], runs: [], evidence: [] });
+      assert.equal(cov.policyCount, 1, `unrecognised shape: ${JSON.stringify(record)}`);
+      assert.equal(cov.status, 'policy');
+    }
+  });
+
+  it('does not resolve an id out of an array or a missing nested object', () => {
+    // Pins the outcome rather than the mechanism: any shape that does not actually carry an id
+    // must resolve to '', so the record lands in no cell. An unresolvable id that resolved to
+    // something non-empty is what would invent coverage. (Mutation-checked: the `Array.isArray`
+    // guard in `nestedString` is not what these array cases exercise — arrays have no `id` or
+    // `check_id`, so they resolve to '' with or without it.)
+    assert.equal(itemCheckId({ check: ['chk_1'] }), '');
+    assert.equal(itemTargetGroupId({ target_group: ['grp_1'] }), '');
+    assert.equal(itemCheckId({}), '');
+    assert.equal(itemTargetGroupId({ target_group: null }), '');
+    // A record with no resolvable group id must not land in a cell.
+    const cov = familyCoverage({
+      checkIds, groupId: gid, testPolicies: [{ check_id: 'chk_1' }], runs: [], evidence: [],
+    });
+    assert.equal(cov.policyCount, 0, 'an unresolvable record must not be counted as coverage');
+  });
+});
+
+describe('vector family assignment', () => {
+  const dns = VECTOR_FAMILIES.find((f) => f.label === 'DNS');
+  const origin = VECTOR_FAMILIES.find((f) => f.label === 'Origin');
+  const gid = 'grp_1';
+
+  it('exposes the families the heatmap grid is sized from', () => {
+    assert.ok(VECTOR_FAMILIES.length > 0);
+    const labels = VECTOR_FAMILIES.map((f) => f.label);
+    assert.equal(new Set(labels).size, labels.length, 'labels are React keys and must be unique');
+    for (const family of VECTOR_FAMILIES) {
+      assert.ok(family.keys.length > 0, `${family.label} needs at least one match key`);
+      assert.ok(family.keys.every((k) => k === k.toLowerCase()), `${family.label} keys must be lowercase`);
+    }
+  });
+
+  it('classifies a check by family, category, name or id', () => {
+    // Catalog entries predating `vector_family` carry the vector only in their name or id, so
+    // all four fields are searched. Matching is case-insensitive.
+    assert.ok(checkMatchesFamily({ vector_family: 'dns' }, dns));
+    assert.ok(checkMatchesFamily({ category: 'DNS' }, dns));
+    assert.ok(checkMatchesFamily({ name: 'DNS amplification' }, dns));
+    assert.ok(checkMatchesFamily({ check_id: 'chk_dns_flood' }, dns));
+    assert.ok(!checkMatchesFamily({ name: 'TLS handshake' }, dns));
+    assert.ok(!checkMatchesFamily({}, dns), 'a check with no fields matches nothing');
+  });
+
+  it('collects only the matching check ids, accepting check_id or id', () => {
+    const checks = [
+      { check_id: 'chk_dns', vector_family: 'dns' },
+      { id: 'chk_dns_legacy', name: 'DNS resolver saturation' },
+      { check_id: 'chk_origin', vector_family: 'origin' },
+      { vector_family: 'dns' },
+    ];
+    assert.deepEqual(
+      [...familyCheckIds(checks, dns)].sort(),
+      ['chk_dns', 'chk_dns_legacy'],
+      'a matching check with no id at all must be dropped, not added as an empty string',
+    );
+    assert.deepEqual([...familyCheckIds(checks, origin)], ['chk_origin']);
+    assert.equal(familyCheckIds([], dns).size, 0);
+  });
+
+  it('joins family matching to coverage end to end', () => {
+    // The path the heatmap actually walks: checks -> family ids -> cell status. Exercised
+    // together because the two halves resolve check ids by different key sets (`id` is accepted
+    // when collecting a check, but a record must use `check_id`/`checkId`/nested `check`).
+    const checks = [{ id: 'chk_dns_legacy', name: 'DNS resolver saturation' }];
+    const ids = familyCheckIds(checks, dns);
+    const cov = familyCoverage({
+      checkIds: ids,
+      groupId: gid,
+      testPolicies: [{ target_group_id: gid, check_id: 'chk_dns_legacy' }],
+      runs: [],
+      evidence: [{ target_group: { id: gid }, check: { check_id: 'chk_dns_legacy' } }],
+    });
+    assert.equal(cov.status, 'evidence');
+    assert.equal(cov.evidenceCount, 1);
+    assert.equal(cov.policyCount, 1);
+    assert.equal(familyCoverage({ checkIds: familyCheckIds(checks, origin), groupId: gid, testPolicies: [], runs: [], evidence: [] }).status, 'no-data');
   });
 });
