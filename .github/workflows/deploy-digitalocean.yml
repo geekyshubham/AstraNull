@@ -85,6 +85,14 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      # Required by the `sbom:` and `provenance:` inputs on the build step below.
+      # Without it buildx uses the default `docker` driver, which cannot produce
+      # attestations at all: the build fails outright with "Attestation is not
+      # supported for the docker driver" before any layer is pushed. This action
+      # switches to the docker-container driver, which supports them.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push container image
         id: build
         uses: docker/build-push-action@v6
