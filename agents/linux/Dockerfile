@@ -1,5 +1,7 @@
 # AstraNull agent container — outbound-only metadata observation agent.
-FROM node:22-alpine
+# Base image pinned by digest for reproducible builds. Dependabot keeps this current
+# (see .github/dependabot.yml); do not replace with a floating tag.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 LABEL org.opencontainers.image.title="AstraNull Agent"
 LABEL org.opencontainers.image.description="Outbound-only validation agent for AstraNull readiness checks"

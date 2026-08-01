@@ -9,6 +9,11 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
 import {
+  API_DOC_PATHS,
+  RISKY_ADMIN_PORTS,
+  assertProbeDestinationAllowed,
+} from './probeEndpoint.mjs';
+import {
   countAxfrProbeRequests,
   resolveBoundedSequenceBudget,
   resolveProbeRequestBudget,
@@ -25,18 +30,11 @@ export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
 ]);
 
-export const RISKY_ADMIN_PORTS = Object.freeze([
-  21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 3389, 5432, 6379, 8080, 8443,
-]);
-
-export const API_DOC_PATHS = Object.freeze([
-  '/swagger.json',
-  '/openapi.json',
-  '/api-docs',
-  '/v3/api-docs',
-  '/graphql',
-  '/.well-known/openapi',
-]);
+// Declared in probeEndpoint.mjs (a leaf module) to keep the job-signing validators
+// cycle-free; re-exported here so existing importers keep working. These must be
+// imported (above) as well as re-exported — `export ... from` alone would leave the
+// names unbound inside this module.
+export { API_DOC_PATHS, RISKY_ADMIN_PORTS };
 
 const WEAK_TLS_PROTOCOLS = new Set(['TLSv1', 'TLSv1.1', 'SSLv3']);
 
@@ -194,6 +192,45 @@ async function resolveNs(zone, deps) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Per-destination guard for probes that egress to a host the worker chokepoint cannot
+ * vet (a nameserver discovered mid-probe, or a profile-declared resolver).
+ *
+ * IP literals are classified directly. Hostnames are resolved first and every resulting
+ * address must pass — a name that resolves to nothing is allowed through so the probe
+ * reports its own lookup failure. `requireIpLiteral` is for destinations that must be a
+ * literal by construction (dns.Resolver#setServers).
+ *
+ * @param {string} host
+ * @param {Record<string, unknown>} deps
+ * @param {{ requireIpLiteral?: boolean }} [options]
+ */
+async function vetProbeDestinationHost(host, deps = {}, options = {}) {
+  const policy = deps.destinationPolicy ?? { allowPrivate: false, allowLoopback: false };
+  const candidate = typeof host === 'string' ? host.trim() : '';
+  if (!candidate) return { ok: false, reason: 'missing_host' };
+
+  if (net.isIP(candidate) !== 0) {
+    const verdict = assertProbeDestinationAllowed(candidate, policy);
+    return verdict.ok
+      ? { ok: true, addresses: [candidate] }
+      : { ok: false, reason: verdict.message, blocked_address: candidate };
+  }
+
+  if (options.requireIpLiteral === true) {
+    return { ok: false, reason: 'not_an_ip_literal' };
+  }
+
+  const [v4, v6] = await Promise.all([resolve4(candidate, deps), resolve6(candidate, deps)]);
+  const addresses = [...new Set([...v4, ...v6])];
+  if (addresses.length === 0) return { ok: true, addresses: [], unresolved: true };
+  for (const ip of addresses) {
+    const verdict = assertProbeDestinationAllowed(ip, policy);
+    if (!verdict.ok) return { ok: false, reason: verdict.message, blocked_address: ip };
+  }
+  return { ok: true, addresses };
 }
 
 function tcpConnectProbe(host, port, timeoutMs, connectFn = net.connect) {
@@ -367,10 +404,12 @@ export async function probeHostSniBypass(job, deps = {}) {
  */
 export async function probePortScanBounded(job, deps = {}) {
   const kind = 'port_scan_bounded';
+  // Scan host is derived from the declared target only. A profile-supplied scan_host used
+  // to let a signed job point the port scan at an address unrelated to the declared target.
   const targetHost = job.target?.kind === 'ip'
     ? String(job.target.value ?? '').trim()
     : apexDomain(job);
-  const host = job.probe_profile?.scan_host ?? targetHost ?? job.target?.value;
+  const host = targetHost ?? job.target?.value;
   if (!host) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
@@ -383,10 +422,17 @@ export async function probePortScanBounded(job, deps = {}) {
   const filtered_ports = [];
   let requestsSent = 0;
 
+  // Prefer an address the worker chokepoint already vetted; re-resolving here would
+  // reopen the rebinding window it closed.
+  const vettedAddresses = Array.isArray(deps.vettedAddresses) ? deps.vettedAddresses : [];
   let resolvedHost = host;
   if (net.isIP(host) === 0) {
-    const ips = await resolve4(host, deps);
-    resolvedHost = ips[0] ?? host;
+    if (vettedAddresses.length > 0) {
+      resolvedHost = vettedAddresses[0];
+    } else {
+      const ips = await resolve4(host, deps);
+      resolvedHost = ips[0] ?? host;
+    }
   }
 
   for (const port of ports) {
@@ -681,6 +727,23 @@ export async function probeAxfrLeak(job, deps = {}) {
   const nsHost = nameservers[0];
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
 
+  // The nameserver is discovered mid-probe, so the worker chokepoint never saw it.
+  const nsVerdict = await vetProbeDestinationHost(nsHost, deps);
+  if (!nsVerdict.ok) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'resolver_not_routable',
+        zone,
+        nameserver: nsHost,
+        blocked_address: nsVerdict.blocked_address ?? null,
+        reason: nsVerdict.reason,
+      }),
+      requests_sent: countAxfrProbeRequests({ nameserverResolved: true, tcpAttempted: false }),
+      duration_ms: Date.now() - started,
+    };
+  }
+
   const outcome = await runDnsTcpAxfrQuery({
     nsHost,
     zone,
@@ -711,6 +774,21 @@ export async function probeTlsAudit(job, deps = {}) {
   const connectFn = deps.connectFn ?? tls.connect;
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+
+  const hostVerdict = await vetProbeDestinationHost(host, deps);
+  if (!hostVerdict.ok) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'resolver_not_routable',
+        audit_host: host,
+        blocked_address: hostVerdict.blocked_address ?? null,
+        reason: hostVerdict.reason,
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
 
   try {
     const session = await new Promise((resolve, reject) => {
@@ -1041,6 +1119,25 @@ export async function probeOpenRecursion(job, deps = {}) {
     return {
       external_result: 'error',
       metadata: withKind(job, kind, { error_class: 'missing_recursion_test_name' }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  // dns.Resolver#setServers only accepts IP literals, so a non-literal resolver_host is
+  // both unsafe (unvetted egress) and unusable here.
+  const resolverVerdict = await vetProbeDestinationHost(resolverHost, deps, {
+    requireIpLiteral: true,
+  });
+  if (!resolverVerdict.ok) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'resolver_not_routable',
+        resolver_host: resolverHost,
+        blocked_address: resolverVerdict.blocked_address ?? null,
+        reason: resolverVerdict.reason,
+      }),
       requests_sent: 0,
       duration_ms: 0,
     };

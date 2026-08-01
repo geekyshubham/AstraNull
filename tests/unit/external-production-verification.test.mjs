@@ -28,10 +28,9 @@ import {
 } from '../../scripts/verify-external-production-readiness.mjs';
 import { resolveReleaseIdFromEvidence } from '../../scripts/attach-external-verification-markers.mjs';
 
-const closedChecklistOptions = {
-  releaseChecklistMarkdown: '- [x] release checklist closed\n',
-  releasePlanMarkdown: '- [x] release plan closed\n',
-};
+import { CLOSED_RELEASE_DOC_OPTIONS } from '../fixtures/releaseDocGateMarkdown.mjs';
+
+const closedChecklistOptions = CLOSED_RELEASE_DOC_OPTIONS;
 
 describe('external production verification contract', () => {
   it('fails closed with no evidence and no manifest', () => {
@@ -147,20 +146,26 @@ describe('external production verification contract', () => {
     assert.equal(report.external_verification.complete, true);
   });
 
-  it('buildLiveExternalVerificationManifestTemplate validates', () => {
+  it('buildLiveExternalVerificationManifestTemplate validates and is not self-attesting', () => {
     const manifest = buildLiveExternalVerificationManifestTemplate({
       releaseId: 'rel_template',
       operatorReference: 'operator://qa/lead',
     });
     const validation = validateExternalVerificationManifest(manifest);
     assert.equal(validation.ok, true);
-    assert.equal(manifest.domains.enterprise_idp_mfa.tier, 'live_external');
+    // The gate generates this manifest, so it must not assert its own verification.
+    assert.equal(manifest.domains.enterprise_idp_mfa.tier, 'pending');
+    assert.equal(manifest.verification_tier, 'pending');
+    for (const domain of Object.values(manifest.domains)) {
+      assert.equal(domain.tier, 'pending');
+      assert.deepEqual(domain.retained_artifact_refs, []);
+    }
   });
 
   it('does not count an unfilled manifest template as live_external', () => {
-    // The bare template ships retained_artifact_refs: [] as a fill-me-in marker.
-    // Even with fully live evidence records, a manifest whose operator never
-    // retained real artifacts must fall back to metadata_only and block launch.
+    // The bare template ships tier 'pending' as a fill-me-in marker. Even with fully
+    // live evidence records, a manifest no operator affirmatively attested must fall
+    // back to metadata_only and block launch.
     const records = liveExternalEvidenceRecords();
     const unfilledManifest = buildLiveExternalVerificationManifestTemplate({
       releaseId: 'rel-live-external-2026-07-04',
@@ -172,8 +177,52 @@ describe('external production verification contract', () => {
     assert.equal(report.live_external_count, 0);
     assert.ok(report.domains.every((domain) => domain.tier === 'metadata_only'));
     assert.ok(
+      report.domains.every((domain) => domain.blockers.includes('manifest_tier_pending')),
+    );
+  });
+
+  it('rejects arbitrary strings as retained_artifact_refs', () => {
+    // retained_artifact_refs previously accepted any non-empty string, so five
+    // arbitrary values in a manifest the gate itself generates satisfied the gate.
+    const records = liveExternalEvidenceRecords();
+    const manifest = liveExternalVerificationManifest();
+    for (const entry of Object.values(manifest.domains)) {
+      entry.retained_artifact_refs = ['x'];
+    }
+    const report = aggregateExternalProductionVerification(records, { manifest });
+    assert.equal(report.complete, false);
+    assert.equal(report.live_external_count, 0);
+    assert.ok(
       report.domains.every((domain) =>
-        domain.blockers.includes('manifest_retained_artifact_refs_missing')),
+        domain.blockers.includes('manifest_retained_artifact_refs_not_custody_shaped')),
+    );
+  });
+
+  it('requires retained_artifact_refs to carry a digest and differ from custody_uri', () => {
+    const records = liveExternalEvidenceRecords();
+
+    const noDigest = liveExternalVerificationManifest();
+    for (const entry of Object.values(noDigest.domains)) {
+      entry.retained_artifact_refs = ['retained://external/idp/rel-2026-07-04'];
+    }
+    const noDigestReport = aggregateExternalProductionVerification(records, { manifest: noDigest });
+    assert.equal(noDigestReport.complete, false);
+    assert.ok(
+      noDigestReport.domains.every((domain) =>
+        domain.blockers.includes('manifest_retained_artifact_refs_missing_digest')),
+    );
+
+    // Echoing custody_uri back as its own retained artifact pins nothing new.
+    const echoed = liveExternalVerificationManifest();
+    for (const entry of Object.values(echoed.domains)) {
+      entry.custody_uri = `custody://external/thing?sha256=${'b'.repeat(64)}`;
+      entry.retained_artifact_refs = [entry.custody_uri];
+    }
+    const echoedReport = aggregateExternalProductionVerification(records, { manifest: echoed });
+    assert.equal(echoedReport.complete, false);
+    assert.ok(
+      echoedReport.domains.every((domain) =>
+        domain.blockers.includes('manifest_retained_artifact_refs_duplicate_custody_uri')),
     );
   });
 

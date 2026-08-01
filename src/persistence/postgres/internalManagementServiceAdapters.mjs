@@ -1,5 +1,6 @@
 import { newId } from '../../lib/ids.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
+import { redactObject } from '../../lib/redact.mjs';
 import {
   canTransitionSignupState,
   customerSafeRejectionReason,
@@ -19,6 +20,7 @@ export const INTERNAL_MANAGEMENT_REPOSITORY_METHODS = Object.freeze([
   'listSignupRequests',
   'updateSignupRequest',
   'provisionTenantFromSignup',
+  'provisionTenantForApprovedSignup',
   'appendInternalAudit',
   'getInternalOverview',
   'listTenants',
@@ -33,6 +35,8 @@ export const INTERNAL_MANAGEMENT_REPOSITORY_METHODS = Object.freeze([
   'decideApprovalRequest',
   'getApprovalRequest',
   'listInternalAudit',
+  'listBreakGlassActivations',
+  'saveBreakGlassActivation',
 ]);
 
 export const POSTGRES_INTERNAL_MANAGEMENT_SERVICE_METHODS = Object.freeze([
@@ -54,6 +58,9 @@ export const POSTGRES_INTERNAL_MANAGEMENT_SERVICE_METHODS = Object.freeze([
   'listApprovalRequests',
   'decideApprovalRequest',
   'listInternalAudit',
+  'appendInternalAudit',
+  'listBreakGlassActivations',
+  'saveBreakGlassActivation',
 ]);
 
 function staffId(ctx) {
@@ -192,14 +199,19 @@ export function createPostgresInternalManagementServices(repositories) {
       if (record.state === 'submitted') {
         const reviewed = transition(record, 'under_review', { reviewer_staff_id: staffId(ctx) });
         if (reviewed.error) return reviewed;
-        record = await repo.updateSignupRequest(id, reviewed);
+        // Every state write is guarded by the state we just read. A null result means a
+        // concurrent approve moved the row first (lost race) -> surface 409, never proceed
+        // to provisioning on stale state.
+        record = await repo.updateSignupRequest(id, { ...reviewed, expected_states: ['submitted'] });
+        if (!record) return { error: 'signup_state_conflict' };
       }
       const approved = transition(record, 'approved', {
         reviewer_staff_id: staffId(ctx),
         decision_reason: body.reason ?? 'approved',
       });
       if (approved.error) return approved;
-      record = await repo.updateSignupRequest(id, approved);
+      record = await repo.updateSignupRequest(id, { ...approved, expected_states: ['under_review'] });
+      if (!record) return { error: 'signup_state_conflict' };
       await repo.appendInternalAudit(auditEntry(ctx, 'signup.request_approved', {
         resource_type: 'signup_request',
         resource_id: id,
@@ -222,7 +234,19 @@ export function createPostgresInternalManagementServices(repositories) {
         redact_headers_by_default: true,
         evidence_retention: plan.default_retention,
       });
-      await repo.provisionTenantFromSignup({
+      const provisionedPatch = transition(record, 'provisioned', {
+        provisioned_tenant_id: tenantId,
+      });
+      if (provisionedPatch.error) return provisionedPatch;
+
+      // The approved -> provisioned claim and every provisioning INSERT run in ONE
+      // transaction. Two overlapping approves therefore cannot both provision: the loser's
+      // guarded UPDATE matches zero rows and its whole transaction (tenant rows included)
+      // rolls back.
+      const provisioned = await repo.provisionTenantForApprovedSignup({
+        signupId: id,
+        expectedStates: ['approved'],
+        signupPatch: provisionedPatch,
         tenant: {
           id: tenantId,
           name: record.organization_name,
@@ -256,6 +280,8 @@ export function createPostgresInternalManagementServices(repositories) {
         subscription,
         grants,
       });
+      if (!provisioned) return { error: 'signup_state_conflict' };
+      record = provisioned.request;
       await repo.appendInternalAudit(auditEntry(ctx, 'tenant.provisioned_from_signup', {
         tenant_id: tenantId,
         resource_type: 'tenant',
@@ -266,13 +292,13 @@ export function createPostgresInternalManagementServices(repositories) {
           owner_user_id: ownerUserId,
         },
       }));
-      record = await repo.updateSignupRequest(id, transition(record, 'provisioned', {
-        provisioned_tenant_id: tenantId,
-      }));
-      record = await repo.updateSignupRequest(id, transition(record, 'customer_invited', {
+      const invited = transition(record, 'customer_invited', {
         customer_notice: 'Your AstraNull account is ready. Check your email for login instructions.',
         provisioned_tenant_id: tenantId,
-      }));
+      });
+      if (invited.error) return invited;
+      record = await repo.updateSignupRequest(id, { ...invited, expected_states: ['provisioned'] });
+      if (!record) return { error: 'signup_state_conflict' };
       return {
         request: record,
         provisioning: {
@@ -442,5 +468,28 @@ export function createPostgresInternalManagementServices(repositories) {
     },
 
     listInternalAudit: (filters) => repo.listInternalAudit(filters),
+
+    /**
+     * Writes a route-supplied audit event (e.g. `break_glass.activated`) to the internal
+     * audit log. Routes emit `actor_user_id`/`actor_role`; the log stores
+     * `staff_id`/`staff_role`, so the shapes are mapped here as in the in-memory service.
+     */
+    async appendInternalAudit(ctx, event = {}) {
+      if (!event.action) {
+        throw new Error('appendInternalAudit requires an action.');
+      }
+      return repo.appendInternalAudit(auditEntry(ctx, event.action, {
+        staff_id: event.actor_user_id ?? staffId(ctx) ?? null,
+        staff_role: event.actor_role ?? staffRole(ctx) ?? null,
+        tenant_id: event.tenant_id ?? null,
+        resource_type: event.resource_type ?? null,
+        resource_id: event.resource_id ?? null,
+        reason: event.reason ?? null,
+        metadata: redactObject(event.metadata ?? {}),
+      }));
+    },
+
+    listBreakGlassActivations: () => repo.listBreakGlassActivations(),
+    saveBreakGlassActivation: (activation) => repo.saveBreakGlassActivation(activation),
   };
 }

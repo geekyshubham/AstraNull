@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
+  stripSqlComments,
   TENANT_CONSISTENT_FK_CONSTRAINTS,
   validateDbSchema,
 } from '../../scripts/validate-db-schema.mjs';
@@ -241,5 +242,73 @@ describe('db schema contract', () => {
     assert.match(schemaSql, /ADD CONSTRAINT findings_tenant_id_id_key UNIQUE \(tenant_id, id\)/);
     assert.match(migrationSql, /findings_tenant_id_id_key UNIQUE \(tenant_id, id\)/);
     assert.match(schemaSql, /waf_connectors[\s\S]*?status TEXT NOT NULL DEFAULT 'disabled'/m);
+  });
+});
+
+/**
+ * Many required patterns are bare identifiers (an index or policy name) that match anywhere
+ * in the file, so before comments were stripped, deleting real DDL and leaving the name in a
+ * nearby comment passed this gate. That made the drift gate fail open on exactly the edit it
+ * exists to catch — a dropped index or unenforced RLS policy.
+ */
+describe('db schema contract comment handling', () => {
+  const readReal = () => ({
+    schemaSql: readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8'),
+    migrationSqls: readdirSync(path.join(ROOT, 'db', 'migrations'))
+      .filter((n) => n.endsWith('.sql'))
+      .sort()
+      .map((n) => readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8')),
+  });
+
+  it('strips line comments without disturbing DDL on the same line', () => {
+    assert.equal(stripSqlComments('CREATE TABLE x (); -- trailing note').trim(), 'CREATE TABLE x ();');
+    assert.equal(stripSqlComments('-- uniq_example\nCREATE INDEX real_one ON x(y);').trim(), 'CREATE INDEX real_one ON x(y);');
+    // The identifier must not survive when it only ever appeared inside the comment.
+    assert.doesNotMatch(stripSqlComments('-- uniq_example is planned'), /uniq_example/);
+  });
+
+  it('validates the real schema and migrations through the injected path', () => {
+    const { schemaSql, migrationSqls } = readReal();
+    assert.equal(validateDbSchema({ schemaSql, migrationSqls }).ok, true);
+  });
+
+  it('rejects a required index whose DDL is gone but whose name remains in a comment', () => {
+    const { schemaSql, migrationSqls } = readReal();
+    const gutted = schemaSql.replace(
+      /CREATE UNIQUE INDEX uniq_verdict_per_test_run[^;]*;/i,
+      '-- uniq_verdict_per_test_run intentionally removed',
+    );
+    assert.notEqual(gutted, schemaSql, 'probe must actually remove the index DDL');
+    const result = validateDbSchema({ schemaSql: gutted, migrationSqls });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => /uniq_verdict_per_test_run/.test(e)));
+  });
+
+  it('rejects a required table that is commented out and renamed', () => {
+    const { schemaSql, migrationSqls } = readReal();
+    const gutted = schemaSql.replace(
+      /CREATE TABLE verdicts \(/,
+      '-- CREATE TABLE verdicts (\nCREATE TABLE verdicts_renamed (',
+    );
+    assert.notEqual(gutted, schemaSql);
+    assert.equal(validateDbSchema({ schemaSql: gutted, migrationSqls }).ok, false);
+  });
+
+  it('rejects an RLS policy that survives only as a comment', () => {
+    const { schemaSql, migrationSqls } = readReal();
+    const gutted = schemaSql.replace(
+      /CREATE POLICY tenant_isolation_probe_jobs/,
+      '-- CREATE POLICY tenant_isolation_probe_jobs\nCREATE POLICY unrelated_policy',
+    );
+    assert.notEqual(gutted, schemaSql);
+    assert.equal(validateDbSchema({ schemaSql: gutted, migrationSqls }).ok, false);
+  });
+
+  it('does not fail a forbidden identifier that appears only in an explanatory comment', () => {
+    // The same stripping cuts both ways, deliberately: `identity_fingerprint` is a banned
+    // column, but documenting why it is absent must not be mistaken for reintroducing it.
+    const { schemaSql, migrationSqls } = readReal();
+    const annotated = `-- identity_fingerprint is deliberately not stored.\n${schemaSql}`;
+    assert.equal(validateDbSchema({ schemaSql: annotated, migrationSqls }).ok, true);
   });
 });

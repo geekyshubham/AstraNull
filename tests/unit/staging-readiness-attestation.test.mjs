@@ -412,6 +412,55 @@ describe('staging readiness attestation', () => {
     );
   });
 
+  it('treats staging-sim evidence as rehearsal material', () => {
+    // staging-sim bundles are simulator output, not observations of a running stack, so
+    // they cannot support production readiness even with a complete inventory.
+    const fullKinds = STAGING_READINESS_RELEASE_PROFILES.full;
+    const records = acceptedRecords(
+      completeEvidenceRecords(fullKinds.filter((kind) => PRODUCTION_RELEASE_EVIDENCE_COMPLETE[kind])),
+    );
+
+    const simulated = aggregateStagingReadinessAttestation(
+      { records, environment: 'staging-sim' },
+      { profile: 'full' },
+    );
+    assert.equal(simulated.production_ready, false);
+    assert.equal(simulated.signoff_status, 'rehearsal_only');
+    assert.equal(simulated.rehearsal_only, true);
+    assert.ok(
+      simulated.blocker_summary.some((line) => /rehearsal\/sample evidence/i.test(line)),
+    );
+
+    // local-staging must stay attestable: release:staging-attestation:local relies on it.
+    const localStaging = aggregateStagingReadinessAttestation(
+      { records, environment: 'local-staging' },
+      { profile: 'full' },
+    );
+    assert.equal(localStaging.production_ready, true);
+    assert.equal(localStaging.signoff_status, 'evidence_complete');
+  });
+
+  it('detects staging-sim on individual records and rel-staging-sim release ids', () => {
+    assert.equal(isSampleOrRehearsalReleaseId('rel-staging-sim-2026-07-04'), true);
+    assert.equal(isSampleOrRehearsalReleaseId('rel-hosted-staging-2026-07-03'), false);
+
+    assert.equal(
+      isRehearsalOrSampleEvidenceInput({ records: [{ kind: 'migration_apply', environment: 'staging-sim' }] }),
+      true,
+    );
+    assert.equal(
+      isRehearsalOrSampleEvidenceInput({
+        records: [{ kind: 'migration_apply', evidence: { environment: 'staging-sim' } }],
+      }),
+      true,
+    );
+    assert.equal(isRehearsalOrSampleEvidenceInput({ environment: 'staging-sim', records: [] }), true);
+    assert.equal(isRehearsalOrSampleEvidenceInput({ environment: 'staging', records: [] }), false);
+    // Both spellings of the top-level rehearsal flag must be honored.
+    assert.equal(isRehearsalOrSampleEvidenceInput({ rehearsalOnly: true, records: [] }), true);
+    assert.equal(isRehearsalOrSampleEvidenceInput({ rehearsal_only: true, records: [] }), true);
+  });
+
   it('complete fixture can pass full profile once contract expansion is present', () => {
     const fullKinds = STAGING_READINESS_RELEASE_PROFILES.full;
     const records = acceptedRecords(

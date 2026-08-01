@@ -1,6 +1,7 @@
 import { audit } from '../audit.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { newId } from '../lib/ids.mjs';
+import { VERIFICATION_RANK, ownershipProofFromStates } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { createOwnershipChallengeJob } from './probeCoordinator.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
@@ -382,14 +383,6 @@ const LADDER_LABELS = Object.freeze({
 
 const VERIFY_PREREQ_STATES = new Set(['agent_verified', 'user_confirmed']);
 
-const VERIFICATION_RANK = Object.freeze({
-  unverified: 0,
-  pending: 1,
-  dns_verified: 2,
-  agent_verified: 3,
-  user_confirmed: 4,
-});
-
 function latestVerificationByTarget(ctx, targetIds) {
   const verifications = (getStore().targetVerifications ?? []).filter(
     (v) => v.tenant_id === ctx.tenantId && targetIds.includes(v.target_id),
@@ -421,6 +414,25 @@ function getActiveLoa(ctx, groupId) {
       && row.target_group_id === groupId
       && row.state === 'signed',
   ) ?? null;
+}
+
+/**
+ * Whether ownership of `targetId` has been proven well enough to aim live traffic at it.
+ *
+ * Reads both places developer-validation mode records ownership — the latest
+ * `target_verifications` row and the group's `ownership_status` — and defers the threshold to
+ * `ownershipProofFromStates`, which the Postgres adapters share.
+ *
+ * @param {import('../context.mjs').TenantScope} ctx
+ * @param {{ id: string, ownership_status?: string }} group
+ * @param {string} targetId
+ * @returns {{ verified: boolean, state: string, source: 'target'|'group'|null }}
+ */
+export function targetOwnershipProof(ctx, group, targetId) {
+  return ownershipProofFromStates({
+    groupState: group?.ownership_status,
+    targetState: latestVerificationByTarget(ctx, [targetId]).get(targetId)?.state,
+  });
 }
 
 /**

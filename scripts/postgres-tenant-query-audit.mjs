@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateProductionReleaseEvidence } from '../src/contracts/productionReleaseEvidence.mjs';
@@ -22,68 +22,116 @@ export const SKIP_FILE_BASENAMES = new Set([
 /** Tables without per-tenant RLS (documented global exceptions). */
 export const GLOBAL_TABLES = new Set(['schema_migrations', 'platform_metrics']);
 
-/** Tenant-scoped tables (aligned with docs/backend/09-database-schema.md RLS set). */
-export const TENANT_SCOPED_TABLES = Object.freeze([
-  'tenants',
-  'environments',
-  'users',
-  'target_groups',
-  'targets',
-  'bootstrap_tokens',
-  'agents',
-  'test_runs',
-  'probe_jobs',
-  'ownership_verifications',
-  'agent_jobs',
-  'events',
-  'verdicts',
-  'findings',
-  'evidence_vault',
-  'reports',
-  'high_scale_requests',
-  'authorization_artifacts',
-  'soc_notes',
-  'soc_kill_switch',
-  'notification_rules',
-  'notification_events',
-  'audit_logs',
-  'service_accounts',
-  'encrypted_secrets',
-  'agent_update_trust_keys',
-  'agent_update_releases',
-  'agent_update_statuses',
-  'high_scale_telemetry',
-  'soc_reports',
-  'notification_delivery_attempts',
-  'production_release_evidence',
-  'external_asset_candidates',
-  'waf_assets',
-  'waf_fingerprints',
-  'waf_validation_runs',
-  'waf_scenario_results',
-  'waf_posture_snapshots',
-  'waf_baselines',
-  'waf_validation_plans',
-  'waf_baseline_approvals',
-  'waf_retest_requests',
-  'waf_drift_events',
-  'waf_drift_scan_results',
-  'waf_connectors',
-  'waf_connector_snapshots',
-  'cve_pipeline_items',
-  'cve_asset_matches',
-  'waf_rule_recommendations',
-  'discovery_entities',
-  'supply_chain_risks',
-  'waf_action_items',
-  'waf_coverage_daily_rollups',
-  'waf_scenario_intakes',
-]);
+/**
+ * Statements that place a table under per-tenant row-level security.
+ *
+ * The RLS DDL is the authoritative definition of "tenant-scoped", so the audit derives
+ * its table list from these statements instead of a hand-maintained copy that silently
+ * drifts as migrations add tables. Policy *names* are deliberately not used as the
+ * source: db/schema.sql omits the five internal-management policies, so a name-based
+ * scan would miss those tables entirely.
+ */
+const RLS_ENABLE_RE =
+  /ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?"?([a-z_][a-z0-9_]*)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY/gi;
 
-const TENANT_TABLE_RE = new RegExp(
-  `\\b(?:FROM|INTO|UPDATE|JOIN|DELETE\\s+FROM)\\s+(${TENANT_SCOPED_TABLES.join('|')})\\b`,
-  'gi',
-);
+/**
+ * Materialized views carrying a `tenant_id`, matched up to the statement-terminating
+ * semicolon so the body can be inspected.
+ *
+ * These need auditing precisely *because* the RLS DDL above can never name them:
+ * PostgreSQL does not apply row-level security to materialized views, so there is no
+ * `ENABLE ROW LEVEL SECURITY` statement to derive them from. That makes them the
+ * inverse of every other tenant table here — an RLS table whose query forgets its
+ * tenant predicate is still contained by the database, whereas an unscoped read of
+ * one of these views returns every tenant's rows with nothing to stop it. Deriving
+ * them from DDL rather than a hand-kept list keeps that from depending on whoever
+ * adds the next view remembering to register it.
+ *
+ * Every materialized view is included, without inspecting the body for a `tenant_id`
+ * column. Sniffing the body would fail in the wrong direction: the check would have to
+ * guess where the statement ends, and a body that defeated the guess would be silently
+ * dropped from the audit — the exact failure this exists to prevent. Including a view
+ * that turns out to be genuinely platform-wide costs one `GLOBAL_TABLES` entry or an
+ * explicit `tenant-query-audit: allow` comment, and that registration is a deliberate,
+ * reviewable act rather than a regex outcome.
+ */
+const MATERIALIZED_VIEW_RE =
+  /CREATE\s+MATERIALIZED\s+VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([a-z_][a-z0-9_]*)"?/gi;
+
+/**
+ * SQL sources scanned for RLS DDL: the consolidated schema plus every migration, since
+ * tables added after schema.sql was last regenerated only appear in migrations.
+ * @param {string} root
+ */
+export function tenantScopedTableSqlSources(root = ROOT) {
+  const sources = [];
+  const schemaPath = path.join(root, 'db', 'schema.sql');
+  if (existsSync(schemaPath)) sources.push(schemaPath);
+  const migrationsDir = path.join(root, 'db', 'migrations');
+  if (existsSync(migrationsDir)) {
+    sources.push(
+      ...readdirSync(migrationsDir)
+        .filter((name) => name.endsWith('.sql'))
+        .sort()
+        .map((name) => path.join(migrationsDir, name)),
+    );
+  }
+  return sources;
+}
+
+/**
+ * Tenant-scoped relations, derived from DDL so the list cannot drift from the schema.
+ *
+ * Two sources, because one cannot cover the other: RLS statements for tables, and
+ * `CREATE MATERIALIZED VIEW` for views that RLS structurally cannot protect.
+ * @param {string} root
+ */
+export function deriveTenantScopedTables(root = ROOT) {
+  const tables = new Set();
+  let sawRls = false;
+  for (const sqlPath of tenantScopedTableSqlSources(root)) {
+    const sql = readFileSync(sqlPath, 'utf8');
+    for (const re of [RLS_ENABLE_RE, MATERIALIZED_VIEW_RE]) {
+      re.lastIndex = 0;
+      let match = re.exec(sql);
+      while (match) {
+        if (re === RLS_ENABLE_RE) sawRls = true;
+        const table = match[1].toLowerCase();
+        if (!GLOBAL_TABLES.has(table)) tables.add(table);
+        match = re.exec(sql);
+      }
+    }
+  }
+  // Fail closed: an empty list would silently pass every query in the repo. The RLS
+  // check is separate from `tables.size` because a schema whose only match came from
+  // a materialized view means the RLS scan silently broke.
+  if (!sawRls) {
+    throw new Error(
+      'No ENABLE ROW LEVEL SECURITY statements found in db/schema.sql or db/migrations; '
+      + 'cannot derive tenant-scoped table list.',
+    );
+  }
+  if (tables.size === 0) {
+    throw new Error('Derived tenant-scoped relation list is empty; refusing to pass every query.');
+  }
+  return Object.freeze([...tables].sort());
+}
+
+export const TENANT_SCOPED_TABLES = deriveTenantScopedTables();
+
+/**
+ * Longest table names first so alternation cannot settle for a shorter prefix match.
+ * @param {readonly string[]} tables
+ */
+export function buildTenantTableRe(tables = TENANT_SCOPED_TABLES) {
+  const ordered = [...tables].sort((a, b) => b.length - a.length);
+  return new RegExp(
+    `\\b(?:FROM|INTO|UPDATE|JOIN|DELETE\\s+FROM)\\s+"?(${ordered.join('|')})"?\\b`,
+    'gi',
+  );
+}
+
+const TENANT_TABLE_RE = buildTenantTableRe();
 
 const CONTEXT_BEFORE_CHARS = 2400;
 const MAX_QUERY_LABEL_LEN = 48;
@@ -240,12 +288,38 @@ export function buildQueryLabel(sql, table) {
  */
 const CROSS_TENANT_ENUMERATION_RE = /\bSELECT\s+DISTINCT\s+tenant_id\b/i;
 
+/**
+ * Ways a query can genuinely constrain rows to one tenant.
+ *
+ * A bare mention of `tenant_id` anywhere in the statement is not one of them: it also
+ * matches `ORDER BY tenant_id`, `SELECT tenant_id`, and `GROUP BY tenant_id`, none of
+ * which scope the result set. The reference has to appear in a predicate, a join
+ * condition, or an INSERT column list.
+ */
+const TENANT_PREDICATE_RES = [
+  // WHERE / AND / OR / ON [alias.]tenant_id = $1 | IN (...) | = ANY($1)
+  /\b(?:WHERE|AND|OR|ON)\s+\(*\s*(?:[a-z_][a-z0-9_]*\.)?"?tenant_id"?\s*(?:=|\bIN\b)/i,
+  // JOIN ... USING (tenant_id)
+  /\bUSING\s*\(\s*[^)]*\btenant_id\b/i,
+  // INSERT INTO t (tenant_id, ...) — the column list carries the tenant
+  /\bINSERT\s+INTO\s+[^(]*\(\s*[^)]*\btenant_id\b/i,
+  // Equality against a bound parameter or a correlated column, wherever it appears
+  /\btenant_id"?\s*=\s*(?:\$\d+|ANY\s*\(|(?:[a-z_][a-z0-9_]*\.)?"?tenant_id"?)/i,
+];
+
+/**
+ * @param {string} sql
+ */
+export function hasTenantPredicate(sql) {
+  return TENANT_PREDICATE_RES.some((re) => re.test(sql));
+}
+
 export function hasTenantContext(sql, table, contextBefore) {
   if (ALLOW_COMMENT_RE.test(contextBefore)) return true;
   if (CROSS_TENANT_ENUMERATION_RE.test(sql) && !/\bwithTenantContext\b/.test(contextBefore)) {
     return false;
   }
-  if (/\btenant_id\b/i.test(sql) && !CROSS_TENANT_ENUMERATION_RE.test(sql)) return true;
+  if (hasTenantPredicate(sql) && !CROSS_TENANT_ENUMERATION_RE.test(sql)) return true;
   if (/app\.tenant_id|set_config\s*\(\s*['"]app\.tenant_id['"]|current_setting\s*\(\s*['"]app\.tenant_id['"]/i.test(
     `${contextBefore}\n${sql}`,
   )) {

@@ -1,5 +1,19 @@
--- AstraNull PostgreSQL production schema contract (migrations 0001–0009 including WAF posture and wave 1 extensions).
--- Developer validation uses src/store.mjs (JSON). Schema coverage only — runtime Postgres adapter remains fail-closed until wired.
+-- AstraNull PostgreSQL schema *contract* — NOT a database build script.
+--
+-- DO NOT load this file to provision a database. db/migrations/ is the only source of
+-- truth and the only thing that is ever executed (see runMigrations in
+-- src/persistence/postgres/migrations.mjs; tests provision via tests/helpers/pg-harness.mjs).
+-- Nothing in the repo executes this file: it is read only by scripts/validate-db-schema.mjs
+-- and scripts/postgres-tenant-query-audit.mjs, and copied into images for reference.
+--
+-- Loading it directly yields a database that is missing every object added after the
+-- migrations it covers — as of migration 0041 that is 6 tables/views and 21 indexes,
+-- including the RLS policies on dns_challenges, target_verifications, loa_signatures,
+-- finding_remediations, and signup_queue_events. A tenant-isolation control that is
+-- absent because the wrong file was loaded fails open silently.
+--
+-- Coverage is therefore deliberately partial and this header is not a completeness claim.
+-- Developer validation uses src/store.mjs (JSON).
 -- App code must set_config('app.tenant_id', ..., true) inside transactions when using RLS-backed queries.
 
 CREATE TABLE schema_migrations (
@@ -37,6 +51,10 @@ CREATE TABLE users (
   role TEXT NOT NULL,
   mfa_enabled BOOLEAN DEFAULT FALSE,
   status TEXT DEFAULT 'active',
+  -- Invite/disable lifecycle metadata (invited_at, disabled_at, disabled_by, disabled_reason)
+  -- read/written by the internal-management repository. Parity with
+  -- db/migrations/0039_users_metadata_json.sql.
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (tenant_id, email)
 );
@@ -134,6 +152,22 @@ CREATE TABLE internal_audit_log (
   reason TEXT,
   metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Platform-level break-glass activations: no tenant_id (staff declare these about the
+-- platform, not a tenant), so RLS is deliberately not enabled here, consistent with
+-- staff_users / signup_requests / platform_metrics. Reporting-only: no authorization path
+-- reads this table. See db/migrations/0041_break_glass_activations.sql.
+CREATE TABLE break_glass_activations (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'active',
+  reason TEXT,
+  ticket_reference TEXT NOT NULL,
+  activated_by TEXT,
+  activated_role TEXT,
+  activated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  duration_minutes INTEGER NOT NULL
 );
 
 CREATE TABLE target_groups (
@@ -1185,6 +1219,9 @@ CREATE INDEX idx_signup_requests_state_created ON signup_requests(state, created
 CREATE INDEX idx_internal_approval_requests_queue ON internal_approval_requests(state, kind, created_at DESC);
 CREATE INDEX idx_internal_audit_log_tenant_created ON internal_audit_log(tenant_id, created_at DESC);
 CREATE INDEX idx_internal_audit_log_staff_created ON internal_audit_log(staff_id, created_at DESC);
+CREATE INDEX idx_break_glass_activations_activated_at ON break_glass_activations(activated_at DESC);
+CREATE UNIQUE INDEX idx_break_glass_activations_single_active ON break_glass_activations(status)
+  WHERE status = 'active';
 CREATE INDEX idx_target_groups_tenant ON target_groups(tenant_id);
 CREATE INDEX idx_ownership_verifications_tenant_target ON ownership_verifications(tenant_id, target_group_id);
 CREATE INDEX idx_test_policies_tenant_active ON test_policies(tenant_id, target_group_id) WHERE archived_at IS NULL;
@@ -1221,6 +1258,9 @@ CREATE INDEX idx_events_tenant_run_time ON events(tenant_id, test_run_id, timest
 CREATE INDEX idx_evidence_vault_tenant_run_created ON evidence_vault(tenant_id, test_run_id, created_at DESC);
 CREATE INDEX idx_evidence_vault_tenant_related_event ON evidence_vault(tenant_id, related_event_id);
 CREATE UNIQUE INDEX uniq_findings_open_target_check ON findings(tenant_id, target_group_id, target_id, check_id) WHERE status = 'open';
+-- Target-detail findings keyset page: (tenant_id, target_id) equality then the
+-- (created_at DESC, id DESC) sort tuple. See db/migrations/0040_findings_created_at_index.sql.
+CREATE INDEX idx_findings_tenant_target_created ON findings(tenant_id, target_id, created_at DESC, id DESC);
 CREATE UNIQUE INDEX uniq_probe_result_per_run_nonce ON events(tenant_id, test_run_id, signal_type, nonce_hash) WHERE signal_type = 'probe_result' AND nonce_hash IS NOT NULL;
 CREATE INDEX idx_waf_assets_tenant_group_url ON waf_assets(tenant_id, target_group_id, canonical_url);
 CREATE INDEX idx_external_asset_candidates_approval_queue ON external_asset_candidates(tenant_id, approval_status, confidence DESC);
@@ -1543,3 +1583,63 @@ CREATE INDEX idx_waf_scenario_intakes_tenant_created ON waf_scenario_intakes(ten
 CREATE POLICY tenant_isolation_waf_scenario_intakes ON waf_scenario_intakes
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+-- Internal management tenant isolation (parity with db/migrations/0021_internal_management.sql).
+-- internal_approval_requests / internal_audit_log allow tenant_id IS NULL for platform-level
+-- (pre-tenant) records.
+CREATE POLICY tenant_accounts_isolation ON tenant_accounts
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_subscriptions_isolation ON tenant_subscriptions
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY entitlement_grants_isolation ON entitlement_grants
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY internal_approval_requests_isolation ON internal_approval_requests
+  USING (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY internal_audit_log_isolation ON internal_audit_log
+  USING (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id IS NULL OR tenant_id = current_setting('app.tenant_id', true));
+
+-- Staff-console platform scope (parity with db/migrations/0038_platform_scope_internal_reads.sql).
+-- Additive SELECT-only permissive policies OR-ed with the tenant_isolation_* policies above.
+-- Requires the transaction-local app.platform_scope marker AND an unset app.tenant_id, so a
+-- tenant-scoped connection can never acquire platform scope and writes stay tenant-governed.
+CREATE POLICY platform_scope_read_tenants ON tenants
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+CREATE POLICY platform_scope_read_users ON users
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+CREATE POLICY platform_scope_read_tenant_accounts ON tenant_accounts
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+CREATE POLICY platform_scope_read_tenant_subscriptions ON tenant_subscriptions
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+CREATE POLICY platform_scope_read_internal_approval_requests ON internal_approval_requests
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+CREATE POLICY platform_scope_read_internal_audit_log ON internal_audit_log
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );

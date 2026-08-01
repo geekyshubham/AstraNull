@@ -1756,6 +1756,8 @@ export function ValidationSurfacePage({
                 actionLabel: 'Start safe run',
                 onAction: () => void startSafeRun()
               })}
+              loadError={data.loadErrors.runs}
+              onRetry={onRefresh ? () => void onRefresh() : undefined}
             />
           </CardContent>
         </Card>
@@ -1774,7 +1776,13 @@ export function ValidationSurfacePage({
             <CardDescription>click a card to open the correlated verdict</CardDescription>
           </CardHeader>
           <CardContent className="findings-surface-wrap">
-            <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} />
+            <FindingsListView
+              findings={data.findings}
+              checks={data.checks}
+              targetGroups={data.targetGroups}
+              loadError={data.loadErrors.findings}
+              onRetry={onRefresh ? () => void onRefresh() : undefined}
+            />
           </CardContent>
         </Card>
       </div>

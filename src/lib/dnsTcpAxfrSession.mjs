@@ -38,13 +38,23 @@ export async function runDnsTcpAxfrQuery({ nsHost, zone, timeoutMs, connectFn = 
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      const { rcode, answer_count: answerCount } = accumulated.parsed;
+      const {
+        rcode,
+        answer_count: answerCount,
+        axfr_refused: wireRefused,
+        reason: wireReason,
+      } = accumulated.parsed;
+      if (wireRefused) {
+        resolve({ axfr_refused: true, reason: wireReason ?? 'malformed_response' });
+        return;
+      }
       if (rcode === 0 && answerCount > 0) {
         resolve({ axfr_leak: true, rcode, answer_count: answerCount });
       } else {
         resolve({ axfr_refused: true, rcode, answer_count: answerCount });
       }
     });
+    socket.on('timeout', () => socket.destroy());
     socket.once('error', (err) => {
       if (settled) return;
       settled = true;

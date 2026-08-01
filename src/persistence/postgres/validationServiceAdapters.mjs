@@ -7,6 +7,7 @@ import {
   resolveExpectedBehaviorForCheck,
 } from '../../contracts/checks.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { verdictWasInserted } from './validationEvidenceRepository.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
 import { buildSignedProbeJobRecord } from '../../lib/probeJobs.mjs';
 import { redactObject } from '../../lib/redact.mjs';
@@ -18,6 +19,7 @@ import {
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
 import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
+import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import {
   correlateExternalOnlyVerdict,
@@ -332,6 +334,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
   const probeJobs = repositories.probeJobs;
   const killSwitch = repositories.killSwitch;
   const productionReleaseEvidence = repositories.productionReleaseEvidence;
+  // Read by the ownership gate in startTestRun only. Deliberately not in
+  // assertValidationServiceDependencies: createPostgresRuntime always constructs it, and the gate
+  // fails closed if it is missing, so requiring it here would break narrower callers for no gain.
+  const portalRevamp = repositories.portalRevamp;
   const nowFn = options.now ?? (() => new Date());
 
   /**
@@ -576,6 +582,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
     };
     const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
 
+    // Lost the finalization race: a verdict was already published for this run and
+    // DO NOTHING left it untouched. Return the incumbent without running any of the
+    // side effects that belong to the winner, so the run status, the audit trail and
+    // the finding severity all describe the verdict that was actually stored.
+    if (!verdictWasInserted(verdict)) {
+      return verdict;
+    }
+
     await validationEvidence.updateTestRun(ctx, run.id, {
       status: 'verdicted',
       completed_at: nowIso,
@@ -669,6 +683,79 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const verdict = await validationEvidence.getVerdictForRun(ctx, id);
       return { ...run, verdict: verdict ?? null };
     },
+    /**
+     * Finalize runs whose bounded collection window elapsed without any client call.
+     *
+     * Postgres mode has no read-path auto-finalizer, so without this sweep an expired
+     * run stays `collecting` forever and keeps holding its `uniq_active_test_run` slot,
+     * blocking every future run for the same (tenant_id, target_group_id).
+     *
+     * Scoped to a single tenant on purpose. The operator runner supplies an explicit
+     * tenant list via scheduledTenantScope; cross-tenant enumeration is refused by RLS.
+     *
+     * @param {{ tenantId: string, userId?: string, role?: string }} ctx
+     * @param {{ limit?: number, now?: string | null }} [options]
+     */
+    async sweepExpiredCollectingRuns(ctx, options = {}) {
+      for (const method of ['listExpiredCollectingRuns', 'withRunFinalizationLock']) {
+        if (typeof validationEvidence[method] !== 'function') {
+          throw new Error(
+            `sweepExpiredCollectingRuns requires validationEvidence.${method}().`,
+          );
+        }
+      }
+
+      const runs = await validationEvidence.listExpiredCollectingRuns(ctx, {
+        limit: options.limit,
+        now: options.now ?? null,
+      });
+
+      const summary = {
+        tenant_id: ctx.tenantId,
+        examined: runs.length,
+        finalized: 0,
+        skipped_locked: 0,
+        skipped_not_finalizable: 0,
+        errors: [],
+        finalized_runs: [],
+      };
+      if (runs.length === 0) return summary;
+
+      const agents = await agentControl.listAgents(ctx);
+
+      for (const staleRun of runs) {
+        try {
+          const { acquired, result } = await validationEvidence.withRunFinalizationLock(
+            ctx,
+            staleRun.id,
+            async () => {
+              // Re-read inside the lock: another sweeper or an observation ingest may
+              // have finalized this run between the listing query and the lock.
+              const fresh = await validationEvidence.getTestRun(ctx, staleRun.id);
+              if (!fresh) return null;
+              return maybeFinalizeCollectingRun(ctx, fresh, agents, { force: true });
+            },
+          );
+
+          if (!acquired) {
+            summary.skipped_locked += 1;
+          } else if (result) {
+            summary.finalized += 1;
+            summary.finalized_runs.push({ run_id: staleRun.id, verdict: result.verdict });
+          } else {
+            summary.skipped_not_finalizable += 1;
+          }
+        } catch (err) {
+          // One bad run must not abort the sweep for the rest of the tenant.
+          summary.errors.push({
+            run_id: staleRun.id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return summary;
+    },
     async getRunEvents(ctx, id) {
       const run = await validationEvidence.getTestRun(ctx, id);
       if (!run) return null;
@@ -714,6 +801,59 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const targetId = body.target_id ?? targets[0]?.id;
       const target = targets.find((t) => t.id === targetId);
       if (!target) return { error: 'target_not_found', status: 404 };
+
+      // Ownership gate — the last check before this run can put packets on the wire. The shared
+      // threshold lives in lib/ownershipPolicy.mjs, which the developer-validation path also
+      // uses. Scoped to the egress path only (the same condition as `inlineProbe` below), so
+      // in-process simulation and ops-readiness probes are unaffected. Runs before any write, so
+      // a denial cannot leave a partial run behind.
+      if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker' && !isOpsReadinessProbeKind(check)) {
+        // The group's status alone can prove ownership (agent challenge, or the Postgres DNS
+        // flow which records `dns_verified` on the group). Only when it does not do we need the
+        // per-target row, so the common path costs no extra query.
+        let targetState = null;
+        if (!ownershipProofFromStates({ groupState: group.ownership_status }).verified) {
+          if (typeof portalRevamp?.getTargetVerificationCurrent !== 'function') {
+            // Fail closed: without this read there is no way to prove ownership, and guessing
+            // "verified" would aim live traffic at an unverified host. `portalRevamp` is always
+            // constructed by createPostgresRuntime, so this is unreachable in production.
+            return denySafeStart(
+              ctx,
+              'test_run.ownership_denied',
+              targetGroupId,
+              {
+                check_id: check.check_id,
+                target_group_id: targetGroupId,
+                target_id: target.id,
+                ownership_state: String(group.ownership_status ?? 'unverified'),
+                reason: 'verification_repository_unavailable',
+              },
+              'ownership_not_verified',
+              409,
+            );
+          }
+          targetState = (await portalRevamp.getTargetVerificationCurrent(ctx, target.id))?.state ?? null;
+        }
+        const ownership = ownershipProofFromStates({
+          groupState: group.ownership_status,
+          targetState,
+        });
+        if (!ownership.verified) {
+          return denySafeStart(
+            ctx,
+            'test_run.ownership_denied',
+            targetGroupId,
+            {
+              check_id: check.check_id,
+              target_group_id: targetGroupId,
+              target_id: target.id,
+              ownership_state: ownership.state,
+            },
+            'ownership_not_verified',
+            409,
+          );
+        }
+      }
 
       const agents = await agentControl.listAgents(ctx);
       const onlineAgents = agents.filter((a) => a.status === 'online');

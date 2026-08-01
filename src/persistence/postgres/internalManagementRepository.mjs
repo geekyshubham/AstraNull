@@ -120,6 +120,21 @@ function mapApproval(row) {
   };
 }
 
+function mapBreakGlassActivation(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    reason: row.reason ?? null,
+    ticket_reference: row.ticket_reference,
+    activated_by: row.activated_by ?? null,
+    activated_role: row.activated_role ?? null,
+    activated_at: toIso(row.activated_at),
+    expires_at: toIso(row.expires_at),
+    duration_minutes: Number(row.duration_minutes),
+  };
+}
+
 function mapInternalAudit(row) {
   if (!row) return null;
   return {
@@ -136,14 +151,179 @@ function mapInternalAudit(row) {
   };
 }
 
+/**
+ * Run staff-scope ("platform scope") reads of internal management tables.
+ *
+ * Internal tables (tenants, users, tenant_accounts, tenant_subscriptions,
+ * internal_approval_requests, internal_audit_log) are FORCE RLS. Reading them over a raw
+ * pool with no context makes `tenant_id = current_setting('app.tenant_id', true)` evaluate
+ * to NULL, silently dropping every tenant-attributed row. This helper opens a transaction
+ * and asserts the explicit `app.platform_scope` marker honoured by the additive SELECT-only
+ * `platform_scope_read_*` policies (db/migrations/0038_platform_scope_internal_reads.sql).
+ *
+ * Both settings are transaction-local (`set_config(..., true)`), so the marker can never
+ * outlive its transaction or leak onto a pooled connection reused by a tenant request.
+ * `app.tenant_id` is pinned empty because the policies require it to be unset — a
+ * tenant-scoped request path (which always sets a non-empty app.tenant_id) can therefore
+ * never acquire platform scope.
+ *
+ * @param {import('pg').Pool} pool
+ * @param {(client: import('pg').PoolClient) => Promise<unknown>} callback
+ */
+export async function withPlatformScope(pool, callback) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.tenant_id', '', true)`);
+    await client.query(`SELECT set_config('app.platform_scope', 'on', true)`);
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // preserve original error
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function queryPlatform(pool, sql, params = []) {
-  const { rows } = await pool.query(sql, params);
-  return rows;
+  return withPlatformScope(pool, async (client) => {
+    const { rows } = await client.query(sql, params);
+    return rows;
+  });
 }
 
 async function queryNullableTenant(pool, tenantId, callback) {
   if (tenantId) return withTenantContext(pool, tenantId, callback);
   return runWithTenantClient(pool, 'platform_internal', undefined, callback);
+}
+
+/**
+ * Guarded signup state transition. The `state = ANY($9::text[])` precondition makes the
+ * read-modify-write safe against lost updates (and duplicate tenant provisioning), matching
+ * the pattern already used by decideApprovalRequest.
+ */
+const SIGNUP_UPDATE_SQL = `UPDATE signup_requests SET
+           state = $2,
+           reviewer_staff_id = $3,
+           decision_reason = $4,
+           customer_notice = $5,
+           provisioned_tenant_id = $6,
+           updated_at = $7::timestamptz,
+           decided_at = $8::timestamptz
+         WHERE id = $1 AND state = ANY($9::text[])
+         RETURNING *`;
+
+function signupUpdateParams(id, next, expectedStates) {
+  return [
+    id,
+    next.state,
+    next.reviewer_staff_id,
+    next.decision_reason,
+    next.customer_notice,
+    next.provisioned_tenant_id,
+    next.updated_at,
+    next.decided_at,
+    expectedStates,
+  ];
+}
+
+/**
+ * Insert the full tenant provisioning row set. Caller must already hold an open transaction
+ * with `app.tenant_id` set to `tenant.id` (the target tables are FORCE RLS).
+ *
+ * @param {import('pg').PoolClient} client
+ */
+async function insertTenantProvisioningRows(client, { tenant, environment, user, account, subscription, grants }) {
+  await client.query(
+    `INSERT INTO tenants (id, name, privacy_settings, created_at)
+     VALUES ($1, $2, $3::jsonb, $4::timestamptz)`,
+    [tenant.id, tenant.name, JSON.stringify(tenant.privacy_settings), tenant.created_at],
+  );
+  await client.query(
+    `INSERT INTO environments (id, tenant_id, name, status, privacy_settings, settings_json, created_at)
+     VALUES ($1, $2, $3, 'active', $4::jsonb, $5::jsonb, $6::timestamptz)`,
+    [
+      environment.id,
+      tenant.id,
+      environment.name,
+      JSON.stringify(environment.privacy_settings ?? tenant.privacy_settings),
+      JSON.stringify(environment.settings_json ?? {}),
+      environment.created_at,
+    ],
+  );
+  await client.query(
+    `INSERT INTO users (id, tenant_id, email, name, role, status, metadata_json, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)`,
+    [
+      user.id,
+      tenant.id,
+      user.email,
+      user.name,
+      user.role,
+      user.status,
+      JSON.stringify({ invited_at: user.invited_at }),
+      user.created_at,
+    ],
+  );
+  await client.query(
+    `INSERT INTO tenant_accounts (
+       tenant_id, legal_name, support_owner, region, lifecycle_state, contract_reference, created_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7::timestamptz)`,
+    [
+      tenant.id,
+      account.legal_name,
+      account.support_owner,
+      account.region,
+      account.lifecycle_state,
+      account.contract_reference,
+      account.created_at,
+    ],
+  );
+  await client.query(
+    `INSERT INTO tenant_subscriptions (
+       tenant_id, plan_id, status, billing_provider_ref, effective_at, renewal_at,
+       limits_json, feature_entitlements_json, created_at
+     ) VALUES ($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7::jsonb,$8::jsonb,$9::timestamptz)`,
+    [
+      tenant.id,
+      subscription.plan_id,
+      subscription.status,
+      subscription.billing_provider_ref,
+      subscription.effective_at,
+      subscription.renewal_at,
+      JSON.stringify(subscription.limits),
+      JSON.stringify(subscription.feature_entitlements),
+      subscription.effective_at,
+    ],
+  );
+  for (const grant of grants) {
+    await client.query(
+      `INSERT INTO entitlement_grants (
+         tenant_id, feature, enabled, limit_value, source, expires_at, created_at
+       ) VALUES ($1,$2,$3,$4::jsonb,$5,$6::timestamptz,$7::timestamptz)
+       ON CONFLICT (tenant_id, feature) DO UPDATE SET
+         enabled = EXCLUDED.enabled,
+         limit_value = EXCLUDED.limit_value,
+         source = EXCLUDED.source,
+         expires_at = EXCLUDED.expires_at,
+         updated_at = NOW()`,
+      [
+        tenant.id,
+        grant.feature,
+        grant.enabled,
+        grant.limit_value == null ? null : JSON.stringify(grant.limit_value),
+        grant.source,
+        grant.expires_at,
+        grant.created_at,
+      ],
+    );
+  }
 }
 
 export function createInternalManagementRepository(pool) {
@@ -212,127 +392,93 @@ export function createInternalManagementRepository(pool) {
       return rows.map(mapSignup);
     },
 
+    /**
+     * Guarded read-modify-write. Returns null when the row is gone OR when another writer
+     * changed `state` between our read and our write (lost race) — callers surface 409.
+     * `patch.expected_states` overrides the default precondition (the state we just read).
+     */
     async updateSignupRequest(id, patch) {
       const existing = await this.getSignupRequest(id);
       if (!existing) return null;
       const next = { ...existing, ...patch, updated_at: patch.updated_at ?? new Date().toISOString() };
+      const expectedStates = Array.isArray(patch.expected_states) && patch.expected_states.length
+        ? patch.expected_states.map(String)
+        : [existing.state];
       const { rows } = await pool.query(
-        `UPDATE signup_requests SET
-           state = $2,
-           reviewer_staff_id = $3,
-           decision_reason = $4,
-           customer_notice = $5,
-           provisioned_tenant_id = $6,
-           updated_at = $7::timestamptz,
-           decided_at = $8::timestamptz
-         WHERE id = $1
-         RETURNING *`,
-        [
-          id,
-          next.state,
-          next.reviewer_staff_id,
-          next.decision_reason,
-          next.customer_notice,
-          next.provisioned_tenant_id,
-          next.updated_at,
-          next.decided_at,
-        ],
+        SIGNUP_UPDATE_SQL,
+        signupUpdateParams(id, next, expectedStates),
       );
       return mapSignup(rows[0] ?? null);
     },
 
-    async provisionTenantFromSignup({ tenant, environment, user, account, subscription, grants }) {
+    /**
+     * Atomically claim an approved signup and provision its tenant in ONE transaction.
+     *
+     * The guarded `UPDATE ... WHERE state = ANY(expected_states)` is the concurrency claim:
+     * a second overlapping approve blocks on the row lock, then re-evaluates the predicate
+     * against the committed state and matches zero rows. Because the claim and every
+     * provisioning INSERT share one transaction, a tenant can never be provisioned twice and
+     * a failed provisioning cannot leave the request marked provisioned.
+     *
+     * @returns {Promise<{ request: object } | null>} null means lost race / row gone -> 409.
+     */
+    async provisionTenantForApprovedSignup({ signupId, expectedStates, signupPatch, ...payload }) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        await client.query('SELECT set_config($1, $2, true)', ['app.tenant_id', tenant.id]);
-        await client.query(
-          `INSERT INTO tenants (id, name, privacy_settings, created_at)
-           VALUES ($1, $2, $3::jsonb, $4::timestamptz)`,
-          [tenant.id, tenant.name, JSON.stringify(tenant.privacy_settings), tenant.created_at],
+        // signup_requests has no RLS; app.tenant_id is required by the FORCE-RLS tenant tables.
+        await client.query('SELECT set_config($1, $2, true)', ['app.tenant_id', payload.tenant.id]);
+        // Claim BEFORE any side effect: taking the signup row lock first makes an overlapping
+        // approve fail fast without inserting any tenant/user rows at all.
+        // provisioned_tenant_id is deferred to after the inserts because
+        // signup_requests.provisioned_tenant_id REFERENCES tenants(id) and that FK is checked
+        // immediately — setting it here would violate the constraint.
+        const claim = await client.query(
+          SIGNUP_UPDATE_SQL,
+          signupUpdateParams(
+            signupId,
+            { ...signupPatch, provisioned_tenant_id: null },
+            expectedStates.map(String),
+          ),
         );
-        await client.query(
-          `INSERT INTO environments (id, tenant_id, name, status, privacy_settings, settings_json, created_at)
-           VALUES ($1, $2, $3, 'active', $4::jsonb, $5::jsonb, $6::timestamptz)`,
-          [
-            environment.id,
-            tenant.id,
-            environment.name,
-            JSON.stringify(environment.privacy_settings ?? tenant.privacy_settings),
-            JSON.stringify(environment.settings_json ?? {}),
-            environment.created_at,
-          ],
-        );
-        await client.query(
-          `INSERT INTO users (id, tenant_id, email, name, role, status, metadata_json, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)`,
-          [
-            user.id,
-            tenant.id,
-            user.email,
-            user.name,
-            user.role,
-            user.status,
-            JSON.stringify({ invited_at: user.invited_at }),
-            user.created_at,
-          ],
-        );
-        await client.query(
-          `INSERT INTO tenant_accounts (
-             tenant_id, legal_name, support_owner, region, lifecycle_state, contract_reference, created_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7::timestamptz)`,
-          [
-            tenant.id,
-            account.legal_name,
-            account.support_owner,
-            account.region,
-            account.lifecycle_state,
-            account.contract_reference,
-            account.created_at,
-          ],
-        );
-        await client.query(
-          `INSERT INTO tenant_subscriptions (
-             tenant_id, plan_id, status, billing_provider_ref, effective_at, renewal_at,
-             limits_json, feature_entitlements_json, created_at
-           ) VALUES ($1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7::jsonb,$8::jsonb,$9::timestamptz)`,
-          [
-            tenant.id,
-            subscription.plan_id,
-            subscription.status,
-            subscription.billing_provider_ref,
-            subscription.effective_at,
-            subscription.renewal_at,
-            JSON.stringify(subscription.limits),
-            JSON.stringify(subscription.feature_entitlements),
-            subscription.effective_at,
-          ],
-        );
-        for (const grant of grants) {
-          await client.query(
-            `INSERT INTO entitlement_grants (
-               tenant_id, feature, enabled, limit_value, source, expires_at, created_at
-             ) VALUES ($1,$2,$3,$4::jsonb,$5,$6::timestamptz,$7::timestamptz)
-             ON CONFLICT (tenant_id, feature) DO UPDATE SET
-               enabled = EXCLUDED.enabled,
-               limit_value = EXCLUDED.limit_value,
-               source = EXCLUDED.source,
-               expires_at = EXCLUDED.expires_at,
-               updated_at = NOW()`,
-            [
-              tenant.id,
-              grant.feature,
-              grant.enabled,
-              grant.limit_value == null ? null : JSON.stringify(grant.limit_value),
-              grant.source,
-              grant.expires_at,
-              grant.created_at,
-            ],
-          );
+        if (claim.rowCount === 0) {
+          await client.query('ROLLBACK');
+          return null;
         }
+        await insertTenantProvisioningRows(client, payload);
+        const linked = await client.query(
+          `UPDATE signup_requests SET provisioned_tenant_id = $2 WHERE id = $1 RETURNING *`,
+          [signupId, payload.tenant.id],
+        );
+        await client.query('COMMIT');
+        return { request: mapSignup(linked.rows[0]) };
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // preserve original error
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+
+    async provisionTenantFromSignup(payload) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT set_config($1, $2, true)', ['app.tenant_id', payload.tenant.id]);
+        await insertTenantProvisioningRows(client, payload);
         await client.query('COMMIT');
       } catch (err) {
-        await client.query('ROLLBACK');
+        // Guard the rollback: a failing ROLLBACK (e.g. dead connection) must not mask the
+        // original provisioning error. Matches tenantContext.mjs.
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // preserve original error
+        }
         throw err;
       } finally {
         client.release();
@@ -367,13 +513,26 @@ export function createInternalManagementRepository(pool) {
     },
 
     async getInternalOverview() {
-      const [signups, blocked, approvals, highScale, tenants] = await Promise.all([
-        queryPlatform(pool, `SELECT count(*)::int AS count FROM signup_requests WHERE state = ANY($1::text[])`, [['submitted', 'under_review', 'approved']]),
-        queryPlatform(pool, `SELECT count(*)::int AS count FROM tenant_accounts WHERE lifecycle_state = 'suspended'`),
-        queryPlatform(pool, `SELECT count(*)::int AS count FROM internal_approval_requests WHERE state = ANY($1::text[])`, [['submitted', 'under_review']]),
-        queryPlatform(pool, `SELECT count(*)::int AS count FROM internal_approval_requests WHERE kind = $1 AND state = ANY($2::text[])`, ['high_scale_validation', ['submitted', 'under_review']]),
-        queryPlatform(pool, `SELECT count(*)::int AS count FROM tenant_accounts`),
-      ]);
+      // Single platform-scope transaction: all five counts read FORCE-RLS internal tables and
+      // returned zeros/undercounts before the platform_scope policies existed.
+      const [signups, blocked, approvals, highScale, tenants] = await withPlatformScope(
+        pool,
+        async (client) => {
+          const run = async (sql, params = []) => (await client.query(sql, params)).rows;
+          return [
+            await run(`SELECT count(*)::int AS count FROM signup_requests WHERE state = ANY($1::text[])`, [['submitted', 'under_review', 'approved']]),
+            await run(`SELECT count(*)::int AS count FROM tenant_accounts WHERE lifecycle_state = 'suspended'`),
+            await run(`SELECT count(*)::int AS count FROM internal_approval_requests WHERE state = ANY($1::text[])`, [['submitted', 'under_review']]),
+            await run(`SELECT count(*)::int AS count FROM internal_approval_requests WHERE kind = $1 AND state = ANY($2::text[])`, ['high_scale_validation', ['submitted', 'under_review']]),
+            // tenant-query-audit: allow — deliberate cross-tenant staff aggregate (total tenant
+            // count for the staff console). It cannot be tenant-filtered by definition. Safety
+            // does not rest on this comment: the query runs inside withPlatformScope(), so RLS
+            // still governs it via the SELECT-only platform_scope_read_* policies, which require
+            // the transaction-local app.platform_scope marker AND an unset app.tenant_id.
+            await run(`SELECT count(*)::int AS count FROM tenant_accounts`),
+          ];
+        },
+      );
       return {
         pending_signups: signups[0]?.count ?? 0,
         blocked_tenants: blocked[0]?.count ?? 0,
@@ -391,7 +550,10 @@ export function createInternalManagementRepository(pool) {
         params.push(`%${q}%`);
         where.push(`(lower(t.name) LIKE $${params.length} OR lower(t.id) LIKE $${params.length})`);
       }
-      const { rows } = await pool.query(
+      // Staff-scope listing across all tenants: tenants/tenant_accounts/tenant_subscriptions/users
+      // are FORCE RLS, so this returned zero rows without platform scope.
+      const rows = await queryPlatform(
+        pool,
         `SELECT t.id, t.name, t.created_at, a.lifecycle_state, a.region, a.support_owner,
                 s.plan_id, s.status AS subscription_status,
                 (SELECT count(*)::int FROM users u WHERE u.tenant_id = t.id) AS user_count
@@ -592,7 +754,11 @@ export function createInternalManagementRepository(pool) {
         params.push(filters.kind);
         where.push(`kind = $${params.length}`);
       }
-      const { rows } = await pool.query(
+      // Same forced-RLS defect as listInternalAudit. Also required for consistency with
+      // getInternalOverview's pending_approval_requests / high_scale_reviews counts, which
+      // now see tenant-attributed rows.
+      const rows = await queryPlatform(
+        pool,
         `SELECT * FROM internal_approval_requests
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
          ORDER BY created_at DESC`,
@@ -639,7 +805,11 @@ export function createInternalManagementRepository(pool) {
       }
       const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
       params.push(limit);
-      const { rows } = await pool.query(
+      // Audit integrity: internal_audit_log is FORCE RLS. Without platform scope every
+      // tenant-attributed entry was silently dropped, so the staff console showed an
+      // incomplete audit trail (only rows with tenant_id IS NULL survived).
+      const rows = await queryPlatform(
+        pool,
         `SELECT * FROM internal_audit_log
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
          ORDER BY created_at DESC
@@ -647,6 +817,63 @@ export function createInternalManagementRepository(pool) {
         params,
       );
       return rows.map(mapInternalAudit);
+    },
+
+    async listBreakGlassActivations() {
+      // Platform-level table (no tenant_id, no RLS) — see 0041 migration header.
+      const rows = await queryPlatform(
+        pool,
+        `SELECT id, status, reason, ticket_reference, activated_by, activated_role,
+                activated_at, expires_at, duration_minutes
+         FROM break_glass_activations
+         ORDER BY activated_at DESC
+         LIMIT 200`,
+      );
+      return rows.map(mapBreakGlassActivation);
+    },
+
+    async saveBreakGlassActivation(activation) {
+      // Supersede + insert in ONE transaction so a concurrent activation cannot leave two
+      // rows in 'active'. The UPDATE runs first, so the loser of a race supersedes the
+      // winner's row only if it commits after it; the partial unique index below is the
+      // backstop that rejects a genuinely overlapping second 'active' row.
+      return withPlatformScope(pool, async (client) => {
+        await client.query(
+          `UPDATE break_glass_activations
+           SET status = 'superseded'
+           WHERE status = 'active' AND id <> $1`,
+          [activation.id],
+        );
+        const { rows } = await client.query(
+          `INSERT INTO break_glass_activations (
+             id, status, reason, ticket_reference, activated_by, activated_role,
+             activated_at, expires_at, duration_minutes
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7::timestamptz,$8::timestamptz,$9)
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id, status, reason, ticket_reference, activated_by, activated_role,
+                     activated_at, expires_at, duration_minutes`,
+          [
+            activation.id,
+            activation.status ?? 'active',
+            activation.reason ?? null,
+            activation.ticket_reference,
+            activation.activated_by ?? null,
+            activation.activated_role ?? null,
+            activation.activated_at,
+            activation.expires_at,
+            activation.duration_minutes,
+          ],
+        );
+        if (rows[0]) return mapBreakGlassActivation(rows[0]);
+        const existing = await client.query(
+          `SELECT id, status, reason, ticket_reference, activated_by, activated_role,
+                  activated_at, expires_at, duration_minutes
+           FROM break_glass_activations
+           WHERE id = $1`,
+          [activation.id],
+        );
+        return mapBreakGlassActivation(existing.rows[0]);
+      });
     },
   };
 }

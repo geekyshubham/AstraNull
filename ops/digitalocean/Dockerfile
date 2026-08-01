@@ -1,5 +1,7 @@
 # DigitalOcean App Platform: Postgres-backed control plane + React UI.
-FROM node:22-alpine
+# Base image pinned by digest for reproducible builds. Dependabot keeps this current
+# (see .github/dependabot.yml); do not replace with a floating tag.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 LABEL org.opencontainers.image.title="AstraNull Control Plane (DigitalOcean)"
 LABEL org.opencontainers.image.description="API and React portal for astranull.site"
@@ -9,8 +11,11 @@ RUN addgroup -g 10001 -S astranull \
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev && npm cache clean --force
+# `npm ci` installs exactly the lockfile's resolved versions and fails if
+# package.json and package-lock.json disagree. The lockfile is copied without a
+# glob so a missing lockfile breaks the build instead of silently floating.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
 COPY scripts ./scripts

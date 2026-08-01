@@ -1,0 +1,2 @@
+# Keeps ops/staging present for `COPY ops/staging` in deploy images.
+# The bundled OIDC fixture itself is gitignored: it is a signing trust root.

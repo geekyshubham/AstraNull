@@ -1,9 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import {
   buildProbeProfile,
   CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
+import { API_DOC_PATHS, RISKY_ADMIN_PORTS } from './capabilityProbes.mjs';
+import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { stableStringify } from './agentUpdates.mjs';
 
@@ -41,6 +44,87 @@ function safeEqualUtf8(a, b) {
   return timingSafeEqual(ba, bb);
 }
 
+/**
+ * Keys whose values become outbound probe destinations. Anything unsafe here would be
+ * HMAC-signed into the job and therefore trusted by the worker, so they are validated
+ * before signing rather than after.
+ */
+const HOST_SHAPED_OVERRIDE_KEYS = new Set([
+  'resolver_host',
+  'direct_ip',
+  'scan_host',
+  'secondary_nameservers',
+]);
+
+const OVERRIDE_HOSTNAME_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const RISKY_ADMIN_PORT_SET = new Set(RISKY_ADMIN_PORTS);
+const API_DOC_PATH_SET = new Set(API_DOC_PATHS);
+
+/**
+ * IP literals are classified immediately. Hostnames cannot be classified without DNS,
+ * which the control plane must not perform at job-build time, so they are shape-checked
+ * here and resolved + classified by the worker destination gate before any egress.
+ *
+ * @param {unknown} value
+ */
+function isHostShapedValueSafe(value) {
+  if (typeof value !== 'string') return false;
+  const candidate = value.trim();
+  if (!candidate || candidate.length > 253) return false;
+
+  if (isIP(candidate) !== 0) {
+    return assertProbeDestinationAllowed(candidate).ok;
+  }
+
+  const lower = candidate.toLowerCase();
+  if (
+    lower.includes('://')
+    || lower.includes('@')
+    || lower.includes('/')
+    || lower.includes(':')
+    || /\s/.test(lower)
+  ) {
+    return false;
+  }
+  const labels = lower.split('.');
+  return labels.every((label) => label.length > 0 && OVERRIDE_HOSTNAME_LABEL.test(label));
+}
+
+function safePortOverride(entry) {
+  const port = typeof entry === 'number' ? entry : Number(String(entry).trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return RISKY_ADMIN_PORT_SET.has(port) ? port : null;
+}
+
+/**
+ * Filter an array override down to values that survive per-key validation.
+ * Returns null when nothing survives so the caller leaves the curated default in place.
+ *
+ * @param {string} key
+ * @param {unknown[]} raw
+ */
+function filterArrayOverride(key, raw) {
+  let values;
+  if (key === 'ports') {
+    values = raw.map(safePortOverride).filter((port) => port != null);
+  } else if (key === 'paths') {
+    values = raw
+      .filter((entry) => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry) => API_DOC_PATH_SET.has(entry));
+  } else if (HOST_SHAPED_OVERRIDE_KEYS.has(key)) {
+    values = raw
+      .filter((entry) => isHostShapedValueSafe(entry))
+      .map((entry) => String(entry).trim());
+  } else {
+    values = raw
+      .map((entry) => (typeof entry === 'number' ? entry : String(entry).trim()))
+      .filter((entry) => entry !== '' && entry != null);
+  }
+  const bounded = [...new Set(values)].slice(0, 16);
+  return bounded.length > 0 ? bounded : null;
+}
+
 function mergeCapabilityOverride(merged, key, override) {
   if (key === 'nonce_hash_only') {
     if (override.nonce_hash_only === true) merged.nonce_hash_only = true;
@@ -48,20 +132,22 @@ function mergeCapabilityOverride(merged, key, override) {
   }
   if (CAPABILITY_ARRAY_OVERRIDE_KEYS.has(key)) {
     if (!Array.isArray(override[key])) return;
-    const values = override[key]
-      .map((entry) => (typeof entry === 'number' ? entry : String(entry).trim()))
-      .filter((entry) => entry !== '' && entry != null)
-      .slice(0, 16);
-    if (values.length > 0) merged[key] = values;
+    const values = filterArrayOverride(key, override[key]);
+    if (values) merged[key] = values;
     return;
   }
   if (key === 'use_https') {
     if (typeof override.use_https === 'boolean') merged.use_https = override.use_https;
     return;
   }
-  if (override[key] != null) {
-    merged[key] = String(override[key]).slice(0, 128);
+  if (override[key] == null) return;
+  if (HOST_SHAPED_OVERRIDE_KEYS.has(key)) {
+    // Drop unsafe destinations entirely so the curated default (or nothing) applies.
+    if (!isHostShapedValueSafe(override[key])) return;
+    merged[key] = String(override[key]).trim().slice(0, 128);
+    return;
   }
+  merged[key] = String(override[key]).slice(0, 128);
 }
 
 export function resolveJobProbeProfile(check, override) {

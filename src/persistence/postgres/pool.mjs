@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import pg from 'pg';
+import { resolveDeploymentProfile } from '../../lib/deploymentProfile.mjs';
 
 const DEFAULT_POOL_MAX = 10;
 const MIN_POOL_MAX = 1;
@@ -24,6 +26,46 @@ function parseBoundedInt(raw, name, { min, max, fallback }) {
 }
 
 /**
+ * Resolve the PostgreSQL TLS CA (inline PEM or mounted file) and the
+ * relaxed-verification flag. A CA makes certificate verification possible,
+ * which is what the `sslmode=no-verify` rewrite otherwise gives up.
+ * @param {NodeJS.ProcessEnv} env
+ */
+function resolvePgTlsCa(env) {
+  const rawFlag = String(env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED ?? '1').trim();
+  const verificationDisabled = rawFlag === '0' || rawFlag.toLowerCase() === 'false';
+
+  const inline = (env.ASTRANULL_PG_SSL_CA ?? '').trim();
+  const caFile = (env.ASTRANULL_PG_SSL_CA_FILE ?? '').trim();
+
+  if (inline && caFile) {
+    throw new Error('Set only one of ASTRANULL_PG_SSL_CA or ASTRANULL_PG_SSL_CA_FILE, not both.');
+  }
+
+  if (inline) {
+    return { ca: inline, verificationDisabled };
+  }
+
+  if (caFile) {
+    let contents;
+    try {
+      contents = readFileSync(caFile, 'utf8');
+    } catch (err) {
+      // Surface only the path and error code — never the file body.
+      throw new Error(
+        `Unable to read ASTRANULL_PG_SSL_CA_FILE at "${caFile}": ${err.code ?? 'read failed'}.`,
+      );
+    }
+    if (!contents.trim()) {
+      throw new Error(`ASTRANULL_PG_SSL_CA_FILE at "${caFile}" is empty.`);
+    }
+    return { ca: contents.trim(), verificationDisabled };
+  }
+
+  return { ca: null, verificationDisabled };
+}
+
+/**
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function resolvePgPoolConfig(env = process.env) {
@@ -32,11 +74,31 @@ export function resolvePgPoolConfig(env = process.env) {
     throw new Error('ASTRANULL_DATABASE_URL must be set for PostgreSQL.');
   }
 
-  const relaxedTls =
-    String(env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED ?? '1').trim() === '0' ||
-    String(env.ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED ?? '1')
-      .trim()
-      .toLowerCase() === 'false';
+  const { ca, verificationDisabled } = resolvePgTlsCa(env);
+
+  // A configured CA always wins: verification is the safe state, so the relaxed
+  // flag is ignored rather than allowed to downgrade an otherwise-verified link.
+  const relaxedTls = verificationDisabled && !ca;
+
+  if (verificationDisabled && ca) {
+    console.warn(
+      '[astranull] WARNING: ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED=0 is ignored because a PostgreSQL TLS CA is configured; certificate verification stays enabled. Remove the flag.',
+    );
+  }
+
+  if (relaxedTls) {
+    const message =
+      'ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED=0 disables PostgreSQL TLS certificate '
+      + 'verification, exposing the database connection to man-in-the-middle attacks. '
+      + 'Provide the managed-database CA via ASTRANULL_PG_SSL_CA or '
+      + 'ASTRANULL_PG_SSL_CA_FILE and remove the flag.';
+    // Gated on the deployment profile only (never NODE_ENV): hosted-staging runs
+    // with NODE_ENV=production today and must keep booting with a loud warning.
+    if (resolveDeploymentProfile(env) === 'production') {
+      throw new Error(`Refusing to start: ${message}`);
+    }
+    console.warn(`[astranull] WARNING: ${message}`);
+  }
 
   let resolvedConnectionString = connectionString;
   if (relaxedTls) {
@@ -47,6 +109,7 @@ export function resolvePgPoolConfig(env = process.env) {
 
   return {
     connectionString: resolvedConnectionString,
+    ...(ca ? { ssl: { ca, rejectUnauthorized: true } } : {}),
     max: parseBoundedInt(env.ASTRANULL_PG_POOL_MAX, 'ASTRANULL_PG_POOL_MAX', {
       min: MIN_POOL_MAX,
       max: MAX_POOL_MAX,

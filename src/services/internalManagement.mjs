@@ -232,6 +232,27 @@ export function disableTenantUser(staffCtx, tenantId, userId, body = {}) {
   };
 }
 
+/**
+ * Writes a route-supplied audit event (e.g. `break_glass.activated`) to the internal audit
+ * log. Routes emit `actor_user_id`/`actor_role`; the audit log stores `staff_id`/`staff_role`,
+ * so the shapes are mapped here rather than at each call site.
+ */
+export function appendInternalAudit(staffCtx, event = {}) {
+  if (!event.action) {
+    throw new Error('appendInternalAudit requires an action.');
+  }
+  return auditInternal({
+    staff_id: event.actor_user_id ?? staffCtx?.staffId ?? staffCtx?.userId ?? null,
+    staff_role: event.actor_role ?? staffCtx?.staffRole ?? staffCtx?.role ?? null,
+    tenant_id: event.tenant_id ?? null,
+    action: event.action,
+    resource_type: event.resource_type ?? null,
+    resource_id: event.resource_id ?? null,
+    reason: event.reason ?? null,
+    metadata: event.metadata ?? {},
+  });
+}
+
 export function listInternalAudit(filters = {}) {
   const store = getStore();
   let items = [...(store.internalAuditLog ?? [])];

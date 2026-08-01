@@ -2701,6 +2701,8 @@ export function SettingsPage({
                 columns={secretColumns}
                 items={data.secrets}
                 empty={<EmptyState icon={KeyRound} title="No secrets stored." body="Store connector or integration credentials here before referencing them from read-only connector workflows." actionLabel="Open Integrations" actionHref="#integrations" />}
+                loadError={data.loadErrors.secrets}
+                onRetry={onRefresh ? () => void onRefresh() : undefined}
               />
             </CardContent>
           </Card>
@@ -4326,7 +4328,7 @@ export function StaffSurfacePage({
                 <CardDescription>Unified internal approvals, including subscription exceptions.</CardDescription>
               </CardHeader>
               <CardContent>
-                <DataTable columns={approvalColumns} items={data.internalApprovalRequests} empty={renderFriendlyEmptyState({ icon: ShieldCheck, title: 'No internal approvals.', body: 'Pending approval records will appear here when backend workflows create them.' })} />
+                <DataTable columns={approvalColumns} items={data.internalApprovalRequests} empty={renderFriendlyEmptyState({ icon: ShieldCheck, title: 'No internal approvals.', body: 'Pending approval records will appear here when backend workflows create them.' })} loadError={data.loadErrors.internalApprovalRequests} onRetry={onRefresh ? () => void onRefresh() : undefined} />
               </CardContent>
             </Card>
           ) : null}
@@ -4337,7 +4339,7 @@ export function StaffSurfacePage({
                 <CardDescription>Recent staff actions from the internal audit API.</CardDescription>
               </CardHeader>
               <CardContent>
-                <DataTable columns={auditColumns} items={data.internalAudit} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions will be listed after they are recorded.' })} />
+                <DataTable columns={auditColumns} items={data.internalAudit} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions will be listed after they are recorded.' })} loadError={data.loadErrors.internalAudit} onRetry={onRefresh ? () => void onRefresh() : undefined} />
               </CardContent>
             </Card>
           ) : null}

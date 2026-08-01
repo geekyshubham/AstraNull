@@ -77,6 +77,25 @@ services:
       - key: ASTRANULL_OIDC_JWKS_URL
         scope: RUN_TIME
         value: https://astranull-qteog.ondigitalocean.app/.well-known/jwks.json
+      # Pinned so startup does not read the fixture just to learn the audience.
+      - key: ASTRANULL_OIDC_AUDIENCE
+        scope: RUN_TIME
+        value: astranull-hosted-staging
+      # OPERATOR ACTION REQUIRED — the token-signing keypair. Keep in sync with .do/app.yaml.
+      #
+      # This was a git-committed file (ops/staging/bundled-oidc-fixture.json) in a PUBLIC
+      # repo until 2026-08-01, making the auth trust root world-readable: anyone could mint a
+      # valid admin token. It is now gitignored and excluded from the image, and the published
+      # key is refused at startup by fingerprint — untracking cannot help, because public git
+      # history keeps it recoverable forever.
+      #
+      # Startup FAILS CLOSED without this secret rather than booting and 500-ing every login.
+      #   1. npm run oidc:fixture:generate -- --force
+      #   2. Paste ops/staging/bundled-oidc-fixture.json contents as this secret.
+      - key: ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON
+        scope: RUN_TIME
+        type: SECRET
+        value: ${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}
       - key: ASTRANULL_PUBLIC_LOGIN_URL
         scope: RUN_TIME
         value: /login
@@ -98,6 +117,16 @@ services:
       - key: ASTRANULL_DATABASE_URL
         scope: RUN_TIME
         value: ${astranull-db.DATABASE_URL}
+      # OPERATOR ACTION REQUIRED — this disables PostgreSQL TLS certificate
+      # verification (MITM exposure on the DB connection). Left in place only
+      # because removing it before a CA is configured would drop the live
+      # database connection. To close it out:
+      #   1. Download the DigitalOcean managed-Postgres CA certificate.
+      #   2. Set ASTRANULL_PG_SSL_CA (PEM contents) or ASTRANULL_PG_SSL_CA_FILE
+      #      (mounted path) on this service.
+      #   3. Confirm startup logs no longer warn about relaxed TLS, then delete
+      #      this variable.
+      # With a CA configured the app keeps verification ON and ignores this flag.
       - key: ASTRANULL_PG_SSL_REJECT_UNAUTHORIZED
         scope: RUN_TIME
         value: "0"

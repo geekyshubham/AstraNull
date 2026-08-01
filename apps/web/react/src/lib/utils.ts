@@ -5,6 +5,16 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * A route the running deployment does not wire (postgres route guard 503).
+ * Distinct from a transient outage: it will never succeed in this deployment, so
+ * surfaces must report it as a mode limitation and must not offer Retry.
+ *
+ * Lives here, not in lib/api.ts, so generic UI primitives can recognize it
+ * without depending on the API layer.
+ */
+export const DEPLOYMENT_MODE_GAP_MESSAGE = 'Not available in this deployment mode.';
+
 export function formatNumber(value: unknown, fallback = '0') {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return new Intl.NumberFormat('en-US').format(value);

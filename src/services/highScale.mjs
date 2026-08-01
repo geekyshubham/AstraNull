@@ -723,21 +723,45 @@ function autoStopRunningHighScaleRequests(ctx, reason) {
 
 export function setKillSwitch(ctx, active, reason) {
   const prev = getStore().socKillSwitch ?? {};
-  let stoppedRequestIds = [];
-  let cancelledRunIds = [];
-  if (active) {
-    stoppedRequestIds = autoStopRunningHighScaleRequests(ctx, reason);
-    cancelledRunIds = autoCancelActiveSafeRunsForKillSwitch(ctx, reason);
-  }
-  getStore().socKillSwitch = {
+  // Two sweep passes, matching the postgres adapter: pass one cancels every run visible
+  // when the flag landed, pass two catches runs that had already cleared the start gate
+  // when pass one enumerated the store. Both sets are merged so the audit event and the
+  // API response report every run this activation actually cancelled.
+  const SWEEP_PASSES = 2;
+
+  // The `active` flag is written BEFORE the sweep so isKillSwitchActiveForTenant()
+  // returns true for the whole mitigation window. When the write happened after the
+  // sweep, the start gate stayed open for the entire sweep: a run created mid-sweep
+  // survived the emergency stop and cancelled_run_ids under-reported. This mirrors the
+  // postgres setKillSwitch so both backends give the same emergency-stop semantics.
+  //
+  // Deliberate trade-off: a failure between this write and the sweep leaves the switch
+  // ACTIVE with runs uncancelled. That is fail-closed — no new traffic can start — and is
+  // repaired by re-invoking setKillSwitch.
+  const record = {
     active,
     reason: reason ?? null,
     updated_at: new Date().toISOString(),
     updated_by: ctx.userId,
     tenant_id: ctx.tenantId ?? prev.tenant_id ?? null,
-    stopped_request_ids: stoppedRequestIds,
-    cancelled_run_ids: cancelledRunIds,
+    stopped_request_ids: [],
+    cancelled_run_ids: [],
   };
+  getStore().socKillSwitch = record;
+
+  const stoppedRequestIds = [];
+  const cancelledRunIds = [];
+  if (active) {
+    stoppedRequestIds.push(...autoStopRunningHighScaleRequests(ctx, reason));
+    for (let pass = 0; pass < SWEEP_PASSES; pass += 1) {
+      for (const runId of autoCancelActiveSafeRunsForKillSwitch(ctx, reason)) {
+        if (!cancelledRunIds.includes(runId)) cancelledRunIds.push(runId);
+      }
+    }
+  }
+  record.stopped_request_ids = stoppedRequestIds;
+  record.cancelled_run_ids = cancelledRunIds;
+  getStore().socKillSwitch = record;
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,

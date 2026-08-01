@@ -218,6 +218,27 @@ export function validateOperatorAttestedRecords(input = {}, options = {}) {
   const profile = options.profile ?? PRODUCTION_PROMOTION_PROFILE;
   resolveReleaseProfileKinds(profile);
 
+  // Report a simulated environment with its specific message before the generic
+  // rehearsal check. staging-sim now also trips isRehearsalOrSampleEvidenceInput, and
+  // both rejections are correct, but "simulated environment" tells the operator which
+  // field to fix.
+  if (!allowRehearsal) {
+    if (hasValue(input.environment)) {
+      validatePromotionEnvironmentValue(input.environment, 'Submission payload', {
+        allowLocalStaging: options.allowLocalStaging === true,
+      });
+    }
+    for (const record of records) {
+      if (isSimulatedEnvironment(record?.evidence?.environment) || isSimulatedEnvironment(record?.environment)) {
+        validatePromotionEnvironmentValue(
+          'staging-sim',
+          `${record?.kind ?? 'unknown'} evidence`,
+          { allowLocalStaging: options.allowLocalStaging === true },
+        );
+      }
+    }
+  }
+
   if (!allowRehearsal && isRehearsalOrSampleEvidenceInput({
     rehearsal_only: input.rehearsal_only,
     releaseId: input.releaseId ?? input.release_id ?? null,

@@ -4,6 +4,7 @@ import { FindingCard } from './finding-card';
 import { Button } from '../ui/button';
 import { EmptyState } from '../ui/empty-state';
 import { Select } from '../ui/select';
+import { TableLoadError } from '../ui/table';
 import type { DataItem } from '../../lib/types';
 import { formatSeverityLabel } from '../../lib/utils';
 
@@ -103,11 +104,16 @@ function sortFindings(items: DataItem[], sort: SortKey) {
 export function FindingsListView({
   findings,
   checks,
-  targetGroups
+  targetGroups,
+  loadError = null,
+  onRetry
 }: {
   findings: DataItem[];
   checks: DataItem[];
   targetGroups: DataItem[];
+  /** Set when `findings` is a fallback because the fetch failed, not real data. */
+  loadError?: string | null;
+  onRetry?: () => void;
 }) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
   const [severityFilter, setSeverityFilter] = useState('all');
@@ -239,13 +245,19 @@ export function FindingsListView({
 
       {pageItems.length === 0 ? (
         <div className="findings-empty">
-          <EmptyState
-            icon={TriangleAlert}
-            title="No matching findings."
-            body="Findings appear after validation runs publish evidence-backed gaps."
-            actionLabel="Open test runs"
-            actionHref="#runs"
-          />
+          {loadError && loadError.trim() ? (
+            // Findings are security-relevant: "no matching findings" must never be
+            // shown when the truth is that the fetch failed.
+            <TableLoadError message={loadError.trim()} onRetry={onRetry} />
+          ) : (
+            <EmptyState
+              icon={TriangleAlert}
+              title="No matching findings."
+              body="Findings appear after validation runs publish evidence-backed gaps."
+              actionLabel="Open test runs"
+              actionHref="#runs"
+            />
+          )}
         </div>
       ) : (
         <div className="findings-list findings-grid">

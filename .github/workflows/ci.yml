@@ -15,11 +15,33 @@ jobs:
           node-version: "22"
           cache: npm
 
+      # `npm ci` installs exactly the locked versions and fails if package.json
+      # and package-lock.json have drifted. `cache: npm` above also depends on
+      # the lockfile being present.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      # Failing gate. Audits the FULL tree, not just runtime deps: the known
+      # postcss path-traversal advisory reaches us transitively through vite, so
+      # `--omit=dev` would report "0 vulnerabilities" and make this gate a no-op.
+      # Build-time dependencies execute in CI and in image builds, so they are
+      # in scope for the supply-chain claim.
+      - name: Dependency audit (high or above fails)
+        run: npm audit --audit-level=high
+
+      # Runtime-only view, reported separately so a shipped-dependency finding is
+      # never lost in build-time noise.
+      - name: Dependency audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
         run: node scripts/lint.mjs
+
+      - name: Portal lint
+        run: npm run lint:portal
+
+      - name: Web typecheck
+        run: npm run web:typecheck
 
       - name: Unit tests
         run: node --test tests/unit/*.test.mjs
@@ -33,5 +55,20 @@ jobs:
       - name: Safety check
         run: node scripts/safety-check.mjs
 
+      - name: DB schema contract
+        run: node scripts/validate-db-schema.mjs
+
       - name: Postgres tenant query audit
         run: node scripts/postgres-tenant-query-audit.mjs
+
+      # apps/web/react-app.{js,css} is a hand-committed bundle that is deployed
+      # as-is. Nothing else rebuilds it, so portal source and the shipped bundle
+      # can silently diverge. Rebuild from source and fail if the result differs
+      # from what is committed.
+      - name: Portal bundle is in sync with source
+        run: |
+          npm run web:build
+          if ! git diff --exit-code -- apps/web/react-app.js apps/web/react-app.css; then
+            echo "::error::Committed portal bundle does not match a fresh build of apps/web/react. Run 'npm run web:build' and commit the regenerated apps/web/react-app.js and apps/web/react-app.css."
+            exit 1
+          fi

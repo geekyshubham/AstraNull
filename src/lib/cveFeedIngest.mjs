@@ -5,6 +5,37 @@ export const CVE_FEED_MAX_ITEMS = 500;
 export const CVE_FEED_MAX_DESCRIPTION_SUMMARY_LENGTH = 2000;
 export const CVE_FEED_MAX_BODY_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Every error code this module (and the item validator it delegates to) raises
+ * for a REQUEST-INPUT problem. Callers use this to decide 400-vs-5xx.
+ *
+ * This is an explicit allowlist rather than a `!err.code` check on purpose: pg
+ * always populates `err.code` with a SQLSTATE, so a truthiness test would
+ * classify every driver failure as a client error and echo the driver's message
+ * — schema, table and host text — back to the caller. Only the codes listed here
+ * are known to carry a fixed, input-derived message that is safe to return.
+ */
+export const CVE_FEED_INPUT_ERROR_CODES = Object.freeze([
+  'invalid_cve_feed_request',
+  'invalid_cve_feed_document',
+  'invalid_cve_feed_item',
+  'invalid_cve_feed_url',
+  'unsafe_cve_feed_item',
+  'cve_feed_fetch_failed',
+  // Raised by validateCvePipelineItem(), which parseCveFeedItem() calls to check
+  // each normalized item. A feed item that fails it is malformed input, not an
+  // infrastructure fault.
+  'invalid_cve_pipeline_item',
+  'unsafe_cve_pipeline_item',
+]);
+
+const CVE_FEED_INPUT_ERROR_CODE_SET = new Set(CVE_FEED_INPUT_ERROR_CODES);
+
+/** True only for a caller-input failure whose message is safe to return. */
+export function isCveFeedInputError(err) {
+  return CVE_FEED_INPUT_ERROR_CODE_SET.has(err?.code);
+}
+
 const CVE_ID_PATTERN = /^CVE-\d{4}-\d{4,}$/i;
 const SEVERITY_LEVELS = new Set(['critical', 'high', 'medium', 'low', 'none', 'unknown']);
 

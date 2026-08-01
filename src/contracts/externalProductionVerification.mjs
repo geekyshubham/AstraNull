@@ -1,10 +1,17 @@
 import { validateProductionReleaseEvidence } from './productionReleaseEvidence.mjs';
 
 export const EXTERNAL_VERIFICATION_TIERS = Object.freeze([
+  // `pending` is the generated-template default: the manifest exists but no operator
+  // has affirmatively attested the domain yet. It is a valid manifest value (so the
+  // template validates) but never satisfies the customer_production_ready gate.
+  'pending',
   'unverified',
   'metadata_only',
   'live_external',
 ]);
+
+/** Tier written by the generated manifest template before an operator fills it in. */
+export const EXTERNAL_VERIFICATION_TEMPLATE_TIER = 'pending';
 
 export const EXTERNAL_VERIFICATION_MANIFEST_REQUIRED_FIELDS = Object.freeze([
   'tier',
@@ -43,6 +50,12 @@ export const EXTERNAL_VERIFICATION_DOMAINS = Object.freeze([
 
 const ENCRYPTED_CREDENTIAL_REF_RE = /^(?:secret|vault|encref):\/\/.+/i;
 const CUSTODY_URI_RE = /^(?:custody|evidence|artifact|signoff|retained):\/\/.+/i;
+/**
+ * A retained artifact pointer must carry a content digest. Without one the pointer
+ * names a location but does not pin *what* was retained, so the attestation cannot
+ * be checked against the artifact later.
+ */
+const RETAINED_ARTIFACT_DIGEST_RE = /sha(?:256|384|512)[:\-=][a-f0-9]{64,128}\b/i;
 const PLACEHOLDER_KMS_RE = /(?:metadata|example|fixture|local-staging|placeholder|staging-sim)/i;
 
 function resolveKmsProviderLabel(vaultSummary = {}) {
@@ -116,6 +129,58 @@ function manifestFieldGaps(entry) {
 
 function manifestTierIsLiveExternal(entry) {
   return typeof entry?.tier === 'string' && entry.tier.trim() === 'live_external';
+}
+
+/**
+ * True when the manifest entry has not been affirmatively attested by an operator:
+ * either the generated template tier (`pending`) or no tier at all. The generated
+ * manifest must never assert its own verification, so this is the default state.
+ */
+function manifestTierIsPending(entry) {
+  if (!entry) return false;
+  const tier = typeof entry.tier === 'string' ? entry.tier.trim() : '';
+  return tier === '' || tier === EXTERNAL_VERIFICATION_TEMPLATE_TIER;
+}
+
+/**
+ * Gaps in a domain's retained_artifact_refs. A live_external attestation must point at
+ * real retained artifacts, so each reference has to be a custody-shaped pointer that
+ * carries a content digest and is distinct from the entry's own custody_uri. Without
+ * the digest a reference names a location but pins nothing; without the distinctness
+ * check an operator can satisfy the gate by echoing the custody_uri back at it.
+ */
+function retainedArtifactRefGaps(entry) {
+  const refs = entry?.retained_artifact_refs;
+  const present = Array.isArray(refs) ? refs.filter((ref) => hasValue(ref)) : [];
+  if (present.length === 0) return ['retained_artifact_refs_missing'];
+
+  const custodyUri = typeof entry?.custody_uri === 'string'
+    ? entry.custody_uri.trim().toLowerCase()
+    : '';
+  const gaps = new Set();
+  let usable = 0;
+  for (const ref of present) {
+    if (typeof ref !== 'string') {
+      gaps.add('retained_artifact_refs_not_custody_shaped');
+      continue;
+    }
+    const trimmed = ref.trim();
+    if (!CUSTODY_URI_RE.test(trimmed)) {
+      gaps.add('retained_artifact_refs_not_custody_shaped');
+      continue;
+    }
+    if (!RETAINED_ARTIFACT_DIGEST_RE.test(trimmed)) {
+      gaps.add('retained_artifact_refs_missing_digest');
+      continue;
+    }
+    if (trimmed.toLowerCase() === custodyUri) {
+      gaps.add('retained_artifact_refs_duplicate_custody_uri');
+      continue;
+    }
+    usable += 1;
+  }
+  if (usable > 0) return [];
+  return [...gaps];
 }
 
 function metadataOnlyEvidenceReady(domainId, records = []) {
@@ -210,6 +275,20 @@ function liveExternalEvidenceReady(domainId, records = []) {
 
 function resolveDomainTier(domainId, records = [], manifest = null) {
   const manifestEntry = manifestDomainEntry(manifest, domainId);
+
+  // The generated manifest template ships `tier: 'pending'`. The gate must not treat a
+  // manifest it produced itself as an attestation, so a pending domain never reaches
+  // live_external no matter how complete the local evidence is; an operator has to set
+  // live_external by hand after retaining the real external artifacts.
+  if (manifestEntry && manifestTierIsPending(manifestEntry)) {
+    const metadata = metadataOnlyEvidenceReady(domainId, records);
+    return {
+      tier: metadata.ready ? 'metadata_only' : 'unverified',
+      blockers: ['manifest_tier_pending', ...metadata.blockers],
+      manifest_attested: false,
+    };
+  }
+
   if (manifestEntry && manifestTierIsLiveExternal(manifestEntry)) {
     const manifestGaps = manifestFieldGaps(manifestEntry);
     const liveEvidence = liveExternalEvidenceReady(domainId, records);
@@ -219,15 +298,11 @@ function resolveDomainTier(domainId, records = [], manifest = null) {
     }
     // A live_external attestation must point at real retained artifacts. The manifest
     // template ships `retained_artifact_refs: []` as a "fill this in before launch"
-    // marker; an empty (or all-blank) list means the operator never retained the
-    // underlying IdP/KMS/provider/deploy/signoff artifact, so the domain has not
-    // actually been externally verified and must not count as live_external.
-    const retainedRefs = manifestEntry.retained_artifact_refs;
-    const hasRetainedArtifact = Array.isArray(retainedRefs)
-      && retainedRefs.some((ref) => hasValue(ref));
-    if (!hasRetainedArtifact) {
-      manifestGaps.push('retained_artifact_refs_missing');
-    }
+    // marker; an empty list means the operator never retained the underlying
+    // IdP/KMS/provider/deploy/signoff artifact, so the domain has not actually been
+    // externally verified and must not count as live_external. Arbitrary strings are
+    // rejected too — see retainedArtifactRefGaps.
+    manifestGaps.push(...retainedArtifactRefGaps(manifestEntry));
     if (manifestGaps.length > 0 || !liveEvidence.ready) {
       return {
         tier: 'metadata_only',
@@ -373,7 +448,9 @@ export function buildLiveExternalVerificationManifestTemplate(input = {}) {
     EXTERNAL_VERIFICATION_DOMAINS.map((domain) => [
       domain.id,
       {
-        tier: 'live_external',
+        // Generated, not attested. The operator must set this to `live_external`
+        // themselves once the real external artifact has been retained.
+        tier: EXTERNAL_VERIFICATION_TEMPLATE_TIER,
         custody_uri: `custody://external/${domain.id}/${releaseId ?? 'unscoped'}`,
         verified_at: createdAt,
         operator_reference: operatorReference,
@@ -387,10 +464,12 @@ export function buildLiveExternalVerificationManifestTemplate(input = {}) {
     artifact_type: 'external_production_verification_manifest',
     created_at: createdAt,
     release_id: releaseId,
-    verification_tier: 'live_external',
+    verification_tier: EXTERNAL_VERIFICATION_TEMPLATE_TIER,
     domains,
     caveats: [
-      'Replace custody_uri and retained_artifact_refs with real retained artifact locations before customer launch.',
+      'This template is generated, not attested: every domain starts at tier "pending" and blocks customer launch.',
+      'Set tier to "live_external" per domain only after retaining the real external artifact.',
+      'Replace custody_uri and add retained_artifact_refs pointers (custody-shaped, carrying a sha256 digest, distinct from custody_uri) before customer launch.',
       'Re-run npm run release:external-verify after updating this manifest.',
     ],
   };

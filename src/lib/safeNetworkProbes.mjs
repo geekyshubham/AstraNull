@@ -6,7 +6,9 @@ import { randomBytes } from 'node:crypto';
 import dgram from 'node:dgram';
 import dns from 'node:dns/promises';
 import http2 from 'node:http2';
+import net from 'node:net';
 import tls from 'node:tls';
+import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 
 const SAFE_UDP_PAYLOAD_PREFIX = 'ASTRANULL:udp:';
 const SAFE_ALERT_PAYLOAD_TYPE = 'astranull_alert_workflow_ping';
@@ -532,9 +534,24 @@ export function resolveAlertWebhookUrl(job) {
   return null;
 }
 
+async function resolveWebhookAddresses(hostname, deps) {
+  const resolve4Fn = deps.resolve4Fn ?? dns.resolve4;
+  const resolve6Fn = deps.resolve6Fn ?? dns.resolve6;
+  const settled = await Promise.all([
+    resolve4Fn(hostname).catch(() => []),
+    resolve6Fn(hostname).catch(() => []),
+  ]);
+  return [...new Set(settled.flat().filter((ip) => typeof ip === 'string'))];
+}
+
 /**
  * @param {Record<string, unknown>} job
- * @param {{ fetchFn?: typeof fetch }} deps
+ * @param {{
+ *   fetchFn?: typeof fetch,
+ *   resolve4Fn?: Function,
+ *   resolve6Fn?: Function,
+ *   destinationPolicy?: { allowPrivate?: boolean, allowLoopback?: boolean },
+ * }} deps
  */
 export async function probeAlertWebhookPing(job, deps = {}) {
   const fetchFn = deps.fetchFn ?? fetch;
@@ -554,9 +571,6 @@ export async function probeAlertWebhookPing(job, deps = {}) {
   let parsedUrl;
   try {
     parsedUrl = new URL(webhookUrl);
-    if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
-      throw new Error('invalid_protocol');
-    }
   } catch {
     return {
       external_result: 'error',
@@ -568,6 +582,61 @@ export async function probeAlertWebhookPing(job, deps = {}) {
       duration_ms: 0,
     };
   }
+
+  // Cleartext webhooks would leak the marker/nonce and are trivially redirectable.
+  if (parsedUrl.protocol !== 'https:') {
+    return {
+      external_result: 'error',
+      metadata: withProfileKind(job, {
+        probe_kind: 'alert_webhook_ping',
+        error_class: 'webhook_scheme_not_allowed',
+        webhook_host: parsedUrl.hostname,
+        webhook_scheme: parsedUrl.protocol.replace(/:$/, ''),
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  // Tenant-supplied host: every resolved address must be routable before any request.
+  const policy = deps.destinationPolicy ?? { allowPrivate: false, allowLoopback: false };
+  const webhookHostname = parsedUrl.hostname.replace(/^\[/, '').replace(/\]$/, '');
+  const addresses = net.isIP(webhookHostname) !== 0
+    ? [webhookHostname]
+    : await resolveWebhookAddresses(webhookHostname, deps);
+
+  if (addresses.length === 0) {
+    return {
+      external_result: 'blocked',
+      metadata: withProfileKind(job, {
+        probe_kind: 'alert_webhook_ping',
+        error_class: 'webhook_host_not_routable',
+        webhook_host: webhookHostname,
+        reason: 'no_resolved_addresses',
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  for (const address of addresses) {
+    const verdict = assertProbeDestinationAllowed(address, policy);
+    if (!verdict.ok) {
+      return {
+        external_result: 'blocked',
+        metadata: withProfileKind(job, {
+          probe_kind: 'alert_webhook_ping',
+          error_class: 'webhook_host_not_routable',
+          webhook_host: webhookHostname,
+          blocked_address: address,
+          reason: verdict.message,
+        }),
+        requests_sent: 0,
+        duration_ms: 0,
+      };
+    }
+  }
+  const pinnedAddress = addresses[0];
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
@@ -591,16 +660,49 @@ export async function probeAlertWebhookPing(job, deps = {}) {
         ...(job.nonce ? { 'x-astranull-nonce': String(job.nonce) } : {}),
       },
       body: JSON.stringify(body),
+      redirect: 'manual',
       signal: controller.signal,
     });
     const durationMs = Date.now() - started;
+
+    // A 3xx is terminal. Following it would re-resolve an attacker-chosen host and
+    // bypass the classification above, so record where it pointed and stop.
+    if (res.status >= 300 && res.status < 400) {
+      let redirectHost = null;
+      const location = res.headers?.get?.('location') ?? null;
+      if (location) {
+        try {
+          redirectHost = new URL(location, parsedUrl.href).hostname;
+        } catch {
+          redirectHost = null;
+        }
+      }
+      return {
+        external_result: 'blocked',
+        metadata: withProfileKind(job, {
+          probe_kind: 'alert_webhook_ping',
+          error_class: 'redirect_declined',
+          duration_ms: durationMs,
+          webhook_host: webhookHostname,
+          pinned_address: pinnedAddress,
+          redirect_declined: true,
+          redirect_host: redirectHost,
+          response_status: res.status,
+          alert_delivery_ok: false,
+        }),
+        requests_sent: 1,
+        duration_ms: durationMs,
+      };
+    }
+
     const ok = res.status >= 200 && res.status < 300;
     return {
       external_result: ok ? 'connected' : 'error',
       metadata: withProfileKind(job, {
         probe_kind: 'alert_webhook_ping',
         duration_ms: durationMs,
-        webhook_host: parsedUrl.hostname,
+        webhook_host: webhookHostname,
+        pinned_address: pinnedAddress,
         response_status: res.status,
         alert_delivery_ok: ok,
       }),
@@ -617,7 +719,8 @@ export async function probeAlertWebhookPing(job, deps = {}) {
         probe_kind: 'alert_webhook_ping',
         error_class: code,
         duration_ms: durationMs,
-        webhook_host: parsedUrl.hostname,
+        webhook_host: webhookHostname,
+        pinned_address: pinnedAddress,
       }),
       requests_sent: 1,
       duration_ms: durationMs,

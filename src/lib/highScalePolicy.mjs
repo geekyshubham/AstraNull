@@ -293,15 +293,15 @@ function artifactProofMissingFields(artifact) {
   return required.filter((field) => !artifactFieldPresent(artifact, field));
 }
 
-function artifactProofExpired(artifact) {
+function artifactProofExpired(artifact, nowMs = Date.now()) {
   if (!artifact || artifact.status !== 'accepted') return false;
   if (!artifact.valid_window) return false;
-  return isValidWindowExpired(artifact.valid_window);
+  return isValidWindowExpired(artifact.valid_window, nowMs);
 }
 
-function bestArtifactForType(req, type) {
+function bestArtifactForType(req, type, nowMs = Date.now()) {
   const arts = (req.artifacts ?? []).filter((a) => a.type === type);
-  const accepted = arts.find((a) => a.status === 'accepted' && !artifactProofExpired(a));
+  const accepted = arts.find((a) => a.status === 'accepted' && !artifactProofExpired(a, nowMs));
   if (accepted) return accepted;
   const pending = arts.find((a) => a.status === 'pending_review');
   if (pending) return pending;
@@ -309,7 +309,7 @@ function bestArtifactForType(req, type) {
   return rejected[rejected.length - 1] ?? null;
 }
 
-function requirementStatusForArtifact(type, artifact) {
+function requirementStatusForArtifact(type, artifact, nowMs = Date.now()) {
   if (!artifact) {
     return {
       type,
@@ -322,7 +322,7 @@ function requirementStatusForArtifact(type, artifact) {
   const missing_fields = artifactProofMissingFields(artifact);
   let status =
     artifact.status === 'accepted' ? 'accepted' : artifact.status === 'rejected' ? 'rejected' : 'pending_review';
-  if (artifact.status === 'accepted' && artifactProofExpired(artifact)) status = 'expired';
+  if (artifact.status === 'accepted' && artifactProofExpired(artifact, nowMs)) status = 'expired';
   else if (artifact.status === 'accepted' && missing_fields.length > 0) status = 'partial';
   else if (artifact.status === 'pending_review' && missing_fields.length > 0) status = 'partial';
   return {
@@ -334,16 +334,16 @@ function requirementStatusForArtifact(type, artifact) {
   };
 }
 
-export function buildAuthorizationRequirementStatuses(req) {
+export function buildAuthorizationRequirementStatuses(req, nowMs = Date.now()) {
   return REQUIRED_ARTIFACT_TYPES.map((type) =>
-    requirementStatusForArtifact(type, bestArtifactForType(req, type)),
+    requirementStatusForArtifact(type, bestArtifactForType(req, type, nowMs), nowMs),
   );
 }
 
-function summarizeProviderChecklistForPack(req) {
+function summarizeProviderChecklistForPack(req, nowMs = Date.now()) {
   return (req.provider_approval_checklist ?? []).map((item) => ({
     provider_name: item.provider_name,
-    status: effectiveProviderChecklistStatus(item),
+    status: effectiveProviderChecklistStatus(item, nowMs),
     artifact_id: item.artifact_id ?? null,
     required: item.required !== false,
   }));
@@ -360,13 +360,13 @@ function summarizeRetainedArtifacts(req) {
   return { count: items.length, items };
 }
 
-function computeAuthorizationPackOverall(req, requirements, providerSummary) {
+function computeAuthorizationPackOverall(req, requirements, providerSummary, nowMs = Date.now()) {
   const reqStatuses = requirements.map((r) => r.status);
   if (providerSummary.some((p) => p.required !== false && p.status === 'expired')) return 'expired';
   if (reqStatuses.some((s) => s === 'expired')) return 'expired';
   if (reqStatuses.some((s) => s === 'rejected')) return 'rejected';
 
-  const providerOk = providerApprovalPackSatisfied(req);
+  const providerOk = providerApprovalPackSatisfied(req, nowMs);
   const allAccepted =
     providerOk && requirements.every((r) => r.status === 'accepted' && (r.missing_fields?.length ?? 0) === 0);
 
@@ -376,17 +376,17 @@ function computeAuthorizationPackOverall(req, requirements, providerSummary) {
   return 'partial';
 }
 
-export function refreshAuthorizationPackStatus(req) {
-  const requirements = buildAuthorizationRequirementStatuses(req);
-  const provider_checklist = summarizeProviderChecklistForPack(req);
+export function refreshAuthorizationPackStatus(req, nowMs = Date.now()) {
+  const requirements = buildAuthorizationRequirementStatuses(req, nowMs);
+  const provider_checklist = summarizeProviderChecklistForPack(req, nowMs);
   const retained_artifacts = summarizeRetainedArtifacts(req);
-  const overall = computeAuthorizationPackOverall(req, requirements, provider_checklist);
+  const overall = computeAuthorizationPackOverall(req, requirements, provider_checklist, nowMs);
   req.authorization_pack_status = {
     overall,
     requirements,
     provider_checklist,
     retained_artifacts,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date(nowMs).toISOString(),
   };
   return req.authorization_pack_status;
 }
@@ -399,14 +399,19 @@ function validWindowEndMs(validWindow) {
   return Number.isNaN(ms) ? null : ms;
 }
 
-function isValidWindowExpired(validWindow) {
+/**
+ * `nowMs` is threaded from the caller rather than read here so readiness scoring
+ * stays deterministic under an injected clock. Reading `Date.now()` at this leaf
+ * made fixture `valid_window` dates silently expire in real time.
+ */
+function isValidWindowExpired(validWindow, nowMs = Date.now()) {
   const endMs = validWindowEndMs(validWindow);
   if (endMs == null) return false;
-  return Date.now() > endMs;
+  return nowMs > endMs;
 }
 
-function effectiveProviderChecklistStatus(item) {
-  if (isValidWindowExpired(item.valid_window)) return 'expired';
+function effectiveProviderChecklistStatus(item, nowMs = Date.now()) {
+  if (isValidWindowExpired(item.valid_window, nowMs)) return 'expired';
   if ((providerApprovalMissingFields(item).length ?? 0) > 0) return 'partial';
   return item.status ?? 'missing';
 }
@@ -577,11 +582,11 @@ export function syncChecklistFromProviderArtifactReview(req, artifact) {
   item.missing_fields = providerApprovalMissingFields(item);
 }
 
-function providerApprovalPackSatisfied(req) {
+function providerApprovalPackSatisfied(req, nowMs = Date.now()) {
   const checklist = req.provider_approval_checklist;
   if (Array.isArray(checklist) && checklist.length > 0) {
     for (const item of checklist) {
-      if (item.required !== false && effectiveProviderChecklistStatus(item) !== 'accepted') {
+      if (item.required !== false && effectiveProviderChecklistStatus(item, nowMs) !== 'accepted') {
         return false;
       }
       if (item.required !== false && providerApprovalMissingFields(item).length > 0) return false;
@@ -595,8 +600,8 @@ function providerApprovalPackSatisfied(req) {
   return true;
 }
 
-export function authorizationPackComplete(req) {
-  refreshAuthorizationPackStatus(req);
+export function authorizationPackComplete(req, nowMs = Date.now()) {
+  refreshAuthorizationPackStatus(req, nowMs);
   return req.authorization_pack_status?.overall === 'accepted';
 }
 

@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { buildCustodyManifest, CUSTODY_SCHEMA_VERSION } from '../../src/lib/custody.mjs';
+import {
+  buildCustodyManifest,
+  canonicalJsonStringify,
+  CUSTODY_SCHEMA_VERSION,
+} from '../../src/lib/custody.mjs';
 import {
   buildCustodySigningEnvelope,
   buildSignableCustodyManifestMetadata,
   digestCustodyManifestMetadata,
+  deriveHmacSigningKeyId,
+  EVIDENCE_SIGNING_KEY_ID_DOMAIN,
+  resolveTenantSigningMaterial,
+  resolveTenantVerificationMaterial,
   signCustodyManifestMetadata,
+  validateHmacSecretEntropy,
   verifyCustodyManifestSignature,
 } from '../../src/lib/evidenceSigning.mjs';
 import { signEvidenceSnapshotCustody } from '../../src/services/evidenceSnapshotSigning.mjs';
@@ -200,6 +209,299 @@ describe('evidence signing library', () => {
     assert.equal(envelope.tenant_id, TENANT);
     assert.equal(envelope.custody_manifest_digest, 'a'.repeat(64));
     assert.equal(envelope.schema_version, CUSTODY_SCHEMA_VERSION);
+  });
+});
+
+describe('evidence signing HMAC key identifier exposure', () => {
+  const legacyFingerprint = (secret) => createHash('sha256').update(secret, 'utf8').digest('hex');
+
+  it('never publishes a bare sha256 digest of the shared secret', () => {
+    const env = signingEnv();
+    const signed = signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_hmac_fp' }),
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(signed.error, undefined);
+    const published = signed.signed.public_key_fingerprint_sha256;
+    assert.match(published, /^[a-f0-9]{64}$/);
+    // The published identifier must not be a digest an attacker can recompute
+    // from a candidate secret without the key.
+    assert.notEqual(published, legacyFingerprint(HMAC_SECRET));
+    assert.equal(
+      published,
+      createHmac('sha256', HMAC_SECRET).update(EVIDENCE_SIGNING_KEY_ID_DOMAIN).digest('hex'),
+    );
+    // The secret itself must never appear in the signed record.
+    assert.equal(JSON.stringify(signed.signed).includes(HMAC_SECRET), false);
+  });
+
+  it('derives the same key identifier on the signing and verification paths', () => {
+    const env = signingEnv();
+    const signing = resolveTenantSigningMaterial({
+      tenantId: TENANT,
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    const verifying = resolveTenantVerificationMaterial({
+      tenantId: TENANT,
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(signing.error, undefined);
+    assert.equal(verifying.error, undefined);
+    assert.equal(signing.publicKeyFingerprintSha256, verifying.publicKeyFingerprintSha256);
+    assert.notEqual(signing.publicKeyFingerprintSha256, legacyFingerprint(HMAC_SECRET));
+  });
+
+  it('prefers an opaque operator-assigned key_id over any derived value', () => {
+    const env = signingEnv({
+      [HMAC_KEY_REF]: {
+        algorithm: 'hmac-sha256',
+        secret: HMAC_SECRET,
+        key_id: 'evsign-2026-07-a',
+      },
+    });
+    const signed = signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_hmac_keyid' }),
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(signed.error, undefined);
+    assert.equal(signed.signed.public_key_fingerprint_sha256, 'evsign-2026-07-a');
+    assert.notEqual(signed.signed.public_key_fingerprint_sha256, legacyFingerprint(HMAC_SECRET));
+  });
+
+  it('signs and verifies an HMAC round-trip after the derivation change', () => {
+    const env = signingEnv();
+    const signed = signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_hmac_rt' }),
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(signed.error, undefined);
+    const verification = verifyCustodyManifestSignature({
+      tenantId: TENANT,
+      custodyManifestDigest: signed.signed.custody_manifest_digest,
+      signer: {
+        key_reference: HMAC_KEY_REF,
+        algorithm: 'hmac-sha256',
+        signature: signed.signed.signature,
+      },
+      env,
+    });
+    assert.deepEqual(verification, { ok: true });
+  });
+
+  it('still verifies manifests signed under the OLD sha256(secret) derivation', () => {
+    const env = signingEnv();
+    const digest = 'b'.repeat(64);
+    // Reconstruct a record exactly as the pre-change signer emitted it: the
+    // signature covers the signing envelope only, and the record carries the old
+    // sha256(secret) fingerprint value.
+    const envelope = buildCustodySigningEnvelope({ tenantId: TENANT, custodyManifestDigest: digest });
+    const legacySignature = createHmac('sha256', HMAC_SECRET)
+      .update(Buffer.from(canonicalJsonStringify(envelope), 'utf8'))
+      .digest('base64');
+    const legacyRecord = {
+      key_reference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      signature: legacySignature,
+      public_key_fingerprint_sha256: legacyFingerprint(HMAC_SECRET),
+    };
+    const verification = verifyCustodyManifestSignature({
+      tenantId: TENANT,
+      custodyManifestDigest: digest,
+      signer: legacyRecord,
+      env,
+    });
+    assert.deepEqual(verification, { ok: true });
+  });
+
+  it('verifies historical HMAC evidence even when the key would now fail the entropy floor', () => {
+    // Provisioning-time policy must not retroactively strip the ability to verify
+    // evidence that was already signed with a weaker key.
+    const weakSecret = 'password-password-password-passwo';
+    const env = {
+      ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON: JSON.stringify({
+        [TENANT]: { [HMAC_KEY_REF]: { algorithm: 'hmac-sha256', secret: weakSecret } },
+      }),
+    };
+    assert.equal(validateHmacSecretEntropy(weakSecret).ok, false);
+    const digest = 'c'.repeat(64);
+    const envelope = buildCustodySigningEnvelope({ tenantId: TENANT, custodyManifestDigest: digest });
+    const signature = createHmac('sha256', weakSecret)
+      .update(Buffer.from(canonicalJsonStringify(envelope), 'utf8'))
+      .digest('base64');
+
+    // Signing with that key is now refused...
+    const resigned = resolveTenantSigningMaterial({
+      tenantId: TENANT,
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(resigned.error, 'hmac_secret_low_entropy');
+
+    // ...but historical verification still succeeds.
+    const verification = verifyCustodyManifestSignature({
+      tenantId: TENANT,
+      custodyManifestDigest: digest,
+      signer: { key_reference: HMAC_KEY_REF, algorithm: 'hmac-sha256', signature },
+      env,
+    });
+    assert.deepEqual(verification, { ok: true });
+  });
+});
+
+describe('evidence signing HMAC secret entropy floor', () => {
+  it('rejects 32-character but low-entropy secrets', () => {
+    // Repeated-character secrets clear a character count but carry almost no
+    // key material. 'a'.repeat(32) is also valid hex, so it decodes to 16 bytes.
+    const repeatedHex = 'a'.repeat(32);
+    assert.deepEqual(validateHmacSecretEntropy(repeatedHex), {
+      ok: false,
+      error: 'hmac_secret_too_short',
+    });
+
+    const weakPassphrase = 'password-password-password-passwo';
+    assert.equal(weakPassphrase.length > 32, true);
+    assert.deepEqual(validateHmacSecretEntropy(weakPassphrase), {
+      ok: false,
+      error: 'hmac_secret_low_entropy',
+    });
+  });
+
+  it('validates decoded bytes rather than character count', () => {
+    // 32 hex characters decode to only 16 bytes of key material.
+    const hex16Bytes = randomBytes(16).toString('hex');
+    assert.equal(hex16Bytes.length, 32);
+    assert.deepEqual(validateHmacSecretEntropy(hex16Bytes), {
+      ok: false,
+      error: 'hmac_secret_too_short',
+    });
+
+    // 32 decoded bytes are accepted in hex, base64 and utf8 encodings.
+    for (const secret of [
+      randomBytes(32).toString('hex'),
+      randomBytes(32).toString('base64'),
+      'dev-only-hmac-secret-32-characters-min',
+    ]) {
+      assert.equal(validateHmacSecretEntropy(secret).ok, true, secret);
+    }
+  });
+
+  it('surfaces the entropy rejection through signing key resolution', () => {
+    const env = {
+      ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON: JSON.stringify({
+        [TENANT]: { [HMAC_KEY_REF]: { algorithm: 'hmac-sha256', secret: 'a'.repeat(32) } },
+      }),
+    };
+    const signed = signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_weak' }),
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+    assert.equal(signed.error, 'hmac_secret_too_short');
+    assert.equal(signed.status, 400);
+  });
+
+  it('rejects a missing or non-string secret', () => {
+    for (const value of [undefined, null, 42, '', '   ']) {
+      assert.equal(validateHmacSecretEntropy(value).ok, false);
+    }
+  });
+
+  it('derives a stable key identifier without exposing the secret digest', () => {
+    const secret = randomBytes(32).toString('base64');
+    const first = deriveHmacSigningKeyId({ secret });
+    assert.equal(first, deriveHmacSigningKeyId({ secret }));
+    assert.notEqual(first, createHash('sha256').update(secret, 'utf8').digest('hex'));
+  });
+});
+
+describe('evidence signing algorithm policy by deployment profile', () => {
+  function hmacEnv(extra = {}) {
+    return {
+      ASTRANULL_EVIDENCE_SIGNING_KEYS_JSON: JSON.stringify({
+        [TENANT]: { [HMAC_KEY_REF]: { algorithm: 'hmac-sha256', secret: HMAC_SECRET } },
+      }),
+      ...extra,
+    };
+  }
+
+  function signHmac(env) {
+    return signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_profile' }),
+      keyReference: HMAC_KEY_REF,
+      algorithm: 'hmac-sha256',
+      env,
+    });
+  }
+
+  it('refuses hmac-sha256 for evidence custody under the production profile', () => {
+    const result = signHmac(hmacEnv({ ASTRANULL_DEPLOYMENT_PROFILE: 'production' }));
+    assert.equal(result.error, 'hmac_signing_forbidden_in_production');
+    assert.equal(result.status, 400);
+  });
+
+  it('permits hmac-sha256 under the hosted-staging profile even when NODE_ENV=production', () => {
+    // astranull.site runs NODE_ENV=production with the hosted-staging profile.
+    // Gating on NODE_ENV would break that deployment.
+    const result = signHmac(hmacEnv({
+      ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
+      NODE_ENV: 'production',
+    }));
+    assert.equal(result.error, undefined);
+    assert.equal(result.signed.algorithm, 'hmac-sha256');
+  });
+
+  it('does not refuse hmac-sha256 on NODE_ENV alone with no profile set', () => {
+    const result = signHmac(hmacEnv({ NODE_ENV: 'production' }));
+    assert.equal(result.error, undefined);
+    assert.equal(result.signed.algorithm, 'hmac-sha256');
+  });
+
+  it('still permits ed25519 under the production profile', () => {
+    const env = signingEnv();
+    const result = signCustodyManifestMetadata({
+      tenantId: TENANT,
+      custody: custodyManifest({ artifact_id: 'rpt_prod_ed' }),
+      keyReference: KEY_REF,
+      algorithm: 'ed25519',
+      env: { ...env, ASTRANULL_DEPLOYMENT_PROFILE: 'production' },
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signed.algorithm, 'ed25519');
+  });
+
+  it('still verifies existing hmac-sha256 evidence under the production profile', () => {
+    // Refusing to *sign* must not orphan evidence signed before the profile changed.
+    const env = hmacEnv();
+    const signed = signHmac(env);
+    assert.equal(signed.error, undefined);
+    const verification = verifyCustodyManifestSignature({
+      tenantId: TENANT,
+      custodyManifestDigest: signed.signed.custody_manifest_digest,
+      signer: {
+        key_reference: HMAC_KEY_REF,
+        algorithm: 'hmac-sha256',
+        signature: signed.signed.signature,
+      },
+      env: { ...env, ASTRANULL_DEPLOYMENT_PROFILE: 'production' },
+    });
+    assert.deepEqual(verification, { ok: true });
   });
 });
 

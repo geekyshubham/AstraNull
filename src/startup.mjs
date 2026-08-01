@@ -1,5 +1,5 @@
 import { loadRuntimeConfig } from './config.mjs';
-import { createServer } from './server.mjs';
+import { beginDraining, createServer } from './server.mjs';
 import { createPostgresRuntime } from './persistence/postgres/runtime.mjs';
 import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
 
@@ -89,24 +89,51 @@ export async function runControlPlaneProcess(options = {}) {
 
   let shuttingDown = false;
 
+  // How long to keep serving while reporting NOT ready, so the load balancer can
+  // take this instance out of rotation before it stops accepting connections.
+  // Defaults to one DigitalOcean health-check period (15s, per
+  // ops/digitalocean/app.yaml). Clamped to half the shutdown grace so the drain
+  // can never consume the budget that app.close() needs — otherwise the
+  // grace-exceeded timer would hard-exit the process mid-close and drop
+  // in-flight requests, which is the opposite of a graceful drain.
+  const drainDelayMs = Math.min(
+    Math.max(Number.parseInt(String(env.ASTRANULL_DRAIN_DELAY_MS ?? '').trim(), 10) || 15_000, 0),
+    Math.floor(app.runtimeConfig.shutdownGraceMs / 2),
+  );
+
   const shutdown = (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`AstraNull shutting down (${signal})`);
-    app
-      .close()
-      .then(() => {
-        console.log('AstraNull stopped');
-        process.exit(0);
-      })
-      .catch((err) => {
-        console.error(`AstraNull shutdown error: ${redactDatabaseUrlInMessage(err, env)}`);
-        process.exit(1);
-      });
+
+    // Flip /ready to 503 first; the server keeps serving during the drain.
+    beginDraining();
+
+    const closeAndExit = () => {
+      app
+        .close()
+        .then(() => {
+          console.log('AstraNull stopped');
+          process.exit(0);
+        })
+        .catch((err) => {
+          console.error(`AstraNull shutdown error: ${redactDatabaseUrlInMessage(err, env)}`);
+          process.exit(1);
+        });
+    };
+
+    // The overall grace timer starts NOW, covering drain + close together.
     setTimeout(() => {
       console.error('AstraNull shutdown grace exceeded; exiting');
       process.exit(1);
     }, app.runtimeConfig.shutdownGraceMs).unref();
+
+    if (drainDelayMs > 0) {
+      console.log(`AstraNull draining for ${drainDelayMs}ms (readiness now failing)`);
+      setTimeout(closeAndExit, drainDelayMs);
+      return;
+    }
+    closeAndExit();
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));

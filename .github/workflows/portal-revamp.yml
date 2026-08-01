@@ -38,8 +38,9 @@ jobs:
           node-version: '22'
           cache: npm
 
+      # `npm ci` respects the lockfile; `cache: npm` above also requires it.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install Playwright browsers
         if: matrix.suite == 'e2e' || matrix.suite == 'a11y'

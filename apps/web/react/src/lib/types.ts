@@ -157,6 +157,14 @@ export type PortalData = {
   internalApprovalRequests: DataItem[];
   internalAudit: DataItem[];
   deploymentFeatures: DataItem | null;
+  /**
+   * Per-dataset hydrate failures, keyed by the PortalData field name above.
+   *
+   * An absent key means the dataset loaded (an empty array is genuinely empty).
+   * A present key means the array/object beside it is a FALLBACK, not data — the
+   * surface must say so instead of rendering a silent empty state.
+   */
+  loadErrors: Record<string, string>;
   loaded: boolean;
   error: string | null;
 };

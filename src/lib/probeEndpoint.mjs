@@ -1,5 +1,26 @@
 import { isIP } from 'node:net';
 
+/**
+ * Curated probe destination allowlists.
+ *
+ * These live in this leaf module (rather than capabilityProbes.mjs) so that both the
+ * probe implementations and the job-signing validators can import them without creating
+ * a probeJobs → capabilityProbes → capabilityProbeAuth → probeJobs module cycle.
+ * capabilityProbes.mjs re-exports them for existing consumers.
+ */
+export const RISKY_ADMIN_PORTS = Object.freeze([
+  21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 3389, 5432, 6379, 8080, 8443,
+]);
+
+export const API_DOC_PATHS = Object.freeze([
+  '/swagger.json',
+  '/openapi.json',
+  '/api-docs',
+  '/v3/api-docs',
+  '/graphql',
+  '/.well-known/openapi',
+]);
+
 const DISCOVERED_VIA_VALUES = new Set([
   'operator_env',
   'cloud_metadata',
@@ -157,6 +178,36 @@ function classifyRoutableIp(ip, allowPrivate) {
     return { ok: false, message: 'ULA IPv6 address' };
   }
   return { ok: true };
+}
+
+/**
+ * Probe-egress destination gate. Wraps the routable-IP classifier so probe paths
+ * cannot reach unspecified/loopback/metadata/link-local/RFC1918/ULA destinations.
+ *
+ * `allowPrivate` (RFC1918 + ULA) and `allowLoopback` are opt-in only and must never
+ * be enabled for production-like deployments — callers own that decision.
+ * Unspecified, cloud-metadata (169.254.169.254) and link-local addresses are always refused.
+ *
+ * @param {string} ip IPv4/IPv6 literal
+ * @param {{ allowPrivate?: boolean, allowLoopback?: boolean }} [options]
+ * @returns {{ ok: true } | { ok: false, message: string }}
+ */
+export function assertProbeDestinationAllowed(ip, options = {}) {
+  const allowPrivate = options.allowPrivate === true;
+  const allowLoopback = options.allowLoopback === true;
+
+  if (typeof ip !== 'string' || isIP(ip) === 0) {
+    return { ok: false, message: 'invalid IP literal' };
+  }
+
+  const classified = classifyRoutableIp(ip, allowPrivate);
+  if (classified.ok) return { ok: true };
+
+  if (allowLoopback && /^(loopback|unspecified) IPv[46] address$/.test(classified.message)) {
+    return { ok: true };
+  }
+
+  return { ok: false, message: classified.message };
 }
 
 function validateIpLiteral(ip, fieldName) {

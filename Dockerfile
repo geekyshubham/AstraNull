@@ -1,5 +1,7 @@
 # AstraNull control plane (API + static UI). No secrets or database URLs baked in.
-FROM node:22-alpine
+# Base image pinned by digest for reproducible builds. Dependabot keeps this current
+# (see .github/dependabot.yml); do not replace with a floating tag.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 LABEL org.opencontainers.image.title="AstraNull Control Plane"
 LABEL org.opencontainers.image.description="No-access-first DDoS readiness validation platform — API and UI"
@@ -11,7 +13,13 @@ RUN addgroup -g 10001 -S astranull \
 
 WORKDIR /app
 
-COPY package.json ./
+# Runtime dependencies must be installed: src/index.mjs reaches `pg` through
+# src/persistence/postgres/pool.mjs, so a dependency-free image fails at import with
+# ERR_MODULE_NOT_FOUND before serving a request. The lockfile is copied without a glob
+# so a missing lockfile breaks the build instead of silently floating.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
 COPY src ./src
 COPY apps/web ./apps/web
 COPY docs/api.md ./docs/api.md

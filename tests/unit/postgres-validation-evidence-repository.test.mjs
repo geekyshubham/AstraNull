@@ -748,14 +748,14 @@ describe('postgres validation evidence repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
-  it('createVerdictIfAbsent upserts with tenant guard and parameterized evidence_ids', async () => {
+  it('createVerdictIfAbsent preserves an existing verdict and parameterizes evidence_ids', async () => {
     const evidenceIds = ['ev_a', 'ev_b'];
     const pool = createRecordingPool((text, params) => {
       if (text.startsWith('INSERT INTO verdicts')) {
         assert.match(text, /ON CONFLICT \(test_run_id\)/);
-        assert.match(text, /DO UPDATE SET/);
-        assert.match(text, /WHERE verdicts\.tenant_id = EXCLUDED\.tenant_id/);
-        assert.match(text, /placement_confidence_json = EXCLUDED\.placement_confidence_json/);
+        // A published verdict is immutable: the conflict path must never rewrite it.
+        assert.match(text, /DO NOTHING/);
+        assert.doesNotMatch(text, /DO UPDATE/);
         assert.match(text, /\$10::jsonb/);
         assertNoInterpolatedValue(text, evidenceIds[0]);
         assert.deepEqual(params[8], evidenceIds);

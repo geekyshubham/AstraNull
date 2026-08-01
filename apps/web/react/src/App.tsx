@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from './components/layout/app-shell';
-import { EMPTY_PORTAL_DATA, ensurePortalSession, fetchPortalData, loadSession, portalSurface, saveSession, sessionIdentity } from './lib/api';
+import {
+  clearSession,
+  EMPTY_PORTAL_DATA,
+  ensurePortalSession,
+  fetchPortalData,
+  loadSession,
+  portalSurface,
+  REAUTH_REQUIRED_EVENT,
+  resetReauthGuard,
+  resolveLoginDestination,
+  saveSession,
+  sessionIdentity
+} from './lib/api';
 import { getRouteFromLocation } from './lib/navigation';
 import { canAccessRoute } from './lib/route-access';
 import type { PortalConfig, PortalData, RouteId, Session } from './lib/types';
@@ -47,19 +59,53 @@ export default function App() {
     }
   }, [route]);
 
+  /**
+   * Leave the authenticated surface for the sign-in page of the current surface.
+   *
+   * Discards the dead credential first, so nothing can keep sending it. Public
+   * pages return early: they are already unauthenticated, and redirecting from
+   * one to itself is how a bounce loop starts.
+   */
+  const goToLogin = useCallback(() => {
+    clearSession();
+    setSession(null);
+    if (isPublicOnlyPath(window.location.pathname)) return;
+    const candidate = portalSurface(window.location.pathname) === 'staff'
+      ? config?.staffLoginPath
+      : config?.loginUrl;
+    window.location.replace(resolveLoginDestination(candidate, window.location.pathname));
+  }, [config]);
+
+  // An expired or revoked session surfaces as 401 (or a staff-role 403) on
+  // whichever calls happen to be in flight. lib/api clears storage and dispatches
+  // this event ONCE for the whole burst, so the portal re-authenticates a single
+  // time instead of once per failed request.
+  useEffect(() => {
+    function onReauthRequired() {
+      goToLogin();
+    }
+    window.addEventListener(REAUTH_REQUIRED_EVENT, onReauthRequired);
+    return () => window.removeEventListener(REAUTH_REQUIRED_EVENT, onReauthRequired);
+  }, [goToLogin]);
+
   useEffect(() => {
     let mounted = true;
     async function boot() {
       const gate = await ensurePortalSession(portalSurface(window.location.pathname));
       if (!mounted) return;
       if (gate.redirectToLogin && !isPublicOnlyPath(window.location.pathname)) {
-        window.location.replace(gate.loginUrl ?? '/login');
+        // Deployments without a dedicated sign-in page report the portal path
+        // itself as login_url, so this must never resolve to the current page.
+        window.location.replace(resolveLoginDestination(gate.loginUrl, window.location.pathname));
         return;
       }
       const nextConfig = gate.config;
       const nextSession = gate.session;
       setConfig(nextConfig);
       setSession(nextSession);
+      // Re-arm the one-shot re-auth latch for this newly established session, so
+      // a later expiry can still trigger its own single redirect.
+      if (nextSession) resetReauthGuard();
       if (!isPublicOnlyPath(window.location.pathname) && nextSession) {
         await refresh(nextConfig, nextSession, getRouteFromLocation());
       }
@@ -156,12 +202,19 @@ export default function App() {
   /** Always re-read sessionStorage so SOC execution-tenant updates are not stale. */
   const handleRefresh = useCallback(async () => {
     if (!config) return;
-    const stored = loadSession() ?? activeSession;
+    const stored = loadSession();
+    // loadSession() returns null once it has purged an expired session. Falling
+    // back to the in-memory session here resurrected exactly the credential that
+    // was just discarded and kept sending its stale token on every refresh.
+    if (!stored) {
+      goToLogin();
+      return;
+    }
     if (sessionIdentity(stored) !== sessionIdentity(session)) {
       setSession(stored);
     }
     await refresh(config, stored, route);
-  }, [config, activeSession, session, refresh, route]);
+  }, [config, session, refresh, route, goToLogin]);
 
   if (loading || !config) return <LoadingScreen />;
 

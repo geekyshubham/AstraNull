@@ -1,54 +1,92 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.mjs';
+// Every helper below is imported from the REAL module that api.ts uses — never a local copy.
+// This file used to re-implement them, so the tests passed regardless of what shipped, and the
+// local `portalSurface` copy had already drifted: it was missing the `/internal/soc` branch that
+// actually ships, so staff-surface detection for the SOC console was silently uncovered.
+import {
+  AUTH_MODE_UNKNOWN,
+  buildApiHeaders,
+  buildSocCustomerHeaders,
+  isAuthFailure,
+  isExternalAuthUrl,
+  isSessionExpired,
+  isStaffSocRole,
+  portalSurface,
+  resolveAuthMode,
+  resolveLoginDestination,
+  resolveOidcLoginRedirect,
+  sessionFromLoginResponse,
+} from '../../apps/web/react/src/lib/portal-auth-policy.mjs';
 
-/**
- * Mirrors pure helpers in apps/web/react/src/lib/api.ts for node:test coverage.
- */
-function isOidcJwtMode(config) {
-  return config.authMode === 'oidc-jwt';
-}
+describe('portal auth mode resolution (shipped module)', () => {
+  it('prefers the /ready auth mode over public site config', () => {
+    assert.equal(
+      resolveAuthMode({ auth_mode: 'oidc-jwt' }, { auth_mode: 'dev-headers' }),
+      'oidc-jwt',
+    );
+  });
 
-function isExternalAuthUrl(url) {
-  const trimmed = url.trim();
-  return /^https?:\/\//i.test(trimmed);
-}
+  it('falls back to site config when /ready omits the mode', () => {
+    assert.equal(resolveAuthMode({}, { auth_mode: 'oidc-jwt' }), 'oidc-jwt');
+    assert.equal(resolveAuthMode({ auth_mode: '   ' }, { auth_mode: 'oidc-jwt' }), 'oidc-jwt');
+  });
 
-function resolveOidcLoginRedirect(config, surface = 'customer') {
-  if (!isOidcJwtMode(config) || config.bundledLoginEnabled) return null;
-  const loginUrl = surface === 'staff' ? config.staffLoginPath : config.loginUrl;
-  return isExternalAuthUrl(loginUrl) ? loginUrl : null;
-}
+  // The audit finding: a failed config fetch used to resolve to dev-headers, and the caller
+  // treats dev-headers as "bootstrap a local identity" — so a network blip minted an
+  // unauthenticated admin session.
+  it('fails closed to unknown — never to dev-headers — when discovery yields nothing', () => {
+    for (const [ready, site] of [
+      [null, null],
+      [undefined, undefined],
+      [{}, {}],
+      [{ auth_mode: '' }, { auth_mode: '   ' }],
+    ]) {
+      const mode = resolveAuthMode(ready, site);
+      assert.equal(mode, AUTH_MODE_UNKNOWN);
+      assert.notEqual(mode, 'dev-headers');
+    }
+  });
 
-function portalSurface(pathname) {
-  const path = pathname.replace(/\/+$/, '') || '/';
-  if (path === '/internal/admin' || path.startsWith('/internal/admin/')) {
-    return 'staff';
-  }
-  return 'customer';
-}
+  it('never reports dev-headers unless a discovery endpoint actually said so', () => {
+    assert.equal(resolveAuthMode({ auth_mode: 'dev-headers' }, {}), 'dev-headers');
+    assert.notEqual(resolveAuthMode({ auth_mode: 'signed-session' }, {}), 'dev-headers');
+  });
+});
 
-function sessionFromLoginResponse(loginResponse) {
-  const expiresIn = Number(loginResponse.expires_in ?? 3600);
-  return {
-    mode: 'oidc',
-    access_token: String(loginResponse.access_token ?? ''),
-    principal: String(loginResponse.principal ?? 'customer'),
-    tenant_id: loginResponse.tenant_id != null ? String(loginResponse.tenant_id) : undefined,
-    user_id: loginResponse.user_id != null ? String(loginResponse.user_id) : undefined,
-    role: loginResponse.role != null ? String(loginResponse.role) : undefined,
-    staff_id: loginResponse.staff_id != null ? String(loginResponse.staff_id) : undefined,
-    staff_role: loginResponse.staff_role != null ? String(loginResponse.staff_role) : undefined,
-    expires_at: Date.now() + expiresIn * 1000,
-  };
-}
+describe('portal auth failure detection (shipped module)', () => {
+  it('treats 401 as a dead credential regardless of payload', () => {
+    for (const payload of [null, undefined, {}, { error: 'anything' }, 'text', 42]) {
+      assert.equal(isAuthFailure(401, payload), true);
+    }
+  });
 
-function buildBearerHeaders(session) {
-  const headers = { accept: 'application/json' };
-  const token = String(session?.access_token ?? '').trim();
-  if (token) headers.authorization = `Bearer ${token}`;
-  return headers;
-}
+  it('treats 403 staff_forbidden as re-authenticable', () => {
+    assert.equal(isAuthFailure(403, { error: 'staff_forbidden' }), true);
+    assert.equal(isAuthFailure(403, { error: '  staff_forbidden  ' }), true);
+  });
+
+  // A plain RBAC denial is a VALID session hitting a route it lacks permission for. Clearing it
+  // would log operators out merely for browsing.
+  it('leaves the session intact on a plain RBAC forbidden', () => {
+    assert.equal(isAuthFailure(403, { error: 'forbidden' }), false);
+    assert.equal(isAuthFailure(403, {}), false);
+    assert.equal(isAuthFailure(403, null), false);
+  });
+
+  it('ignores non-auth statuses', () => {
+    for (const status of [200, 204, 400, 404, 409, 429, 500, 503]) {
+      assert.equal(isAuthFailure(status, { error: 'staff_forbidden' }), false);
+    }
+  });
+
+  it('does not throw on non-object payloads', () => {
+    for (const payload of ['forbidden', 0, false, [], () => {}]) {
+      assert.equal(isAuthFailure(403, payload), false);
+    }
+  });
+});
 
 describe('react portal auth helpers', () => {
   it('detects external enterprise login URLs', () => {
@@ -95,18 +133,168 @@ describe('react portal auth helpers', () => {
   });
 
   it('builds Authorization bearer headers from stored access tokens', () => {
-    const headers = buildBearerHeaders({ access_token: '  token-value  ' });
+    const config = { authMode: 'oidc-jwt' };
+    const headers = buildApiHeaders(config, { access_token: '  token-value  ' });
     assert.equal(headers.authorization, 'Bearer token-value');
-    assert.equal(buildBearerHeaders({}).authorization, undefined);
+    assert.equal(buildApiHeaders(config, {}).authorization, undefined);
   });
 
-  it('derives staff surface from internal admin paths', () => {
+  it('derives staff surface from internal admin and SOC paths', () => {
     assert.equal(portalSurface('/internal/admin'), 'staff');
     assert.equal(portalSurface('/internal/admin/'), 'staff');
     assert.equal(portalSurface('/internal/admin/login'), 'staff');
+    // The old local mirror omitted this branch entirely.
+    assert.equal(portalSurface('/internal/soc'), 'staff');
+    assert.equal(portalSurface('/internal/soc/'), 'staff');
+    assert.equal(portalSurface('/internal/soc/queue'), 'staff');
     assert.equal(portalSurface('/app'), 'customer');
     assert.equal(portalSurface('/login'), 'customer');
     assert.equal(portalSurface('/'), 'customer');
+  });
+});
+
+describe('session expiry (shipped module)', () => {
+  it('treats a missing session as expired', () => {
+    assert.equal(isSessionExpired(null), true);
+    assert.equal(isSessionExpired(undefined), true);
+  });
+
+  it('compares expires_at against the injected clock', () => {
+    assert.equal(isSessionExpired({ expires_at: 1_000 }, 999), false);
+    assert.equal(isSessionExpired({ expires_at: 1_000 }, 1_000), false);
+    assert.equal(isSessionExpired({ expires_at: 1_000 }, 1_001), true);
+  });
+
+  // dev-headers sessions carry no expiry. Failing closed here would lock local development out.
+  it('does not treat a missing or unparseable expiry as expired', () => {
+    for (const session of [{}, { expires_at: 0 }, { expires_at: 'soon' }, { expires_at: -1 }]) {
+      assert.equal(isSessionExpired(session, 9_999_999), false);
+    }
+  });
+});
+
+describe('api header construction (shipped module)', () => {
+  const oidc = { authMode: 'oidc-jwt' };
+  const dev = { authMode: 'dev-headers' };
+
+  it('always sends JSON content negotiation', () => {
+    const headers = buildApiHeaders(oidc, {});
+    assert.equal(headers['Content-Type'], 'application/json');
+    assert.equal(headers.accept, 'application/json');
+  });
+
+  // The audit defect: an expired token keeps a revoked credential in flight and turns every
+  // call into a 401 instead of a clean re-auth.
+  it('omits the bearer token once the session has expired', () => {
+    const session = { access_token: 'jwt.example', expires_at: 5_000 };
+    assert.equal(buildApiHeaders(oidc, session, 4_999).authorization, 'Bearer jwt.example');
+    assert.equal(buildApiHeaders(oidc, session, 5_001).authorization, undefined);
+  });
+
+  it('sends dev-headers identity only in dev-headers mode', () => {
+    const headers = buildApiHeaders(dev, { tenant_id: 'ten_a', user_id: 'usr_a', role: 'engineer' });
+    assert.equal(headers['x-tenant-id'], 'ten_a');
+    assert.equal(headers['x-user-id'], 'usr_a');
+    assert.equal(headers['x-role'], 'engineer');
+    assert.equal(headers.authorization, undefined);
+    // An oidc-jwt session must never carry spoofable identity headers.
+    const oidcHeaders = buildApiHeaders(oidc, { tenant_id: 'ten_a', access_token: 't' });
+    assert.equal(oidcHeaders['x-tenant-id'], undefined);
+    assert.equal(oidcHeaders['x-role'], undefined);
+  });
+
+  it('sends staff dev-headers for a staff principal', () => {
+    const headers = buildApiHeaders(dev, {
+      principal: 'staff',
+      staff_id: 'staff_1',
+      staff_role: 'internal_admin',
+    });
+    assert.equal(headers['x-principal-type'], 'staff');
+    assert.equal(headers['x-staff-id'], 'staff_1');
+    assert.equal(headers['x-staff-role'], 'internal_admin');
+    assert.equal(headers['x-tenant-id'], undefined);
+  });
+
+  it('ignores an expired dev-headers session (no token is involved)', () => {
+    const headers = buildApiHeaders(dev, { tenant_id: 'ten_a', expires_at: 1 }, 9_999);
+    assert.equal(headers['x-tenant-id'], 'ten_a');
+  });
+});
+
+describe('staff SOC impersonation (shipped module)', () => {
+  const oidc = { authMode: 'oidc-jwt' };
+  const dev = { authMode: 'dev-headers' };
+
+  it('identifies operational SOC staff roles only', () => {
+    assert.equal(isStaffSocRole({ staff_role: 'soc_analyst' }), true);
+    assert.equal(isStaffSocRole({ staff_role: '  SOC_LEAD  ' }), true);
+    assert.equal(isStaffSocRole({ staff_role: 'internal_admin' }), false);
+    assert.equal(isStaffSocRole({}), false);
+  });
+
+  // Silently defaulting to ten_demo would run a governed action against the wrong tenant.
+  it('refuses a staff SOC action with no execution tenant', () => {
+    assert.throws(
+      () => buildSocCustomerHeaders(dev, { principal: 'staff', staff_id: 'staff_1' }),
+      /Select an execution tenant/,
+    );
+  });
+
+  it('rewrites staff dev-headers to the chosen tenant with the soc role', () => {
+    const headers = buildSocCustomerHeaders(dev, { principal: 'staff', staff_id: 'staff_1' }, 'ten_b');
+    assert.equal(headers['x-tenant-id'], 'ten_b');
+    assert.equal(headers['x-user-id'], 'staff_1');
+    assert.equal(headers['x-role'], 'soc');
+    // Staff markers must be stripped, or the server sees a staff principal AND a tenant role.
+    assert.equal(headers['x-principal-type'], undefined);
+    assert.equal(headers['x-staff-id'], undefined);
+    assert.equal(headers['x-staff-role'], undefined);
+  });
+
+  // Staff cannot mint SOC claims under oidc-jwt, so this must throw rather than quietly send a
+  // request the server will reject.
+  it('refuses staff SOC impersonation under oidc-jwt', () => {
+    assert.throws(
+      () => buildSocCustomerHeaders(oidc, { principal: 'staff', access_token: 'jwt' }, 'ten_b'),
+      /not available in oidc-jwt mode/,
+    );
+  });
+
+  it('passes a tenant SOC session through unchanged under oidc-jwt', () => {
+    const headers = buildSocCustomerHeaders(
+      oidc,
+      { principal: 'customer', access_token: 'jwt', expires_at: 9_000 },
+      'ten_b',
+      1_000,
+    );
+    assert.equal(headers.authorization, 'Bearer jwt');
+    assert.equal(headers['x-role'], undefined);
+  });
+});
+
+describe('login destination (shipped module)', () => {
+  // getPublicSiteConfig reports the PORTAL path as login_url when there is no dedicated sign-in
+  // page, so redirecting /app to /app would navigate forever.
+  it('breaks the redirect loop when the candidate is the current page', () => {
+    assert.equal(resolveLoginDestination('/app', '/app'), '/login');
+    assert.equal(resolveLoginDestination('/app/', '/app'), '/login');
+    assert.equal(resolveLoginDestination('/app?next=1', '/app'), '/login');
+    assert.equal(resolveLoginDestination('/app#top', '/app'), '/login');
+  });
+
+  it('keeps a distinct in-app destination', () => {
+    assert.equal(resolveLoginDestination('/login', '/app'), '/login');
+    assert.equal(resolveLoginDestination('signin', '/app'), '/signin');
+  });
+
+  it('passes an external IdP URL through untouched', () => {
+    const idp = 'https://idp.example/oauth2/authorize?client_id=x';
+    assert.equal(resolveLoginDestination(idp, '/app'), idp);
+  });
+
+  it('defaults to /login when no candidate is supplied', () => {
+    assert.equal(resolveLoginDestination(null, '/app'), '/login');
+    assert.equal(resolveLoginDestination('   ', '/app'), '/login');
   });
 });
 

@@ -7,6 +7,9 @@ const COUNTERS = {
   events_ingested_total: 0,
   high_scale_transitions_total: 0,
   api_rate_limited_total: 0,
+  // Stale probe-job leases taken from a presumed-dead worker. A non-zero and growing value
+  // means workers are dying mid-job rather than that reclaim is misbehaving.
+  probe_job_leases_reclaimed_total: 0,
 };
 
 export function incMetric(name, delta = 1) {

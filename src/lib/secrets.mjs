@@ -1,10 +1,94 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { resolveDeploymentProfile } from './deploymentProfile.mjs';
 
 export const ENVELOPE_VERSION = 1;
 export const ENVELOPE_ALGORITHM = 'AES-256-GCM';
 
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
+
+/** Minimum distinct decoded bytes for a 32-byte key (a random key averages ~30). */
+const MIN_DISTINCT_KEY_BYTES = 16;
+
+/**
+ * SHA-256 digests of decoded key material known to be public. Digests are stored
+ * instead of the values so this file never itself contains a usable secret.
+ * These were committed to a public repo, so treat them as permanently burned.
+ */
+const KNOWN_WEAK_KEY_DIGESTS = new Map([
+  // Fixture key previously committed in ops/railway/staging.env.example and
+  // ops/docker/local-staging.env.
+  ['4884fdaafea47c29fea7159d0daddd9c085d6200e1359e85bb81736af6b7c837', 'a published AstraNull fixture key'],
+  // 32 zero bytes.
+  ['66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925', 'an all-zero key'],
+  // 32 repeats of 'a'.
+  ['3ba3f5f43b92602683c19aee62a20342b084dd5971ddd33808d81a328879a547', 'a single repeated character'],
+]);
+
+/**
+ * Length of the shortest prefix the buffer is a repetition of. Returns the full
+ * length when no shorter cycle exists. Deliberately does not require the period
+ * to divide the length, so truncated repeats (ABCABCAB) are caught too.
+ * @param {Buffer} buf
+ */
+function smallestRepeatingPeriod(buf) {
+  for (let period = 1; period < buf.length; period += 1) {
+    let repeats = true;
+    for (let i = period; i < buf.length; i += 1) {
+      if (buf[i] !== buf[i % period]) {
+        repeats = false;
+        break;
+      }
+    }
+    if (repeats) return period;
+  }
+  return buf.length;
+}
+
+/**
+ * Reject publicly-known and trivially low-entropy encryption keys.
+ *
+ * Entropy is judged on the DECODED bytes: a 32-character string can still be a
+ * 32-byte key with almost no entropy, which a length check would wave through.
+ * Diagnostics describe the key's properties and never echo its value.
+ *
+ * @param {Buffer} key decoded 32-byte key material
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function assertStrongSecretEncryptionKey(key, env = process.env) {
+  const reasons = [];
+
+  const digest = createHash('sha256').update(key).digest('hex');
+  const known = KNOWN_WEAK_KEY_DIGESTS.get(digest);
+  if (known) {
+    reasons.push(`it matches ${known}, which is public and must be considered compromised`);
+  }
+
+  const distinct = new Set(key).size;
+  if (distinct < MIN_DISTINCT_KEY_BYTES) {
+    reasons.push(
+      `it decodes to only ${distinct} distinct byte values (minimum ${MIN_DISTINCT_KEY_BYTES})`,
+    );
+  }
+
+  const period = smallestRepeatingPeriod(key);
+  if (period < KEY_BYTES) {
+    reasons.push(`its decoded bytes repeat every ${period} byte(s) instead of being ${KEY_BYTES} independent bytes`);
+  }
+
+  if (reasons.length === 0) return;
+
+  const message =
+    `ASTRANULL_SECRET_ENCRYPTION_KEY is unacceptably weak: ${reasons.join('; ')}. `
+    + 'Generate a fresh key with: openssl rand -hex 32';
+
+  // Gated on the deployment profile only (never NODE_ENV): hosted-staging runs
+  // with NODE_ENV=production today and must keep booting with a loud warning.
+  if (resolveDeploymentProfile(env) === 'production') {
+    throw new Error(`Refusing to start: ${message}`);
+  }
+  console.warn(`[astranull] WARNING: ${message}`);
+}
 
 function stableStringify(value) {
   if (value === undefined) {
@@ -47,6 +131,7 @@ export function loadSecretEncryptionKey(env = process.env, { required = false } 
       'ASTRANULL_SECRET_ENCRYPTION_KEY must be a 32-byte key encoded as base64 or 64-character hex.',
     );
   }
+  assertStrongSecretEncryptionKey(key, env);
   return key;
 }
 

@@ -14,6 +14,11 @@ export function freshStore() {
         environment_id: 'env_demo',
         name: 'TG',
         expected_behavior_default: 'must_block_before_origin',
+        // Signed-worker runs require proven ownership before egress (see the ownership gate
+        // in startTestRun). The default fixture models a tenant that has completed the
+        // agent ownership challenge, since that is the normal state for anyone running live
+        // probes. Tests covering the gate itself override this to an unverified value.
+        ownership_status: 'agent_verified',
       },
     ],
     targets: [

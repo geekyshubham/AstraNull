@@ -952,11 +952,27 @@ function createRecordingValidationRepositories(overrides = {}) {
       overrides.isKillSwitchActiveForTenant?.(...args) ?? false,
   };
 
-  return {
-    repositories: { validationEvidence, audit, coreCatalog, agentControl, probeJobs, killSwitch },
-    validationCalls,
-    auditEvents,
+  const repositories = {
+    validationEvidence,
+    audit,
+    coreCatalog,
+    agentControl,
+    probeJobs,
+    killSwitch,
   };
+
+  // Only wired when a test opts in, so the ownership gate's fail-closed branch (no verification
+  // repository at all) stays reachable. Production always constructs this repository.
+  if (overrides.getTargetVerificationCurrent) {
+    repositories.portalRevamp = {
+      getTargetVerificationCurrent: async (...args) => {
+        validationCalls.push({ method: 'portalRevamp.getTargetVerificationCurrent', args });
+        return overrides.getTargetVerificationCurrent(...args);
+      },
+    };
+  }
+
+  return { repositories, validationCalls, auditEvents };
 }
 
 function assertNoRunProbeOrAgentSideEffects(validationCalls) {
@@ -972,6 +988,10 @@ function baseStartTargetGroup(overrides = {}) {
     safe_test_windows: [],
     safety_policy: {},
     targets: [{ id: 'tgt_1', kind: 'ip', value: '203.0.113.1' }],
+    // Signed-worker runs are real egress and require proven ownership. The default models a
+    // tenant that completed the agent challenge, which is the normal state for anyone running
+    // live probes; the ownership-gate tests below override this.
+    ownership_status: 'agent_verified',
     ...overrides,
   };
 }
@@ -1914,6 +1934,117 @@ describe('postgres validation service adapters', () => {
     assert.equal(soc.error, 'soc_gated_check');
     assert.equal(soc.status, 403);
     assert.ok(auditEvents.some((a) => a.entry.action === 'test_run.blocked_soc_gated'));
+  });
+
+  describe('startTestRun ownership gate', () => {
+    const ownershipCtx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const startBody = {
+      check_id: 'origin.direct_bypass.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    };
+    const signedWorker = {
+      probeMode: 'signed-worker',
+      probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+    };
+    const queriedVerification = (calls) =>
+      calls.some((c) => c.method === 'portalRevamp.getTargetVerificationCurrent');
+
+    it('denies signed-worker runs when neither the group nor the target is verified', async () => {
+      const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
+        getTargetVerificationCurrent: async () => ({ state: 'pending' }),
+        listAgents: async () => [baseOnlineAgent()],
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
+
+      assert.deepEqual(result, { error: 'ownership_not_verified', status: 409 });
+      const denial = auditEvents.find((a) => a.entry.action === 'test_run.ownership_denied');
+      assert.ok(denial);
+      assert.equal(denial.entry.metadata.ownership_state, 'pending');
+      assert.equal(denial.entry.metadata.target_id, 'tgt_1');
+      assertNoRunProbeOrAgentSideEffects(validationCalls);
+    });
+
+    it('fails closed when the verification repository is unavailable', async () => {
+      const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
+        listAgents: async () => [baseOnlineAgent()],
+      });
+      assert.equal(repositories.portalRevamp, undefined);
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
+
+      assert.deepEqual(result, { error: 'ownership_not_verified', status: 409 });
+      const denial = auditEvents.find((a) => a.entry.action === 'test_run.ownership_denied');
+      assert.equal(denial.entry.metadata.reason, 'verification_repository_unavailable');
+      assertNoRunProbeOrAgentSideEffects(validationCalls);
+    });
+
+    // Regression: the group path briefly required agent_verified, which would have denied a
+    // Postgres tenant whose DNS proof legitimately lands as a group-level dns_verified.
+    it('allows a dns_verified group without reading the per-target row', async () => {
+      const { repositories, validationCalls } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'dns_verified' }),
+        getTargetVerificationCurrent: async () => {
+          throw new Error('per-target row must not be read when the group already proves ownership');
+        },
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (c, record) => ({ ...record }),
+        updateTestRun: async (c, id, patch) => ({ id, ...patch }),
+        createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
+
+      assert.equal(result.error, undefined);
+      assert.equal(queriedVerification(validationCalls), false);
+      assert.ok(validationCalls.some((c) => c.method === 'createProbeJob'));
+    });
+
+    it('allows per-target DNS proof when the group is unverified', async () => {
+      const { repositories, validationCalls } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
+        getTargetVerificationCurrent: async (c, targetId) =>
+          targetId === 'tgt_1' ? { state: 'dns_verified' } : null,
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (c, record) => ({ ...record }),
+        updateTestRun: async (c, id, patch) => ({ id, ...patch }),
+        createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
+
+      assert.equal(result.error, undefined);
+      assert.equal(queriedVerification(validationCalls), true);
+      assert.ok(validationCalls.some((c) => c.method === 'createProbeJob'));
+    });
+
+    it('leaves in-process simulation runs ungated', async () => {
+      const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (c, record) => ({ ...record }),
+        updateTestRun: async (c, id, patch) => ({ id, ...patch }),
+        appendEvent: async (c, event) => event,
+        appendEvidence: async () => ({ id: 'ev_1' }),
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const result = await testRuns.startTestRun(ownershipCtx, startBody);
+
+      assert.equal(result.error, undefined);
+      assert.equal(
+        auditEvents.some((a) => a.entry.action === 'test_run.ownership_denied'),
+        false,
+      );
+      assert.equal(queriedVerification(validationCalls), false);
+    });
   });
 
   it('cancelTestRun updates cancellable runs and denies terminal statuses', async () => {
@@ -3216,14 +3347,17 @@ describe('postgres probe job service adapters', () => {
     assert.equal(rejected.error, 'raw_packet_rejected');
   });
 
-  it('rejects duplicate probe nonce before appending another event', async () => {
+  it('reconciles a duplicate probe nonce instead of appending another event', async () => {
     const ctx = {
       tenantId: 'ten_demo',
       workerId: 'pw_1',
       role: 'probe_worker',
     };
-    let appended = false;
+    let eventAppended = false;
+    let evidenceAppended = false;
     let completed = false;
+    /** @type {object | null} */
+    let runPatch = null;
     const probeJobs = {
       async leasePendingJobsForWorker() {
         return [];
@@ -3266,18 +3400,25 @@ describe('postgres probe job service adapters', () => {
         };
       },
       async listRunEvents() {
-        return [{ id: 'event_existing', signal_type: 'probe_result', nonce_hash: 'nh_dup' }];
+        return [
+          {
+            id: 'event_existing',
+            signal_type: 'probe_result',
+            nonce_hash: 'nh_dup',
+            metadata: { external_result: 'blocked' },
+          },
+        ];
       },
       async appendProbeResultEventIdempotent() {
-        appended = true;
+        eventAppended = true;
         return null;
       },
       async appendEvidence() {
-        appended = true;
+        evidenceAppended = true;
         return null;
       },
-      async updateTestRun() {
-        appended = true;
+      async updateTestRun(_ctx, _runId, patch) {
+        runPatch = patch;
         return null;
       },
     };
@@ -3293,11 +3434,30 @@ describe('postgres probe job service adapters', () => {
       safety_attestation: { requests_sent: 1, duration_ms: 10 },
     });
 
-    assert.equal(result.error, 'probe_already_ingested');
-    assert.equal(result.status, 409);
-    assert.equal(appended, false);
-    assert.equal(completed, false);
-    assert.equal(auditEvents.length, 0);
+    // The durable event is authoritative: rather than a 409 the retry converges the run
+    // and completes the job, so a crash between the event write and the run patch repairs
+    // itself instead of wedging the run permanently.
+    assert.equal(result.error, undefined);
+    assert.equal(result.reconciled, true);
+    assert.equal(result.probe_event.id, 'event_existing');
+    assert.equal(result.run_id, 'run_dup');
+    assert.equal(result.job_id, 'pjob_dup');
+
+    // Evidence is already durable, so nothing is written twice.
+    assert.equal(eventAppended, false);
+    assert.equal(evidenceAppended, false);
+
+    // The leased job is completed, and the reconciliation is audited.
+    assert.equal(completed, true);
+    assert.equal(auditEvents.length, 1);
+    assert.equal(auditEvents[0].action, 'probe_job.result_reconciled');
+
+    // Containment: every written value derives from the stored event, never the request
+    // body. The body claims 'connected' while the durable event recorded 'blocked', so a
+    // replay must not be able to flip a recorded verdict.
+    assert.equal(runPatch.probe_external_result, 'blocked');
+    assert.equal(runPatch.awaiting_external_probe, false);
+    assert.equal(runPatch.status, 'collecting');
   });
 });
 

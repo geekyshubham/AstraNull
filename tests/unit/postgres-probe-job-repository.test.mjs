@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   createProbeJobRepository,
+  isProbeJobLeaseStale,
   mapProbeJobRow,
+  probeJobLeaseTtlSeconds,
 } from '../../src/persistence/postgres/probeJobRepository.mjs';
+import { metricsSnapshot } from '../../src/lib/metrics.mjs';
 
 const CTX = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
 const FIXED_NOW = '2026-06-01T12:00:00.000Z';
@@ -81,7 +84,8 @@ describe('postgres probe job repository', () => {
   it('leases pending jobs with tenant context, bounded limit, and SKIP LOCKED', async () => {
     const pool = createRecordingPool((sql, params) => {
       if (sql.includes('WITH picked AS')) {
-        assert.deepEqual(params, [CTX.tenantId, 25, FIXED_NOW, WORKER_ID]);
+        // $5-$8 are the stale-lease TTL tunables; asserted in the reclaim test below.
+        assert.deepEqual(params.slice(0, 4), [CTX.tenantId, 25, FIXED_NOW, WORKER_ID]);
         return { rows: [sampleRow({ status: 'leased', leased_by: WORKER_ID })] };
       }
       return { rows: [] };
@@ -98,6 +102,120 @@ describe('postgres probe job repository', () => {
     assert.match(lease.text, /FOR UPDATE SKIP LOCKED/);
     assert.match(lease.text, /LIMIT \$2/);
     assert.ok(!lease.text.includes('ten_demo'));
+  });
+
+  it('lease predicate reclaims expired leases while keeping SKIP LOCKED and bound TTL params', async () => {
+    let leaseSql = null;
+    let leaseParams = null;
+    const pool = createRecordingPool((sql, params) => {
+      if (sql.includes('WITH picked AS')) {
+        leaseSql = sql;
+        leaseParams = params;
+        return { rows: [sampleRow({ status: 'leased', leased_by: WORKER_ID })] };
+      }
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+    await repo.leasePendingJobsForWorker(CTX, WORKER_ID, { leasedAt: FIXED_NOW });
+
+    // Both branches present: fresh work and reclaimable work.
+    assert.match(leaseSql, /status = 'pending'/);
+    assert.match(leaseSql, /status = 'leased' AND leased_at < now\(\) -/);
+    // Concurrency protection must survive the widened predicate.
+    assert.match(leaseSql, /FOR UPDATE SKIP LOCKED/);
+    // Every TTL tunable is a bound parameter, never interpolated.
+    assert.equal(leaseParams.length, 8);
+    assert.match(leaseSql, /\$5::numeric/);
+    assert.match(leaseSql, /\$6::numeric/);
+    assert.match(leaseSql, /\$7::numeric/);
+    assert.match(leaseSql, /\$8::numeric/);
+    assert.ok(!leaseSql.includes('ten_demo'));
+    // Staleness is judged per row against that row's own budget.
+    assert.match(leaseSql, /constraints_json->>'max_duration_seconds'/);
+  });
+
+  it('counts reclaimed leases in a metric without counting ordinary pending leases', async () => {
+    const before = metricsSnapshot().probe_job_leases_reclaimed_total ?? 0;
+    const pool = createRecordingPool((sql) => {
+      if (sql.includes('WITH picked AS')) {
+        return {
+          rows: [
+            // Ordinary pending pickup — not a reclaim.
+            { ...sampleRow({ id: 'pjob_fresh', status: 'leased' }), prior_status: 'pending' },
+            // Taken from a presumed-dead worker — a reclaim.
+            { ...sampleRow({ id: 'pjob_stolen', status: 'leased' }), prior_status: 'leased' },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+    const jobs = await repo.leasePendingJobsForWorker(CTX, WORKER_ID, { leasedAt: FIXED_NOW });
+    assert.equal(jobs.length, 2);
+    assert.equal(metricsSnapshot().probe_job_leases_reclaimed_total - before, 1);
+  });
+
+  it('derives a lease TTL that cannot fire under a live worker', () => {
+    // A check may legally declare max_duration_seconds as low as 1; the floor stops that from
+    // becoming a seconds-long TTL that would steal a live worker's job mid-probe.
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 1 }), 900);
+    // Malformed or absent constraints fall back rather than deriving something tiny.
+    assert.equal(probeJobLeaseTtlSeconds({}), probeJobLeaseTtlSeconds({ max_duration_seconds: 120 }));
+    assert.equal(
+      probeJobLeaseTtlSeconds({ max_duration_seconds: 'nonsense' }),
+      probeJobLeaseTtlSeconds({}),
+    );
+    // The TTL must cover a whole serially-drained batch, not one probe: 120s of per-probe
+    // budget across a max batch is far more than 120s of wall clock.
+    const ttl = probeJobLeaseTtlSeconds({ max_duration_seconds: 120 });
+    assert.ok(ttl >= 120 * 100, `expected batch-sized TTL, got ${ttl}`);
+  });
+
+  it('keeps the JS lease-TTL mirror in step with the SQL predicate at the edges', () => {
+    // These two must agree, or the lease query could reclaim a job while the ingest guard
+    // still believed the old lease live — rejecting the new holder and re-wedging the slot.
+    // '0' is accepted by the SQL regex and so must NOT fall back to the default here.
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 0 }), 900);
+    // Values the SQL regex rejects must fall back on BOTH sides. Number() coercion disagrees
+    // with the regex on every one of these, which is the whole reason this test exists.
+    const fallback = probeJobLeaseTtlSeconds({ max_duration_seconds: 120 });
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: -5 }), fallback);
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: '' }), fallback);
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: ' 5 ' }), fallback);
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: '1e3' }), fallback);
+    assert.equal(probeJobLeaseTtlSeconds(null), fallback);
+    // Fractional values are accepted by the regex and honoured on both sides.
+    assert.equal(
+      probeJobLeaseTtlSeconds({ max_duration_seconds: 30.5 }),
+      Math.max(900, 30.5 * 100 + 300),
+    );
+  });
+
+  it('treats a lease as stale only past TTL, and never on missing evidence', () => {
+    const leasedAt = '2026-06-01T12:00:00.000Z';
+    const constraints = { max_duration_seconds: 120 };
+    const ttlMs = probeJobLeaseTtlSeconds(constraints) * 1000;
+    const leased = { status: 'leased', leased_at: leasedAt, constraints };
+
+    // Within TTL: a live worker still owns this job.
+    assert.equal(isProbeJobLeaseStale(leased, new Date(Date.parse(leasedAt) + ttlMs - 1000)), false);
+    // Past TTL: holder is presumed gone.
+    assert.equal(isProbeJobLeaseStale(leased, new Date(Date.parse(leasedAt) + ttlMs + 1000)), true);
+    // Fail closed — absent or unparseable evidence never authorizes a steal.
+    assert.equal(
+      isProbeJobLeaseStale({ status: 'leased', leased_at: null, constraints }, new Date()),
+      false,
+    );
+    assert.equal(
+      isProbeJobLeaseStale({ status: 'leased', leased_at: 'not-a-date', constraints }, new Date()),
+      false,
+    );
+    // Non-leased statuses are never "stale".
+    assert.equal(isProbeJobLeaseStale({ status: 'pending', leased_at: leasedAt }, new Date()), false);
+    assert.equal(
+      isProbeJobLeaseStale({ status: 'completed', leased_at: leasedAt }, new Date()),
+      false,
+    );
   });
 
   it('looks up and updates jobs with parameterized tenant-scoped SQL', async () => {

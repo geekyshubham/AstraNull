@@ -599,7 +599,13 @@ describe('postgres migrations', () => {
   it('getLatestMigrationVersion returns last sorted file', () => {
     const files = listMigrationFiles(MIGRATIONS_DIR);
     const latest = getLatestMigrationVersion(files);
-    assert.equal(latest, '0037_test_policies');
+    // Derived from the numeric prefix independently of the function under test, so
+    // adding a migration does not require editing this assertion. This still catches
+    // a migration whose name sorts lexically out of step with its number.
+    const highestNumbered = [...files]
+      .sort((a, b) => Number(a.version.slice(0, 4)) - Number(b.version.slice(0, 4)))
+      .at(-1).version;
+    assert.equal(latest, highestNumbered);
     assert.equal(latest, files[files.length - 1].version);
   });
 

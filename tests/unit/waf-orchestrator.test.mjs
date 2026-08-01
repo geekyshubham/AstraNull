@@ -52,6 +52,10 @@ function seedStore() {
         environment_id: 'env_demo',
         name: 'TG',
         expected_behavior_default: 'must_block_before_origin',
+        // WAF plan/retest execution delegates to startTestRun in signed-worker mode, which
+        // is real egress and therefore subject to the ownership gate. These tests cover
+        // delegation mechanics, so the fixture models a tenant that has proven ownership.
+        ownership_status: 'agent_verified',
       },
     ],
     targets: [

@@ -1,5 +1,4 @@
 import {
-  createHash,
   createHmac,
   createPrivateKey,
   createPublicKey,
@@ -14,11 +13,32 @@ import {
   sha256CanonicalJson,
 } from './custody.mjs';
 import { BASE64_DER_RE, fingerprintPublicKeyDerBase64 } from './agentUpdates.mjs';
+import { resolveDeploymentProfile } from './deploymentProfile.mjs';
 
 export const EVIDENCE_SIGNING_SCHEMA_VERSION = 'astranull.evidence_signing.v1';
 export const EVIDENCE_SIGNING_ALGORITHMS = Object.freeze(['ed25519', 'hmac-sha256']);
 export const KEY_REFERENCE_RE = /^key:\/\/[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$/;
 export const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+
+/**
+ * Domain-separation tag for HMAC signing key identifiers.
+ *
+ * A bare `sha256(secret)` published in API responses, audit records and evidence
+ * manifests is an offline verification oracle: an attacker can brute-force or
+ * dictionary-attack the symmetric signing key against the published digest. The
+ * key identifier is therefore a domain-separated HMAC *commitment* keyed by the
+ * secret, which is not a digest of the secret and cannot be recomputed without it.
+ */
+export const EVIDENCE_SIGNING_KEY_ID_DOMAIN = 'astranull.evidence_signing.key_id.v1';
+
+/** Minimum decoded key material for HMAC-SHA256 (RFC 2104 recommends >= hash length). */
+const HMAC_MIN_KEY_BYTES = 32;
+const HMAC_MIN_DISTINCT_BYTES = 16;
+const HMAC_MIN_BITS_PER_BYTE = 3;
+
+const HEX_SECRET_RE = /^[0-9a-fA-F]+$/;
+const BASE64_SECRET_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64URL_SECRET_RE = /^[A-Za-z0-9_-]+={0,2}$/;
 
 const SIGNABLE_CUSTODY_FIELDS = Object.freeze([
   'schema_version',
@@ -49,6 +69,97 @@ const FORBIDDEN_CUSTODY_KEYS = new Set([
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Decode a configured secret to its underlying key material.
+ *
+ * A 64-character hex string carries 32 bytes of key material, not 64, so a raw
+ * character count overstates entropy for encoded secrets. Base64 is only decoded
+ * when the length is a valid base64 block (`% 4 === 0`) to avoid misreading a
+ * hyphenated passphrase as base64url.
+ * @param {string} secret
+ */
+function decodeSecretKeyMaterial(secret) {
+  if (secret.length % 2 === 0 && HEX_SECRET_RE.test(secret)) {
+    return { bytes: Buffer.from(secret, 'hex'), encoding: 'hex' };
+  }
+  if (secret.length % 4 === 0) {
+    if (BASE64_SECRET_RE.test(secret)) {
+      return { bytes: Buffer.from(secret, 'base64'), encoding: 'base64' };
+    }
+    if (BASE64URL_SECRET_RE.test(secret)) {
+      return { bytes: Buffer.from(secret, 'base64url'), encoding: 'base64url' };
+    }
+  }
+  return { bytes: Buffer.from(secret, 'utf8'), encoding: 'utf8' };
+}
+
+/**
+ * Reject symmetric signing keys whose decoded key material is too short or too
+ * predictable. Character-count checks accept `"a".repeat(32)`, which offers no
+ * meaningful resistance to offline attack.
+ * @param {unknown} secret
+ * @returns {{ ok: true, secret: string, keyMaterial: Buffer } | { ok: false, error: string }}
+ */
+export function validateHmacSecretEntropy(secret) {
+  if (typeof secret !== 'string' || secret.trim() === '') {
+    return { ok: false, error: 'invalid_hmac_secret' };
+  }
+  const trimmed = secret.trim();
+  const { bytes } = decodeSecretKeyMaterial(trimmed);
+  if (bytes.length < HMAC_MIN_KEY_BYTES) {
+    return { ok: false, error: 'hmac_secret_too_short' };
+  }
+  const counts = new Map();
+  for (const byte of bytes) {
+    counts.set(byte, (counts.get(byte) ?? 0) + 1);
+  }
+  if (counts.size < HMAC_MIN_DISTINCT_BYTES) {
+    return { ok: false, error: 'hmac_secret_low_entropy' };
+  }
+  let bitsPerByte = 0;
+  for (const count of counts.values()) {
+    const p = count / bytes.length;
+    bitsPerByte -= p * Math.log2(p);
+  }
+  if (bitsPerByte < HMAC_MIN_BITS_PER_BYTE) {
+    return { ok: false, error: 'hmac_secret_low_entropy' };
+  }
+  return { ok: true, secret: trimmed, keyMaterial: bytes };
+}
+
+/**
+ * Derive a publishable key identifier for a symmetric signing key.
+ *
+ * Prefers an opaque operator-assigned `key_id` from the key-map entry. Otherwise
+ * derives a domain-separated HMAC commitment keyed by the secret. This value is
+ * safe to publish in API responses, audit records and manifests: unlike
+ * `sha256(secret)` it is not a digest of the secret, so it gives an offline
+ * attacker no oracle to test candidate keys against.
+ * @param {{ secret: string, keyId?: unknown }} input
+ */
+export function deriveHmacSigningKeyId({ secret, keyId }) {
+  if (typeof keyId === 'string' && keyId.trim() !== '') {
+    return keyId.trim();
+  }
+  return createHmac('sha256', secret).update(EVIDENCE_SIGNING_KEY_ID_DOMAIN).digest('hex');
+}
+
+/**
+ * Evidence custody signed with a shared symmetric secret cannot be attributed to
+ * a single holder and is repudiable, so production deployments must use ed25519
+ * or a KMS-held key. Gated on the deployment profile only: `NODE_ENV` is
+ * `production` on hosted-staging deployments too, and gating on it would refuse
+ * signing for a deployment that is not production.
+ * @param {NodeJS.ProcessEnv} env
+ */
+function isHmacForbiddenForProfile(env) {
+  try {
+    return resolveDeploymentProfile(env) === 'production';
+  } catch {
+    return false;
+  }
 }
 
 function normalizeAlgorithm(raw) {
@@ -249,9 +360,13 @@ export function resolveTenantSigningMaterial(input) {
   if (!algorithm) {
     return { error: 'invalid_algorithm', status: 400 };
   }
+  const env = input.env ?? process.env;
+  if (algorithm === 'hmac-sha256' && isHmacForbiddenForProfile(env)) {
+    return { error: 'hmac_signing_forbidden_in_production', status: 400 };
+  }
   let keyMap;
   try {
-    keyMap = parseEvidenceSigningKeyMap(input.env ?? process.env);
+    keyMap = parseEvidenceSigningKeyMap(env);
   } catch (err) {
     return { error: 'invalid_signing_key_config', status: 500, detail: err.message };
   }
@@ -277,15 +392,18 @@ export function resolveTenantSigningMaterial(input) {
       publicKeyFingerprintSha256: fingerprintPublicKeyDerBase64(loaded.publicKeyDerBase64),
     };
   }
-  const secret = entry.secret;
-  if (typeof secret !== 'string' || secret.trim().length < 32) {
-    return { error: 'invalid_hmac_secret', status: 400 };
+  const validated = validateHmacSecretEntropy(entry.secret);
+  if (!validated.ok) {
+    return { error: validated.error, status: 400 };
   }
   return {
     algorithm,
     keyReference,
-    secret: secret.trim(),
-    publicKeyFingerprintSha256: createHash('sha256').update(secret.trim(), 'utf8').digest('hex'),
+    secret: validated.secret,
+    publicKeyFingerprintSha256: deriveHmacSigningKeyId({
+      secret: validated.secret,
+      keyId: entry.key_id,
+    }),
   };
 }
 
@@ -346,6 +464,11 @@ export function resolveTenantVerificationMaterial(input) {
       publicKeyFingerprintSha256: fingerprintPublicKeyDerBase64(loaded.publicKeyDerBase64),
     };
   }
+  // Verification is deliberately more permissive than signing. The entropy floor and
+  // the production-profile refusal are provisioning-time controls: applying them here
+  // would make already-signed evidence unverifiable the moment the policy tightened,
+  // which is a worse outcome than the weak key it would flag. Retains the original
+  // structural floor so no previously verifiable record stops verifying.
   const secret = entry.secret;
   if (typeof secret !== 'string' || secret.trim().length < 32) {
     return { error: 'invalid_hmac_secret', status: 400 };
@@ -354,7 +477,10 @@ export function resolveTenantVerificationMaterial(input) {
     algorithm,
     keyReference,
     secret: secret.trim(),
-    publicKeyFingerprintSha256: createHash('sha256').update(secret.trim(), 'utf8').digest('hex'),
+    publicKeyFingerprintSha256: deriveHmacSigningKeyId({
+      secret: secret.trim(),
+      keyId: entry.key_id,
+    }),
   };
 }
 

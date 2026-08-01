@@ -97,6 +97,7 @@ function emptyStore() {
     entitlementGrants: [],
     internalApprovalRequests: [],
     internalAuditLog: [],
+    breakGlassActivations: [],
   };
 }
 

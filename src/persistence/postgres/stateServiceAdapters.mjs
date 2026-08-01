@@ -453,7 +453,7 @@ function computeReadinessSummary({
     detail: freshnessDetail,
   });
 
-  const socGovernance = scoreSocGovernance({ highScaleRequests, killSwitch });
+  const socGovernance = scoreSocGovernance({ highScaleRequests, killSwitch, nowMs });
   factors.push({
     key: 'soc_readiness',
     label: 'SOC governance posture',
@@ -494,12 +494,12 @@ function acceptedArtifactTypes(req) {
   );
 }
 
-function pendingHighScaleGates(requests) {
+function pendingHighScaleGates(requests, nowMs = Date.now()) {
   const gates = [];
   for (const req of requests) {
     if (['closed', 'rejected'].includes(req.state)) continue;
     const missing = [];
-    if (!authorizationPackComplete(req)) {
+    if (!authorizationPackComplete(req, nowMs)) {
       const accepted = acceptedArtifactTypes(req);
       const missingTypes = REQUIRED_ARTIFACT_TYPES.filter((type) => !accepted.has(type));
       if (missingTypes.length > 0) {
@@ -521,11 +521,11 @@ function killSwitchHasEvidence(killSwitch) {
   return Boolean(killSwitch?.updated_at);
 }
 
-function highScaleGovernanceEvidence(requests) {
+function highScaleGovernanceEvidence(requests, nowMs = Date.now()) {
   const hits = [];
   for (const req of requests) {
     const approvals = distinctSocApprovalCount(req);
-    if (authorizationPackComplete(req) && approvals >= 2) {
+    if (authorizationPackComplete(req, nowMs) && approvals >= 2) {
       hits.push({
         requestId: req.id,
         detail: `Request ${req.id}: authorization pack accepted with ${approvals} SOC approver(s).`,
@@ -541,9 +541,9 @@ function highScaleGovernanceEvidence(requests) {
   return hits;
 }
 
-function scoreSocGovernance({ highScaleRequests, killSwitch }) {
-  const pendingGates = pendingHighScaleGates(highScaleRequests);
-  const hsHits = highScaleGovernanceEvidence(highScaleRequests);
+function scoreSocGovernance({ highScaleRequests, killSwitch, nowMs = Date.now() }) {
+  const pendingGates = pendingHighScaleGates(highScaleRequests, nowMs);
+  const hsHits = highScaleGovernanceEvidence(highScaleRequests, nowMs);
   const hasKillSwitchEvidence = killSwitchHasEvidence(killSwitch);
 
   if (!hasKillSwitchEvidence && hsHits.length === 0) {

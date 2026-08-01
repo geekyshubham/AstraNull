@@ -750,6 +750,144 @@ describe('executeProbeForJob routing', () => {
     assert.ok(['connected', 'blocked', 'timeout', 'error'].includes(outcome.external_result));
   });
 
+  // These use capability probe kinds (port_scan_bounded / bot_challenge_probe) because
+  // those are the paths that actually receive injected deps — so "the dep was never
+  // called" is a real assertion about egress, not a vacuous one.
+  function scanJob(target) {
+    return baseJob({ check_id: 'l3.firewall_exposure_scan.safe', target });
+  }
+  function httpJob(target) {
+    return baseJob({ check_id: 'l7.bot_challenge_marker.safe', target });
+  }
+
+  it('blocks an ip target pointed at cloud metadata before any connect', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let connectCalls = 0;
+    const outcome = await executeProbeForJob(scanJob({ kind: 'ip', value: '169.254.169.254' }), {
+      env: {},
+      signedJobVerified: true,
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'destination_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '169.254.169.254');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(connectCalls, 0);
+  });
+
+  it('blocks an fqdn target resolving to RFC1918 space before any fetch', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(httpJob({ kind: 'fqdn', value: 'internal.example.test' }), {
+      env: {},
+      signedJobVerified: true,
+      resolve4Fn: async () => ['10.0.0.5'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'destination_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '10.0.0.5');
+    assert.equal(outcome.metadata.destination_host, 'internal.example.test');
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('blocks when only one address in a resolved set is non-routable', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(httpJob({ kind: 'fqdn', value: 'split.example.test' }), {
+      env: {},
+      signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10', '10.1.2.3'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'destination_not_routable');
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('allows a public destination through the chokepoint', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(httpJob({ kind: 'fqdn', value: 'edge.example.test' }), {
+      env: {},
+      signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return { status: 200, headers: { get: () => null } };
+      },
+    });
+    assert.notEqual(outcome.metadata.error_class, 'destination_not_routable');
+    assert.equal(outcome.metadata.probe_kind, 'bot_challenge_probe');
+    assert.equal(fetchCalls, 1);
+  });
+
+  it('refuses the private-destination opt-in when the deployment is production-like', async () => {
+    const { executeProbeForJob, resolveProbeDestinationPolicy } = await import('../../workers/probe-worker.mjs');
+
+    assert.equal(
+      resolveProbeDestinationPolicy({ ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS: '1' }).allowPrivate,
+      true,
+    );
+
+    for (const productionEnv of [
+      { NODE_ENV: 'production', ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS: '1' },
+      { ASTRANULL_DEPLOYMENT_PROFILE: 'production', ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS: '1' },
+      // NODE_ENV=production with a hosted-staging profile must NOT earn an exemption.
+      {
+        NODE_ENV: 'production',
+        ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
+        ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS: '1',
+      },
+    ]) {
+      const policy = resolveProbeDestinationPolicy(productionEnv);
+      assert.equal(policy.allowPrivate, false);
+      assert.equal(policy.allowLoopback, false);
+      assert.equal(policy.optInRefused, true);
+
+      let fetchCalls = 0;
+      const outcome = await executeProbeForJob(httpJob({ kind: 'ip', value: '10.0.0.5' }), {
+        env: productionEnv,
+        signedJobVerified: true,
+        fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+      });
+      assert.equal(outcome.external_result, 'blocked');
+      assert.equal(outcome.metadata.error_class, 'destination_not_routable');
+      assert.equal(outcome.metadata.private_destination_opt_in_refused, true);
+      assert.equal(fetchCalls, 0);
+    }
+  });
+
+  it('honors the private-destination opt-in outside production, but never for metadata', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    const env = { NODE_ENV: 'test', ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS: '1' };
+
+    let fetchCalls = 0;
+    const allowed = await executeProbeForJob(httpJob({ kind: 'ip', value: '10.0.0.5' }), {
+      env,
+      signedJobVerified: true,
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return { status: 200, headers: { get: () => null } };
+      },
+    });
+    assert.notEqual(allowed.metadata.error_class, 'destination_not_routable');
+    assert.equal(fetchCalls, 1);
+
+    let metadataFetches = 0;
+    const metadata = await executeProbeForJob(httpJob({ kind: 'ip', value: '169.254.169.254' }), {
+      env,
+      signedJobVerified: true,
+      fetchFn: async () => { metadataFetches += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(metadata.external_result, 'blocked');
+    assert.equal(metadata.metadata.error_class, 'destination_not_routable');
+    assert.equal(metadataFetches, 0);
+  });
+
   it('uses worker version constant in processJob attestation', async () => {
     const server = createHttpServer((req, res) => {
       res.statusCode = 200;

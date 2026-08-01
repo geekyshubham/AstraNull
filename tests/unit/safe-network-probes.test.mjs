@@ -123,12 +123,110 @@ describe('safe network probes', () => {
         },
       }),
       {
-        fetchFn: async () => ({ status: 204 }),
+        // The webhook host is now classified before any request, so the resolver is
+        // injected alongside fetchFn.
+        resolve4Fn: async () => ['203.0.113.20'],
+        resolve6Fn: async () => [],
+        fetchFn: async () => ({ status: 204, headers: { get: () => null } }),
       },
     );
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.alert_delivery_ok, true);
     assert.equal(outcome.metadata.response_status, 204);
+    assert.equal(outcome.metadata.webhook_host, 'hooks.example.test');
+    assert.equal(outcome.metadata.pinned_address, '203.0.113.20');
+  });
+
+  function webhookJob(url) {
+    return baseJob({
+      probe_profile: { kind: 'alert_webhook_ping', marker: 'test-marker' },
+      target: { value: 'canary', metadata: { alert_webhook_url: url } },
+    });
+  }
+
+  it('probeAlertWebhookPing rejects a cleartext http webhook URL', async () => {
+    let fetchCalls = 0;
+    const outcome = await probeAlertWebhookPing(webhookJob('http://hooks.example.test/ping'), {
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+      resolve4Fn: async () => ['203.0.113.20'],
+    });
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'webhook_scheme_not_allowed');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('probeAlertWebhookPing blocks a webhook host resolving to cloud metadata', async () => {
+    let fetchCalls = 0;
+    const outcome = await probeAlertWebhookPing(webhookJob('https://evil.example.test/ping'), {
+      resolve4Fn: async () => ['169.254.169.254'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '169.254.169.254');
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('probeAlertWebhookPing blocks a webhook host resolving to RFC1918 space', async () => {
+    let fetchCalls = 0;
+    const outcome = await probeAlertWebhookPing(webhookJob('https://internal.example.test/ping'), {
+      resolve4Fn: async () => ['10.0.0.5'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('probeAlertWebhookPing declines a 302 to a metadata IP after exactly one request', async () => {
+    let fetchCalls = 0;
+    let capturedInit = null;
+    const outcome = await probeAlertWebhookPing(webhookJob('https://hooks.example.test/ping'), {
+      resolve4Fn: async () => ['203.0.113.20'],
+      resolve6Fn: async () => [],
+      fetchFn: async (_url, init) => {
+        fetchCalls += 1;
+        capturedInit = init;
+        return {
+          status: 302,
+          headers: { get: (name) => (name === 'location' ? 'http://169.254.169.254/latest/meta-data/' : null) },
+        };
+      },
+    });
+    // Host validation alone is bypassable via redirect, so the request must be manual.
+    assert.equal(capturedInit.redirect, 'manual');
+    assert.equal(fetchCalls, 1);
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'redirect_declined');
+    assert.equal(outcome.metadata.redirect_declined, true);
+    assert.equal(outcome.metadata.redirect_host, '169.254.169.254');
+    assert.equal(outcome.metadata.alert_delivery_ok, false);
+    assert.equal(outcome.requests_sent, 1);
+  });
+
+  it('probeAlertWebhookPing records the true final hostname in webhook_host', async () => {
+    const outcome = await probeAlertWebhookPing(webhookJob('https://hooks.example.test/ping'), {
+      resolve4Fn: async () => ['203.0.113.20'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
+    });
+    assert.equal(outcome.metadata.webhook_host, 'hooks.example.test');
+    assert.equal(outcome.metadata.pinned_address, '203.0.113.20');
+  });
+
+  it('probeAlertWebhookPing blocks a webhook host that resolves to nothing', async () => {
+    let fetchCalls = 0;
+    const outcome = await probeAlertWebhookPing(webhookJob('https://missing.example.test/ping'), {
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => [],
+      fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
+    assert.equal(fetchCalls, 0);
   });
 
   it('probeTlsSession reports connected after secureConnect', async () => {

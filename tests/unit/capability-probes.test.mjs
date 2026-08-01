@@ -3,9 +3,12 @@ import net from 'node:net';
 import { describe, it } from 'node:test';
 import { isLiveCapabilityProbeAuthorized } from '../../src/lib/capabilityProbeAuth.mjs';
 import {
+  MAX_DNS_TCP_RESPONSE_BYTES,
+  accumulateDnsTcpResponse,
   buildAxfrDnsMessage,
   encodeDnsQName,
   frameDnsTcpMessage,
+  parseDnsResponseHeader,
 } from '../../src/lib/dnsTcpWire.mjs';
 import {
   BOUNDED_SUBDOMAIN_PREFIXES,
@@ -402,6 +405,9 @@ describe('capability probes P0/P1', () => {
         probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
       }), {
         signedJobVerified: true,
+        // Local harness nameserver: loopback is opt-in for the destination guard, so this
+        // fixture states that intent explicitly rather than relying on a default.
+        destinationPolicy: { allowLoopback: true },
         resolveNsFn: async () => ['127.0.0.1'],
         connectFn: (opts) => net.connect({ ...opts, port }),
       });
@@ -459,6 +465,150 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.axfr_refused, true);
     assert.notEqual(outcome.metadata.axfr_leak, true);
     assert.equal(outcome.requests_sent, 2);
+  });
+
+  it('axfr leak probe refuses a nameserver that resolves into RFC1918 space', async () => {
+    let connectCalls = 0;
+    const outcome = await probeAxfrLeak(job({
+      probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+    }), {
+      signedJobVerified: true,
+      resolveNsFn: async () => ['ns-internal.example.test'],
+      resolve4Fn: async () => ['10.0.0.53'],
+      resolve6Fn: async () => [],
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '10.0.0.53');
+    assert.equal(connectCalls, 0);
+  });
+
+  it('axfr leak probe refuses a metadata-address nameserver literal', async () => {
+    let connectCalls = 0;
+    const outcome = await probeAxfrLeak(job({
+      probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+    }), {
+      signedJobVerified: true,
+      resolveNsFn: async () => ['169.254.169.254'],
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(connectCalls, 0);
+  });
+
+  it('open recursion probe refuses a non-routable resolver_host', async () => {
+    let resolverCalls = 0;
+    const outcome = await probeOpenRecursion(job({
+      probe_profile: { kind: 'dns_open_recursion', resolver_host: '10.0.0.53' },
+    }), {
+      resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(resolverCalls, 0);
+  });
+
+  it('open recursion probe refuses a resolver_host that is not an IP literal', async () => {
+    let resolverCalls = 0;
+    const outcome = await probeOpenRecursion(job({
+      probe_profile: { kind: 'dns_open_recursion', resolver_host: 'resolver.example.test' },
+    }), {
+      resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.metadata.reason, 'not_an_ip_literal');
+    assert.equal(resolverCalls, 0);
+  });
+
+  it('tls audit refuses a host resolving to a non-routable address', async () => {
+    let connectCalls = 0;
+    const outcome = await probeTlsAudit(job({
+      target: { kind: 'fqdn', value: 'internal.example.test' },
+      probe_profile: { kind: 'tls_audit' },
+    }), {
+      resolve4Fn: async () => ['192.168.1.10'],
+      resolve6Fn: async () => [],
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '192.168.1.10');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(connectCalls, 0);
+  });
+
+  it('port scan ignores a profile-supplied scan_host and uses the declared target', async () => {
+    const probed = [];
+    const outcome = await probePortScanBounded(
+      job({
+        constraints: { timeout_ms: 100, max_requests: 1 },
+        target: { kind: 'ip', value: '198.51.100.9' },
+        probe_profile: { kind: 'port_scan_bounded', ports: [443], scan_host: '169.254.169.254' },
+      }),
+      {
+        connectFn: ({ host, port }) => {
+          probed.push({ host, port });
+          return {
+            once(event, handler) {
+              if (event === 'error') setImmediate(() => handler({ code: 'ECONNREFUSED' }));
+            },
+            destroy() {},
+          };
+        },
+      },
+    );
+    assert.deepEqual(probed, [{ host: '198.51.100.9', port: 443 }]);
+    assert.equal(outcome.metadata.scan_host, '198.51.100.9');
+  });
+
+  it('parseDnsResponseHeader terminates a zero-length TCP frame in a single parse', () => {
+    const parsed = parseDnsResponseHeader(Buffer.from([0x00, 0x00]), { transport: 'tcp' });
+    assert.equal(parsed.incomplete, false);
+    assert.equal(parsed.axfr_refused, true);
+    assert.equal(parsed.reason, 'malformed_response');
+
+    const accumulated = accumulateDnsTcpResponse(
+      Buffer.alloc(0),
+      Buffer.from([0x00, 0x00]),
+      { transport: 'tcp' },
+    );
+    assert.equal(accumulated.complete, true);
+    assert.equal(accumulated.parsed.axfr_refused, true);
+  });
+
+  it('accumulateDnsTcpResponse stops at the hard response ceiling', () => {
+    const oversized = Buffer.alloc(MAX_DNS_TCP_RESPONSE_BYTES + 1);
+    oversized.writeUInt16BE(0xffff, 0);
+    const accumulated = accumulateDnsTcpResponse(Buffer.alloc(0), oversized, { transport: 'tcp' });
+    assert.equal(accumulated.complete, true);
+    assert.equal(accumulated.parsed.reason, 'response_too_large');
+    assert.ok(accumulated.buffer.length <= MAX_DNS_TCP_RESPONSE_BYTES);
+  });
+
+  it('axfr session reports malformed_response for a zero-length frame without hanging', async () => {
+    const outcome = await probeAxfrLeak(job({
+      probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+    }), {
+      signedJobVerified: true,
+      resolveNsFn: async () => ['203.0.113.53'],
+      connectFn: () => ({
+        once(event, handler) {
+          if (event === 'connect') setImmediate(() => handler());
+        },
+        on(event, handler) {
+          if (event === 'data') setImmediate(() => handler(Buffer.from([0x00, 0x00])));
+        },
+        write() {},
+        destroy() {},
+      }),
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.axfr_refused, true);
+    assert.equal(outcome.metadata.reason, 'malformed_response');
   });
 
   it('tls audit reports weak protocol issues', async () => {

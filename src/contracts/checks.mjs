@@ -133,10 +133,13 @@ function applyWafSafeProbeMetadata(profile, meta = {}) {
   }
 }
 
+// `scan_host` is deliberately NOT passed through: it selected an arbitrary port-scan
+// destination independent of the declared target, and it cannot be proven at job-build
+// time to resolve to the declared target's address set. probePortScanBounded now derives
+// its host from the declared target instead.
 export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'protected_host',
   'direct_ip',
-  'scan_host',
   'resolver_host',
   'recursion_test_name',
   'secondary_nameservers',

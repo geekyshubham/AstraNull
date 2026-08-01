@@ -10,6 +10,8 @@ Status: `[ ]` not started, `[~]` in progress, `[x]` complete, `[!]` blocked, `[?
 
 When a task is partially implemented for local engineering only, keep `[~]` and state the **production release blocker** in the completion goal.
 
+> **Security audit 2026-08-01 — `[x]` marks below are stale.** A code-level audit confirmed 52 defects (5 critical, 10 high) after an adversarial verification pass, several of them in areas this tracker marks complete. Rows citing `rel-hosted-staging-2026-07-03` predate the audit, and some were closed by gate logic since fixed for failing open. Treat `[x]` as unverified until re-checked. The contradicted areas, the fix status of each, and the operator actions that cannot be closed in code are listed at the top of [`docs/release-checklist.md`](docs/release-checklist.md).
+
 Metadata-only evidence validators (`npm run …:evidence`, `npm run release:gap-audit`) check JSON contracts and forbidden-field rules only. They do **not** substitute for staging execution, security review, SOC/legal signoff, KMS/vault custody, or provider evidence. `npm run release:sample-evidence` writes rehearsal fixtures (`rehearsal_only: true`) for operator walkthroughs — never treat passing sample generation or local validators as production readiness.
 
 ## 0. Product foundation

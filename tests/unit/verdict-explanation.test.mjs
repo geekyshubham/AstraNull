@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS,
+  VALIDATION_EVIDENCE_REPOSITORY_METHODS,
+  createPostgresValidationServices,
+} from '../../src/persistence/postgres/validationServiceAdapters.mjs';
+import {
+  VERDICT_INSERTED,
+  verdictWasInserted,
+} from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
+import {
   buildVerdictExplanationFields,
   normalizeVerdictKey,
   resolveRemediationTemplate,
@@ -9,6 +18,267 @@ import {
   summarizePlacementConfidence,
   trafficHopState,
 } from '../../apps/web/react/src/lib/verdict-explanation.ts';
+
+const RACE_CTX = { tenantId: 'ten_demo', userId: 'system', role: 'system' };
+const FIXED_NOW = new Date('2026-01-01T00:00:00.000Z');
+
+const RACE_TARGET = {
+  id: 'tgt_1',
+  value: '203.0.113.1',
+  expected_behavior: 'must_block_before_origin',
+};
+
+function raceRun(overrides = {}) {
+  return {
+    id: 'run_1',
+    tenant_id: 'ten_demo',
+    target_group_id: 'tg_1',
+    target_id: 'tgt_1',
+    check_id: 'origin.direct_bypass.safe',
+    status: 'collecting',
+    correlation: { nonce_hash: 'nh_1', window_ms: 120_000 },
+    probe_external_result: 'connected',
+    awaiting_external_probe: false,
+    // Deadline already elapsed so the sweeper path considers the run finalizable.
+    collection_deadline_at: '2025-01-01T00:00:00.000Z',
+    remediation_template: 'block_origin',
+    safety_constraints: { max_events: 50 },
+    ...overrides,
+  };
+}
+
+const PROBE_EVENT = {
+  id: 'evt_probe',
+  test_run_id: 'run_1',
+  signal_type: 'probe_result',
+  nonce_hash: 'nh_1',
+  timestamp: FIXED_NOW.toISOString(),
+  metadata: { external_result: 'connected' },
+};
+
+const OBSERVATION_EVENT = {
+  id: 'evt_obs',
+  test_run_id: 'run_1',
+  signal_type: 'agent_observation',
+  agent_id: 'ag_1',
+  nonce_hash: 'nh_1',
+  timestamp: FIXED_NOW.toISOString(),
+};
+
+const ONLINE_AGENT = {
+  id: 'ag_1',
+  tenant_id: 'ten_demo',
+  status: 'online',
+  target_group_id: 'tg_1',
+};
+
+/**
+ * Shared backing "database" for two independent finalizer instances.
+ *
+ * `verdicts` enforces the real `uniq_verdict_per_test_run` + ON CONFLICT DO NOTHING
+ * semantics: the first insert for a run wins, later inserts are suppressed and get the
+ * incumbent back tagged VERDICT_INSERTED=false.
+ *
+ * `staleVerdictReads` keeps `getVerdictForRun` answering null so both racers get past
+ * their pre-insert existence check, which is exactly the interleaving that let the old
+ * DO UPDATE version overwrite a published verdict.
+ */
+function createSharedVerdictStore() {
+  return {
+    verdicts: new Map(),
+    audits: [],
+    findings: [],
+    appendedEvents: [],
+    runPatches: [],
+    staleVerdictReads: true,
+  };
+}
+
+function buildRaceRepositories(shared, { withObservation }) {
+  const validationEvidence = {};
+  for (const method of VALIDATION_EVIDENCE_REPOSITORY_METHODS) {
+    validationEvidence[method] = async () => undefined;
+  }
+
+  const events = withObservation ? [PROBE_EVENT, OBSERVATION_EVENT] : [PROBE_EVENT];
+
+  validationEvidence.getTestRun = async () => raceRun();
+  validationEvidence.listRunEvents = async () => [...events, ...shared.appendedEvents];
+  validationEvidence.getTargetGroup = async () => ({ id: 'tg_1', targets: [RACE_TARGET] });
+  validationEvidence.updateTestRun = async (_ctx, id, patch) => {
+    shared.runPatches.push({ id, patch });
+    return { ...raceRun(), ...patch };
+  };
+  validationEvidence.appendEvent = async (_ctx, event) => {
+    shared.appendedEvents.push(event);
+    return event;
+  };
+  validationEvidence.getVerdictForRun = async (_ctx, runId) => {
+    if (shared.staleVerdictReads) return null;
+    return shared.verdicts.get(runId) ?? null;
+  };
+  validationEvidence.createVerdictIfAbsent = async (_ctx, record) => {
+    const incumbent = shared.verdicts.get(record.test_run_id);
+    if (incumbent) {
+      return { ...incumbent, [VERDICT_INSERTED]: false };
+    }
+    const stored = { ...record, [VERDICT_INSERTED]: true };
+    shared.verdicts.set(record.test_run_id, stored);
+    return stored;
+  };
+  validationEvidence.findOpenFinding = async () => null;
+  validationEvidence.upsertOpenFindingFromVerdict = async (_ctx, finding) => {
+    shared.findings.push(finding);
+    return finding;
+  };
+
+  const agentControl = {};
+  for (const method of VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS) {
+    agentControl[method] = async () => undefined;
+  }
+  agentControl.listAgents = async () => [ONLINE_AGENT];
+
+  return {
+    validationEvidence,
+    audit: {
+      appendAuditEvent: async (entry) => {
+        shared.audits.push(entry);
+        return entry;
+      },
+    },
+    coreCatalog: { getTargetGroup: validationEvidence.getTargetGroup },
+    agentControl,
+    probeJobs: { createProbeJob: async () => undefined },
+    killSwitch: { isKillSwitchActiveForTenant: async () => false },
+  };
+}
+
+function buildRaceService(shared, { withObservation }) {
+  return createPostgresValidationServices(buildRaceRepositories(shared, { withObservation }), {
+    now: () => FIXED_NOW,
+  });
+}
+
+function verdictAudits(shared) {
+  return shared.audits.filter((entry) => String(entry.action ?? '').startsWith('verdict.'));
+}
+
+describe('concurrent verdict finalization is single-writer (createVerdictIfAbsent)', () => {
+  it('observation finalizer wins: no-observation replay returns the incumbent and adds no audit', async () => {
+    const shared = createSharedVerdictStore();
+    // Observation-ingest finalizer: agentObserved = true -> bypassable / severity high.
+    const observed = buildRaceService(shared, { withObservation: true });
+    // Sweeper finalizer: agentObserved = false -> misplaced_agent / no finding.
+    const unobserved = buildRaceService(shared, { withObservation: false });
+
+    const winner = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1');
+    assert.equal(winner.verdict, 'bypassable');
+
+    const loserResult = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', {
+      force: true,
+    });
+
+    // Exactly one verdict was stored, and it is the first one published.
+    assert.equal(shared.verdicts.size, 1);
+    const stored = shared.verdicts.get('run_1');
+    assert.equal(stored.verdict, 'bypassable');
+
+    // The losing finalizer observed the incumbent, not its own opposite verdict.
+    const loserVerdict = loserResult?.verdict ?? loserResult;
+    assert.equal(loserVerdict.verdict, 'bypassable');
+    assert.notEqual(loserVerdict.verdict, 'misplaced_agent');
+    assert.equal(verdictWasInserted(loserVerdict), false);
+
+    // Audit trail and finding severity both describe the stored verdict, exactly once.
+    const audits = verdictAudits(shared);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].action, 'verdict.published');
+    assert.equal(audits[0].metadata.verdict, 'bypassable');
+    assert.equal(
+      shared.audits.some((entry) => entry.action === 'verdict.finalized_no_observation'),
+      false,
+    );
+
+    assert.equal(shared.findings.length, 1);
+    assert.equal(shared.findings[0].severity, 'high');
+    assert.match(shared.findings[0].title, /bypassable/);
+  });
+
+  it('no-observation finalizer wins: later observation replay cannot rewrite verdict, audit or finding', async () => {
+    const shared = createSharedVerdictStore();
+    const unobserved = buildRaceService(shared, { withObservation: false });
+    const observed = buildRaceService(shared, { withObservation: true });
+
+    const winner = await unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', { force: true });
+    assert.equal(winner.verdict.verdict, 'misplaced_agent');
+
+    const loserVerdict = await observed.testRuns.maybeFinalizeRunAfterProbeIngest(
+      RACE_CTX,
+      'run_1',
+    );
+
+    assert.equal(shared.verdicts.size, 1);
+    assert.equal(shared.verdicts.get('run_1').verdict, 'misplaced_agent');
+
+    // The observation finalizer got the incumbent back instead of publishing 'bypassable'.
+    assert.equal(loserVerdict.verdict, 'misplaced_agent');
+    assert.equal(verdictWasInserted(loserVerdict), false);
+
+    const audits = verdictAudits(shared);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].action, 'verdict.finalized_no_observation');
+    assert.equal(audits[0].metadata.verdict, 'misplaced_agent');
+
+    // misplaced_agent creates no finding; the suppressed 'bypassable' must not add a
+    // high-severity finding that contradicts the stored verdict.
+    assert.equal(shared.findings.length, 0);
+  });
+
+  it('two concurrent finalizers produce exactly one verdict and one audit event', async () => {
+    const shared = createSharedVerdictStore();
+    const observed = buildRaceService(shared, { withObservation: true });
+    const unobserved = buildRaceService(shared, { withObservation: false });
+
+    const [a, b] = await Promise.all([
+      observed.testRuns.maybeFinalizeRunAfterProbeIngest(RACE_CTX, 'run_1'),
+      unobserved.testRuns.finalizeTestRun(RACE_CTX, 'run_1', { force: true }),
+    ]);
+
+    assert.equal(shared.verdicts.size, 1);
+    const stored = shared.verdicts.get('run_1');
+
+    const audits = verdictAudits(shared);
+    assert.equal(audits.length, 1);
+    assert.equal(audits[0].metadata.verdict, stored.verdict);
+
+    // Both callers agree on the single stored verdict.
+    const bVerdict = b?.verdict ?? b;
+    assert.equal(a.verdict, stored.verdict);
+    assert.equal(bVerdict.verdict, stored.verdict);
+
+    // Findings, if any, match the stored verdict's severity.
+    if (stored.verdict === 'bypassable') {
+      assert.equal(shared.findings.length, 1);
+      assert.equal(shared.findings[0].severity, 'high');
+    } else {
+      assert.equal(shared.findings.length, 0);
+    }
+  });
+
+  it('verdictWasInserted treats a missing flag as inserted so plain doubles still work', () => {
+    assert.equal(verdictWasInserted({ verdict: 'protected' }), true);
+    assert.equal(verdictWasInserted({ verdict: 'protected', [VERDICT_INSERTED]: true }), true);
+    assert.equal(verdictWasInserted({ verdict: 'protected', [VERDICT_INSERTED]: false }), false);
+    assert.equal(verdictWasInserted(null), false);
+  });
+
+  it('the inserted flag is invisible to JSON and Object.keys (cannot leak into API shape)', () => {
+    const verdict = { id: 'ver_1', verdict: 'protected', [VERDICT_INSERTED]: false };
+    assert.equal(Object.keys(verdict).includes('inserted'), false);
+    assert.equal(JSON.stringify(verdict).includes('inserted'), false);
+    assert.deepEqual(Object.keys(verdict), ['id', 'verdict']);
+  });
+});
 
 describe('verdict-explanation (React portal)', () => {
   it('summarizeExternalProbeEvidence reads external_result from metadata', () => {

@@ -90,11 +90,17 @@ export function liveExternalVerificationManifest(releaseId = 'rel-live-external-
     operatorReference: 'operator://security/release-lead',
     createdAt: '2026-07-04T00:00:00.000Z',
   });
-  // Simulate an operator who has actually retained the external artifacts. The
-  // bare template ships empty retained_artifact_refs as a fill-me-in marker; a
-  // real live_external attestation must reference at least one retained artifact.
+  // Simulate an operator who has actually retained the external artifacts and
+  // affirmatively attested each domain. The bare template ships tier 'pending' and
+  // empty retained_artifact_refs as fill-me-in markers; a real live_external
+  // attestation must set the tier by hand and reference at least one retained
+  // artifact pointer that carries a content digest.
+  template.verification_tier = 'live_external';
   for (const [domainId, entry] of Object.entries(template.domains)) {
-    entry.retained_artifact_refs = [`retained://external/${domainId}/${releaseId}`];
+    entry.tier = 'live_external';
+    entry.retained_artifact_refs = [
+      `retained://external/${domainId}/${releaseId}?sha256=${'a'.repeat(64)}`,
+    ];
   }
   return template;
 }

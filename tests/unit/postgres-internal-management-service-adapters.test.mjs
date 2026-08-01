@@ -6,6 +6,7 @@ function createRepo() {
   const repo = {
     signups: [],
     audits: [],
+    breakGlassActivations: [],
     tenants: [],
     subscriptions: new Map(),
     grants: new Map(),
@@ -25,16 +26,34 @@ function createRepo() {
     async listSignupRequests() {
       return [...this.signups];
     },
+    // Mirrors the guarded UPDATE ... WHERE state = ANY($n): a stale expected state loses.
     async updateSignupRequest(id, patch) {
       const idx = this.signups.findIndex((r) => r.id === id);
       if (idx < 0) return null;
-      this.signups[idx] = { ...this.signups[idx], ...patch };
+      const { expected_states: expected, ...rest } = patch;
+      if (Array.isArray(expected) && expected.length && !expected.includes(this.signups[idx].state)) {
+        return null;
+      }
+      this.signups[idx] = { ...this.signups[idx], ...rest };
       return this.signups[idx];
     },
     async provisionTenantFromSignup(payload) {
       this.tenants.push(payload);
       this.subscriptions.set(payload.tenant.id, payload.subscription);
       this.grants.set(payload.tenant.id, payload.grants);
+    },
+    // Atomic claim + provision: the state precondition and the tenant writes succeed or
+    // fail together, so a lost race provisions nothing.
+    async provisionTenantForApprovedSignup({ signupId, expectedStates, signupPatch, ...payload }) {
+      const idx = this.signups.findIndex((r) => r.id === signupId);
+      if (idx < 0) return null;
+      if (!expectedStates.includes(this.signups[idx].state)) return null;
+      const { expected_states: _ignored, ...rest } = signupPatch;
+      this.signups[idx] = { ...this.signups[idx], ...rest };
+      this.tenants.push(payload);
+      this.subscriptions.set(payload.tenant.id, payload.subscription);
+      this.grants.set(payload.tenant.id, payload.grants);
+      return { request: this.signups[idx] };
     },
     async appendInternalAudit(entry) {
       this.audits.push(entry);
@@ -66,6 +85,17 @@ function createRepo() {
     async decideApprovalRequest() { return null; },
     async getApprovalRequest() { return null; },
     async listInternalAudit() { return this.audits; },
+    async listBreakGlassActivations() {
+      return this.breakGlassActivations.map((entry) => ({ ...entry }));
+    },
+    // Mirrors the repository's single-transaction supersede + insert.
+    async saveBreakGlassActivation(activation) {
+      for (const entry of this.breakGlassActivations) {
+        if (entry.status === 'active') entry.status = 'superseded';
+      }
+      this.breakGlassActivations.push({ ...activation });
+      return { ...activation };
+    },
   };
   return repo;
 }

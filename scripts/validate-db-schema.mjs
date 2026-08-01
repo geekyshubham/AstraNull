@@ -21,6 +21,27 @@ function readSqlFiles() {
   return { schemaSql, migrationFiles };
 }
 
+/**
+ * Strips SQL comments so prose cannot satisfy — or trip — a pattern check.
+ *
+ * Several required patterns are bare identifiers (an index or policy name), which match
+ * anywhere in the file, including inside a comment. Deleting real DDL and leaving the
+ * name in a nearby comment therefore passed this gate: verified by removing
+ * `CREATE UNIQUE INDEX uniq_verdict_per_test_run` and watching validation still succeed.
+ *
+ * This cuts in both directions and both are correct: a commented-out column no longer
+ * satisfies a required check, and a forbidden identifier mentioned only in an explanatory
+ * comment no longer fails one.
+ *
+ * Only line comments are stripped. Neither db/schema.sql nor db/migrations/*.sql contains
+ * a `--` inside a string literal, nor any C-style block comment, so this cannot truncate
+ * real DDL. A block-comment stripper would have to reason about quoting to stay safe, and
+ * adding an unexercised one would be risk without benefit.
+ */
+export function stripSqlComments(sql) {
+  return String(sql).replace(/--[^\n]*/g, '');
+}
+
 function assertPattern(label, sql, pattern) {
   if (!pattern.test(sql)) {
     return `${label}: missing required pattern ${pattern}`;
@@ -423,8 +444,12 @@ const TENANT_FK_COMPOSITE_SHAPE =
 export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
   const errors = [];
   const loaded = schemaSql != null ? { schemaSql, migrationFiles: migrationSqls } : readSqlFiles();
-  const combinedMigration = loaded.migrationFiles.map((m) => (typeof m === 'string' ? m : m.sql)).join('\n');
-  const schema = loaded.schemaSql ?? schemaSql;
+  // Comments are removed before any pattern runs: every check below asserts on DDL, and a
+  // bare identifier pattern would otherwise be satisfied by prose that merely names it.
+  const combinedMigration = stripSqlComments(
+    loaded.migrationFiles.map((m) => (typeof m === 'string' ? m : m.sql)).join('\n'),
+  );
+  const schema = stripSqlComments(loaded.schemaSql ?? schemaSql);
 
   for (const table of REQUIRED_TABLES) {
     errors.push(assertPattern(`schema:${table}`, schema, new RegExp(`CREATE TABLE ${table}\\b`, 'i')));

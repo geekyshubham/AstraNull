@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react';
-import { cn } from '../../lib/utils';
+import { cn, DEPLOYMENT_MODE_GAP_MESSAGE } from '../../lib/utils';
 
 const DATA_TABLE_STYLES = `
 .table-wrap .data-table .data-table-head th {
@@ -39,7 +39,38 @@ type DataTableProps<T> = {
   selectedId?: string | number | null;
   getRowId?: (item: T, index: number) => string | number;
   getRowProps?: (item: T, index: number) => Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
+  /**
+   * Why this dataset is missing. When set, `items` is a fallback rather than
+   * data, so the error is shown INSTEAD of the empty state — an operator must
+   * never read "no findings" when the truth is "findings failed to load".
+   */
+  loadError?: string | null;
+  /** Retry affordance for `loadError`. Omitted renders the message alone. */
+  onRetry?: () => void;
 };
+
+/**
+ * Distinguishes a deployment-mode gap from a transient fault. A route that is
+ * not wired in this deployment will never succeed, so offering Retry there is
+ * misleading.
+ */
+function isDeploymentModeMessage(message: string) {
+  return message === DEPLOYMENT_MODE_GAP_MESSAGE;
+}
+
+export function TableLoadError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const permanent = isDeploymentModeMessage(message);
+  return (
+    <div className="form-banner error table-load-error" role="alert">
+      <span>{permanent ? message : `Could not load — ${message}`}</span>
+      {onRetry && !permanent ? (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
+          Retry
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 function TableHeaderRow<T>({ columns }: { columns: TableColumn<T>[] }) {
   return (
@@ -121,15 +152,20 @@ export function DataTable<T>({
   className,
   selectedId = null,
   getRowId,
-  getRowProps
+  getRowProps,
+  loadError = null,
+  onRetry
 }: DataTableProps<T>) {
   if (items.length === 0) {
+    const failed = Boolean(loadError && loadError.trim());
     return (
       <DataTableChrome columns={columns} className={className}>
         <tbody>
           <tr className="table-empty-row">
             <td colSpan={columns.length}>
-              <div className="table-empty">{empty}</div>
+              <div className="table-empty">
+                {failed ? <TableLoadError message={String(loadError).trim()} onRetry={onRetry} /> : empty}
+              </div>
             </td>
           </tr>
         </tbody>

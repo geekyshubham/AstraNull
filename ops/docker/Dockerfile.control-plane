@@ -1,5 +1,7 @@
 # Local staging / developer control plane (Postgres-backed, non-production auth defaults).
-FROM node:22-alpine
+# Base image pinned by digest for reproducible builds. Dependabot keeps this current
+# (see .github/dependabot.yml); do not replace with a floating tag.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 
 LABEL org.opencontainers.image.title="AstraNull Control Plane (Local Staging)"
 LABEL org.opencontainers.image.description="Postgres-backed API and UI for local Docker staging simulator"
@@ -9,8 +11,10 @@ RUN addgroup -g 10001 -S astranull \
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev && npm cache clean --force
+# Lockfile copied without a glob: a missing lockfile must fail the build rather
+# than fall back to an unpinned install.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src ./src
 COPY scripts ./scripts

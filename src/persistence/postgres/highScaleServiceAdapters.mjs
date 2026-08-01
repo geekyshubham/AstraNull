@@ -35,6 +35,13 @@ import {
 
 const CANCELLABLE_RUN_STATUSES = ['planned', 'running', 'collecting'];
 
+/**
+ * Sweep passes performed after the kill-switch flag is written. Pass one cancels runs
+ * visible when the flag landed; pass two catches runs that cleared the start gate before
+ * the flag but landed in the store after pass one listed them.
+ */
+const KILL_SWITCH_SWEEP_PASSES = 2;
+
 /** @type {readonly string[]} */
 export const HIGH_SCALE_REPOSITORY_METHODS = Object.freeze([
   'createHighScaleRequest',
@@ -774,9 +781,27 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
     },
 
     async setKillSwitch(ctx, active, reason) {
-      let stoppedRequestIds = [];
-      let cancelledRunIds = [];
-      let cancelledProbeJobIds = [];
+      const stoppedRequestIds = [];
+      const cancelledRunIds = [];
+      const cancelledProbeJobIds = [];
+
+      // The `active` flag is written BEFORE the sweep so isKillSwitchActiveForTenant()
+      // returns true for the whole mitigation window. When the write happened after the
+      // sweep, the start gate stayed open for hundreds of round trips: a run created
+      // mid-sweep survived the emergency stop and cancelled_run_ids under-reported.
+      //
+      // Deliberate trade-off: a crash between this write and the sweep leaves the switch
+      // ACTIVE with runs uncancelled. That is fail-closed — no new traffic can start —
+      // and is repaired by re-invoking setKillSwitch. For an emergency stop that is the
+      // correct direction to fail.
+      const now = nowFn().toISOString();
+      const record = await killSwitchRepo.upsertKillSwitch(ctx, {
+        active,
+        reason: reason ?? null,
+        updated_by: ctx.userId,
+        updated_at: now,
+      });
+
       if (active) {
         const running = await repo.listRunningHighScaleRequests(ctx);
         for (const req of running) {
@@ -806,12 +831,23 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           stoppedRequestIds.push(req.id);
           await notifyStateChangeOptional(notifications, ctx, req, 'stop');
         }
-        cancelledRunIds = await autoCancelActiveSafeRunsForKillSwitch(
-          ctx,
-          reason,
-          validationEvidence,
-          auditRepo,
-        );
+        // Two sweep passes. The first cancels every run visible when the flag landed. The
+        // second catches runs that had already cleared the start gate but were not yet
+        // persisted when pass one listed them. Both sets are merged so the audit event and
+        // the API response report every run this activation actually cancelled.
+        for (let pass = 0; pass < KILL_SWITCH_SWEEP_PASSES; pass += 1) {
+          const passRunIds = await autoCancelActiveSafeRunsForKillSwitch(
+            ctx,
+            reason,
+            validationEvidence,
+            auditRepo,
+          );
+          for (const runId of passRunIds) {
+            if (!cancelledRunIds.includes(runId)) {
+              cancelledRunIds.push(runId);
+            }
+          }
+        }
         const cancelAt = nowFn().toISOString();
         const cancelledJobs = await probeJobsRepo.cancelOpenProbeJobsForTestRuns(
           ctx,
@@ -826,13 +862,6 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
           });
         }
       }
-      const now = nowFn().toISOString();
-      const record = await killSwitchRepo.upsertKillSwitch(ctx, {
-        active,
-        reason: reason ?? null,
-        updated_by: ctx.userId,
-        updated_at: now,
-      });
       await appendAudit(auditRepo, ctx, active ? 'soc.kill_switch.activated' : 'soc.kill_switch.cleared', 'platform', 'kill_switch', {
         reason,
         tenant_id: ctx.tenantId,

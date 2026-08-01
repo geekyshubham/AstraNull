@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isConnectorsEnabledForTenant, loadRuntimeConfig } from './config.mjs';
 import { getBundledStagingJwksDocument, isBundledStagingOidcEnabled } from './lib/bundledStagingOidc.mjs';
 import { requireAgentAuth } from './lib/agentAuth.mjs';
@@ -18,7 +19,17 @@ import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
 import { readArtifactUploadBody } from './lib/authorizationArtifactLedger.mjs';
-import { HttpBodyError, json, parseUrl, readBodyText, readJsonBody, serveStatic, text } from './lib/http.mjs';
+import {
+  HttpBodyError,
+  json,
+  parseUrl,
+  readBodyText,
+  readJsonBody,
+  respondBodyError,
+  securityHeaders,
+  serveStatic,
+  text,
+} from './lib/http.mjs';
 import { isProbeWorkerRoute } from './context.mjs';
 import * as probeCoordinator from './services/probeCoordinator.mjs';
 import { requirePermission } from './rbac.mjs';
@@ -55,7 +66,8 @@ import {
   blockPostgresWafDriftScanRoute,
   tryHandleWafDriftScanRoutes,
 } from './routes/wafDriftRoutes.mjs';
-import { resolveCveFeedItems } from './lib/cveFeedIngest.mjs';
+import { isCveFeedInputError, resolveCveFeedItems } from './lib/cveFeedIngest.mjs';
+import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
 import { formatNotificationRuleForRead } from './lib/notifications.mjs';
 import * as cvePipeline from './services/cvePipeline.mjs';
 import * as externalDiscovery from './services/externalDiscovery.mjs';
@@ -498,6 +510,143 @@ function resolveAgentUpdateService(runtimeConfig, serviceDeps) {
   return agentUpdates;
 }
 
+/** Readiness verdicts are reused for this long before another DB check runs. */
+const READINESS_CACHE_TTL_MS = 3_000;
+
+/**
+ * Consecutive FRESH failing readiness checks before `/health` reports 503.
+ * Hysteresis exists because `/health` is the orchestrator's restart probe: a
+ * single transient Postgres blip (e.g. a failover) must not restart the
+ * instance, which would turn a recoverable event into a restart loop.
+ */
+const HEALTH_FAILURE_THRESHOLD = 3;
+
+/**
+ * Probe endpoints get their own generous bucket, deliberately NOT the API limit.
+ * They must be rate-limited (they were previously exempt, so anonymous traffic
+ * could drive unbounded DB work), but throttling the orchestrator's own probe
+ * would cause a healthy instance to be killed.
+ */
+const PROBE_RATE_LIMIT_MIN_MAX_REQUESTS = 1_200;
+
+const DEFAULT_MAX_CONNECTIONS = 1_024;
+const DEFAULT_HEADERS_TIMEOUT_MS = 15_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Module-level drain flag.
+ *
+ * Set one probe interval before `app.close()` so `/ready` starts reporting 503
+ * while the process is still serving. That lets the load balancer pull this
+ * instance out of rotation BEFORE it stops accepting connections, instead of
+ * discovering the outage by way of failed customer requests.
+ */
+let draining = false;
+
+/** Begin failing `/ready` ahead of shutdown. */
+export function beginDraining() {
+  draining = true;
+}
+
+export function isDraining() {
+  return draining;
+}
+
+/** Test seam: module state would otherwise leak between server instances. */
+export function resetDrainingState() {
+  draining = false;
+}
+
+function parseBoundedEnvInt(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(String(value ?? '').trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+/**
+ * Compare a presented token against the configured one in constant time.
+ * Both sides are hashed first so `timingSafeEqual` never sees mismatched
+ * lengths (it throws on those) and so the comparison cannot leak token length.
+ */
+function safeTokenEqual(presented, expected) {
+  const a = createHash('sha256').update(String(presented)).digest();
+  const b = createHash('sha256').update(String(expected)).digest();
+  return timingSafeEqual(a, b);
+}
+
+function bearerToken(req) {
+  const header = req.headers?.authorization;
+  if (typeof header !== 'string') return null;
+  const match = /^Bearer[ \t]+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * TTL + single-flight cache around the readiness assessment.
+ *
+ * `/ready` was unauthenticated, un-rate-limited, and performed TWO Postgres
+ * round trips per request (ping + `assertLatestMigrationApplied`) against a
+ * 10-connection pool, so anonymous probe traffic alone could exhaust the pool.
+ * Both round trips are retained — `assertLatestMigrationApplied` is the only
+ * runtime signal that the running code matches the applied schema — but they now
+ * happen at most once per TTL no matter how many callers arrive, and concurrent
+ * callers share one in-flight check rather than each starting their own.
+ */
+function createReadinessCache({ runtimeConfig, runtimeHealth, ttlMs = READINESS_CACHE_TTL_MS, now = () => Date.now() }) {
+  /** @type {{ at: number, verdict: any } | null} */
+  let cached = null;
+  /** @type {Promise<any> | null} */
+  let inFlight = null;
+  let consecutiveFailures = 0;
+  let checkCount = 0;
+
+  const isFresh = () => cached !== null && now() - cached.at < ttlMs;
+
+  function refresh() {
+    // Collapse concurrent callers onto a single DB check.
+    if (inFlight) return inFlight;
+    const pending = (async () => {
+      checkCount += 1;
+      const verdict = await assessControlPlaneReadiness(runtimeConfig, runtimeHealth);
+      cached = { at: now(), verdict };
+      if (verdict.ok) consecutiveFailures = 0;
+      else consecutiveFailures += 1;
+      return verdict;
+    })();
+    inFlight = pending;
+    // Attach a handler to both outcomes so a rejected check cannot surface as an
+    // unhandled rejection, and so the slot is always released.
+    const release = () => {
+      if (inFlight === pending) inFlight = null;
+    };
+    pending.then(release, release);
+    return pending;
+  }
+
+  return {
+    /** Awaited verdict, reusing a fresh cache entry when there is one. */
+    async get() {
+      if (isFresh()) return cached.verdict;
+      return refresh();
+    },
+    /**
+     * Last known verdict WITHOUT awaiting a DB call, kicking off a refresh when
+     * stale. `/health` uses this so the restart probe can never block on a hung
+     * database — a probe that hangs is indistinguishable from a dead process and
+     * would get the instance killed.
+     */
+    peek() {
+      if (!isFresh()) refresh().catch(() => {});
+      return {
+        verdict: cached?.verdict ?? null,
+        consecutiveFailures,
+      };
+    },
+    /** Diagnostics/tests: how many real assessments have run. */
+    checkCount: () => checkCount,
+  };
+}
+
 async function assessControlPlaneReadiness(runtimeConfig, runtimeHealth) {
   if (runtimeConfig.persistenceMode === 'postgres') {
     if (typeof runtimeHealth !== 'function') {
@@ -524,9 +673,11 @@ async function assessControlPlaneReadiness(runtimeConfig, runtimeHealth) {
 function respondRateLimited(res, retryAfterSeconds) {
   const payload = JSON.stringify({ error: 'rate_limited' });
   res.writeHead(429, {
+    ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
     'Retry-After': String(retryAfterSeconds),
+    'Cache-Control': 'no-store',
   });
   res.end(payload);
 }
@@ -548,12 +699,80 @@ export function createServer(options = {}) {
         maxRequests: runtimeConfig.rateLimit.maxRequests,
       });
 
+  // Separate, deliberately generous bucket for the unauthenticated infra
+  // endpoints. They must not be exempt from limiting (that was the hole that let
+  // anonymous traffic drive unbounded readiness work), but they must also not
+  // share the API budget: the orchestrator's own probe would then be throttled by
+  // unrelated API traffic and a healthy instance would be restarted.
+  const probeRateLimiter = runtimeConfig.rateLimit.disabled
+    ? null
+    : createFixedWindowRateLimiter({
+        windowMs: runtimeConfig.rateLimit.windowMs,
+        maxRequests: Math.max(
+          runtimeConfig.rateLimit.maxRequests,
+          PROBE_RATE_LIMIT_MIN_MAX_REQUESTS,
+        ),
+      });
+
+  const readinessCache = options.readinessCache ?? createReadinessCache({
+    runtimeConfig,
+    runtimeHealth,
+    ttlMs: parseBoundedEnvInt(env.ASTRANULL_READINESS_CACHE_TTL_MS, READINESS_CACHE_TTL_MS, {
+      min: 500,
+      max: 30_000,
+    }),
+  });
+
+  const metricsToken = String(env.ASTRANULL_METRICS_TOKEN ?? '').trim();
+  const isProduction = String(env.NODE_ENV ?? '').trim() === 'production';
+
+  /**
+   * Server-side error sink. Injectable so tests can assert that a 500 actually
+   * emits its correlation id — the id is worthless if it only reaches the client.
+   */
+  const logError = options.logError ?? ((line) => console.error(line));
+
   const server = http.createServer(async (req, res) => {
     const url = parseUrl(req);
 
     try {
+      const isProbePath = req.method === 'GET'
+        && (url.pathname === '/health'
+          || url.pathname === '/ready'
+          || url.pathname === '/metrics'
+          || url.pathname === '/.well-known/jwks.json');
+
+      // Limiter gate now sits ABOVE the infra handlers, not below them.
+      if (isProbePath && probeRateLimiter) {
+        const probeKey = deriveClientKey(req, {
+          trustProxyHeaders: runtimeConfig.rateLimit.trustProxyHeaders,
+        });
+        const decision = probeRateLimiter.check(probeKey);
+        if (!decision.allowed) {
+          incMetric('api_rate_limited_total');
+          respondRateLimited(res, decision.retryAfterSeconds);
+          return;
+        }
+      }
+
       if (req.method === 'GET' && url.pathname === '/health') {
         incMetric('http_requests_total');
+        // Non-blocking read of the cached verdict. /health is the RESTART probe,
+        // so it must never await a database call: a probe that hangs on a wedged
+        // DB looks identical to a dead process and gets the instance killed.
+        const { verdict, consecutiveFailures } = readinessCache.peek();
+        const failing = verdict !== null
+          && verdict.ok === false
+          && consecutiveFailures >= HEALTH_FAILURE_THRESHOLD;
+        if (failing) {
+          json(res, 503, {
+            status: 'degraded',
+            service: 'astranull',
+            reason: verdict.reason,
+            consecutive_failures: consecutiveFailures,
+          });
+          return;
+        }
         json(res, 200, { status: 'ok', service: 'astranull' });
         return;
       }
@@ -570,8 +789,21 @@ export function createServer(options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/ready') {
         incMetric('http_requests_total');
-        const check = await assessControlPlaneReadiness(runtimeConfig, runtimeHealth);
         const timestamp = new Date().toISOString();
+        // Fail readiness one probe interval before close() so the balancer drains
+        // this instance while it can still serve in-flight work.
+        if (draining) {
+          json(res, 503, {
+            status: 'not_ready',
+            service: 'astranull',
+            reason: 'draining',
+            auth_mode: runtimeConfig.authMode,
+            persistence: runtimeConfig.persistenceMode,
+            timestamp,
+          });
+          return;
+        }
+        const check = await readinessCache.get();
         if (!check.ok) {
           json(res, 503, {
             status: 'not_ready',
@@ -596,6 +828,21 @@ export function createServer(options = {}) {
       }
 
       if (req.method === 'GET' && url.pathname === '/metrics') {
+        incMetric('http_requests_total');
+        // Counters describe internal volumes and error rates, so the endpoint is
+        // bearer-gated. When no token is configured we fail CLOSED in production
+        // and stay open elsewhere, so local/dev scrapes keep working without
+        // silently shipping an open metrics endpoint to production.
+        if (metricsToken) {
+          const presented = bearerToken(req);
+          if (!presented || !safeTokenEqual(presented, metricsToken)) {
+            json(res, 401, { error: 'unauthorized' });
+            return;
+          }
+        } else if (isProduction) {
+          json(res, 401, { error: 'unauthorized', reason: 'metrics_token_not_configured' });
+          return;
+        }
         text(res, 200, metricsPlaintext());
         return;
       }
@@ -678,12 +925,45 @@ export function createServer(options = {}) {
       text(res, 404, 'Not found');
     } catch (err) {
       if (err instanceof HttpBodyError) {
-        json(res, err.status, { error: err.code });
+        // Closes the connection when an oversized body was abandoned unread.
+        respondBodyError(res, err);
         return;
       }
-      json(res, 500, { error: 'internal_error', message: err.message });
+      // Driver errors carry schema, table, host and role text in their message, so
+      // the response body must never echo them. The correlation id is the only
+      // link between what the caller sees and the full stack, so it is logged
+      // BEFORE responding — a failure to write the response must not lose the
+      // only diagnostic. The stack is passed as a string (not the Error) because
+      // the redactor reads `.message` off an Error and would drop the frames.
+      const correlationId = randomUUID();
+      logError(
+        `astranull internal_error correlation_id=${correlationId} method=${req.method} path=${url.pathname} ${redactDatabaseUrlInMessage(err?.stack ?? err, env)}`,
+      );
+      json(res, 500, { error: 'internal_error', correlation_id: correlationId });
     }
   });
+
+  // Explicit socket-level ceilings. Without these, Node's defaults let a caller
+  // hold connections open indefinitely (slowloris) or open as many as the file
+  // descriptor limit allows, which is a cheap way to take the control plane down
+  // without ever passing authentication.
+  server.maxConnections = parseBoundedEnvInt(
+    env.ASTRANULL_MAX_CONNECTIONS,
+    DEFAULT_MAX_CONNECTIONS,
+    { min: 16, max: 65_535 },
+  );
+  // Time allowed to finish sending request HEADERS.
+  server.headersTimeout = parseBoundedEnvInt(
+    env.ASTRANULL_HEADERS_TIMEOUT_MS,
+    DEFAULT_HEADERS_TIMEOUT_MS,
+    { min: 1_000, max: 120_000 },
+  );
+  // Time allowed for the ENTIRE request, including the body.
+  server.requestTimeout = parseBoundedEnvInt(
+    env.ASTRANULL_REQUEST_TIMEOUT_MS,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    { min: 1_000, max: 300_000 },
+  );
 
   return server;
 }
@@ -1159,7 +1439,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     try {
       upload = await readArtifactUploadBody(req, runtimeConfig.maxJsonBodyBytes);
     } catch (err) {
-      if (err instanceof HttpBodyError) return json(res, err.status, { error: err.code });
+      if (err instanceof HttpBodyError) return respondBodyError(res, err);
       throw err;
     }
     const art = wafOffensive.addArtifact(ctx, wafOffensiveArtPost[1], upload.body, {
@@ -1318,17 +1598,26 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'waf:write');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    // The try covers INPUT RESOLUTION ONLY. Persisting the feed is deliberately
+    // outside it so a driver/connection fault propagates to the top-level 5xx
+    // handler instead of being reported as a client error with the driver's
+    // message attached.
+    let feedItems;
     try {
-      const feedItems = await resolveCveFeedItems(body);
-      const result = await cveSvc.ingestCveFeed(ctx, feedItems);
-      if (result.error) return json(res, result.status ?? 400, result);
-      return json(res, 202, result);
+      feedItems = await resolveCveFeedItems(body);
     } catch (err) {
+      // Only codes on the module's frozen allowlist are known to carry a fixed,
+      // input-derived message. Anything else is an infrastructure fault wearing
+      // an error code (pg always sets one) and must not be answered with 400.
+      if (!isCveFeedInputError(err)) throw err;
       return json(res, 400, {
-        error: err.code ?? 'invalid_cve_feed_request',
+        error: err.code,
         message: err.message,
       });
     }
+    const result = await cveSvc.ingestCveFeed(ctx, feedItems);
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 202, result);
   }
   const cveTriageMatch = path.match(/^\/v1\/waf\/cve-pipeline\/([^/]+)\/triage$/);
   if (cveTriageMatch && method === 'POST') {
@@ -2455,7 +2744,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     try {
       upload = await readArtifactUploadBody(req, runtimeConfig.maxJsonBodyBytes);
     } catch (err) {
-      if (err instanceof HttpBodyError) return json(res, err.status, { error: err.code });
+      if (err instanceof HttpBodyError) return respondBodyError(res, err);
       throw err;
     }
     const art = await Promise.resolve(
@@ -2973,15 +3262,21 @@ async function handleInternalAdminApi(req, res, url, ctx, runtimeConfig, options
   if (method === 'GET' && path === '/internal/admin/break-glass/status') {
     const gate = requireStaffPermission(ctx, 'staff:audit:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    return json(res, 200, breakGlass.breakGlassStatus());
+    return json(res, 200, await breakGlass.breakGlassStatus(new Date(), {
+      store: managementService,
+    }));
   }
 
   if (method === 'POST' && path === '/internal/admin/break-glass/activate') {
     const gate = requireStaffPermission(ctx, 'staff:signup:decide');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = breakGlass.activateBreakGlass(ctx, body, {
-      audit: (event) => managementService.appendInternalAudit?.(ctx, event) ?? null,
+    // `audit` is a required writer, not an optional hook: both the in-memory and Postgres
+    // internal-management services implement appendInternalAudit, and activateBreakGlass
+    // throws rather than activating unaudited if it is ever missing.
+    const result = await breakGlass.activateBreakGlass(ctx, body, {
+      store: managementService,
+      audit: (event) => managementService.appendInternalAudit(ctx, event),
     });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);

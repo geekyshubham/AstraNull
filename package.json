@@ -140,7 +140,17 @@
     "dr:backup:dev": "node scripts/backup-dev-store.mjs",
     "dr:restore:dev": "node scripts/restore-dev-store.mjs",
     "dr:restore:evidence": "node scripts/dr-restore-evidence.mjs",
-    "rollback:evidence": "node scripts/rollback-fixforward-evidence.mjs"
+    "rollback:evidence": "node scripts/rollback-fixforward-evidence.mjs",
+    "oidc:fixture:generate": "node scripts/generate-bundled-oidc-fixture.mjs",
+    "oidc:fixture:ensure": "node scripts/generate-bundled-oidc-fixture.mjs --quiet",
+    "pretest": "node scripts/generate-bundled-oidc-fixture.mjs --quiet",
+    "pretest:unit": "node scripts/generate-bundled-oidc-fixture.mjs --quiet",
+    "pretest:e2e": "node scripts/generate-bundled-oidc-fixture.mjs --quiet",
+    "pretest:integration": "node scripts/generate-bundled-oidc-fixture.mjs --quiet",
+    "pretest:contract": "node scripts/generate-bundled-oidc-fixture.mjs --quiet"
+  },
+  "overrides": {
+    "postcss": "^8.5.18"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

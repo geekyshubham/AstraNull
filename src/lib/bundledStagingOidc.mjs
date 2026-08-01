@@ -1,4 +1,4 @@
-import { createPrivateKey, createSign } from 'node:crypto';
+import { createHash, createPrivateKey, createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,13 +6,104 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FIXTURE_PATH = path.resolve(__dirname, '../../ops/staging/bundled-oidc-fixture.json');
 
-let cachedFixture = null;
+/**
+ * SHA-256 of the RSA modulus of the fixture key that was committed to this repo until
+ * 2026-08-01. The repo is public, so `git log -p` keeps that key recoverable forever:
+ * anyone can mint a valid admin token with it. Untracking the file cannot undo that, so
+ * the key is treated as permanently burned and refused outright.
+ *
+ * This is a fingerprint of *public* key material — safe to store in source, and it is the
+ * only way to catch a stale fixture being redeployed from an old checkout, a cached image
+ * layer, or a copy-pasted secret.
+ */
+const BURNED_KEY_MODULUS_SHA256 =
+  '15cf684e4a87c50221e687b7f189e04c05bc31c974e970bae8f9a72e60075f2e';
 
+/** Cache keyed by source, so a different env in the same process cannot read a stale key. */
+const fixtureCache = new Map();
+
+function assertNotBurned(fixture, source) {
+  const modulus = fixture?.public_jwk?.n;
+  if (typeof modulus !== 'string' || modulus === '') return;
+  const fingerprint = createHash('sha256').update(modulus).digest('hex');
+  if (fingerprint !== BURNED_KEY_MODULUS_SHA256) return;
+  throw new Error(
+    'Refusing to start: the bundled staging OIDC fixture is the key that was published in '
+    + `this repository's git history (source: ${source}). It can no longer authenticate anyone `
+    + 'safely — anybody can mint an admin token with it. Generate a replacement with '
+    + '`npm run oidc:fixture:generate` and deliver it out-of-band via '
+    + 'ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON.',
+  );
+}
+
+/**
+ * Resolves the fixture from, in order: inline JSON in the environment (how deployments
+ * inject it, since the file is gitignored and therefore absent from the image), an
+ * explicit path, then the default local path used by dev and tests.
+ */
 function loadFixture(env = process.env) {
-  if (cachedFixture) return cachedFixture;
-  const fixturePath = String(env.ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE ?? DEFAULT_FIXTURE_PATH).trim();
-  cachedFixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
-  return cachedFixture;
+  const inline = String(env.ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON ?? '').trim();
+  const explicitPath = String(env.ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE ?? '').trim();
+  const source = inline
+    ? 'env:ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON'
+    : (explicitPath || DEFAULT_FIXTURE_PATH);
+  const cached = fixtureCache.get(source);
+  if (cached) return cached;
+
+  let raw;
+  if (inline) {
+    raw = inline;
+  } else {
+    try {
+      raw = readFileSync(source, 'utf8');
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+      // The fixture is a signing trust root, so it is gitignored and absent from fresh
+      // clones and built images by design. Say how to supply it instead of surfacing ENOENT.
+      throw new Error(
+        `Bundled staging OIDC is enabled but no fixture was found at ${source}. This file is `
+        + 'gitignored because it holds the token-signing private key. For local use run '
+        + '`npm run oidc:fixture:generate`; for a deployment set '
+        + 'ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON to the fixture JSON.',
+      );
+    }
+  }
+
+  let fixture;
+  try {
+    fixture = JSON.parse(raw);
+  } catch {
+    throw new Error(`Bundled staging OIDC fixture at ${source} is not valid JSON.`);
+  }
+  if (typeof fixture?.private_key_pem !== 'string' || !fixture.private_key_pem.includes('PRIVATE KEY')) {
+    throw new Error(`Bundled staging OIDC fixture at ${source} is missing private_key_pem.`);
+  }
+  assertNotBurned(fixture, source);
+  fixtureCache.set(source, fixture);
+  return fixture;
+}
+
+/** Test seam: drops memoized fixtures so a regenerated key is picked up in-process. */
+export function resetBundledStagingOidcFixtureCache() {
+  fixtureCache.clear();
+}
+
+/**
+ * Forces the fixture to load at startup so a missing or burned signing key refuses the boot.
+ *
+ * Without this, startup succeeds and the failure surfaces per-request: `/.well-known/jwks.json`
+ * and every token mint throw, so the deployment looks healthy while nobody can authenticate.
+ * Failing during startup instead means the platform's health check fails the deploy and the
+ * previous revision keeps serving, which is the safer outcome for an auth trust root.
+ *
+ * Issuer, audience, and JWKS URL are pinned in deployment config, so none of the other code
+ * paths here touch the fixture during config load — this check has to be explicit.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function assertBundledStagingOidcFixtureUsable(env = process.env) {
+  if (!isBundledStagingOidcEnabled(env)) return;
+  loadFixture(env);
 }
 
 /**

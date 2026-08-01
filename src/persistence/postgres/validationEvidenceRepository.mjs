@@ -17,6 +17,43 @@ const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
   created_at, updated_at`;
 
+/**
+ * Marks whether `createVerdictIfAbsent` actually inserted the verdict row it returned.
+ *
+ * A Symbol is used deliberately: verdict objects are spread into API responses and
+ * JSON-serialized, and a symbol-keyed flag is invisible to `Object.keys`/`JSON.stringify`,
+ * so it cannot leak into the wire shape. Absence of the flag must be read as "inserted"
+ * so repository doubles that return plain verdict records keep working.
+ */
+export const VERDICT_INSERTED = Symbol('astranull.verdict.inserted');
+
+/**
+ * @param {{ [VERDICT_INSERTED]?: boolean } | null | undefined} verdict
+ * @returns {boolean}
+ */
+export function verdictWasInserted(verdict) {
+  if (!verdict) return false;
+  return verdict[VERDICT_INSERTED] !== false;
+}
+
+const EXPIRED_COLLECTION_SWEEP_STATUSES = Object.freeze(['running', 'collecting']);
+const DEFAULT_EXPIRED_COLLECTION_SWEEP_LIMIT = 100;
+const MAX_EXPIRED_COLLECTION_SWEEP_LIMIT = 500;
+
+/**
+ * Bounded re-read of a verdict the INSERT lost the race for. `ON CONFLICT DO NOTHING`
+ * does not wait on a concurrent uncommitted inserter, so the incumbent may not be
+ * visible for a moment. 5 x 20ms caps the wait at ~100ms.
+ */
+const INCUMBENT_VERDICT_READ_ATTEMPTS = 5;
+const INCUMBENT_VERDICT_READ_DELAY_MS = 20;
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms).unref?.();
+  });
+}
+
 const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
 const MAX_TEST_RUN_LIST_LIMIT = 500;
 const DEFAULT_RUN_EVENTS_LIST_LIMIT = 200;
@@ -645,6 +682,17 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
+    /**
+     * Insert a verdict only if the run has none yet.
+     *
+     * A published verdict is immutable: `uniq_verdict_per_test_run` is the arbiter and the
+     * conflict path is DO NOTHING, never DO UPDATE. A replayed or concurrent finalization
+     * therefore cannot rewrite an already-stored verdict — it gets the incumbent back,
+     * tagged with `VERDICT_INSERTED === false` so callers can skip the side effects
+     * (run status update, audit append, finding upsert) that belong to the winner only.
+     *
+     * @returns {Promise<object>} the stored verdict, never null
+     */
     async createVerdictIfAbsent(ctx, record) {
       const tenantId = ctx.tenantId;
       const evidenceIds = asStringArray(record.evidence_ids);
@@ -657,17 +705,7 @@ export function createValidationEvidenceRepository(pool) {
              explanation, evidence_ids, placement_confidence_json, created_at
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::timestamptz)
-           ON CONFLICT (test_run_id)
-           DO UPDATE SET
-             target_id = EXCLUDED.target_id,
-             check_id = EXCLUDED.check_id,
-             verdict = EXCLUDED.verdict,
-             confidence = EXCLUDED.confidence,
-             explanation = EXCLUDED.explanation,
-             evidence_ids = EXCLUDED.evidence_ids,
-             placement_confidence_json = EXCLUDED.placement_confidence_json,
-             created_at = EXCLUDED.created_at
-           WHERE verdicts.tenant_id = EXCLUDED.tenant_id
+           ON CONFLICT (test_run_id) DO NOTHING
            RETURNING ${VERDICT_COLUMNS}`,
           [
             record.id,
@@ -683,8 +721,122 @@ export function createValidationEvidenceRepository(pool) {
             record.created_at,
           ],
         );
-        return mapVerdictRow(rows[0]);
+
+        if (rows[0]) {
+          const inserted = mapVerdictRow(rows[0]);
+          inserted[VERDICT_INSERTED] = true;
+          return inserted;
+        }
+
+        // DO NOTHING suppressed the insert: a verdict already exists for this run.
+        // Unlike DO UPDATE, DO NOTHING does not block on a concurrent uncommitted
+        // inserter, so the incumbent can be briefly invisible to us. Re-read under
+        // READ COMMITTED (each statement takes a fresh snapshot) until it lands.
+        for (let attempt = 0; attempt < INCUMBENT_VERDICT_READ_ATTEMPTS; attempt += 1) {
+          if (attempt > 0) {
+            await sleep(INCUMBENT_VERDICT_READ_DELAY_MS);
+          }
+          const { rows: incumbentRows } = await client.query(
+            `SELECT ${VERDICT_COLUMNS}
+               FROM verdicts
+              WHERE tenant_id = $1 AND test_run_id = $2`,
+            [tenantId, record.test_run_id],
+          );
+          if (incumbentRows[0]) {
+            const incumbent = mapVerdictRow(incumbentRows[0]);
+            incumbent[VERDICT_INSERTED] = false;
+            return incumbent;
+          }
+        }
+
+        // Fail loudly rather than returning null: every caller dereferences the result.
+        throw new Error(
+          `createVerdictIfAbsent: verdict for test_run_id=${record.test_run_id} conflicted `
+          + 'but the incumbent row is not visible to this tenant context.',
+        );
       });
+    },
+
+    /**
+     * Runs whose bounded collection window has elapsed but which never reached a verdict.
+     * Tenant-scoped by design: the sweeper must be given an explicit tenant list, since
+     * cross-tenant enumeration is refused under RLS.
+     *
+     * @param {{ tenantId: string }} ctx
+     * @param {{ limit?: number, now?: string | null }} [options]
+     */
+    async listExpiredCollectingRuns(ctx, options = {}) {
+      const limit = normalizeBoundedLimit(
+        options.limit,
+        DEFAULT_EXPIRED_COLLECTION_SWEEP_LIMIT,
+        MAX_EXPIRED_COLLECTION_SWEEP_LIMIT,
+      );
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${TEST_RUN_COLUMNS}
+             FROM test_runs
+            WHERE tenant_id = $1
+              AND status = ANY($2::text[])
+              AND collection_deadline_at IS NOT NULL
+              AND collection_deadline_at < COALESCE($3::timestamptz, now())
+            ORDER BY collection_deadline_at ASC
+            LIMIT $4`,
+          [
+            ctx.tenantId,
+            [...EXPIRED_COLLECTION_SWEEP_STATUSES],
+            options.now ?? null,
+            limit,
+          ],
+        );
+        return rows.map(mapTestRunRow);
+      });
+    },
+
+    /**
+     * Serialize finalization of one run across concurrent sweeper instances.
+     *
+     * Uses a *session*-level try-lock rather than `pg_advisory_xact_lock`: finalization
+     * spans many independent transactions (each repository call opens its own), so a
+     * transaction-scoped lock would be released before the finalize work began and would
+     * provide no exclusion at all. The lock is held on a dedicated client for the whole
+     * callback and always released in `finally`.
+     *
+     * The key is namespaced (`verdict_finalize:<runId>`) so it cannot collide with the
+     * `hashtext(tenant_id)` locks taken by the audit/retention repositories — a collision
+     * there would block the audit append made from inside this callback on another client.
+     *
+     * Correctness does not rest on this lock: `uniq_verdict_per_test_run` plus
+     * `ON CONFLICT DO NOTHING` guarantee a single verdict even without it. The lock
+     * only stops two sweepers doing redundant, discarded work.
+     *
+     * @param {{ tenantId: string }} _ctx
+     * @param {string} runId
+     * @param {() => Promise<T>} callback
+     * @returns {Promise<{ acquired: boolean, result: T | null }>}
+     * @template T
+     */
+    async withRunFinalizationLock(_ctx, runId, callback) {
+      const lockKey = `verdict_finalize:${runId}`;
+      const client = await pool.connect();
+      let acquired = false;
+      try {
+        const { rows } = await client.query(
+          'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+          [lockKey],
+        );
+        acquired = rows[0]?.acquired === true;
+        if (!acquired) return { acquired: false, result: null };
+        return { acquired: true, result: await callback() };
+      } finally {
+        if (acquired) {
+          try {
+            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+          } catch {
+            // lock is released when the session ends; do not mask the original error
+          }
+        }
+        client.release();
+      }
     },
 
     async getVerdictForRun(ctx, runId) {

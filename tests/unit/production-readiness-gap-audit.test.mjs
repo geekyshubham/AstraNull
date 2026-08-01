@@ -30,6 +30,10 @@ import {
   PRODUCTION_RELEASE_EVIDENCE_COMPLETE,
   stampAcceptedReleaseRecords,
 } from '../fixtures/productionReleaseEvidenceComplete.mjs';
+import {
+  CLOSED_RELEASE_DOC_OPTIONS,
+  CLOSED_RELEASE_PLAN_MARKDOWN,
+} from '../fixtures/releaseDocGateMarkdown.mjs';
 
 const tempDirs = [];
 
@@ -92,10 +96,7 @@ function acceptedRecordsForRelease(releaseId, kinds = PRODUCTION_RELEASE_EVIDENC
   return stampAcceptedReleaseRecords(completeEvidenceRecords(kinds), releaseId);
 }
 
-const closedChecklistOptions = {
-  releaseChecklistMarkdown: '- [x] release checklist closed\n',
-  releasePlanMarkdown: '- [x] release plan closed\n',
-};
+const closedChecklistOptions = CLOSED_RELEASE_DOC_OPTIONS;
 
 afterEach(() => {
   while (tempDirs.length > 0) {
@@ -284,6 +285,50 @@ Not a checklist - [ ] fake
     );
   });
 
+  it('reports a blocker when the release-plan gates section is absent', () => {
+    // The !sawRows guard used to sit inside the insideGateSection branch, so a renamed
+    // or deleted heading reported zero blockers and the plan read as fully closed.
+    const counts = parseReleasePlanGateTableCounts(`
+## Renamed gates section
+
+| Gate | Owner | Evidence / artifact | Status |
+|---|---|---|---|
+| Product and API contract accuracy | Product | docs | **Open** |
+`);
+
+    assert.equal(counts.external_blockers, 1);
+    assert.equal(counts.open_gates, true);
+    assert.equal(counts.complete, 0);
+    assert.equal(counts.external_blocker_items[0].gate, 'Production release gates table');
+    assert.match(counts.external_blocker_items[0].text, /section not found/i);
+  });
+
+  it('reports a blocker for markdown with no gates heading at all', () => {
+    const counts = parseReleasePlanGateTableCounts('- [x] release plan closed\n');
+    assert.equal(counts.external_blockers, 1);
+    assert.equal(counts.open_gates, true);
+  });
+
+  it('surfaces a missing gates section as a named release-plan blocker', () => {
+    const gates = loadReleaseDocGateCounts({
+      releaseChecklistMarkdown: '- [x] checklist closed\n',
+      releasePlanMarkdown: '- [x] release plan closed\n',
+      enterpriseGapBacklogMarkdown: `
+### P0 disposition and signoff map
+
+| P0 gap | Local disposition | Owner | Evidence / signoff reference | External closeout still required |
+|---|---|---|---|---|
+| Runtime Postgres adapter | Implemented locally | Backend + Platform | PROGRESS.md SEC-001 | Staging signoff |
+`,
+    });
+    assert.equal(gates.release_plan.external_blockers, 1);
+    assert.equal(gates.combined.open_gates, true);
+    const item = gates.combined.external_blocker_items
+      .find((entry) => entry.gate === 'Production release gates table');
+    assert.ok(item, 'expected a named blocker for the missing gates section');
+    assert.equal(item.source, 'docs/product/06-release-plan.md');
+  });
+
   it('parses valid P0 disposition rows as complete local tracker dispositions', () => {
     const counts = parseP0DispositionGateCounts(`
 ### P0 disposition and signoff map
@@ -455,7 +500,7 @@ Not a checklist - [ ] fake
       { releaseId: 'rel_external_only', records: acceptedRecordsForRelease('rel_external_only') },
       {
         releaseChecklistMarkdown: '- [x] OIDC ready. **Remaining (external):** IdP signoff\n',
-        releasePlanMarkdown: '- [x] release verification complete\n',
+        releasePlanMarkdown: CLOSED_RELEASE_PLAN_MARKDOWN,
       },
     );
 

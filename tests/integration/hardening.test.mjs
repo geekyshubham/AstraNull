@@ -56,10 +56,20 @@ async function registerAgent(targetGroupId = 'tg_1') {
   return { agentId: reg.json.agent.id, credential: reg.json.agent_credential };
 }
 
-before(() => {
+// Await 'listening' rather than reading address() synchronously, and pin the port for the whole
+// file. A run once failed 20 assertions here with 404 from POST /v1/agents/register — a status
+// that route cannot return (registerAgent yields only 400 or 401; even a partial-services server
+// answers 401). A 404 therefore means the request reached a LIVE server without that route, i.e.
+// baseUrl pointed somewhere else. Ephemeral ports are reused across the per-file test processes,
+// so an unawaited bind is the one remaining path to a stale/foreign port. Unreproduced across 10+
+// consecutive lane runs, so this is defensive, not a demonstrated fix.
+before(async () => {
   freshStore();
   server = createServer();
-  server.listen(0);
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
   const { port } = server.address();
   baseUrl = `http://127.0.0.1:${port}`;
 });
@@ -1133,5 +1143,107 @@ describe('hardening acceptance gaps', () => {
       assert.equal(viewerRead.status, 200);
       assert.equal(viewerRead.json.items.length, 1);
     });
+  });
+});
+
+/**
+ * The top-level 500 handler used to return `err.message`, which for a pg failure
+ * carries schema, table, host and role text, and which the portal then rendered
+ * verbatim. The body must now carry only a correlation id — and that id is only
+ * worth anything if it actually reaches the logs.
+ */
+describe('internal errors do not leak driver detail', () => {
+  const DATABASE_URL = 'postgres://svc_user:pw@db.internal:5432/astranull';
+  let errorServer;
+  let errorBaseUrl;
+  let logLines;
+
+  before(async () => {
+    freshStore();
+    logLines = [];
+    const driverError = new Error(
+      `relation "findings" does not exist; connecting to ${DATABASE_URL} as role astranull_app`,
+    );
+    // pg ALWAYS sets a SQLSTATE, which is why code presence cannot be used to
+    // classify an error as caller input.
+    driverError.code = '42P01';
+    errorServer = createServer({
+      env: { ...process.env, ASTRANULL_DATABASE_URL: DATABASE_URL },
+      logError: (line) => logLines.push(line),
+      services: {
+        findings: {
+          listFindingsEnvelope: async () => {
+            throw driverError;
+          },
+        },
+      },
+    });
+    // Awaited bind, same reasoning as the top-level before(): this file shares module-level
+    // server/baseUrl across both describe blocks, so a half-bound listener here can leave a
+    // request aimed at a port that another test process owns.
+    await new Promise((resolve, reject) => {
+      errorServer.once('error', reject);
+      errorServer.listen(0, '127.0.0.1', resolve);
+    });
+    errorBaseUrl = `http://127.0.0.1:${errorServer.address().port}`;
+  });
+
+  after(() => errorServer?.close());
+
+  it('answers a repository throw with a correlation id and no message', async () => {
+    const res = await request(errorBaseUrl, 'GET', '/v1/findings', {
+      headers: demoHeaders('admin'),
+    });
+
+    assert.equal(res.status, 500);
+    assert.equal(res.json.error, 'internal_error');
+    // Absent, not merely empty: any message at all is a disclosure channel.
+    assert.ok(!('message' in res.json), 'the 500 body must not carry a message key');
+    assert.match(res.json.correlation_id, /^[0-9a-f-]{36}$/);
+
+    // No schema, table, host, role or connection string in the response.
+    // (Checked as specific phrases: the bare word "relation" is a substring of
+    // the legitimate `correlation_id` field.)
+    for (const leak of [
+      'relation "findings"',
+      'does not exist',
+      'db.internal',
+      'svc_user',
+      'astranull_app',
+      'postgres://',
+      '42P01',
+    ]) {
+      assert.ok(
+        !res.text.includes(leak),
+        `the 500 body must not disclose ${leak} — got ${res.text}`,
+      );
+    }
+  });
+
+  it('logs the stack under the same correlation id, with the database url redacted', async () => {
+    logLines.length = 0;
+    const res = await request(errorBaseUrl, 'GET', '/v1/findings', {
+      headers: demoHeaders('admin'),
+    });
+    const correlationId = res.json.correlation_id;
+
+    const matching = logLines.filter((line) => line.includes(correlationId));
+    assert.equal(matching.length, 1, `expected exactly one log line for ${correlationId}`);
+    const line = matching[0];
+
+    // The whole point of dropping the message: the operator can still get there.
+    assert.match(line, /path=\/v1\/findings/);
+    assert.match(line, /method=GET/);
+    assert.ok(line.includes('relation "findings" does not exist'), 'the log must retain the driver detail');
+    assert.ok(line.includes('at '), 'the log must retain stack frames, not just the message');
+    // Redactor is applied server-side too, so log shipping cannot exfiltrate the DSN.
+    assert.ok(!line.includes(DATABASE_URL), 'the database url must be redacted from logs');
+    assert.ok(line.includes('[redacted-database-url]'));
+  });
+
+  it('gives each failure its own correlation id', async () => {
+    const first = await request(errorBaseUrl, 'GET', '/v1/findings', { headers: demoHeaders('admin') });
+    const second = await request(errorBaseUrl, 'GET', '/v1/findings', { headers: demoHeaders('admin') });
+    assert.notEqual(first.json.correlation_id, second.json.correlation_id);
   });
 });

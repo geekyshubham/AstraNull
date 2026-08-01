@@ -1,0 +1,40 @@
+version: 2
+
+# Base images are pinned by @sha256 digest in every Dockerfile. Pinning alone
+# would freeze us on whatever CVEs the pinned layer carries, so Dependabot owns
+# the update path: it opens PRs that bump the digest as node:22-alpine is
+# rebuilt, and those PRs run the full CI gate before merge.
+updates:
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/agents/linux"
+      - "/ops/digitalocean"
+      - "/ops/railway"
+      - "/ops/docker"
+      - "/ops/kubernetes"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Security fixes land as individual PRs; routine bumps are batched to keep
+      # lockfile churn reviewable.
+      dev-dependencies:
+        dependency-type: development
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(actions)"

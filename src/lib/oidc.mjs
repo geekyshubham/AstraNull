@@ -92,7 +92,53 @@ export function readClaimValue(payload, claimPath) {
   return current;
 }
 
-function normalizeRoleCandidate(raw, oidc) {
+/**
+ * Parse an `idp_role:platform_role,...` mapping string.
+ * Malformed entries are skipped rather than thrown: an unparsed entry stays
+ * unmapped, which fails closed wherever requireExplicitRoleMap is enabled.
+ * @param {unknown} raw
+ * @returns {Record<string, string>}
+ */
+function parseRoleMapString(raw) {
+  /** @type {Record<string, string>} */
+  const map = {};
+  if (raw == null) return map;
+  for (const entry of String(raw).split(',')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const separator = trimmed.indexOf(':');
+    if (separator <= 0 || separator === trimmed.length - 1) continue;
+    const idpRole = trimmed.slice(0, separator).trim().toLowerCase();
+    const platformRole = trimmed.slice(separator + 1).trim().toLowerCase();
+    if (!idpRole || !platformRole) continue;
+    map[idpRole] = platformRole;
+  }
+  return map;
+}
+
+/** @type {{ raw: string | null, map: Record<string, string> }} */
+let staffRoleMapEnvCache = { raw: null, map: {} };
+
+/**
+ * Staff role mappings are configured independently of the customer role map so
+ * a customer-facing mapping can never mint staff privileges. Prefers an
+ * explicit `oidc.staffRoleMap`, else ASTRANULL_OIDC_STAFF_ROLE_MAP.
+ * @param {object} oidc
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {Record<string, string>}
+ */
+function resolveStaffRoleMap(oidc, env = process.env) {
+  if (oidc.staffRoleMap != null && typeof oidc.staffRoleMap === 'object') {
+    return oidc.staffRoleMap;
+  }
+  const raw = String(env.ASTRANULL_OIDC_STAFF_ROLE_MAP ?? '');
+  if (staffRoleMapEnvCache.raw !== raw) {
+    staffRoleMapEnvCache = { raw, map: parseRoleMapString(raw) };
+  }
+  return staffRoleMapEnvCache.map;
+}
+
+function normalizeRoleCandidate(raw, oidc, roleMap) {
   let role = String(raw).toLowerCase();
   if (oidc.rolePrefix) {
     const prefix = String(oidc.rolePrefix).toLowerCase();
@@ -100,23 +146,24 @@ function normalizeRoleCandidate(raw, oidc) {
       role = role.slice(prefix.length);
     }
   }
-  const roleMap = oidc.roleMap ?? {};
-  if (roleMap[role] != null) {
-    return { role: String(roleMap[role]).toLowerCase(), mapped: true };
+  const map = roleMap ?? {};
+  if (map[role] != null) {
+    return { role: String(map[role]).toLowerCase(), mapped: true };
   }
   const rawLower = String(raw).toLowerCase();
-  if (roleMap[rawLower] != null) {
-    return { role: String(roleMap[rawLower]).toLowerCase(), mapped: true };
+  if (map[rawLower] != null) {
+    return { role: String(map[rawLower]).toLowerCase(), mapped: true };
   }
   return { role, mapped: false };
 }
 
 function pickRole(roleClaim, oidc) {
   const requireExplicitRoleMap = oidc.requireExplicitRoleMap === true;
+  const roleMap = oidc.roleMap ?? {};
   const candidates = Array.isArray(roleClaim) ? roleClaim : [roleClaim];
   for (const raw of candidates) {
     if (raw == null || raw === '') continue;
-    const { role, mapped } = normalizeRoleCandidate(raw, oidc);
+    const { role, mapped } = normalizeRoleCandidate(raw, oidc, roleMap);
     if (requireExplicitRoleMap && !mapped) continue;
     if (ROLES.includes(role)) return role;
   }
@@ -124,10 +171,13 @@ function pickRole(roleClaim, oidc) {
 }
 
 function pickStaffRole(roleClaim, oidc) {
+  const requireExplicitRoleMap = oidc.requireExplicitRoleMap === true;
+  const staffRoleMap = resolveStaffRoleMap(oidc);
   const candidates = Array.isArray(roleClaim) ? roleClaim : [roleClaim];
   for (const raw of candidates) {
     if (raw == null || raw === '') continue;
-    const { role } = normalizeRoleCandidate(raw, oidc);
+    const { role, mapped } = normalizeRoleCandidate(raw, oidc, staffRoleMap);
+    if (requireExplicitRoleMap && !mapped) continue;
     if (STAFF_ROLES.includes(role)) return role;
   }
   return null;
@@ -167,17 +217,26 @@ function isRs256SigningRsaJwk(jwk) {
 }
 
 /**
- * Verify RS256 OIDC bearer JWT against JWKS and return human auth ctx or { error }.
+ * Shared verification sequence for every OIDC bearer path: parse -> JWKS lookup
+ * -> signature verify -> iss/aud/exp/nbf -> MFA. Both exported verifiers run
+ * this identical gauntlet before extracting their own claims, so a check added
+ * here can never apply to only one principal type.
+ *
  * @param {string} token
  * @param {import('../config.mjs').OidcRuntimeConfig} oidc
+ * @returns {Promise<{ error: string } | { payload: object }>}
  */
-export async function verifyOidcBearerToken(token, oidc) {
+async function verifyOidcJwtEnvelope(token, oidc) {
   const parsed = parseCompactJwt(token);
   if (!parsed) return { error: 'invalid_token' };
 
   const { header, payload, signingInput, signature } = parsed;
+  // Pin the algorithm from config, never from the token header: rejects
+  // alg:'none' and HS256/RS256 confusion before any key is selected.
   if (header.alg !== 'RS256') return { error: 'invalid_token' };
 
+  // kid selects a key from the trusted JWKS only; header-supplied key material
+  // (jwk/jku/x5c) is never honoured.
   const kid = header.kid;
   if (!kid || typeof kid !== 'string') return { error: 'invalid_token' };
 
@@ -198,12 +257,17 @@ export async function verifyOidcBearerToken(token, oidc) {
     return { error: 'invalid_token' };
   }
 
-  const sigOk = verify(
-    'RSA-SHA256',
-    Buffer.from(signingInput, 'utf8'),
-    publicKey,
-    signature,
-  );
+  let sigOk = false;
+  try {
+    sigOk = verify(
+      'RSA-SHA256',
+      Buffer.from(signingInput, 'utf8'),
+      publicKey,
+      signature,
+    );
+  } catch {
+    return { error: 'invalid_token' };
+  }
   if (!sigOk) return { error: 'invalid_token' };
 
   if (payload.iss !== oidc.issuer) return { error: 'invalid_token' };
@@ -232,6 +296,19 @@ export async function verifyOidcBearerToken(token, oidc) {
     return { error: 'mfa_required' };
   }
 
+  return { payload };
+}
+
+/**
+ * Verify RS256 OIDC bearer JWT against JWKS and return human auth ctx or { error }.
+ * @param {string} token
+ * @param {import('../config.mjs').OidcRuntimeConfig} oidc
+ */
+export async function verifyOidcBearerToken(token, oidc) {
+  const envelope = await verifyOidcJwtEnvelope(token, oidc);
+  if (envelope.error) return { error: envelope.error };
+  const { payload } = envelope;
+
   const tenantId = claimString(payload, oidc.tenantClaim);
   const userId = claimString(payload, oidc.userClaim);
   if (!tenantId || !userId) return { error: 'invalid_token' };
@@ -244,69 +321,24 @@ export async function verifyOidcBearerToken(token, oidc) {
 
 /**
  * Verify OIDC bearer for staff principals (staff roles only).
+ *
+ * Staff elevation requires the dedicated staff-role claim resolved through the
+ * staff role map. The customer `oidc.roleClaim` is deliberately NOT consulted:
+ * a customer-facing role entry must never imply staff privileges.
+ *
  * @param {string} token
  * @param {import('../config.mjs').OidcRuntimeConfig} oidc
  */
 export async function verifyOidcStaffBearerToken(token, oidc) {
-  const parsed = parseCompactJwt(token);
-  if (!parsed) return { error: 'invalid_token' };
-
-  const { header, payload, signingInput, signature } = parsed;
-  if (header.alg !== 'RS256') return { error: 'invalid_token' };
-
-  const kid = header.kid;
-  if (!kid || typeof kid !== 'string') return { error: 'invalid_token' };
-
-  const keys = await loadJwksKeys(
-    oidc.jwksUrl,
-    oidc.jwksCacheTtlMs,
-    oidc.jwksFetchTimeoutMs,
-  );
-  if (!keys) return { error: 'invalid_token' };
-
-  const jwk = keys.find((k) => k && k.kid === kid && isRs256SigningRsaJwk(k));
-  if (!jwk) return { error: 'invalid_token' };
-
-  let publicKey;
-  try {
-    publicKey = createPublicKey({ key: jwk, format: 'jwk' });
-  } catch {
-    return { error: 'invalid_token' };
-  }
-
-  const sigOk = verify(
-    'RSA-SHA256',
-    Buffer.from(signingInput, 'utf8'),
-    publicKey,
-    signature,
-  );
-  if (!sigOk) return { error: 'invalid_token' };
-
-  if (payload.iss !== oidc.issuer) return { error: 'invalid_token' };
-  if (!audienceMatches(payload.aud, oidc.audience)) return { error: 'invalid_token' };
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  const expSec = readJwtNumericDate(payload.exp);
-  if (expSec == null) {
-    return payload.exp == null ? { error: 'expired' } : { error: 'invalid_token' };
-  }
-  if (expSec + CLOCK_TOLERANCE_SEC < nowSec) {
-    return { error: 'expired' };
-  }
-
-  if (
-    oidc.requireMfa
-    && !claimHasAcceptedMfaValue(readClaimValue(payload, oidc.mfaClaim), oidc.mfaValues)
-  ) {
-    return { error: 'mfa_required' };
-  }
+  const envelope = await verifyOidcJwtEnvelope(token, oidc);
+  if (envelope.error) return { error: envelope.error };
+  const { payload } = envelope;
 
   const userId = claimString(payload, oidc.userClaim);
   if (!userId) return { error: 'invalid_token' };
 
-  const staffRoleClaimName = (oidc.staffRoleClaim ?? 'staff_role').trim();
-  const staffRole = pickStaffRole(readClaimValue(payload, staffRoleClaimName), oidc)
-    ?? pickStaffRole(readClaimValue(payload, oidc.roleClaim), oidc);
+  const staffRoleClaimName = (oidc.staffRoleClaim ?? 'staff_role').trim() || 'staff_role';
+  const staffRole = pickStaffRole(readClaimValue(payload, staffRoleClaimName), oidc);
   if (!staffRole) return { error: 'invalid_staff_role' };
 
   return {

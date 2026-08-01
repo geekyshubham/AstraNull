@@ -18,6 +18,7 @@ import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVe
 import { upsertFindingFromVerdict } from './findings.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
+import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { computeReadiness } from './readiness.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
@@ -429,6 +430,41 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       message:
         'Signed-worker Host/SNI bypass checks require an IP target, literal-IP URL, probe_profile.direct_ip, or target.metadata.direct_origin_ip.',
     };
+  }
+
+  // Ownership gate — the last check before this run can put packets on the wire.
+  //
+  // Scoped to the egress path only: this is the exact condition under which the probe is
+  // dispatched to an external worker instead of being computed in-process (see `inlineProbe`
+  // below). Simulation and ops-readiness probes never leave the machine, so gating them would
+  // block dev/CI flows without protecting anyone.
+  //
+  // Placed after target resolution (it needs `target.id`) but before any store mutation, so a
+  // denial cannot leave a half-created run behind.
+  //
+  // No deadlock: the ownership challenge that *earns* verification builds its probe job
+  // directly via createOwnershipChallengeJob and never passes through startTestRun.
+  const probeWillLeaveThisHost =
+    (runtimeConfig.probeMode ?? 'simulation') === 'signed-worker'
+    && !isOpsReadinessProbeKind(check);
+
+  if (probeWillLeaveThisHost) {
+    const ownership = targetOwnershipProof(ctx, group, target.id);
+    if (!ownership.verified) {
+      return denySafeStart(
+        ctx,
+        'test_run.ownership_denied',
+        targetGroupId,
+        {
+          check_id: check.check_id,
+          target_group_id: targetGroupId,
+          target_id: target.id,
+          ownership_state: ownership.state,
+        },
+        'ownership_not_verified',
+        409,
+      );
+    }
   }
 
   const onlineAgents = getStore().agents.filter(

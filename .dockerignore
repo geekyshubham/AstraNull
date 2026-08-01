@@ -11,3 +11,9 @@ npm-debug.log*
 tmp
 temp
 *.tmp
+# Auth trust root: the bundled staging OIDC fixture holds the token-signing private key.
+# CI generates one to run tests in the same checkout that builds this image, so without
+# this entry `COPY ops/staging` would bake an ephemeral per-build key into the image and
+# silently invalidate every token on each deploy. Deployments inject it at runtime via
+# ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON instead.
+ops/staging/bundled-oidc-fixture.json

@@ -12,6 +12,13 @@ coverage/
 !.env.example
 ops/digitalocean/.app.generated.yaml
 
+# Bundled staging OIDC fixture: contains the RSA private key that signs auth
+# tokens, i.e. the deployment's auth trust root. It was committed here until
+# 2026-08-01; that key is burned (public git history keeps it recoverable) and
+# has been rotated. Generate a local one with `npm run oidc:fixture:generate`.
+# Deployments supply it out-of-band via ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON.
+ops/staging/bundled-oidc-fixture.json
+
 
 # Certificates and key material
 *.pem
@@ -53,9 +60,10 @@ grokorches-skill.md
 .grok-prompts/
 .grok/
 
-# Local npm install artifact (not tracked in this repo)
-package-lock.json
-
+# package-lock.json IS tracked: it is the single lockfile governing every
+# `npm ci` install (CI, all Dockerfiles). Never ignore it — an unpinned install
+# lets two builds of the same commit resolve different dependency versions,
+# which breaks the signed-supply-chain guarantee.
 
 # Railway / deployment CLI state (local operator only)
 .railway/

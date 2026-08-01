@@ -958,7 +958,15 @@ export function NotificationsPage({
   );
 }
 
-export function AuditPage({ data, session }: { data: PortalData; session: Session }) {
+export function AuditPage({
+  data,
+  session,
+  onRefresh
+}: {
+  data: PortalData;
+  session: Session;
+  onRefresh?: () => void | Promise<void>;
+}) {
   const [filter, setFilter] = useState('');
   const [custodyOnly, setCustodyOnly] = useState(false);
   const [actorFilter, setActorFilter] = useState('all');
@@ -1144,6 +1152,8 @@ export function AuditPage({ data, session }: { data: PortalData; session: Sessio
                   onClick: () => setSelectedId(auditEntrySelectionKey(item))
                 })}
                 empty={renderAuditEmpty()}
+                loadError={data.loadErrors.audit}
+                onRetry={onRefresh ? () => void onRefresh() : undefined}
               />
             </CardContent>
           </Card>

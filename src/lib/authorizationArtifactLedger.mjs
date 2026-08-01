@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { getStore, persistStore } from '../store.mjs';
-import { HttpBodyError } from './http.mjs';
+// The JSON upload path delegates to the shared readBodyText() rather than keeping a
+// second text reader here: it already has the oversized-body abort semantics and
+// there is no reason for the two to drift again.
+import { HttpBodyError, readBodyText } from './http.mjs';
 import { newId } from './ids.mjs';
 import { redactString } from './redact.mjs';
 
@@ -218,27 +221,66 @@ export async function readArtifactUploadBody(req, maxBytes) {
   return { body, envelope: 'json' };
 }
 
+/**
+ * Read an artifact upload body as raw bytes, bounded by maxBytes.
+ *
+ * Kept separate from the shared readBodyText() because multipart parsing needs the
+ * undecoded bytes: parseMultipartMetadataOnly() reads the buffer as `latin1` to
+ * round-trip arbitrary octets, which a utf8 decode would corrupt.
+ *
+ * Same oversized-body treatment as the shared helper: the old version set a
+ * `tooLarge` flag and kept pulling the rest of the upload off the wire, so the cap
+ * bounded memory but not work — an unauthenticated caller could make the process
+ * read a body of arbitrary length before being rejected. Now an over-cap declared
+ * Content-Length is rejected before a single chunk is read, and a chunked stream is
+ * abandoned on the first chunk that crosses the cap.
+ */
 export async function readBodyBuffer(req, maxBytes) {
   if (!Number.isInteger(maxBytes) || maxBytes < 1) {
     throw new Error('readBodyBuffer requires a positive integer maxBytes');
   }
+
+  // Fast path: the caller told us it is too big, so never start reading.
+  const declared = Number.parseInt(
+    Array.isArray(req.headers?.['content-length'])
+      ? req.headers['content-length'][0]
+      : req.headers?.['content-length'],
+    10,
+  );
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw abortOversizedUpload(req);
+  }
+
   const chunks = [];
   let total = 0;
-  let tooLarge = false;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > maxBytes) tooLarge = true;
-    else chunks.push(chunk);
-  }
-  if (tooLarge) {
-    throw new HttpBodyError('payload_too_large', 413);
+    if (total > maxBytes) {
+      // Break out of the read loop on the FIRST chunk past the cap: the rest of
+      // the upload is never pulled off the wire.
+      throw abortOversizedUpload(req);
+    }
+    chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 }
 
-async function readBodyText(req, maxBytes) {
-  const buffer = await readBodyBuffer(req, maxBytes);
-  return buffer.toString('utf8');
+/**
+ * Stop consuming an oversized upload and signal that the connection must be closed.
+ *
+ * Mirrors the shared helper's abort semantics deliberately, including NOT calling
+ * req.destroy() here: destroying the request synchronously also destroys the socket
+ * the response would be written to, so the client gets a dropped connection instead
+ * of an observable 413. Pausing and unpiping leaves the body undrained, which is the
+ * protection that matters; teardown happens in respondBodyError() once the 413 has
+ * flushed (the `closeConnection` flag is what triggers it).
+ */
+function abortOversizedUpload(req) {
+  req.pause?.();
+  req.unpipe?.();
+  const err = new HttpBodyError('payload_too_large', 413);
+  err.closeConnection = true;
+  return err;
 }
 
 /** Deterministic SHA-256 for test fixtures and client-side digest hints. */

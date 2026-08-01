@@ -1,4 +1,7 @@
-import { applyBundledStagingOidcEnvDefaults } from './lib/bundledStagingOidc.mjs';
+import {
+  applyBundledStagingOidcEnvDefaults,
+  assertBundledStagingOidcFixtureUsable,
+} from './lib/bundledStagingOidc.mjs';
 import { isHostedStagingDeployment, resolveDeploymentProfile } from './lib/deploymentProfile.mjs';
 import { loadSecretEncryptionKey } from './lib/secrets.mjs';
 
@@ -279,6 +282,10 @@ function assertProductionPersistence(env, persistenceMode) {
 
 export function loadRuntimeConfig(env = process.env) {
   applyBundledStagingOidcEnvDefaults(env);
+  // Deployment config pins issuer/audience/JWKS, so nothing above reads the signing key.
+  // Assert it explicitly: otherwise a missing or revoked key boots fine and then fails every
+  // auth request, which looks healthy to a deploy while nobody can sign in.
+  assertBundledStagingOidcFixtureUsable(env);
   const nodeEnv = env.NODE_ENV ?? 'development';
   const deploymentProfile = resolveDeploymentProfile(env);
   const authMode = resolveAuthMode(env);

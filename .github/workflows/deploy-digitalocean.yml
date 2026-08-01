@@ -9,9 +9,9 @@ concurrency:
   group: deploy-digitalocean
   cancel-in-progress: false
 
+# Least privilege by default; the deploy job widens this for itself only.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   verify:
@@ -24,27 +24,53 @@ jobs:
           node-version: "22"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Dependency audit (high or above fails)
+        run: npm audit --audit-level=high
 
       - name: Lint
         run: node scripts/lint.mjs
 
-      - name: Deploy gate tests
-        run: |
-          node --test \
-            tests/unit/product-scope.test.mjs \
-            tests/unit/bundled-staging-oidc.test.mjs \
-            tests/unit/react-portal-auth.test.mjs \
-            tests/unit/railway-staging-start.test.mjs \
-            tests/e2e/ui-smoke.test.mjs
+      - name: Portal lint
+        run: npm run lint:portal
+
+      - name: Web typecheck
+        run: npm run web:typecheck
+
+      # The full suite. This previously ran 5 hand-listed files out of 260+ and
+      # omitted the tenant-isolation audit, so production could ship changes that
+      # CI would have rejected.
+      - name: Tests
+        run: npm test
+
+      - name: Postgres tenant query audit
+        run: node scripts/postgres-tenant-query-audit.mjs
 
       - name: Safety check
         run: node scripts/safety-check.mjs
+
+      - name: DB schema contract
+        run: node scripts/validate-db-schema.mjs
+
+      - name: Portal bundle is in sync with source
+        run: |
+          npm run web:build
+          if ! git diff --exit-code -- apps/web/react-app.js apps/web/react-app.css; then
+            echo "::error::Committed portal bundle does not match a fresh build of apps/web/react. Run 'npm run web:build' and commit the result."
+            exit 1
+          fi
 
   deploy:
     needs: verify
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+      # Required for cosign keyless signing: the job mints a short-lived OIDC
+      # token as its signing identity instead of holding a private key.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +81,9 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Build and push container image
         id: build
         uses: docker/build-push-action@v6
@@ -62,7 +91,33 @@ jobs:
           context: .
           file: ops/digitalocean/Dockerfile
           push: true
-          tags: ghcr.io/geekyshubham/astranull:latest
+          # :latest is mutable, so on its own it leaves no immutable rollback
+          # target. The commit-SHA tag gives every deploy a stable coordinate.
+          tags: |
+            ghcr.io/geekyshubham/astranull:latest
+            ghcr.io/geekyshubham/astranull:${{ github.sha }}
+          # Attach an SBOM and SLSA provenance to the pushed image.
+          sbom: true
+          provenance: mode=max
+
+      # Keyless signing via the workflow's OIDC identity — no long-lived key to
+      # steal or rotate. Signs the immutable digest, not a mutable tag.
+      - name: Sign image with cosign
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/geekyshubham/astranull@${IMAGE_DIGEST}"
+
+      # Fail the deploy if the signature we just made does not verify. Without
+      # this, signing is decorative: nothing would notice a bad or absent
+      # signature before the image reaches production.
+      - name: Verify image signature before deploy
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "ghcr.io/geekyshubham/astranull@${IMAGE_DIGEST}"
 
       - name: Deploy to App Platform
         uses: digitalocean/app_action/deploy@v2

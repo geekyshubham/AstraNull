@@ -225,10 +225,16 @@ export function parseReleasePlanGateTableCounts(markdown = '') {
     }
   }
 
-  if (insideGateSection && !sawRows) {
+  // Fail closed when no gate rows were counted, whether or not the section heading was
+  // found. Guarding this on `insideGateSection` made a renamed or deleted heading report
+  // zero blockers, so a release plan that no longer documents its gates read as "all
+  // gates closed". Mirrors parseP0DispositionGateCounts.
+  if (!sawRows) {
     const item = {
       status: 'external_blocker',
-      text: 'Production release gates table: missing or empty',
+      text: insideGateSection
+        ? 'Production release gates table: missing or empty'
+        : 'Production release gates section not found; expected a "## Production release gates" heading',
       gate: 'Production release gates table',
       owner: null,
       evidence: null,
@@ -665,6 +671,9 @@ export function aggregateProductionReadinessGapAudit(input = {}, options = {}) {
     records,
     createdAt: input.createdAt ?? null,
     notes: input.notes ?? null,
+    // Carried through so simulated-environment bundles are recognized as rehearsal
+    // material by the attestation rather than counting toward production readiness.
+    environment: input.environment ?? null,
     rehearsal_only: input.rehearsal_only === true || input.rehearsalOnly === true,
   }, attestationOptions);
 
@@ -793,6 +802,7 @@ export function parseEvidenceInput(parsed) {
     records: normalizeEvidenceRecords(parsed),
     createdAt: parsed.created_at ?? null,
     notes: parsed.notes ?? null,
+    environment: parsed.environment ?? null,
     rehearsalOnly: parsed.rehearsal_only === true,
   };
 }
@@ -866,6 +876,7 @@ export async function main(argv = process.argv.slice(2)) {
       records: normalized.records,
       createdAt: normalized.createdAt,
       notes: normalized.notes,
+      environment: normalized.environment,
       rehearsalOnly: normalized.rehearsalOnly,
     };
   }

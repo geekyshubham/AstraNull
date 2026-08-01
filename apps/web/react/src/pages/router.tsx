@@ -70,7 +70,7 @@ export function RouteView({ route, data, config, session, onRefresh }: RouteView
   if (route === 'notifications') {
     return <NotificationsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
-  if (route === 'audit') return <AuditPage data={data} session={session} />;
+  if (route === 'audit') return <AuditPage data={data} session={session} onRefresh={onRefresh} />;
   if (route === 'release-evidence') return <ReleaseEvidencePage data={data} session={session} />;
   if (route === 'support') return <SupportPage data={data} session={session} />;
   if (route === 'subscription') return <SubscriptionPage data={data} />;

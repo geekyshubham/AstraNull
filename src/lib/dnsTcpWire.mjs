@@ -57,12 +57,17 @@ export function parseDnsResponseHeader(chunk, options = {}) {
     }
     const declaredLen = buffer.readUInt16BE(0);
     if (declaredLen < 12) {
+      // A DNS message cannot be shorter than its 12-byte header. Once the 2-byte
+      // length prefix has arrived this frame can never become valid, so terminate
+      // instead of waiting for bytes that would never complete the read.
       return {
         rcode: null,
         answer_count: 0,
         dns_message: buffer,
-        incomplete: true,
+        incomplete: false,
         tcp_framed: true,
+        axfr_refused: true,
+        reason: 'malformed_response',
       };
     }
     if (buffer.length < declaredLen + 2) {
@@ -112,6 +117,13 @@ export function parseDnsResponseHeader(chunk, options = {}) {
 }
 
 /**
+ * Hard accumulation ceiling: a DNS-over-TCP frame is a 16-bit length prefix plus at
+ * most 65535 payload bytes, so nothing legitimate exceeds this. Bounds memory when a
+ * hostile nameserver streams an endlessly incomplete frame.
+ */
+export const MAX_DNS_TCP_RESPONSE_BYTES = 2 + 0xffff;
+
+/**
  * Append a TCP DNS response chunk and parse when the frame is complete.
  * @param {Buffer} responseBuffer accumulated bytes so far
  * @param {Buffer} chunk newly received bytes
@@ -119,6 +131,21 @@ export function parseDnsResponseHeader(chunk, options = {}) {
  */
 export function accumulateDnsTcpResponse(responseBuffer, chunk, options = { transport: 'tcp' }) {
   const buffer = Buffer.concat([responseBuffer, chunk]);
+  if (buffer.length > MAX_DNS_TCP_RESPONSE_BYTES) {
+    return {
+      buffer: buffer.subarray(0, MAX_DNS_TCP_RESPONSE_BYTES),
+      parsed: {
+        rcode: null,
+        answer_count: 0,
+        dns_message: Buffer.alloc(0),
+        incomplete: false,
+        tcp_framed: true,
+        axfr_refused: true,
+        reason: 'response_too_large',
+      },
+      complete: true,
+    };
+  }
   const parsed = parseDnsResponseHeader(buffer, options);
   return { buffer, parsed, complete: parsed.incomplete !== true };
 }

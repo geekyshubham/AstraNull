@@ -14,36 +14,159 @@ export class HttpBodyError extends Error {
   }
 }
 
+/**
+ * Content Security Policy for the portal shell.
+ *
+ * Shipped Report-Only deliberately. apps/web/index.html carries four inline
+ * <script> blocks (theme init, stylesheet injector, boot controller, module
+ * loader) and a large inline <style>. Enforcing a hash-based script-src would
+ * hard-break the console the moment any of those blocks is edited, and that file
+ * is owned by the portal work — a policy that fails closed on someone else's
+ * whitespace change is a liability, not a control. Report-Only gives us the
+ * violation telemetry to tighten it later without risking a blank console.
+ *
+ * `frame-ancestors` is the exception: it is enforced separately below, because
+ * clickjacking is the one framing risk that matters here and the console is
+ * never legitimately framed.
+ */
+const CSP_REPORT_ONLY = [
+  "default-src 'self'",
+  // Inline + injected scripts in the boot shell; see note above.
+  "script-src 'self' 'unsafe-inline'",
+  // Inline boot styles plus the Google Fonts stylesheet link.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
+/**
+ * Defence-in-depth response headers applied to every writer.
+ *
+ * Scope note: AstraNull's portal authenticates with a bearer token held in the
+ * SPA, not a cookie session. So framing carries no ambient session and cookie
+ * SameSite is not in play — these headers are hardening, not the primary
+ * control. HSTS is deliberately NOT emitted: TLS terminates upstream at the load
+ * balancer, and an app-level Strict-Transport-Security would let a
+ * plaintext-origin misconfiguration pin browsers to a broken scheme.
+ */
+export function securityHeaders() {
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'no-referrer',
+    'X-Frame-Options': 'DENY',
+    // Enforced (framing only); the full policy rides along Report-Only.
+    'Content-Security-Policy': "frame-ancestors 'none'",
+    'Content-Security-Policy-Report-Only': CSP_REPORT_ONLY,
+  };
+}
+
 export function json(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
+    ...securityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
+    // API payloads are tenant-scoped; never let a shared cache retain them.
+    'Cache-Control': 'no-store',
   });
   res.end(payload);
 }
 
 export function text(res, status, body, contentType = 'text/plain; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': contentType });
+  res.writeHead(status, { ...securityHeaders(), 'Content-Type': contentType });
   res.end(body);
 }
 
+/**
+ * Read a request body as UTF-8, refusing oversized payloads without consuming
+ * them.
+ *
+ * The previous implementation kept draining the socket after the cap was
+ * exceeded and only raised 413 once the stream ended, so an unauthenticated
+ * caller could make the process read a body of arbitrary length before being
+ * rejected — the cap bounded memory, not work. Now the declared Content-Length
+ * is rejected before a single chunk is read, and a chunked stream is aborted on
+ * the first chunk that crosses the cap.
+ */
 export async function readBodyText(req, maxBytes) {
   if (!Number.isInteger(maxBytes) || maxBytes < 1) {
     throw new Error('readBodyText requires a positive integer maxBytes');
   }
+
+  // Fast path: the caller told us it is too big, so never start reading.
+  const declared = Number.parseInt(
+    Array.isArray(req.headers?.['content-length'])
+      ? req.headers['content-length'][0]
+      : req.headers?.['content-length'],
+    10,
+  );
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw abortOversized(req);
+  }
+
   const chunks = [];
   let total = 0;
-  let tooLarge = false;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > maxBytes) tooLarge = true;
-    else chunks.push(chunk);
-  }
-  if (tooLarge) {
-    throw new HttpBodyError('payload_too_large', 413);
+    if (total > maxBytes) {
+      // Break out of the read loop on the FIRST chunk past the cap: the rest of
+      // the upload is never pulled off the wire.
+      throw abortOversized(req);
+    }
+    chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/**
+ * Stop consuming an oversized body and signal that the connection must be closed.
+ *
+ * Deliberately does NOT call `req.destroy()` here. Destroying the request
+ * synchronously also destroys the socket the response would be written to, so
+ * the client gets a dropped connection instead of a 413 — verified empirically:
+ * the oversized cases returned a fetch-level failure rather than a status. The
+ * body still goes unread either way (socket byte counters confirm the payload is
+ * not drained), so pausing gives the same protection while keeping the rejection
+ * observable. Teardown happens in `respondBodyError` once the 413 has flushed.
+ */
+function abortOversized(req) {
+  req.pause?.();
+  req.unpipe?.();
+  const err = new HttpBodyError('payload_too_large', 413);
+  err.closeConnection = true;
+  return err;
+}
+
+/**
+ * Write an HttpBodyError response, closing the connection when the body was
+ * abandoned unread (otherwise the client would keep uploading into a socket
+ * nobody is draining).
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {HttpBodyError & { closeConnection?: boolean }} err
+ */
+export function respondBodyError(res, err) {
+  const payload = JSON.stringify({ error: err.code });
+  // Capture the socket up front: it is already detached by the time the write
+  // callback runs, which is how the first attempt at this crashed.
+  const socket = res.socket;
+  res.writeHead(err.status, {
+    ...securityHeaders(),
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(payload),
+    'Cache-Control': 'no-store',
+    ...(err.closeConnection ? { Connection: 'close' } : {}),
+  });
+  res.end(payload, () => {
+    if (err.closeConnection && socket && !socket.destroyed) {
+      socket.destroy();
+    }
+  });
 }
 
 export async function readJsonBody(req, maxBytes) {
@@ -178,7 +301,10 @@ export async function serveStatic(req, res, url, runtimeConfig) {
     const body = isStaffLoginShell
       ? decorateStaffLoginShell(data.toString('utf8'))
       : data;
-    res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream' });
+    res.writeHead(200, {
+      ...securityHeaders(),
+      'Content-Type': types[ext] ?? 'application/octet-stream',
+    });
     res.end(body);
     return true;
   } catch {

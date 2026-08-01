@@ -272,6 +272,7 @@ describe('dev store migration', () => {
       entitlementGrants: [],
       internalApprovalRequests: [],
       internalAuditLog: [],
+      breakGlassActivations: [],
       testPolicies: [],
       wafOffensiveRequests: [],
       wafOffensiveReports: [],

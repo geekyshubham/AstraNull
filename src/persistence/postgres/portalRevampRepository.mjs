@@ -2,7 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { buildAuditRecord } from '../../audit.mjs';
 import { encodeBase32 } from '../../lib/base32.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
-import { decodeCursor, encodeCursor, paginateItems } from '../../lib/cursorPagination.mjs';
+import {
+  clampPageLimit,
+  decodeKeysetCursor,
+  encodeKeysetCursor,
+} from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
@@ -31,6 +35,17 @@ function mapDnsRow(row) {
     audit_entry_id: row.audit_entry_id,
   };
 }
+
+/**
+ * Hard caps for the target-detail hydrator's unbounded reads.
+ *
+ * `findings.id` is TEXT and `findings.created_at` is TIMESTAMPTZ (db/migrations/0001),
+ * so the keyset tuple is `(created_at, id)` cast to `(timestamptz, text)`.
+ */
+const FINDINGS_PAGE_MAX = 100;
+const FINDINGS_PAGE_FALLBACK = 50;
+const FINDINGS_DEFAULT_PAGE = 20;
+const VERIFICATION_HISTORY_CAP = 200;
 
 /** @type {readonly string[]} */
 export const PORTAL_REVAMP_REPOSITORY_METHODS = Object.freeze([
@@ -334,12 +349,87 @@ export function createPortalRevampRepository(pool) {
             ? target.metadata_json
             : {};
 
+        // Page size is clamped server-side; a client-supplied findings_limit can never
+        // widen the read beyond FINDINGS_PAGE_MAX.
+        const requestedFindingsLimit = Number(query.findings_limit);
+        const findingsPaginated =
+          Number.isFinite(requestedFindingsLimit) && requestedFindingsLimit > 0;
+        const findingsLimit = findingsPaginated
+          ? clampPageLimit(requestedFindingsLimit, {
+              max: FINDINGS_PAGE_MAX,
+              fallback: FINDINGS_PAGE_FALLBACK,
+            })
+          : FINDINGS_DEFAULT_PAGE;
+
+        // Keyset cursors carry the whole (created_at, id) sort tuple. A LEGACY cursor
+        // holds only `id`, so its created_at is resolved here with a single primary-key
+        // lookup on findings.id. We resolve rather than restart at page one: restarting
+        // would silently hand the caller a different slice under the new ordering, and
+        // the lookup is one indexed row. If the id no longer exists (finding deleted or
+        // re-scoped) we fall back to a documented no-cursor first page.
+        let findingsCursor = findingsPaginated
+          ? decodeKeysetCursor(query.findings_cursor, { timeField: 'created_at', idField: 'id' })
+          : null;
+        if (findingsCursor?.legacy) {
+          bump();
+          const legacyRes = await client.query(
+            `SELECT created_at::text AS created_at_cursor FROM findings
+             WHERE tenant_id = $1 AND id = $2 AND target_id = $3
+             LIMIT 1`,
+            [ctx.tenantId, findingsCursor.id, targetId],
+          );
+          const resolvedAt = legacyRes.rows[0]?.created_at_cursor ?? null;
+          findingsCursor = resolvedAt == null
+            ? null
+            : { id: findingsCursor.id, created_at: resolvedAt, legacy: false };
+        }
+
+        // Row-tuple seek predicate on the composite (created_at, id). Emitted only when a
+        // cursor is present so the planner sees a plain range scan; folding it in as
+        // "($3 IS NULL OR (created_at, id) < ...)" would force a filter instead of a seek.
+        // Fetch limit+1 rows: the extra row is the has-next-page probe, so we no longer
+        // need a total count to decide whether to emit a cursor.
+        const findingsParams = [ctx.tenantId, targetId];
+        let findingsKeysetPredicate = '';
+        if (findingsCursor) {
+          findingsParams.push(findingsCursor.created_at, findingsCursor.id);
+          findingsKeysetPredicate =
+            `\n               AND (created_at, id) < ($${findingsParams.length - 1}::timestamptz, $${findingsParams.length}::text)`;
+        }
+        findingsParams.push(findingsLimit + 1);
+        // created_at_cursor is the LOSSLESS cursor value. TIMESTAMPTZ holds microseconds
+        // (NOW() populates them) but node-postgres parses the column into a JS Date, which
+        // only keeps milliseconds. Feeding that truncated value back into the seek
+        // predicate would place the boundary *before* the real row and silently skip every
+        // row in the truncated sub-millisecond window. Casting to text in SQL round-trips
+        // exactly. The Date-typed created_at is still selected for the opened_at output.
+        const findingsSql =
+          `SELECT id, severity, title, status, created_at, created_at::text AS created_at_cursor
+             FROM findings
+             WHERE tenant_id = $1 AND target_id = $2${findingsKeysetPredicate}
+             ORDER BY created_at DESC, id DESC
+             LIMIT $${findingsParams.length}`;
+
         bump();
-        const [verifications, loa, findings, runs, wafAsset, agentBinding, wafSnapshot] = await Promise.all([
+        const [
+          verifications,
+          loa,
+          findings,
+          findingCounts,
+          runs,
+          wafAsset,
+          agentBinding,
+          wafSnapshot,
+        ] = await Promise.all([
+          // Capped, but ordered DESC and reversed below so the newest rows survive the
+          // cap. An ASC order with a LIMIT would keep the OLDEST rows and make the
+          // "latest verification" (last element) stale once history exceeds the cap.
           client.query(
             `SELECT * FROM target_verifications
-             WHERE tenant_id = $1 AND target_id = $2 ORDER BY transitioned_at ASC`,
-            [ctx.tenantId, targetId],
+             WHERE tenant_id = $1 AND target_id = $2
+             ORDER BY transitioned_at DESC, id DESC
+             LIMIT $3`,
+            [ctx.tenantId, targetId, VERIFICATION_HISTORY_CAP],
           ),
           client.query(
             `SELECT * FROM loa_signatures
@@ -347,10 +437,18 @@ export function createPortalRevampRepository(pool) {
              ORDER BY signed_at DESC LIMIT 1`,
             [ctx.tenantId, target.target_group_id],
           ),
+          client.query(findingsSql, findingsParams),
+          // counts.findings_open/closed used to be derived from the fully materialized
+          // findings array. Now that the page is LIMITed, the totals must come from an
+          // aggregate or they would silently collapse to "counts within this page".
+          // COUNT(*) FILTER keeps the emitted numbers identical to the old behaviour
+          // while staying index-only on findings_by_target_state(target_id, status).
           client.query(
-            `SELECT id, severity, title, status, created_at
-             FROM findings WHERE tenant_id = $1 AND target_id = $2
-             ORDER BY created_at DESC`,
+            `SELECT
+               COUNT(*) FILTER (WHERE status = 'open')::int AS open_count,
+               COUNT(*) FILTER (WHERE status IN ('closed', 'accepted'))::int AS closed_count
+             FROM findings
+             WHERE tenant_id = $1 AND target_id = $2`,
             [ctx.tenantId, targetId],
           ),
           client.query(
@@ -397,11 +495,17 @@ export function createPortalRevampRepository(pool) {
             )
           : { rows: [] };
 
-        const verificationRows = verifications.rows;
+        // Re-reverse the DESC-capped verification rows back into ASC order so both the
+        // history array and `latest` (the final element) keep their original semantics.
+        const verificationRows = verifications.rows.slice().reverse();
         const latest = verificationRows[verificationRows.length - 1];
+
+        // The limit+1th row, if present, only signals that another page exists; it is
+        // trimmed off before mapping so the emitted page size matches the request.
         const findingsRows = findings.rows;
-        const limit = Number(query.findings_limit);
-        let findingsPage = findingsRows.map((f) => ({
+        const findingsHasMore = findingsRows.length > findingsLimit;
+        const findingsPageRows = findingsRows.slice(0, findingsLimit);
+        const findingsPage = findingsPageRows.map((f) => ({
           id: f.id,
           severity: f.severity,
           title: f.title,
@@ -409,14 +513,16 @@ export function createPortalRevampRepository(pool) {
           opened_at: toIso(f.created_at),
           owner_group: 'edge-sre',
         }));
-        let findingsNextCursor = null;
-        if (Number.isFinite(limit) && limit > 0) {
-          const paged = paginateItems(findingsPage, { limit, cursor: query.findings_cursor, cursorField: 'id' });
-          findingsPage = paged.items;
-          findingsNextCursor = paged.next_cursor;
-        } else {
-          findingsPage = findingsPage.slice(0, 20);
-        }
+        const findingsPageLast = findingsPageRows[findingsPageRows.length - 1];
+        // Unpaginated callers never received a cursor before, so keep emitting null for
+        // them rather than changing the shape of the default response.
+        const findingsNextCursor =
+          findingsPaginated && findingsHasMore && findingsPageLast
+            ? encodeKeysetCursor({
+                created_at: findingsPageLast.created_at_cursor,
+                id: findingsPageLast.id,
+              })
+            : null;
 
         const agentRow = agentBinding.rows[0] ?? null;
         const snapshotRow = wafSnapshot.rows[0] ?? null;
@@ -499,8 +605,10 @@ export function createPortalRevampRepository(pool) {
             : null,
           counts: {
             runs_total: runs.rows.length,
-            findings_open: findingsRows.filter((f) => f.status === 'open').length,
-            findings_closed: findingsRows.filter((f) => f.status === 'closed' || f.status === 'accepted').length,
+            // Sourced from the aggregate, not the page: these are per-target totals and
+            // must not shrink just because the findings read is now bounded.
+            findings_open: Number(findingCounts.rows[0]?.open_count ?? 0),
+            findings_closed: Number(findingCounts.rows[0]?.closed_count ?? 0),
           },
         };
         payload.meta = {

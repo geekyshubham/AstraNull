@@ -18,6 +18,8 @@ import {
   probeUdpDatagram,
   probeWebsocketUpgradePosture,
 } from '../src/lib/safeNetworkProbes.mjs';
+import { resolveDeploymentProfile } from '../src/lib/deploymentProfile.mjs';
+import { assertProbeDestinationAllowed } from '../src/lib/probeEndpoint.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../src/lib/wafProductCatalog.mjs';
 import {
   probeWorkerAuthHeaders,
@@ -49,6 +51,46 @@ function parseFlag(argv, name) {
 function parseBoolEnv(value) {
   if (value == null || value === '') return false;
   return value === '1' || value.toLowerCase() === 'true' || value.toLowerCase() === 'yes';
+}
+
+/**
+ * Production-like deployments never get the private-destination escape hatch.
+ * NODE_ENV=production alone is enough — a hosted-staging profile does not soften this,
+ * and an unparseable profile fails closed.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function isProductionLikeDeployment(env = process.env) {
+  if (String(env.NODE_ENV ?? '').trim() === 'production') return true;
+  try {
+    return resolveDeploymentProfile(env) === 'production';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Opt-in relaxation for legitimate on-prem RFC1918 probing. Refused outright when the
+ * deployment is production-like; cloud metadata and link-local stay blocked regardless.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function resolveProbeDestinationPolicy(env = process.env) {
+  const productionLike = isProductionLikeDeployment(env);
+  const requested = parseBoolEnv(env.ASTRANULL_PROBE_ALLOW_PRIVATE_DESTINATIONS);
+
+  // Loopback is where the local harness lives (dev servers, local-staging smoke targets),
+  // and an operator probing their own box gains nothing an attacker could not already do.
+  // In a production-like deployment it is a genuine SSRF sink (the prober's own admin
+  // surface), so it is refused there. Cloud metadata and link-local are never allowed by
+  // either branch — assertProbeDestinationAllowed refuses those unconditionally.
+  const allowLoopback = !productionLike;
+
+  return {
+    allowPrivate: requested && !productionLike,
+    allowLoopback,
+    optInRefused: requested && productionLike,
+  };
 }
 
 export function parseWorkerConfig(argv = process.argv.slice(2), env = process.env) {
@@ -244,6 +286,106 @@ function dnsQueryName(job) {
     return `${label}.${base}`;
   }
   return value;
+}
+
+/**
+ * Extract the single host this job will egress to, mirroring how the probe helpers
+ * derive their destination (bare host, host:port, [v6]:port, or URL).
+ *
+ * @param {Record<string, unknown>} job
+ * @returns {string | null}
+ */
+export function probeDestinationHost(job) {
+  const value = String(job?.target?.value ?? '').trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const { hostname } = new URL(value);
+      return hostname.replace(/^\[/, '').replace(/\]$/, '') || null;
+    } catch {
+      return null;
+    }
+  }
+  const withoutPath = value.split('/')[0];
+  const bracketed = withoutPath.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1];
+  if (net.isIP(withoutPath) !== 0) return withoutPath;
+  const hostPort = withoutPath.match(/^([^:]+):(\d+)$/);
+  return (hostPort ? hostPort[1] : withoutPath) || null;
+}
+
+async function resolveOrEmpty(fn, host) {
+  try {
+    const out = await fn(host);
+    return Array.isArray(out) ? out.filter((ip) => typeof ip === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Single destination-classification chokepoint for probe egress.
+ *
+ * Resolves the target host's A/AAAA set exactly once and refuses the job when ANY
+ * resolved address is non-routable. Resolving once (rather than letting each probe
+ * re-resolve) also closes the DNS-rebinding/TOCTOU window between check and connect.
+ *
+ * Hosts that resolve to nothing are allowed through: there is no address to probe, so
+ * the underlying probe reports its own ENOTFOUND/blocked outcome.
+ *
+ * @param {Record<string, unknown>} job
+ * @param {{ resolve4Fn?: Function, resolve6Fn?: Function, destinationPolicy?: object, env?: NodeJS.ProcessEnv }} deps
+ */
+export async function vetProbeDestination(job, deps = {}) {
+  const policy = deps.destinationPolicy ?? resolveProbeDestinationPolicy(deps.env ?? process.env);
+  const host = probeDestinationHost(job);
+  if (!host) {
+    return { ok: true, host: null, addresses: [], policy };
+  }
+
+  if (net.isIP(host) !== 0) {
+    const verdict = assertProbeDestinationAllowed(host, policy);
+    return verdict.ok
+      ? { ok: true, host, addresses: [host], policy }
+      : { ok: false, host, addresses: [host], blocked_address: host, reason: verdict.message, policy };
+  }
+
+  const resolve4Fn = deps.resolve4Fn ?? dns.resolve4;
+  const resolve6Fn = deps.resolve6Fn ?? dns.resolve6;
+  const [v4, v6] = await Promise.all([
+    resolveOrEmpty(resolve4Fn, host),
+    resolveOrEmpty(resolve6Fn, host),
+  ]);
+  const addresses = [...new Set([...v4, ...v6])];
+  if (addresses.length === 0) {
+    return { ok: true, host, addresses: [], unresolved: true, policy };
+  }
+
+  for (const ip of addresses) {
+    const verdict = assertProbeDestinationAllowed(ip, policy);
+    if (!verdict.ok) {
+      return { ok: false, host, addresses, blocked_address: ip, reason: verdict.message, policy };
+    }
+  }
+  return { ok: true, host, addresses, policy };
+}
+
+function destinationBlockedOutcome(job, vetted) {
+  return {
+    external_result: 'blocked',
+    metadata: withProfileKind(job, {
+      probe_kind: 'destination_gate',
+      error_class: 'destination_not_routable',
+      destination_host: vetted.host,
+      blocked_address: vetted.blocked_address ?? null,
+      reason: vetted.reason ?? 'not_routable',
+      ...(vetted.policy?.optInRefused
+        ? { private_destination_opt_in_refused: true }
+        : {}),
+    }),
+    requests_sent: 0,
+    duration_ms: 0,
+  };
 }
 
 const MAX_SAFE_HTTP_REDIRECTS = 3;
@@ -658,7 +800,28 @@ export function probeMetadataMarker(job) {
 
 export async function executeProbeForJob(job, deps = {}) {
   const profileKind = job.probe_profile?.kind;
-  const capabilityOutcome = await executeCapabilityProbe(job, deps);
+
+  // Destination chokepoint. metadata_marker sends no packets, so it is exempt; every
+  // other kind egresses and must clear the classifier before any probe helper — and
+  // therefore before any connectFn/fetchFn — is touched.
+  let destinationPolicy = deps.destinationPolicy;
+  let vettedAddresses = [];
+  if (profileKind !== 'metadata_marker') {
+    const vetted = await vetProbeDestination(job, deps);
+    if (!vetted.ok) {
+      return destinationBlockedOutcome(job, vetted);
+    }
+    destinationPolicy = vetted.policy;
+    vettedAddresses = vetted.addresses ?? [];
+  }
+  // Reuse the vetted policy for destinations discovered mid-probe (NS hosts, resolvers),
+  // and hand down the already-vetted IP literals so probes need not re-resolve.
+  const probeDeps = { ...deps, destinationPolicy };
+  if (vettedAddresses.length > 0 && deps.vettedAddresses == null) {
+    probeDeps.vettedAddresses = vettedAddresses;
+  }
+
+  const capabilityOutcome = await executeCapabilityProbe(job, probeDeps);
   if (capabilityOutcome) {
     return capabilityOutcome;
   }
@@ -672,7 +835,7 @@ export async function executeProbeForJob(job, deps = {}) {
     return probeQuicReachability(job);
   }
   if (profileKind === 'alert_webhook_ping') {
-    return probeAlertWebhookPing(job);
+    return probeAlertWebhookPing(job, { destinationPolicy });
   }
   if (profileKind === 'ownership_challenge') {
     const res = await probeHttpHead(job);

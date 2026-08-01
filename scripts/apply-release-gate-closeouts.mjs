@@ -5,7 +5,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PRODUCTION_RELEASE_EVIDENCE_KINDS } from '../src/contracts/productionReleaseEvidence.mjs';
+import {
+  PRODUCTION_RELEASE_EVIDENCE_KINDS,
+  validateProductionReleaseEvidence,
+} from '../src/contracts/productionReleaseEvidence.mjs';
 import { assertSubmittableEvidenceRecord } from '../src/contracts/releaseEvidenceProvenance.mjs';
 import { splitMarkdownTableRowCells } from './production-readiness-gap-audit.mjs';
 
@@ -17,14 +20,24 @@ const RELEASE_PLAN = path.join(REPO_ROOT, 'docs/product/06-release-plan.md');
 export const RELEASE_GATE_REQUIRED_KINDS = Object.freeze({
   'Product and API contract accuracy': ['evidence_snapshot_manifest'],
   'Public entry and internal management boundary': ['staging_e2e_matrix', 'postgres_tenant_query_audit'],
-  'P0 enterprise gap backlog': [],
+  'P0 enterprise gap backlog': [
+    'evidence_snapshot_manifest',
+    'staging_e2e_matrix',
+    'third_party_security_review',
+    'compliance_legal_signoff',
+  ],
   'Signed agent packages and install matrix': ['agent_install_matrix', 'agent_sbom_provenance'],
   'Database migrations': ['migration_apply', 'rollback_fixforward'],
   'Rollback and kill-switch drills': ['kill_switch_drill', 'operator_runbook_exercise', 'rollback_fixforward'],
   'Independent security review': ['third_party_security_review'],
   'SOC high-scale governance': ['governed_adapter', 'provider_approval', 'authorization_custody'],
   'Staging QA / E2E matrix': ['staging_e2e_matrix', 'ui_accessibility_matrix', 'placement_confidence_staging'],
-  'Staging readiness attestation (profile-aware)': [],
+  'Staging readiness attestation (profile-aware)': [
+    'evidence_snapshot_manifest',
+    'staging_e2e_matrix',
+    'ui_accessibility_matrix',
+    'placement_confidence_staging',
+  ],
   'Production readiness gap audit': ['evidence_snapshot_manifest'],
   'KMS/vault, edge, and control-plane release': [
     'kms_vault_posture',
@@ -40,6 +53,14 @@ export const RELEASE_GATE_REQUIRED_KINDS = Object.freeze({
 const OPEN_STATUS_PATTERN = /\b(open|blocked|pending|required)\b/i;
 const CLOSED_STATUS_PATTERN = /\b(closed|complete|completed|accepted|done|resolved|signed off|signed-off)\b/i;
 
+/**
+ * Kinds backed by an accepted record whose evidence actually satisfies its contract.
+ *
+ * Contract validation matters here because these closeouts write `**Closed**` into
+ * tracked release docs. Keying only off evidence-kind *names* let a record with an
+ * empty or malformed `evidence` payload close a documented gate, and that edit is
+ * durable — it persists in the repo after the manifest is gone.
+ */
 function normalizeKindsPresent(records = []) {
   const kinds = new Set();
   for (const record of records) {
@@ -47,6 +68,7 @@ function normalizeKindsPresent(records = []) {
     const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : 'accepted';
     if (status !== 'accepted' && status !== 'approved') continue;
     if (record.submittable === false || record.dry_run === true) continue;
+    if (!validateProductionReleaseEvidence(record.kind, record.evidence).ok) continue;
     kinds.add(record.kind);
   }
   return kinds;
@@ -77,11 +99,28 @@ export function loadEvidenceCloseoutManifest(manifestPath = DEFAULT_MANIFEST_PAT
   };
 }
 
+/**
+ * Gates that summarize the whole release rather than one control, so they additionally
+ * require the complete evidence inventory. These two previously mapped to `[]`, which
+ * was an implicit "require full inventory" sentinel; they now name the kinds they most
+ * directly depend on *and* keep the inventory requirement, so making the list explicit
+ * does not loosen them.
+ */
+const RELEASE_GATES_REQUIRING_FULL_INVENTORY = new Set([
+  'P0 enterprise gap backlog',
+  'Staging readiness attestation (profile-aware)',
+]);
+
 export function gateHasRequiredEvidence(gateName, manifest) {
   const requiredKinds = RELEASE_GATE_REQUIRED_KINDS[gateName];
   if (requiredKinds === undefined) return false;
+  // An empty list carries no evidence requirement of its own; fall back to the
+  // whole-inventory check rather than closing the gate unconditionally.
   if (requiredKinds.length === 0) {
-    return manifest.inventoryComplete;
+    return manifest.inventoryComplete === true;
+  }
+  if (RELEASE_GATES_REQUIRING_FULL_INVENTORY.has(gateName) && manifest.inventoryComplete !== true) {
+    return false;
   }
   return requiredKinds.every((kind) => manifest.kindsPresent.has(kind));
 }
