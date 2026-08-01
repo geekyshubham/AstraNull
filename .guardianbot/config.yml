@@ -1,0 +1,173 @@
+schemaVersion: 1.0.0
+workflowVersion: f2a7f5410bd5d8b140378a7c722b74ba0b455727
+repository:
+  defaultBranch: main
+  releaseBranches:
+    - main
+  languages:
+    - css
+    - dockerfile
+    - html
+    - javascript
+    - makefile
+    - shell
+    - typescript
+  packageManagers:
+    - pnpm
+  lockfiles:
+    - pnpm-lock.yaml
+  relatedRepositories: []
+paths:
+  source:
+    - apps/web/react/src/**
+    - apps/web/react/src/lib/**
+    - scripts/lib/**
+    - src/**
+    - src/lib/**
+  test: &a2
+    - "**/*.spec.*"
+    - "**/*.test.*"
+    - tests/**
+  generated: []
+  vendored: []
+  excluded: &a1
+    - "**/*.generated.*"
+    - "**/*.map"
+    - "**/*.min.js"
+    - "**/.build/**"
+    - "**/.next/**"
+    - "**/Carthage/**"
+    - "**/Pods/**"
+    - "**/build/**"
+    - "**/coverage/**"
+    - "**/dist/**"
+    - "**/node_modules/**"
+    - "**/vendor/**"
+review:
+  automatic: true
+  drafts: manual
+  incremental: true
+  manual: true
+  targetBranches:
+    - main
+  maxInlineComments: 8
+  categories:
+    - security
+    - logic
+    - reliability
+    - concurrency
+    - performance
+    - contract
+    - testing
+  highRiskPaths:
+    - "**/auth/**"
+    - "**/security/**"
+    - "**/migrations/**"
+    - .github/workflows/**
+    - "**/Dockerfile*"
+    - "**/Containerfile*"
+    - "**/*secret*"
+    - "**/*tenant*"
+  contextDocuments:
+    - README.md
+  excludedPaths: *a1
+  pathRules:
+    - name: tests
+      paths: *a2
+      categories:
+        - testing
+        - logic
+      instructions:
+        - Check that changed behavior has deterministic coverage and meaningful assertions.
+    - name: documentation
+      paths:
+        - "**/*.md"
+        - docs/**
+      categories:
+        - contract
+        - maintainability
+      instructions:
+        - Keep documented behavior, examples, and operational instructions aligned with the
+          implementation.
+    - name: security-sensitive
+      paths:
+        - "**/*auth*"
+        - "**/*secret*"
+        - "**/*tenant*"
+        - "**/Dockerfile*"
+        - "**/migrations/**"
+        - "**/security/**"
+        - .github/workflows/**
+      categories:
+        - security
+        - logic
+        - reliability
+      instructions:
+        - Review trust boundaries, authorization, secret handling, and safe failure behavior.
+runner:
+  executionEnvironment: github-hosted
+  testCommands:
+    - pnpm test
+  buildCommands: []
+scanners:
+  mode: report-only
+  semgrep: true
+  trivy: true
+  suppressions: []
+image:
+  name: geekyshubham/astranull
+  dockerfile: ops/digitalocean/Dockerfile
+  context: .
+  platform: linux/amd64
+  buildArguments: {}
+  smokeProfile: multi-service
+  registry: ghcr.io/geekyshubham/astranull
+  healthPath: /health
+  readinessPath: /ready
+  containerPort: 8080
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: tcp
+  signing:
+    mode: keyless
+    workflow: .github/workflows/guardianbot.yml
+    ref: refs/heads/main
+  sbomFormat: cyclonedx-json
+  sbomRetentionDays: 30
+  dependentServices:
+    - postgres
+    - redis
+  runtimeEnvironment:
+    ASTRANULL_DATABASE_URL: postgresql://guardianbot:guardianbot@guardianbot-postgres:5432/guardianbot?sslmode=disable
+    ASTRANULL_PUBLIC_BASE_URL: https://guardianbot.invalid
+    ASTRANULL_PERSISTENCE_MODE: postgres
+    ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
+    ASTRANULL_BUNDLED_STAGING_OIDC: "1"
+    ASTRANULL_AUTH_MODE: oidc-jwt
+    ASTRANULL_PROBE_MODE: signed-worker
+    ASTRANULL_HIGH_SCALE_ADAPTER_MODE: disabled
+    ASTRANULL_AGENT_IDENTITY_MODE: bearer
+  ephemeralEnvironment:
+    - ASTRANULL_SECRET_ENCRYPTION_KEY
+    - ASTRANULL_PROBE_WORKER_SECRET
+  migrationCommand: node scripts/migrate-postgres.mjs
+  testCommand: node --check src/index.mjs && node --check scripts/railway-staging-start.mjs
+  deployment:
+    environment: staging
+    requireImmutableDigest: true
+    requireSignature: true
+    requireSbom: true
+    promotionMode: verified-default-branch
+dast:
+  allowedOrigin: https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  allowedOrigins:
+    - https://guardianbot-astranull-stage-sisf9.ondigitalocean.app
+  openapi: docs/api/guardianbot-dast-openapi.json
+  openapiSource: repository-file
+  authenticationProfile: control-plane://profiles/astranull-staging
+  sessionAssertionPath: /v1/checks
+  profiles:
+    deploySmoke: authenticated-baseline
+    nightly: authenticated-full
+  excludedRoutes: []

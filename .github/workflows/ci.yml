@@ -13,7 +13,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
 
       # `npm ci` installs exactly the locked versions and fails if package.json
       # and package-lock.json have drifted. `cache: npm` above also depends on
@@ -42,6 +41,14 @@ jobs:
 
       - name: Web typecheck
         run: npm run web:typecheck
+
+      # The token-signing fixture is gitignored (it was a committed private key in a public
+      # repo), so a fresh checkout does not have one and any test that reads it fails.
+      # package.json declares this via `pretest:unit`, but the steps below invoke
+      # `node --test` directly and so never run npm's pretest hook. Generating it here keeps
+      # the local and CI story identical instead of relying on a leftover file.
+      - name: Generate local OIDC signing fixture
+        run: npm run oidc:fixture:ensure
 
       - name: Unit tests
         run: node --test tests/unit/*.test.mjs

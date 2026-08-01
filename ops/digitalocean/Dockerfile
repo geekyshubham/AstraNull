@@ -14,8 +14,15 @@ WORKDIR /app
 # `npm ci` installs exactly the lockfile's resolved versions and fails if
 # package.json and package-lock.json disagree. The lockfile is copied without a
 # glob so a missing lockfile breaks the build instead of silently floating.
+#
+# The global npm pin is kept from the GuardianBot base-image update: it fixes the
+# npm shipped in the base layer, so the resolver itself is a pinned version rather
+# than whatever the image happens to carry. Both halves matter — the pin fixes the
+# tool, the lockfile fixes what the tool installs.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm install --global npm@11.18.0 \
+  && npm ci --omit=dev \
+  && npm cache clean --force
 
 COPY src ./src
 COPY scripts ./scripts
