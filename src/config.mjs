@@ -262,11 +262,30 @@ export function resolveAuthMode(env = process.env) {
 
 function assertProductionPersistence(env, persistenceMode) {
   const nodeEnv = env.NODE_ENV ?? 'development';
-  if (nodeEnv !== 'production') return;
+  // Gated on EITHER signal, deliberately. NODE_ENV alone used to gate this, which left a real
+  // misconfiguration path open: a deployment carrying ASTRANULL_DEPLOYMENT_PROFILE=production with
+  // an unset or non-production NODE_ENV skipped every check below, and resolvePersistenceMode()
+  // defaults to 'dev-json' off production, so the process booted happily on the local JSON FILE
+  // store. Every tenant row would land in .data/astranull-dev.json, vanish on container restart,
+  // and never pass through Postgres RLS at all — a silent data-loss and isolation failure rather
+  // than a startup error. Latent today (ops/digitalocean/Dockerfile pins NODE_ENV=production and
+  // scripts/railway-staging-start.mjs defaults persistence to postgres), so this closes a
+  // misconfiguration path, not an active fault.
+  //
+  // Widened rather than switched to profile-only: the profile is unset on the NODE_ENV=production
+  // deployments we run today, and keying on it alone would silently DROP enforcement for them.
+  // Note the asymmetry with pool.mjs's TLS gate, which keys on the profile only ("never NODE_ENV")
+  // because hosted-staging runs with NODE_ENV=production and must keep booting with a warning
+  // rather than throwing. No equivalent hosted-staging exemption is needed here: widening only ADDS
+  // the profile==='production' arm, which hosted-staging never matches. Deployed hosted-staging was
+  // already covered by the NODE_ENV arm, and a hosted-staging profile carrying a non-production
+  // NODE_ENV still boots on dev-json exactly as before.
+  const profileIsProduction = resolveDeploymentProfile(env) === 'production';
+  if (nodeEnv !== 'production' && !profileIsProduction) return;
 
   if (persistenceMode === 'memory' || persistenceMode === 'dev-json') {
     throw new Error(
-      `Refusing to start: persistence mode "${persistenceMode}" is not permitted when NODE_ENV=production. Use postgres with ASTRANULL_DATABASE_URL.`,
+      `Refusing to start: persistence mode "${persistenceMode}" is not permitted when NODE_ENV=production or ASTRANULL_DEPLOYMENT_PROFILE=production. Use postgres with ASTRANULL_DATABASE_URL.`,
     );
   }
 
@@ -274,7 +293,7 @@ function assertProductionPersistence(env, persistenceMode) {
     const databaseUrl = (env.ASTRANULL_DATABASE_URL ?? '').trim();
     if (!databaseUrl) {
       throw new Error(
-        'Refusing to start: ASTRANULL_DATABASE_URL must be set when NODE_ENV=production and persistence mode is postgres.',
+        'Refusing to start: ASTRANULL_DATABASE_URL must be set when NODE_ENV=production or ASTRANULL_DEPLOYMENT_PROFILE=production and persistence mode is postgres.',
       );
     }
   }

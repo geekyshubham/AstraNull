@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { loadRuntimeConfig, resolveAuthMode } from '../../src/config.mjs';
+import { loadRuntimeConfig, resolvePersistenceMode, resolveAuthMode } from '../../src/config.mjs';
 import { mintSignedSessionToken, verifySignedSessionToken } from '../../src/context.mjs';
 
 const TEST_SECRET = 'test-session-secret-at-least-32-chars!!';
@@ -359,6 +359,58 @@ describe('runtime auth config', () => {
     process.env.NODE_ENV = 'development';
     process.env.ASTRANULL_DEPLOYMENT_PROFILE = 'hosted-staging';
     assert.equal(loadRuntimeConfig().oidc.requireExplicitRoleMap, false);
+  });
+
+  /**
+   * The persistence fail-closed gate keys on NODE_ENV OR the deployment profile.
+   *
+   * It used to key on NODE_ENV alone and early-return otherwise. That left a misconfiguration path
+   * where ASTRANULL_DEPLOYMENT_PROFILE=production with an unset or non-production NODE_ENV skipped
+   * every check, and resolvePersistenceMode() defaults to dev-json off production — so the process
+   * booted on the local JSON file store, losing tenant data on restart and bypassing RLS entirely,
+   * with no error. Latent rather than live (both Dockerfiles that pin NODE_ENV do pin production),
+   * so this pins the misconfiguration path shut.
+   *
+   * resolvePersistenceMode is intentionally left keyed on NODE_ENV: the gate rejects the unsafe
+   * default rather than silently redefining it, which is the fail-closed half of the behaviour.
+   */
+  it('enforces production persistence under a production profile with non-production NODE_ENV', () => {
+    process.env.NODE_ENV = 'test';
+    baseOidcEnv();
+    process.env.ASTRANULL_OIDC_JWKS_URL = 'https://idp.example/jwks';
+    process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
+    delete process.env.ASTRANULL_PERSISTENCE_MODE;
+    delete process.env.ASTRANULL_NO_PERSIST;
+    delete process.env.ASTRANULL_DATABASE_URL;
+    process.env.ASTRANULL_DEPLOYMENT_PROFILE = 'production';
+
+    // The unsafe default is still what gets resolved; the gate is what refuses it.
+    assert.equal(resolvePersistenceMode(), 'dev-json');
+    assert.throws(() => loadRuntimeConfig(), /persistence mode "dev-json" is not permitted/);
+
+    process.env.ASTRANULL_PERSISTENCE_MODE = 'memory';
+    assert.throws(() => loadRuntimeConfig(), /persistence mode "memory" is not permitted/);
+
+    // Postgres without a database URL is equally unusable, and equally silent before this.
+    process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
+    assert.throws(() => loadRuntimeConfig(), /ASTRANULL_DATABASE_URL must be set/);
+
+    process.env.ASTRANULL_DATABASE_URL = 'postgres://astranull:test@127.0.0.1:5432/astranull';
+    assert.equal(loadRuntimeConfig().persistenceMode, 'postgres');
+  });
+
+  it('leaves non-production profiles free to run the dev-json store', () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.ASTRANULL_PERSISTENCE_MODE;
+    delete process.env.ASTRANULL_NO_PERSIST;
+
+    // hosted-staging keeps booting on dev-json: widening the gate must not sweep in the profiles
+    // that legitimately run without Postgres (local dev, E2E, the bundled staging fixture).
+    for (const profile of ['local-staging', 'hosted-staging']) {
+      process.env.ASTRANULL_DEPLOYMENT_PROFILE = profile;
+      assert.equal(loadRuntimeConfig().persistenceMode, 'dev-json');
+    }
   });
 
   it('rejects malformed OIDC MFA policy env values', () => {

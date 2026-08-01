@@ -260,7 +260,24 @@ export function listInternalAudit(filters = {}) {
   if (filters.staff_id) items = items.filter((a) => a.staff_id === filters.staff_id);
   if (filters.action) items = items.filter((a) => a.action === filters.action);
   items.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-  return items.slice(0, filters.limit ?? 100);
+  // Clamp to the same [1, 500] window, with the same `|| 100` fallback, that the Postgres backend
+  // applies in src/persistence/postgres/internalManagementRepository.mjs (the source of truth for
+  // this bound — it is the backend production actually runs, so this expression mirrors it rather
+  // than inventing a second policy). Previously this was a bare `filters.limit ?? 100`, and
+  // src/server.mjs hands the raw query param through as Number(...), so a staff caller holding
+  // staff:audit:read could ask for ?limit=99999999 on any non-postgres deployment and pull the
+  // whole internal audit log into one JSON.stringify. Backend divergence rather than a live
+  // outage, since production is postgres, but the unbounded side is the one that answers in
+  // local/dev-json/memory deployments.
+  //
+  // Two edge cases move deliberately, in both cases TOWARD the Postgres behaviour:
+  //   ?limit=0  previously returned an empty array (slice(0, 0)); `0 || 100` now makes it the
+  //             default page, which is what the Postgres path already returns for 0.
+  //   ?limit=-5 previously dropped the last 5 entries (slice(0, -5)); it now returns 1.
+  // A non-numeric ?limit=abc was already the default page on the Postgres path (NaN || 100 === 100)
+  // and is now the default page here too; it previously returned empty, since slice(0, NaN) is [].
+  const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
+  return items.slice(0, limit);
 }
 
 export {
