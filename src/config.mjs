@@ -466,6 +466,29 @@ export function loadRuntimeConfig(env = process.env) {
   );
 
   const bundledStagingOidc = env.ASTRANULL_BUNDLED_STAGING_OIDC === '1';
+  /**
+   * Whether the bundled fixture may mint STAFF principals.
+   *
+   * Deliberately a separate flag from `bundledStagingOidc`, and deliberately with no production
+   * escape hatch. `bundledStagingOidc` is the OIDC trust root: it also gates token verification
+   * and the JWKS document (src/server.mjs), so reusing it as the kill switch here would stop the
+   * deployment validating tokens it has already issued. This flag gates only the mint.
+   *
+   * `POST /v1/auth/bundled-staging-login` is an unauthenticated public route (isPublicApiRoute in
+   * src/lib/staffAuth.mjs, dispatched before any auth resolution), and its staff branch defaults
+   * `staff_role` to `internal_admin`. With the fixture enabled on a NODE_ENV=production spec, that
+   * combination let an anonymous caller mint a platform-staff bearer and read /internal/admin —
+   * verified against the live deployment before this gate existed. Staff authority is not
+   * demo-tenant-scoped, so it must come from a real IdP in production; there is intentionally no
+   * env var that turns this back on there.
+   *
+   * The customer branch stays on `bundledStagingOidc`: it is pinned to the ten_demo tenant and is
+   * currently the portal's only working login, so gating it here would take the site down. Closing
+   * that one is the IdP cutover, not a flag flip.
+   */
+  const bundledStagingStaffLogin = bundledStagingOidc
+    && nodeEnv !== 'production'
+    && env.ASTRANULL_BUNDLED_STAGING_STAFF_LOGIN !== '0';
   const publicLoginUrl = (
     env.ASTRANULL_PUBLIC_LOGIN_URL
     ?? (bundledStagingOidc ? '/login' : '/app')
@@ -484,6 +507,7 @@ export function loadRuntimeConfig(env = process.env) {
     oidc,
     deploymentProfile,
     bundledStagingOidc,
+    bundledStagingStaffLogin,
     publicSite: {
       loginUrl: publicLoginUrl,
       signupEnabled: publicSignupEnabled,
