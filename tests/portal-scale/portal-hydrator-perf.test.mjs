@@ -54,12 +54,27 @@ function p95(samples) {
   return sorted[Math.max(0, idx)];
 }
 
-/** Indexes from migration 0032_targets_indexes_for_hydrator.sql */
+/**
+ * Index names accepted for each hydrator access path.
+ *
+ * A list per path, not a single name, because more than one index can legitimately serve the same
+ * access path and the planner is free to pick the cheapest. The findings page is the live example:
+ * 0032's `findings_by_target(target_id)` stops at the equality column, while 0040's
+ * `idx_findings_tenant_target_created(tenant_id, target_id, created_at DESC, id DESC)` also covers
+ * the `ORDER BY created_at DESC` — so the planner prefers it, correctly. Pinning the 0032 name
+ * alone therefore failed CI on a strictly BETTER plan (an Index Scan costing 42 for 20 rows), which
+ * is the opposite of what this test exists to catch.
+ *
+ * Both properties that actually matter are asserted below: some index serves the path, and no hot
+ * hydrator table is sequentially scanned. Add a name here when a migration introduces a better
+ * index for a path; do not remove the older one while its migration still creates it.
+ */
 const HYDRATOR_INDEXES = Object.freeze({
-  targetsByGroup: 'targets_by_group_kind',
-  targetsByTenant: 'targets_by_tenant',
-  findingsByTarget: 'findings_by_target',
-  testRunsByTarget: 'test_runs_by_target',
+  targetsByGroup: ['targets_by_group_kind'],
+  targetsByTenant: ['targets_by_tenant'],
+  // 0040 first: it is the one the planner should pick for the ordered keyset page.
+  findingsByTarget: ['idx_findings_tenant_target_created', 'findings_by_target'],
+  testRunsByTarget: ['test_runs_by_target'],
 });
 
 const PG_PERF_BUDGETS = Object.freeze([
@@ -69,14 +84,22 @@ const PG_PERF_BUDGETS = Object.freeze([
 ]);
 
 /**
+ * Assert an EXPLAIN plan is served by one of the indexes valid for that access path.
+ *
+ * Matched on a word boundary rather than with `includes()`: underscore is a word character in JS
+ * regex, so `\bfindings_by_target\b` does NOT match inside `findings_by_target_state`. A plain
+ * substring check would accept a plan served by that different, narrower index and report the path
+ * as covered when it is not.
+ *
  * @param {string} plan
- * @param {string} indexName
+ * @param {readonly string[]} indexNames any one of these satisfies the path
  * @param {string} label
  */
-function assertPlanUsesIndex(plan, indexName, label) {
+function assertPlanUsesIndex(plan, indexNames, label) {
+  const matched = indexNames.find((name) => new RegExp(`\\b${name}\\b`).test(plan));
   assert.ok(
-    plan.includes(indexName),
-    `${label}: expected index "${indexName}" in plan:\n${plan}`,
+    matched !== undefined,
+    `${label}: expected one of ${indexNames.map((n) => `"${n}"`).join(', ')} in plan:\n${plan}`,
   );
   assert.ok(
     !/Seq Scan on (?:targets|findings|test_runs)\b/.test(plan),
@@ -284,7 +307,7 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
     });
   }
 
-  it('FT-PERF-PG-04 EXPLAIN hydrator queries use 0032 indexes', async (t) => {
+  it('FT-PERF-PG-04 EXPLAIN hydrator queries stay index-served', async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {
       t.skip(availability.reason);
