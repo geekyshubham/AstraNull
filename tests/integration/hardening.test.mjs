@@ -45,6 +45,32 @@ async function uploadAndAcceptArtifacts(hsId, socHeaders) {
 let baseUrl;
 let server;
 
+/**
+ * Registers an agent, and on any unexpected status reports enough to identify WHO answered.
+ *
+ * A run once failed 20 assertions in this file with 404 from POST /v1/agents/register. That
+ * status is unreachable for this route in the current code, established by reading it rather
+ * than by assumption:
+ *
+ *  - The route guard (`path === '/v1/agents/register' && method === 'POST'`) sits directly in
+ *    `handleApi`, ungated, and no predicate ahead of it matches this path — checked across every
+ *    `===`, `startsWith`, `.match` and `.test` literal before it.
+ *  - No `block*` gate 404s it (only the waf/connector/discovery gates emit 404, and they emit
+ *    their own distinct bodies; the postgres gates answer 503).
+ *  - `src/services/agents.mjs` contains no 404 at all, so registerAgent yields 201/400/401.
+ *  - A POST under /v1 cannot reach the dispatcher's plain-text 404: that branch is outside the
+ *    /v1 block, which always returns first.
+ *
+ * So a 404 here means the request was answered by something that is not this server's
+ * `handleApi`. The useful discriminator is NOT the body — all three dispatcher catch-alls emit a
+ * byte-identical `{"error":"not_found"}` — but the response headers: every writer in
+ * `src/lib/http.mjs` stamps `securityHeaders()`, so a reply missing them did not come from us.
+ *
+ * Unreproduced across 20+ consecutive lane runs and several full suites, including 12 runs with
+ * the server instrumented to log the responding source line. Rather than leave that ghost
+ * uninstrumented, capture the evidence on the spot: the next occurrence should say whether it
+ * was our process, and on which port.
+ */
 async function registerAgent(targetGroupId = 'tg_1') {
   const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'admin' };
   const { secret } = createBootstrapToken(ctx, { target_group_id: targetGroupId, max_registrations: 5 });
@@ -52,17 +78,24 @@ async function registerAgent(targetGroupId = 'tg_1') {
     headers: demoHeaders('engineer'),
     body: { bootstrap_token: secret, hostname: 'hardening-host', capabilities: ['canary', 'heartbeat'] },
   });
-  assert.equal(reg.status, 201);
+  if (reg.status !== 201) {
+    const ours = reg.headers['content-security-policy-report-only'] !== undefined
+      && reg.headers['x-content-type-options'] === 'nosniff';
+    assert.fail(
+      `agent register expected 201, got ${reg.status} from ${baseUrl}\n`
+      + `  answered by this server: ${ours ? 'yes (security headers present)' : 'NO — some other listener replied'}\n`
+      + `  body: ${reg.text.slice(0, 300)}\n`
+      + `  listening: ${server?.listening === true}, address: ${JSON.stringify(server?.address() ?? null)}`,
+    );
+  }
   return { agentId: reg.json.agent.id, credential: reg.json.agent_credential };
 }
 
-// Await 'listening' rather than reading address() synchronously, and pin the port for the whole
-// file. A run once failed 20 assertions here with 404 from POST /v1/agents/register — a status
-// that route cannot return (registerAgent yields only 400 or 401; even a partial-services server
-// answers 401). A 404 therefore means the request reached a LIVE server without that route, i.e.
-// baseUrl pointed somewhere else. Ephemeral ports are reused across the per-file test processes,
-// so an unawaited bind is the one remaining path to a stale/foreign port. Unreproduced across 10+
-// consecutive lane runs, so this is defensive, not a demonstrated fix.
+// Await 'listening' rather than reading address() synchronously. Note the original theory for the
+// 404 above — an unawaited bind handing back a stale/foreign ephemeral port — was measured and
+// disproven: Node binds synchronously inside listen() (address() was valid 300/300 times, and a
+// fetch completed before 'listening' fired), and port reuse across processes did not occur in 400
+// attempts. Awaiting is still the correct shape, but do not read it as the fix.
 before(async () => {
   freshStore();
   server = createServer();
