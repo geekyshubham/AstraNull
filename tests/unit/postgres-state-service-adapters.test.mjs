@@ -114,7 +114,8 @@ function acceptedAuthorizationArtifacts() {
     approver: 'Security Owner',
     valid_window: {
       window_start: '2026-06-01T00:00:00.000Z',
-      window_end: '2026-08-01T00:00:00.000Z',
+      // Far future so accepted fixtures stay valid past calendar boundaries (prod uses Date.now()).
+      window_end: '2099-12-31T23:59:59.999Z',
     },
     emergency_contacts: [{ name: 'SOC Lead', phone: '+15555550100' }],
     abort_criteria: {
