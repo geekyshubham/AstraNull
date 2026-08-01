@@ -32,6 +32,21 @@ const SPEC_PATH = '.do/app.yaml';
  * value-shape rules below are asserted against both.
  */
 const SPEC_PATHS = [SPEC_PATH, 'ops/digitalocean/app.yaml'];
+/**
+ * The spec applied by hand, per its own header:
+ * `doctl apps create --spec ops/digitalocean/app.yaml`.
+ *
+ * doctl reads the file off disk, so the operator's shell never expands anything, and no action
+ * substitutes into it either — app_action is pinned to SPEC_PATH (asserted below).
+ *
+ * Whether doctl performs any `${VAR}` substitution of its own is NOT verified here; it is not
+ * believed to, but nothing in this repo executes it. The rules below are written so the answer
+ * does not matter: a placeholder on this path is only ever safe if an operator sets the real
+ * value on the app, so what is pinned is that the spec does not grow new placeholders and that
+ * the one it keeps carries the instructions for setting it.
+ */
+const DOCTL_SPEC_PATH = 'ops/digitalocean/app.yaml';
+const FIXTURE_KEY = 'ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON';
 const WORKFLOW_PATH = '.github/workflows/deploy-digitalocean.yml';
 const DEPLOY_STEP_NAME = 'Deploy to App Platform';
 
@@ -60,6 +75,58 @@ function envEntry(specText, key) {
     block.push(line);
   }
   return block.join('\n');
+}
+
+/**
+ * The contiguous `#` comment block immediately above a `- key: NAME` line.
+ *
+ * `envEntry` deliberately starts AT the key line, so it captures the interleaved notes but not
+ * the leading ones. Reading upward from the key — rather than searching the whole file — is what
+ * makes "the warning is attached to THIS entry" the thing being asserted.
+ *
+ * @returns {string} '' when the key is absent or carries no leading comment.
+ */
+function commentBlockAbove(specText, key) {
+  const lines = specText.split('\n');
+  const startIndex = lines.findIndex((line) =>
+    new RegExp(`^\\s*-\\s+key:\\s*${key}\\s*$`).test(line));
+  if (startIndex === -1) return '';
+
+  const block = [];
+  for (let i = startIndex - 1; i >= 0; i -= 1) {
+    if (!lines[i].trim().startsWith('#')) break;
+    block.unshift(lines[i]);
+  }
+  return block.join('\n');
+}
+
+/**
+ * A spec with whole-line `#` comments removed, so only lines App Platform actually reads remain.
+ *
+ * Used for the doctl placeholder scan below. `envPlaceholders` is deliberately left scanning raw
+ * text for SPEC_PATH — over-reporting a `${FOO}` that appears only in prose there is harmless,
+ * it just forces the workflow to pass FOO. But these specs' comments now quote `${VAR}` while
+ * EXPLAINING placeholder substitution, and flagging documentation as a deployed value would make
+ * the doctl assertion fail for a reason that has nothing to do with what gets deployed.
+ * Trailing inline comments are not stripped: a `#` inside a quoted value is legal YAML and
+ * cutting at it would corrupt the value.
+ */
+function directiveLines(specText) {
+  return specText
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+}
+
+/** An env entry with comment lines dropped and indentation collapsed, for cross-spec comparison. */
+function envEntryDirectives(specText, key) {
+  const entry = envEntry(specText, key);
+  if (entry == null) return null;
+  return entry
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+    .join('\n');
 }
 
 /**
@@ -166,6 +233,100 @@ describe('digitalocean deploy spec placeholders', () => {
         + 'the substituted JSON as a YAML mapping and rejects the spec.',
       );
     }
+  });
+
+  /**
+   * The same silent-overwrite failure as above, on the path the passthrough test cannot cover.
+   *
+   * That test reads SPEC_PATH only, because the workflow env is what fills SPEC_PATH's
+   * placeholders. DOCTL_SPEC_PATH has no such backstop: its header documents it as applied by
+   * hand, and no substitution step exists for it anywhere in the repo. A `${VAR}` added here is
+   * therefore shipped literally, and for a SECRET that means the app takes an unusable value —
+   * fail-closed startup on `apps update` (previous revision keeps serving), never booting at all
+   * on `apps create`.
+   *
+   * The fixture key is allowlisted rather than removed: the entry has to stay declared and
+   * single-quoted for the two tests above, so the placeholder is load-bearing as a marker. What
+   * makes it safe is the operator note pinned by the next test, not its absence.
+   */
+  it('adds no unfillable placeholder to the hand-applied doctl spec', () => {
+    const unfillable = envPlaceholders(directiveLines(read(DOCTL_SPEC_PATH)))
+      .filter((name) => name !== FIXTURE_KEY);
+    assert.deepEqual(
+      unfillable,
+      [],
+      `${DOCTL_SPEC_PATH} interpolates ${unfillable.join(', ')}, but nothing substitutes into it: `
+      + `doctl applies the file verbatim and app_action is pinned to ${SPEC_PATH}. The literal `
+      + 'template would be deployed as the value. Set it on the app instead, or hard-code it here.',
+    );
+  });
+
+  it('warns the operator that the doctl path leaves the fixture placeholder unfilled', () => {
+    // Load-bearing, not decorative: the allowlist above only holds because an operator following
+    // this spec's header is told the placeholder is inert and where to put the real secret.
+    // Asserted on the comment block attached to the entry, so a note buried elsewhere in the file
+    // (or in the other spec) cannot satisfy it.
+    const note = commentBlockAbove(read(DOCTL_SPEC_PATH), FIXTURE_KEY);
+    assert.match(
+      note,
+      /doctl/,
+      `${DOCTL_SPEC_PATH}: the ${FIXTURE_KEY} note must state that the doctl path does not fill `
+      + 'the placeholder.',
+    );
+    assert.match(
+      note,
+      /app_spec_location|app_action/,
+      `${DOCTL_SPEC_PATH}: the ${FIXTURE_KEY} note must record that the substituting action is `
+      + `pinned to ${SPEC_PATH}, so this spec never gets substituted.`,
+    );
+    assert.match(
+      note,
+      /dashboard/i,
+      `${DOCTL_SPEC_PATH}: the ${FIXTURE_KEY} note must tell the operator to set the secret on the `
+      + 'app (DO dashboard) rather than relying on shell or CLI expansion.',
+    );
+  });
+
+  /**
+   * `npm run do:bootstrap` applies DOCTL_SPEC_PATH too, and it edits the file by string match.
+   *
+   * scripts/digitalocean-bootstrap.mjs appends ASTRANULL_SECRET_ENCRYPTION_KEY and
+   * ASTRANULL_PROBE_WORKER_SECRET by replacing one exact comment line in this spec, then hands the
+   * result to `doctl apps create/update`. `String.replace` with a string needle is a silent no-op
+   * when it misses: reword or reindent that line and the script still runs, still reports success,
+   * and creates an app with no encryption key and no probe secret. Editing the comments in this
+   * spec is exactly how that anchor gets broken, which is why the guard lives here.
+   *
+   * The anchor is read out of the script rather than restated, so this observes the shipped needle.
+   */
+  it('keeps the anchor line the bootstrap script patches secrets into', () => {
+    const script = read('scripts/digitalocean-bootstrap.mjs');
+    const anchor = /\breplace\(\s*'((?:[^'\\]|\\.)*)'/.exec(script)?.[1];
+    assert.ok(
+      anchor,
+      'could not find the string literal that scripts/digitalocean-bootstrap.mjs replaces. If the '
+      + 'script was refactored, update this guard — do not delete it: a missed anchor makes the '
+      + 'script skip both secrets silently.',
+    );
+    assert.ok(
+      read(DOCTL_SPEC_PATH).includes(anchor),
+      `${DOCTL_SPEC_PATH} no longer contains the line scripts/digitalocean-bootstrap.mjs patches `
+      + `(${JSON.stringify(anchor)}), so \`npm run do:bootstrap\` would deploy with no `
+      + 'ASTRANULL_SECRET_ENCRYPTION_KEY and no ASTRANULL_PROBE_WORKER_SECRET, and report success.',
+    );
+  });
+
+  it('keeps the fixture entry byte-identical across both specs', () => {
+    // These specs drift silently — that is why the rules here run over both. This pins the entry
+    // as a whole rather than one field at a time, so a change to scope/type/value in one spec
+    // cannot land without the other. Comments are excluded: the doctl spec carries a warning that
+    // is deliberately absent from the action-applied spec, which does get substituted.
+    assert.equal(
+      envEntryDirectives(read(DOCTL_SPEC_PATH), FIXTURE_KEY),
+      envEntryDirectives(read(SPEC_PATH), FIXTURE_KEY),
+      `${FIXTURE_KEY} differs between ${SPEC_PATH} and ${DOCTL_SPEC_PATH}. Whichever spec is `
+      + 'applied must configure the auth trust root identically.',
+    );
   });
 
   it('never inlines private key material in either spec', () => {

@@ -1,6 +1,9 @@
 # DigitalOcean App Platform spec — astranull.site
 # Create once: doctl apps create --spec ops/digitalocean/app.yaml
 # Update:      doctl apps update <APP_ID> --spec ops/digitalocean/app.yaml
+#
+# Both commands apply this file VERBATIM — assume nothing fills in the placeholder below.
+# Read the ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON note before applying either one.
 name: astranull
 region: nyc
 
@@ -100,6 +103,31 @@ services:
         scope: RUN_TIME
         value: 'owner:owner,admin:admin,engineer:engineer,soc:soc,auditor:auditor,viewer:viewer'
       # OPERATOR ACTION REQUIRED — the token-signing keypair. Keep in sync with .do/app.yaml.
+      #
+      # NOTHING FILLS THE `${...}` BELOW ON EITHER PATH THAT APPLIES *THIS* FILE. The only ${VAR}
+      # substitution in this repo is `digitalocean/app_action/deploy@v2`, and that action is pinned
+      # to the OTHER spec (.github/workflows/deploy-digitalocean.yml sets
+      # app_spec_location: .do/app.yaml). This file is applied two other ways, and neither fills it:
+      #   - `doctl apps create/update --spec` by hand, per the header. doctl reads the file off
+      #     disk, so the operator's shell never expands anything.
+      #   - `npm run do:bootstrap` (scripts/digitalocean-bootstrap.mjs), which patches the spec
+      #     before applying it — but ONLY to append ASTRANULL_SECRET_ENCRYPTION_KEY and
+      #     ASTRANULL_PROBE_WORKER_SECRET at the anchor comment ending this file. It generates
+      #     those two and leaves this one templated. Do not read "the script handles the secrets"
+      #     as covering the trust root; it does not.
+      # App Platform's own `${KEY}` interpolation cannot rescue it either, because the reference
+      # names the very key it is the value of. The placeholder is kept only so the two specs stay
+      # byte-comparable on this entry (and so the JSON-quoting rule below is enforced in both) —
+      # treat it as a marker, never as a value.
+      # So whichever of those two paths you use, do NOT apply this file and expect auth to work:
+      #   1. Apply the spec.
+      #   2. Set ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON as an encrypted app env in the DO
+      #      dashboard (same place the bootstrap script puts the other two), pasting the fixture
+      #      JSON as the value — do not rely on a shell or a local env var.
+      # Skipping step 2 ships the literal string `${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}`
+      # as the auth trust root. Startup then fails closed (see below): `doctl apps update` has the
+      # rollout rejected and the previous revision keeps serving, and `doctl apps create` never
+      # comes up at all.
       #
       # This was a git-committed file (ops/staging/bundled-oidc-fixture.json) in a PUBLIC
       # repo until 2026-08-01, making the auth trust root world-readable: anyone could mint a
