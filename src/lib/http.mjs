@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -271,6 +272,57 @@ function decorateStaffLoginShell(html) {
  */
 const NOT_A_SERVABLE_FILE = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ENAMETOOLONG']);
 
+/**
+ * Cache policy for shipped assets.
+ *
+ * `no-cache` means "revalidate before reuse", NOT "do not store": the browser keeps the
+ * bundle and asks with `If-None-Match`, so an unchanged deploy costs a 304 with no body.
+ * Without it, `react-app.js` has a fixed filename and no validator, so browsers apply
+ * heuristic freshness and strand users on a pre-deploy bundle across reloads — observed
+ * live. Long max-age + immutable is the wrong trade here precisely because the filenames
+ * are fixed; that would require content-hashed names, which this app deliberately avoids.
+ */
+const STATIC_CACHE_CONTROL = 'no-cache';
+
+/** filePath (plus shell variant) -> { mtimeMs, size, etag }; re-hashed only when the file changes. */
+const staticEtagCache = new Map();
+
+function staticEtag(cacheKey, stats, body) {
+  const cached = staticEtagCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+    return cached.etag;
+  }
+  const etag = `"${createHash('sha256').update(body).digest('base64url')}"`;
+  staticEtagCache.set(cacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, etag });
+  return etag;
+}
+
+function cachedStaticEtag(cacheKey, stats) {
+  const cached = staticEtagCache.get(cacheKey);
+  if (!cached) return null;
+  return cached.mtimeMs === stats.mtimeMs && cached.size === stats.size ? cached.etag : null;
+}
+
+/** RFC 9110 If-None-Match: `*`, or any list member equal after dropping the weak prefix. */
+function ifNoneMatchSatisfied(header, etag) {
+  const raw = Array.isArray(header) ? header.join(',') : header;
+  if (typeof raw !== 'string' || raw.trim() === '') return false;
+  const strong = (value) => (value.startsWith('W/') ? value.slice(2) : value);
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .some((value) => value === '*' || strong(value) === strong(etag));
+}
+
+function sendNotModified(res, etag) {
+  res.writeHead(304, {
+    ...securityHeaders(),
+    'Cache-Control': STATIC_CACHE_CONTROL,
+    ETag: etag,
+  });
+  res.end();
+}
+
 export async function serveStatic(req, res, url, runtimeConfig) {
   const aliases = buildStaticRouteAliases(runtimeConfig);
   let pathname;
@@ -308,7 +360,6 @@ export async function serveStatic(req, res, url, runtimeConfig) {
     return true;
   }
   try {
-    const data = await readFile(filePath);
     const ext = path.extname(filePath);
     const types = {
       '.html': 'text/html; charset=utf-8',
@@ -321,14 +372,45 @@ export async function serveStatic(req, res, url, runtimeConfig) {
     const isStaffLoginShell = ext === '.html'
       && rel === '/index.html'
       && pathname === staffLoginPathname(runtimeConfig);
+    // The decorated staff shell is a different byte stream from the same file, so it needs
+    // its own validator.
+    const cacheKey = isStaffLoginShell ? `${filePath}::staff-login` : filePath;
+    const ifNoneMatch = req?.headers?.['if-none-match'];
+
+    const stats = await stat(filePath);
+    if (!stats.isFile()) {
+      // A directory is as legitimately "no file here" as ENOENT; keep it a 404.
+      return false;
+    }
+
+    // Revalidation hit on an unchanged file answers without reading it back off disk.
+    const knownEtag = cachedStaticEtag(cacheKey, stats);
+    if (knownEtag && ifNoneMatchSatisfied(ifNoneMatch, knownEtag)) {
+      sendNotModified(res, knownEtag);
+      return true;
+    }
+
+    const data = await readFile(filePath);
     const body = isStaffLoginShell
-      ? decorateStaffLoginShell(data.toString('utf8'))
+      ? Buffer.from(decorateStaffLoginShell(data.toString('utf8')), 'utf8')
       : data;
+    const etag = staticEtag(cacheKey, stats, body);
+    if (ifNoneMatchSatisfied(ifNoneMatch, etag)) {
+      sendNotModified(res, etag);
+      return true;
+    }
+
     res.writeHead(200, {
       ...securityHeaders(),
       'Content-Type': types[ext] ?? 'application/octet-stream',
+      'Content-Length': String(body.length),
+      'Last-Modified': stats.mtime.toUTCString(),
+      'Cache-Control': STATIC_CACHE_CONTROL,
+      ETag: etag,
     });
-    res.end(body);
+    // HEAD carries the identical status and headers as GET, with no body.
+    if (req?.method === 'HEAD') res.end();
+    else res.end(body);
     return true;
   } catch (err) {
     // The response is already committed (this threw from writeHead/end, not from the read),

@@ -34,6 +34,7 @@ import {
   resolveOpsReadinessScenario,
 } from '../../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 /** @type {readonly string[]} */
 export const VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
@@ -518,7 +519,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
     if (!hasExternalProbeEvidence(run, events)) return null;
 
-    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
     const target = group?.targets?.find((t) => t.id === run.target_id) ?? null;
     const externalOnly = group?.validation_mode === 'external_only';
 
@@ -662,7 +663,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
     if (!hasExternalProbeEvidence(run, events)) return null;
     if (hasMatchingObservation(run, events)) return null;
-    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
     if (collectingGroup?.validation_mode === 'external_only') {
       return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
     }
@@ -774,7 +775,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
 
       const targetGroupId = body.target_group_id;
-      const group = await coreCatalog.getTargetGroup(ctx, targetGroupId);
+      const group = await coreCatalog.getTargetGroup(ctx, targetGroupId, LEAN_GROUP_LOOKUP);
       if (!group) return { error: 'target_group_not_found', status: 404 };
 
       if (await killSwitch.isKillSwitchActiveForTenant(ctx)) {
@@ -1323,7 +1324,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       if (hasMatchingObservation(run, events)) {
         return finalizeVerdictIfReady(ctx, run, agents);
       }
-      const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id);
+      const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
       if (ingestGroup?.validation_mode === 'external_only') {
         if (run.status === 'running') {
           await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });

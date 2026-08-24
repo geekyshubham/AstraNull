@@ -2053,13 +2053,17 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
 
     if (outboundHealth) {
       applyConnectorPollHealth(connector, outboundHealth, now);
-    } else if (created.length > 0) {
+    } else {
+      // A failing poll returned above, so this poll completed: stamp it even when it produced
+      // zero snapshots, or LAST POLL keeps reading as dead after a successful empty poll.
       connector.last_success_at = now;
       connector.updated_at = now;
-      if (connector.status !== 'disabled') {
-        connector.status = 'active';
+      if (created.length > 0) {
+        if (connector.status !== 'disabled') {
+          connector.status = 'active';
+        }
+        connector.last_error_at = null;
       }
-      connector.last_error_at = null;
     }
 
     const pollStatus = outboundHealth

@@ -16,6 +16,7 @@ import {
   buildMarkdownComplianceSection,
   buildReportComplianceSummary,
   normalizeReportKind,
+  normalizeReportPeriod,
 } from '../contracts/complianceReports.mjs';
 
 export function createReport(ctx, body) {
@@ -25,18 +26,21 @@ export function createReport(ctx, body) {
   const findings = store.findings.filter((f) => f.tenant_id === ctx.tenantId && f.status === 'open');
   const id = newId('report');
   const reportKind = normalizeReportKind(body.kind);
+  const reportPeriod = normalizeReportPeriod(body.period);
   const report = {
     id,
     tenant_id: ctx.tenantId,
     kind: reportKind,
     title: body.title ?? 'AstraNull Readiness Summary',
     status: 'ready',
+    period: reportPeriod,
     summary: {
       readiness_score: readiness.score,
       readiness_factors: readiness.factors,
       open_findings: findings.length,
       recent_runs: runs.map((r) => ({ id: r.id, status: r.status, check_id: r.check_id })),
       compliance: buildReportComplianceSummary(reportKind),
+      period: reportPeriod,
     },
     run_ids: runs.map((r) => r.id),
     created_at: new Date().toISOString(),
@@ -55,8 +59,15 @@ export function createReport(ctx, body) {
   return report;
 }
 
+/** Reports stored before `period` existed must still read back with an explicit null. */
+function projectReport(report) {
+  if (!report) return report;
+  return { ...report, period: report.period ?? report.summary?.period ?? null };
+}
+
 export function getReport(ctx, id) {
-  return getStore().reports.find((r) => r.id === id && r.tenant_id === ctx.tenantId) ?? null;
+  const report = getStore().reports.find((r) => r.id === id && r.tenant_id === ctx.tenantId);
+  return report ? projectReport(report) : null;
 }
 
 export function listReports(ctx, options = {}) {
@@ -65,7 +76,8 @@ export function listReports(ctx, options = {}) {
   return getStore().reports
     .filter((r) => r.tenant_id === ctx.tenantId)
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
-    .slice(0, limit);
+    .slice(0, limit)
+    .map(projectReport);
 }
 
 function buildExportPayload(ctx, report) {

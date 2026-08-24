@@ -62,6 +62,7 @@ import {
   computeAssetRiskAssessment,
   enrichSnapshotWithRisk,
 } from '../../services/wafRiskService.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 export const WAF_POSTURE_REPOSITORY_METHODS = Object.freeze([
   'listWafAssets',
@@ -887,7 +888,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       try {
         assertNoRawWafEvidence(body);
         const normalized = normalizeWafAssetInput(body);
-        const targetGroup = await coreCatalog.getTargetGroup(ctx, normalized.target_group_id);
+        const targetGroup = await coreCatalog.getTargetGroup(ctx, normalized.target_group_id, LEAN_GROUP_LOOKUP);
         if (!targetGroup) {
           return {
             error: 'waf_asset_not_found',
@@ -1726,6 +1727,13 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
             status: connector.status === 'disabled' ? 'disabled' : 'active',
             last_success_at: now,
             last_error_at: null,
+            updated_at: now,
+          });
+        } else {
+          // Same rule as the dev-json path: a poll that completed without error stamps the
+          // poll timestamp even when it produced zero snapshots, so LAST POLL is not stale.
+          await wafRepo.updateConnectorStatus(ctx, id, {
+            last_success_at: now,
             updated_at: now,
           });
         }

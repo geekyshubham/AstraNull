@@ -85,9 +85,9 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/target-groups` | `target_group:read` | `?archived=true` lists soft-deleted groups only | `{ items, count }` active groups by default (`deleted_at` / `archived_at` null). |
+| GET | `/v1/target-groups` | `target_group:read` | `?archived=true` lists soft-deleted groups only | `{ items, count }` active groups by default (`deleted_at` / `archived_at` null). Each item carries the group row plus summary keys `target_count` (declared targets in the group) and `loa_state` (`signed` when an active LOA signature exists, else `required`). The heavier detail fields (`targets[]`, `runs_recent`, `findings_on_group`) stay on `GET /v1/target-groups/:id`. |
 | POST | `/v1/target-groups` | `target_group:write` | `{ name, environment_id?, description?, timezone?, safe_test_windows?, safety_policy? }` | `201` group. `safe_test_windows`: `[{ start_at, end_at, reason? }]`. `safety_policy`: `{ max_runs_per_hour?, min_seconds_between_runs? }` (defaults `60` / `0`). |
-| GET | `/v1/target-groups/:id` | `target_group:read` | — | Group with `targets[]`. |
+| GET | `/v1/target-groups/:id` | `target_group:read` | — | Group with `targets[]` plus the detail enrichment both persistence adapters return: `target_count`, `loa_state`, `loa` (`{ state, signer_name, signed_at, custody_digest_sha256 }` or `null`), `runs_recent` (newest 6 by `started_at`), `findings_on_group` (`{ id, target_id, title, severity, status }`, newest 50 by `created_at`), `findings_on_group_total` (integer count of all findings on the group, so a capped list can render "showing 50 of N"), and `meta` empty-state reasons. |
 | PATCH | `/v1/target-groups/:id` | `target_group:write` | partial group fields | Updated group or `404`. |
 | DELETE | `/v1/target-groups/:id` | `target_group:write` | — | Soft-archives the group (`deleted_at`, `deleted_by`) or returns `409 target_group_active_run` while an active run still references it. |
 | POST | `/v1/target-groups/:id/restore` | `target_group:write` | — | Clears `deleted_at` / `deleted_by` and returns `{ target_group }`, or `404 not_archived` when the group is active. |
@@ -286,9 +286,9 @@ In `postgres` mode, `runtime.services.testRuns` backs the safe validation loop: 
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/reports` | `report:create` | `limit?` | `{ items }` generated report metadata for the tenant, newest first. |
-| POST | `/v1/reports` | `report:create` | `{ kind?, title? }` | `201` report with summary. |
-| GET | `/v1/reports/:id` | `report:create` | — | Report metadata. |
+| GET | `/v1/reports` | `report:create` | `limit?` | `{ items, capabilities }`. `items` is generated report metadata for the tenant, newest first; each item carries `period` (`null` when the report was generated without a declared window). `capabilities` is the authoritative builder enum set — `{ default_kind, default_format, default_period, kinds: [{ value, label }], formats: [{ value, label }], periods: [{ value, label }] }` from `src/contracts/complianceReports.mjs`; clients must render report kind/format/period pickers from it instead of hardcoding enum copies. |
+| POST | `/v1/reports` | `report:create` | `{ kind?, title?, period? }` | `201` report with summary. `period` is optional and must be one of `last-7-days`, `last-30-days`, `quarter`, `all-time`; anything else returns `400 { error: 'unsupported_period', supported_periods }`. Omitted or empty stores `period: null`. |
+| GET | `/v1/reports/:id` | `report:create` | — | Report metadata, including `period`. |
 | GET | `/v1/reports/:id/export?format=json\|markdown\|html` | `report:create` | — | `format=json`: `{ payload, custody }`. `format=markdown` or `html`: redacted report text with an embedded **Custody** section (artifact id, `content_sha256`, canonicalization, `created_at`, optional `previous_audit_hash`). Self-contained HTML has no external scripts. |
 
 ### Export custody (developer validation)

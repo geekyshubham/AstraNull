@@ -71,6 +71,81 @@ function mapTargetGroupRow(row) {
     validation_mode: row.validation_mode ?? 'agent_assisted',
     ownership_status: row.ownership_status ?? 'unverified',
     dns_ownership: row.dns_ownership ?? null,
+    // Only the list query selects these summary columns; other callers omit them entirely.
+    ...(row.target_count === undefined ? {} : { target_count: Number(row.target_count) }),
+    ...(row.loa_state === undefined ? {} : { loa_state: row.loa_state ?? 'required' }),
+  };
+}
+
+/** Detail-page cap on recent runs, matching the dev-json reference implementation. */
+const TARGET_GROUP_RUNS_RECENT_LIMIT = 6;
+
+/** Detail-page cap on findings, matching the dev-json reference implementation. */
+const TARGET_GROUP_FINDINGS_LIMIT = 50;
+
+/**
+ * Options for the lean `getTargetGroup` lookup that internal callers use.
+ *
+ * The enriched read carries LOA / recent-runs / findings LATERAL aggregates for the API
+ * detail route. Every internal caller (run start,
+ * collect, ingest, WAF orchestration, high-scale, policy enrichment, agent binding) only
+ * reads the group row and its targets, so they paid for aggregates they discard. Only the
+ * HTTP detail handler still asks for the enriched shape.
+ */
+export const LEAN_GROUP_LOOKUP = Object.freeze({ enriched: false });
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/**
+ * Detail-only enrichment for GET /v1/target-groups/:id. Mirrors the dev-json shape in
+ * src/services/targetGroups.mjs `getTargetGroup` so both adapters feed the same portal panels.
+ *
+ * @param {Record<string, unknown> | null} row target_groups row with the detail LATERAL columns
+ * @param {Array<Record<string, unknown>>} targets already-mapped target rows
+ */
+function mapTargetGroupDetail(row, targets) {
+  const runsRecent = asArray(row?.runs_recent).map((run) => ({
+    id: run.id,
+    policy_id: run.policy_id ?? null,
+    check_count: run.check_count ?? run.check_id ?? null,
+    verdict: run.verdict ?? run.status ?? 'pending',
+    started_at: toIso(run.started_at),
+    agent_id: run.agent_id ?? null,
+  }));
+  const findingsOnGroup = asArray(row?.findings_on_group).map((finding) => ({
+    id: finding.id,
+    target_id: finding.target_id ?? null,
+    title: finding.title,
+    severity: finding.severity,
+    status: finding.status ?? 'open',
+  }));
+  return {
+    targets,
+    target_count: targets.length,
+    runs_recent: runsRecent,
+    findings_on_group: findingsOnGroup,
+    findings_on_group_total: Number(row?.findings_on_group_total ?? findingsOnGroup.length),
+    loa: row?.loa_state
+      ? {
+          state: row.loa_state,
+          signer_name: row.loa_signer_name ?? null,
+          signed_at: toIso(row.loa_signed_at),
+          custody_digest_sha256: row.loa_custody_digest_sha256 ?? null,
+        }
+      : null,
+    meta: {
+      targets_empty_reason: targets.length
+        ? null
+        : 'No targets have been declared for this group yet.',
+      runs_empty_reason: runsRecent.length
+        ? null
+        : 'No test runs have been recorded for this target group yet.',
+      findings_empty_reason: findingsOnGroup.length
+        ? null
+        : 'No findings are published for this target group yet.',
+    },
   };
 }
 
@@ -115,6 +190,27 @@ function mapTargetRow(row) {
   const metadata = asObject(row.metadata_json);
   if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
   return mapped;
+}
+
+/**
+ * Target as the group-detail payload renders it.
+ *
+ * `targets` has no verification_state column, so the value rides in metadata when it exists.
+ * dev-json stamps the same field with the same 'unverified' fallback
+ * (src/services/targetGroups.mjs `getTargetGroup`); Postgres omitted it entirely, so the
+ * portal's verify chip fell back to its own default on one backend and read a real state on
+ * the other. Applied only on the detail path, matching dev-json — add/patch responses carry
+ * no such field on either backend.
+ */
+function mapDetailTargetRow(row) {
+  const mapped = mapTargetRow(row);
+  if (!mapped) return null;
+  const metadata = asObject(row.metadata_json);
+  return {
+    ...mapped,
+    verification_state:
+      row.verification_state ?? metadata.verification_state ?? metadata.verify_state ?? 'unverified',
+  };
 }
 
 /**
@@ -287,32 +383,143 @@ export function createCoreCatalogRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const archivedOnly = options.archived === true;
         const activeFilter = archivedOnly
-          ? '(deleted_at IS NOT NULL OR archived_at IS NOT NULL)'
-          : 'deleted_at IS NULL AND archived_at IS NULL';
+          ? '(tg.deleted_at IS NOT NULL OR tg.archived_at IS NOT NULL)'
+          : 'tg.deleted_at IS NULL AND tg.archived_at IS NULL';
         const { rows } = await client.query(
-          `SELECT id, tenant_id, environment_id, name, description, expected_behavior_default,
-                  timezone, safe_test_windows, safety_policy, deleted_at, deleted_by,
-                  archived_at, validation_mode, ownership_status, dns_ownership, created_at
-           FROM target_groups
-           WHERE tenant_id = $1 AND ${activeFilter}
-           ORDER BY created_at`,
+          `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
+                  tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
+                  tg.safety_policy, tg.deleted_at, tg.deleted_by, tg.archived_at,
+                  tg.validation_mode, tg.ownership_status, tg.dns_ownership, tg.created_at,
+                  COALESCE(tc.target_count, 0) AS target_count,
+                  loa.state AS loa_state
+           FROM target_groups tg
+           LEFT JOIN (
+             SELECT target_group_id, COUNT(*)::int AS target_count
+             FROM targets
+             WHERE tenant_id = $1
+             GROUP BY target_group_id
+           ) tc ON tc.target_group_id = tg.id
+           LEFT JOIN LATERAL (
+             SELECT state
+             FROM loa_signatures
+             WHERE tenant_id = $1 AND target_group_id = tg.id AND state = 'signed'
+             LIMIT 1
+           ) loa ON TRUE
+           WHERE tg.tenant_id = $1 AND ${activeFilter}
+           ORDER BY tg.created_at`,
           [ctx.tenantId],
         );
         return rows.map(mapTargetGroupRow);
       });
     },
 
-    async getTargetGroup(ctx, id) {
+    /**
+     * @param {{ enriched?: boolean }} [options] `{ enriched: false }` is the lean lookup: the
+     *   group row plus its targets, with none of the detail aggregates.
+     */
+    async getTargetGroup(ctx, id, options = {}) {
+      if (options.enriched === false) {
+        return withTenantContext(pool, ctx.tenantId, async (client) => {
+          const { rows } = await client.query(
+            `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
+                    tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
+                    tg.safety_policy, tg.archived_at, tg.validation_mode,
+                    tg.ownership_status, tg.dns_ownership, tg.created_at
+             FROM target_groups tg
+             WHERE tg.id = $1 AND tg.tenant_id = $2
+               AND tg.deleted_at IS NULL AND tg.archived_at IS NULL`,
+            [id, ctx.tenantId],
+          );
+          const group = mapTargetGroupRow(rows[0] ?? null);
+          if (!group) return null;
+          const targets = await client.query(
+            `SELECT id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at
+             FROM targets
+             WHERE target_group_id = $1 AND tenant_id = $2
+             ORDER BY created_at`,
+            [id, ctx.tenantId],
+          );
+          const mapped = targets.rows.map(mapTargetRow);
+          return { ...group, targets: mapped, target_count: mapped.length };
+        });
+      }
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        // Detail enrichment rides on the group read (one round trip) so the Postgres
+        // payload matches the dev-json reference in src/services/targetGroups.mjs.
         const { rows } = await client.query(
-          `SELECT id, tenant_id, environment_id, name, description, expected_behavior_default,
-                  timezone, safe_test_windows, safety_policy, archived_at, validation_mode,
-                  ownership_status, dns_ownership, created_at
-           FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
-          [id, ctx.tenantId],
+          `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
+                  tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
+                  tg.safety_policy, tg.archived_at, tg.validation_mode,
+                  tg.ownership_status, tg.dns_ownership, tg.created_at,
+                  loa.state AS loa_state,
+                  loa.signer_name AS loa_signer_name,
+                  loa.signed_at AS loa_signed_at,
+                  loa.custody_digest_sha256 AS loa_custody_digest_sha256,
+                  runs.items AS runs_recent,
+                  findings.items AS findings_on_group,
+                  findings.total AS findings_on_group_total
+           FROM target_groups tg
+           LEFT JOIN LATERAL (
+             SELECT state, signer_name, signed_at, custody_digest_sha256
+             FROM loa_signatures
+             WHERE tenant_id = $2 AND target_group_id = tg.id AND state = 'signed'
+             LIMIT 1
+           ) loa ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT jsonb_agg(
+                      jsonb_build_object(
+                        'id', run.id,
+                        'check_id', run.check_id,
+                        'status', run.status,
+                        'started_at', run.started_at
+                      )
+                      ORDER BY run.started_at DESC, run.id
+                    ) AS items
+             FROM (
+               SELECT id, check_id, status,
+                      to_char(
+                        COALESCE(started_at, created_at) AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+                      ) AS started_at
+               FROM test_runs
+               WHERE tenant_id = $2 AND target_group_id = tg.id
+               ORDER BY COALESCE(started_at, created_at) DESC, id
+               LIMIT $3
+             ) run
+           ) runs ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT
+               (
+                 SELECT count(*)::int
+                 FROM findings
+                 WHERE tenant_id = $2 AND target_group_id = tg.id
+               ) AS total,
+               (
+                 SELECT jsonb_agg(
+                          jsonb_build_object(
+                            'id', finding.id,
+                            'target_id', finding.target_id,
+                            'title', finding.title,
+                            'severity', finding.severity,
+                            'status', finding.status
+                          )
+                          ORDER BY finding.created_at DESC, finding.id DESC
+                        )
+                 FROM (
+                   SELECT id, target_id, title, severity, status, created_at
+                   FROM findings
+                   WHERE tenant_id = $2 AND target_group_id = tg.id
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT $4
+                 ) finding
+               ) AS items
+           ) findings ON TRUE
+           WHERE tg.id = $1 AND tg.tenant_id = $2
+             AND tg.deleted_at IS NULL AND tg.archived_at IS NULL`,
+          [id, ctx.tenantId, TARGET_GROUP_RUNS_RECENT_LIMIT, TARGET_GROUP_FINDINGS_LIMIT],
         );
-        const group = mapTargetGroupRow(rows[0] ?? null);
+        const row = rows[0] ?? null;
+        const group = mapTargetGroupRow(row);
         if (!group) return null;
 
         const targets = await client.query(
@@ -322,7 +529,10 @@ export function createCoreCatalogRepository(pool) {
            ORDER BY created_at`,
           [id, ctx.tenantId],
         );
-        return { ...group, targets: targets.rows.map(mapTargetRow) };
+        return {
+          ...group,
+          ...mapTargetGroupDetail(row, targets.rows.map(mapDetailTargetRow)),
+        };
       });
     },
 
@@ -597,8 +807,12 @@ export function createCoreCatalogRepository(pool) {
 }
 
 export {
+  TARGET_GROUP_RUNS_RECENT_LIMIT,
+  TARGET_GROUP_FINDINGS_LIMIT,
   mapTenantRow,
   mapEnvironmentRow,
+  mapTargetGroupDetail,
   mapTargetGroupRow,
+  mapDetailTargetRow,
   mapTargetRow,
 };

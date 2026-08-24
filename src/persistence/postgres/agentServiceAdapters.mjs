@@ -8,6 +8,7 @@ import {
 import { generateSalt, hashSecretWithSalt } from '../../lib/crypto.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { checkProbeEndpointBinding, validateProbeEndpoint } from '../../lib/probeEndpoint.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 /** @type {readonly string[]} */
 export const AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze([
@@ -196,6 +197,7 @@ export function createPostgresAgentServices(repositories, options = {}) {
             const targetGroup = await coreCatalog.getTargetGroup(
               { tenantId: agent.tenant_id },
               agent.target_group_id,
+              LEAN_GROUP_LOOKUP,
             );
             targetGroupFqdns = (targetGroup?.targets ?? [])
               .filter((t) => t.kind === 'fqdn')

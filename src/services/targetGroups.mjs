@@ -5,6 +5,10 @@ import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
 
+/** Detail-page cap on runs / findings, mirrored by the Postgres adapter. */
+const TARGET_GROUP_RUNS_RECENT_LIMIT = 6;
+export const TARGET_GROUP_FINDINGS_LIMIT = 50;
+
 export function isArchivedTargetGroup(group) {
   return Boolean(group?.deleted_at ?? group?.archived_at);
 }
@@ -34,13 +38,33 @@ function activeRunForTarget(tenantId, targetGroupId, targetId) {
   ) ?? null;
 }
 
+/** Single-pass tenant joins so the list summary stays O(targets + signatures), not O(groups × rows). */
+function targetGroupSummaryJoins(tenantId) {
+  const targetCounts = new Map();
+  for (const target of getStore().targets) {
+    if (target.tenant_id !== tenantId) continue;
+    targetCounts.set(target.target_group_id, (targetCounts.get(target.target_group_id) ?? 0) + 1);
+  }
+  const loaStates = new Map();
+  for (const row of getStore().loaSignatures ?? []) {
+    if (row.tenant_id !== tenantId || row.state !== 'signed') continue;
+    loaStates.set(row.target_group_id, row.state);
+  }
+  return { targetCounts, loaStates };
+}
+
 export function listTargetGroups(ctx, options = {}) {
   const includeArchived = options.archived === true;
-  const groups = getStore().targetGroups.filter((g) => g.tenant_id === ctx.tenantId);
-  if (includeArchived) {
-    return groups.filter((g) => isArchivedTargetGroup(g));
-  }
-  return groups.filter((g) => !isArchivedTargetGroup(g));
+  const groups = getStore().targetGroups.filter(
+    (g) => g.tenant_id === ctx.tenantId
+      && (includeArchived ? isArchivedTargetGroup(g) : !isArchivedTargetGroup(g)),
+  );
+  const { targetCounts, loaStates } = targetGroupSummaryJoins(ctx.tenantId);
+  return groups.map((g) => ({
+    ...g,
+    target_count: targetCounts.get(g.id) ?? 0,
+    loa_state: loaStates.get(g.id) ?? g.loa_state ?? 'required',
+  }));
 }
 
 export function listTargetGroupsEnvelope(ctx, options = {}) {
@@ -72,7 +96,7 @@ export function getTargetGroup(ctx, id) {
   const runsRecent = (getStore().testRuns ?? [])
     .filter((run) => run.tenant_id === ctx.tenantId && run.target_group_id === id)
     .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)))
-    .slice(0, 6)
+    .slice(0, TARGET_GROUP_RUNS_RECENT_LIMIT)
     .map((run) => ({
       id: run.id,
       policy_id: run.policy_id ?? run.test_policy_id ?? null,
@@ -81,8 +105,15 @@ export function getTargetGroup(ctx, id) {
       started_at: run.started_at ?? run.created_at,
       agent_id: run.agent_id ?? null,
     }));
-  const findingsOnGroup = (getStore().findings ?? [])
-    .filter((finding) => finding.tenant_id === ctx.tenantId && finding.target_group_id === id)
+  const groupFindings = (getStore().findings ?? []).filter(
+    (finding) => finding.tenant_id === ctx.tenantId && finding.target_group_id === id,
+  );
+  const findingsOnGroupTotal = groupFindings.length;
+  const findingsOnGroup = groupFindings
+    .slice()
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
+      || String(b.id ?? '').localeCompare(String(a.id ?? '')))
+    .slice(0, TARGET_GROUP_FINDINGS_LIMIT)
     .map((finding) => ({
       id: finding.id,
       target_id: finding.target_id ?? null,
@@ -99,6 +130,7 @@ export function getTargetGroup(ctx, id) {
     target_count: targets.length,
     runs_recent: runsRecent,
     findings_on_group: findingsOnGroup,
+    findings_on_group_total: findingsOnGroupTotal,
     loa: loa
       ? {
           state: loa.state,

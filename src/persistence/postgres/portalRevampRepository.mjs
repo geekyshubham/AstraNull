@@ -489,7 +489,7 @@ export function createPortalRevampRepository(pool) {
 
         const wafConnector = wafAsset.rows[0]?.connector_id
           ? await client.query(
-              `SELECT id, status, last_success_at, last_polled_at
+              `SELECT id, status, last_success_at
                FROM waf_connectors WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
               [ctx.tenantId, wafAsset.rows[0].connector_id],
             )

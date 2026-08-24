@@ -12,6 +12,7 @@ import {
   formatRetestRequestForApi,
   formatValidationPlanForApi,
 } from './wafOrchestratorRepository.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 export const WAF_ORCHESTRATOR_REPOSITORY_METHODS = Object.freeze([
   'listValidationPlans',
@@ -601,7 +602,7 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
           ...body,
           tenant_id: ctx.tenantId,
         });
-        const targetGroup = await coreCatalog.getTargetGroup(ctx, normalized.target_group_id);
+        const targetGroup = await coreCatalog.getTargetGroup(ctx, normalized.target_group_id, LEAN_GROUP_LOOKUP);
         if (!targetGroup) {
           return {
             error: 'target_group_not_found',
@@ -864,7 +865,7 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
         };
       }
 
-      const targetGroup = await coreCatalog.getTargetGroup(ctx, plan.target_group_id);
+      const targetGroup = await coreCatalog.getTargetGroup(ctx, plan.target_group_id, LEAN_GROUP_LOOKUP);
       const targets = targetGroup?.targets ?? [];
       if (!targetGroup || targets.length === 0) {
         return {
@@ -1121,7 +1122,7 @@ export function createPostgresWafOrchestratorServices(repositories, options = {}
         return { error: 'waf_asset_not_found', status: 404 };
       }
 
-      const targetGroup = await coreCatalog.getTargetGroup(ctx, asset.target_group_id);
+      const targetGroup = await coreCatalog.getTargetGroup(ctx, asset.target_group_id, LEAN_GROUP_LOOKUP);
       const targets = targetGroup?.targets ?? [];
       if (!targetGroup || targets.length === 0) {
         return {

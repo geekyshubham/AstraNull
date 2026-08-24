@@ -1,6 +1,7 @@
 import { getCheckById, isCustomerRunnable } from '../../contracts/checks.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { redactObject } from '../../lib/redact.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const CADENCES = new Set(['manual', 'daily', 'weekly', 'monthly', 'event_driven']);
 const EXPECTED_VERDICTS = new Set(['pass', 'warn', 'fail', 'manual_review']);
@@ -117,7 +118,7 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
     if (cache.has(groupId)) return cache.get(groupId);
     // getTargetGroup returns null for archived/deleted/missing groups, matching
     // the dev "active target group" filter.
-    const group = await coreCatalog.getTargetGroup(ctx, groupId);
+    const group = await coreCatalog.getTargetGroup(ctx, groupId, LEAN_GROUP_LOOKUP);
     cache.set(groupId, group);
     return group;
   }

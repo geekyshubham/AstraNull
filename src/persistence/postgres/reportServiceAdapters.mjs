@@ -5,6 +5,7 @@ import {
   buildMarkdownComplianceSection,
   buildReportComplianceSummary,
   normalizeReportKind,
+  normalizeReportPeriod,
 } from '../../contracts/complianceReports.mjs';
 import { buildCustodyManifest } from '../../lib/custody.mjs';
 import { newId } from '../../lib/ids.mjs';
@@ -273,12 +274,14 @@ export function createPostgresReportServices(repositories, options = {}) {
       }
       const id = newIdFn('report');
       const reportKind = normalizeReportKind(body?.kind);
+      const reportPeriod = normalizeReportPeriod(body?.period);
       const record = {
         id,
         tenant_id: ctx.tenantId,
         kind: reportKind,
         title: body?.title ?? 'AstraNull Readiness Summary',
         status: 'ready',
+        period: reportPeriod,
         summary: {
           readiness_score: readinessScore,
           readiness_factors: readinessFactors,
@@ -289,6 +292,7 @@ export function createPostgresReportServices(repositories, options = {}) {
             check_id: r.check_id,
           })),
           compliance: buildReportComplianceSummary(reportKind),
+          period: reportPeriod,
         },
         run_ids: (runs ?? []).map((r) => r.id),
         created_at: nowFn().toISOString(),

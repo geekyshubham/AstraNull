@@ -14,6 +14,7 @@ import { redactObject } from '../../lib/redact.mjs';
 import { normalizeWafAssetInput } from '../../contracts/wafPosture.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createExternalDiscoveryRepository } from './externalDiscoveryRepository.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const INBOX_STATES = new Set(['candidate', 'needs_review']);
 const APPROVABLE_STATES = new Set(['candidate', 'needs_review']);
@@ -520,7 +521,7 @@ export function createPostgresExternalDiscoveryServices(repositories, options = 
         };
       }
 
-      const targetGroup = await coreCatalog.getTargetGroup(ctx, targetGroupId);
+      const targetGroup = await coreCatalog.getTargetGroup(ctx, targetGroupId, LEAN_GROUP_LOOKUP);
       if (!targetGroup) {
         return {
           error: 'target_group_not_found',

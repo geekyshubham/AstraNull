@@ -32,6 +32,7 @@ import {
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
 } from '../../lib/highScalePolicy.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
 const CANCELLABLE_RUN_STATUSES = ['planned', 'running', 'collecting'];
 
@@ -184,7 +185,7 @@ async function validateTargetScope(coreCatalog, ctx, targetGroupId) {
   if (!targetGroupId) {
     return { error: 'missing_target_group_id', status: 400 };
   }
-  const group = await coreCatalog.getTargetGroup(ctx, targetGroupId);
+  const group = await coreCatalog.getTargetGroup(ctx, targetGroupId, LEAN_GROUP_LOOKUP);
   if (!group) {
     return { error: 'target_group_not_found', status: 404 };
   }

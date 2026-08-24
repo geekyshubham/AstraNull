@@ -43,13 +43,17 @@ function normalizeReportListLimit(limit) {
 
 function mapReportRow(row) {
   if (!row) return null;
+  const summary = asObject(row.summary_json);
   return {
     id: row.id,
     tenant_id: row.tenant_id,
     kind: row.kind,
     title: row.title,
     status: row.status,
-    summary: asObject(row.summary_json),
+    // `reports` has no period column; the generated window rides in summary_json and is
+    // projected back to the top level so dev-json and Postgres return the same shape.
+    period: summary.period ?? null,
+    summary,
     run_ids: asStringArray(row.run_ids),
     created_by: row.created_by ?? undefined,
     created_at: toIso(row.created_at),
@@ -123,6 +127,8 @@ export function createReportRepository(pool) {
     async createReport(ctx, record) {
       const tenantId = ctx.tenantId;
       const summaryJson = asObject(record.summary ?? record.summary_json);
+      const period = record.period ?? summaryJson.period ?? null;
+      const summaryToStore = period == null ? summaryJson : { ...summaryJson, period };
       const runIds = asStringArray(record.run_ids);
 
       return withTenantContext(pool, tenantId, async (client) => {
@@ -138,7 +144,7 @@ export function createReportRepository(pool) {
             record.kind,
             record.title,
             record.status,
-            JSON.stringify(summaryJson),
+            JSON.stringify(summaryToStore),
             runIds,
             record.created_by ?? null,
             record.created_at,

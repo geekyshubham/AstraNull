@@ -13,6 +13,102 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/** The frozen fixture instant is replayed as this far in the past, so demo activity reads as recent. */
+const DEMO_ANCHOR_AGE_MS = 2 * 60 * 60 * 1000;
+const RUNNING_RUN_AGE_MS = 7 * 60 * 1000;
+const AGENT_HEARTBEAT_AGE_MS = 18 * 1000;
+const DEMO_AGENT_VERSION = '0.2.0';
+
+/**
+ * Collections whose timestamps are shifted onto seed time.
+ *
+ * Deliberately an allow-list, not an exclude-list: `auditLog` is hash-chained over its
+ * own `timestamp`, and `loaSignatures` / `highScaleAuthorizationArtifacts` carry a
+ * custody digest computed over `signed_at`. Rewriting a timestamp in any of those
+ * invalidates the integrity check that reads it, so a new fixture collection has to be
+ * added here on purpose rather than swept in by default.
+ */
+const REBASED_COLLECTIONS = Object.freeze([
+  'agents',
+  'agentJobs',
+  'probeJobs',
+  'testRuns',
+  'events',
+  'verdicts',
+  'findings',
+  'reports',
+  'notificationEvents',
+  'highScaleRequests',
+  'highScaleTelemetry',
+  'signupRequests',
+  'signupQueueEvents',
+  'wafValidationRuns',
+  'wafScenarioResults',
+  'wafPostureSnapshots',
+  'wafDriftEvents',
+  'wafDriftScanResults',
+  'wafActionItems',
+  'wafConnectors',
+  'wafConnectorSnapshots',
+  'cvePipelineItems',
+  'cveAssetMatches',
+  'discoveryEntities',
+  'discoveryCandidates',
+  'externalAssetCandidates',
+  'supplyChainRisks',
+]);
+
+function shiftIsoInstants(value, deltaMs) {
+  if (typeof value === 'string') {
+    if (!ISO_INSTANT_RE.test(value)) return value;
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? value : new Date(ms + deltaMs).toISOString();
+  }
+  if (Array.isArray(value)) return value.map((item) => shiftIsoInstants(item, deltaMs));
+  if (value && typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value)) {
+      value[key] = shiftIsoInstants(nested, deltaMs);
+    }
+  }
+  return value;
+}
+
+/**
+ * Replays the frozen demo fixture at seed time: the dev portal should not open on a
+ * "running" run that started 53 days ago next to an agent that is Online with no heartbeat.
+ * @param {Record<string, unknown>} store
+ * @param {Date} [now]
+ */
+export function rebaseDemoStoreTimestamps(store, now = new Date()) {
+  const frozenMs = Date.parse(PORTAL_DEMO_IDS.frozenAt);
+  const deltaMs = now.getTime() - DEMO_ANCHOR_AGE_MS - frozenMs;
+  for (const collection of REBASED_COLLECTIONS) {
+    if (!Array.isArray(store[collection])) continue;
+    store[collection] = shiftIsoInstants(store[collection], deltaMs);
+  }
+
+  const agent = store.agents?.find((row) => row.id === PORTAL_DEMO_IDS.agentId);
+  if (agent) {
+    const heartbeatAt = new Date(now.getTime() - AGENT_HEARTBEAT_AGE_MS).toISOString();
+    agent.status = 'online';
+    agent.version = DEMO_AGENT_VERSION;
+    agent.last_heartbeat_at = heartbeatAt;
+    agent.last_token_validation_at = heartbeatAt;
+    agent.last_token_validation_status = 'valid';
+  }
+
+  const runningRun = store.testRuns?.find((row) => row.status === 'running');
+  if (runningRun) {
+    const startedAt = new Date(now.getTime() - RUNNING_RUN_AGE_MS).toISOString();
+    runningRun.started_at = startedAt;
+    runningRun.created_at = startedAt;
+  }
+
+  return store;
+}
+
 function parseArgs(argv) {
   return { help: argv.includes('--help') || argv.includes('-h') };
 }
@@ -49,6 +145,7 @@ Detail deep-links (append to /app#...):
 
   delete process.env.ASTRANULL_NO_PERSIST;
   const store = buildPortalDemoStore();
+  rebaseDemoStoreTimestamps(store);
   migrateDevStore(store);
   writeDevStoreToDisk(store);
   clearStoreCacheForTests();
@@ -78,4 +175,7 @@ Detail deep-links (append to /app#...):
   console.log('seed-dev-portal-demo: restart the API (`npm run dev:api`) then open http://127.0.0.1:5173/app');
 }
 
-main();
+// Guarded so unit tests can import `rebaseDemoStoreTimestamps` without writing the dev store.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

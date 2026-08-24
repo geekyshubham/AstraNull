@@ -33,6 +33,12 @@ import {
 } from './lib/http.mjs';
 import { isProbeWorkerRoute } from './context.mjs';
 import * as probeCoordinator from './services/probeCoordinator.mjs';
+import {
+  REPORT_EXPORT_FORMATS,
+  REPORT_PERIODS,
+  normalizeReportPeriod,
+  reportCapabilities,
+} from './contracts/complianceReports.mjs';
 import { requirePermission } from './rbac.mjs';
 import { seedIfEmpty } from './seed.mjs';
 import { getStore } from './store.mjs';
@@ -1058,7 +1064,9 @@ export function createServer(options = {}) {
         return;
       }
 
-      if (req.method === 'GET') {
+      // HEAD is dispatched alongside GET: `serveStatic` answers it with the same status and
+      // headers minus the body. Without this, `curl -I /react-app.js` fell through to 404.
+      if (req.method === 'GET' || req.method === 'HEAD') {
         const served = await serveStatic(req, res, url, runtimeConfig);
         if (served) return;
         text(res, 404, 'Not found');
@@ -2784,6 +2792,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    // `period` is optional, but an unknown window must never be silently dropped or stored.
+    const periodInput = body?.period;
+    if (periodInput != null && String(periodInput).trim() !== '' && normalizeReportPeriod(periodInput) == null) {
+      return json(res, 400, {
+        error: 'unsupported_period',
+        supported_periods: [...REPORT_PERIODS],
+      });
+    }
     return json(res, 201, await serviceDeps.reports.createReport(ctx, body));
   }
   if (path === '/v1/reports' && method === 'GET') {
@@ -2794,6 +2810,8 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       items: await serviceDeps.reports.listReports(ctx, {
         limit: Number(url.searchParams.get('limit') ?? 100),
       }),
+      // Report builders read their kind/format options from here, never from a client copy.
+      capabilities: reportCapabilities(),
     });
   }
   const rptMatch = path.match(/^\/v1\/reports\/([^/]+)$/);
@@ -2811,10 +2829,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresReportRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const format = url.searchParams.get('format') || 'json';
-    if (!['json', 'markdown', 'html'].includes(format)) {
+    if (!REPORT_EXPORT_FORMATS.includes(format)) {
       return json(res, 400, {
         error: 'unsupported_format',
-        supported_formats: ['json', 'markdown', 'html'],
+        supported_formats: [...REPORT_EXPORT_FORMATS],
       });
     }
     const out = await serviceDeps.reports.exportReport(ctx, rptExport[1], format);

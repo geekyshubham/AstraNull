@@ -20,6 +20,39 @@ export const REPORT_KINDS = Object.freeze([
   'internal_audit',
 ]);
 
+/** Human-readable labels for the report kinds the portal offers. */
+const KIND_LABELS = Object.freeze({
+  executive: 'Executive',
+  board: 'Board',
+  technical: 'Technical',
+  soc: 'SOC',
+  audit: 'Audit',
+  soc2: 'SOC 2',
+  iso27001: 'ISO 27001',
+  dora: 'DORA',
+  nis2: 'NIS2',
+  internal_audit: 'Internal audit',
+});
+
+/** @type {readonly string[]} Export formats `exportReport` can render. */
+export const REPORT_EXPORT_FORMATS = Object.freeze(['json', 'markdown', 'html']);
+
+/** @type {readonly string[]} Reporting windows a generated report may be scoped to. */
+export const REPORT_PERIODS = Object.freeze(['last-7-days', 'last-30-days', 'quarter', 'all-time']);
+
+const PERIOD_LABELS = Object.freeze({
+  'last-7-days': 'Last 7 days',
+  'last-30-days': 'Last 30 days',
+  quarter: 'Current quarter',
+  'all-time': 'All time',
+});
+
+const FORMAT_LABELS = Object.freeze({
+  json: 'JSON',
+  markdown: 'Markdown',
+  html: 'HTML',
+});
+
 const KIND_ALIASES = Object.freeze({
   exec: 'executive',
   'internal-audit': 'internal_audit',
@@ -448,6 +481,9 @@ const MAPPINGS_BY_KIND = {
 
 const DEFAULT_KIND = 'technical';
 
+/** Reports are generated without a declared window unless the caller asks for one. */
+const DEFAULT_PERIOD = null;
+
 /**
  * @param {string | undefined | null} kind
  * @returns {string}
@@ -462,6 +498,51 @@ export function normalizeReportKind(kind) {
     return aliased;
   }
   return DEFAULT_KIND;
+}
+
+/**
+ * Reporting period is optional: `null` means the report was generated without a declared window.
+ * Unknown values normalize to `null` so callers can reject them instead of storing a guess.
+ *
+ * @param {string | undefined | null} period
+ * @returns {string | null}
+ */
+export function normalizeReportPeriod(period) {
+  if (period == null || String(period).trim() === '') {
+    return null;
+  }
+  const raw = String(period).trim().toLowerCase().replace(/_/g, '-');
+  return REPORT_PERIODS.includes(raw) ? raw : null;
+}
+
+/**
+ * @param {string | undefined | null} period
+ * @returns {string | null}
+ */
+export function reportPeriodLabel(period) {
+  const normalized = normalizeReportPeriod(period);
+  return normalized == null ? null : PERIOD_LABELS[normalized] ?? normalized;
+}
+
+/**
+ * Authoritative kind/format/period option lists for report builders (portal dropdowns included).
+ * The backend enums stay the single source of truth; clients must not hardcode their own.
+ */
+export function reportCapabilities() {
+  return {
+    default_kind: DEFAULT_KIND,
+    default_format: REPORT_EXPORT_FORMATS[0],
+    default_period: DEFAULT_PERIOD,
+    kinds: REPORT_KINDS.map((kind) => ({ value: kind, label: KIND_LABELS[kind] ?? kind })),
+    formats: REPORT_EXPORT_FORMATS.map((format) => ({
+      value: format,
+      label: FORMAT_LABELS[format] ?? format,
+    })),
+    periods: REPORT_PERIODS.map((period) => ({
+      value: period,
+      label: PERIOD_LABELS[period] ?? period,
+    })),
+  };
 }
 
 export function listReportTemplates() {
