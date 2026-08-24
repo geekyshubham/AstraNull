@@ -2,6 +2,7 @@
  * Deterministic DNS resolver stub for portal revamp tests (docs/ux/17 §2).
  * Unit, contract, and integration suites inject this instead of live DNS.
  */
+import './dev-data-dir.mjs';
 
 const DEFAULT_TXT = new Map();
 

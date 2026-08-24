@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import {
+  TARGET_GROUP_FINDINGS_LIMIT,
   addTarget,
   archiveTargetGroup,
   createTargetGroup,
@@ -112,5 +113,41 @@ describe('target group service CRUD', () => {
     const reloaded = getTargetGroup(ctx, group.id).targets;
     assert.equal(reloaded.find((t) => t.value === 'origin.example.com').metadata.agent_id, 'agt_edge_1');
     assert.equal(reloaded.find((t) => t.value === '203.0.113.10:443').metadata.notes, 'Origin behind CDN · single-AZ');
+  });
+
+  it('caps findings_on_group at 50 newest-first and reports the full total', () => {
+    const group = createTargetGroup(ctx, { name: 'Noisy group' });
+    const total = TARGET_GROUP_FINDINGS_LIMIT + 5;
+    for (let i = 0; i < total; i += 1) {
+      getStore().findings.push({
+        id: `fnd_cap_${String(i).padStart(3, '0')}`,
+        tenant_id: ctx.tenantId,
+        target_group_id: group.id,
+        title: `Finding ${i}`,
+        severity: 'medium',
+        status: 'open',
+        created_at: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+      });
+    }
+    // A same-tenant finding on another group must not leak into either the list or the total.
+    getStore().findings.push({
+      id: 'fnd_cap_other_group',
+      tenant_id: ctx.tenantId,
+      target_group_id: 'tg_1',
+      title: 'Elsewhere',
+      severity: 'low',
+      status: 'open',
+      created_at: new Date(Date.UTC(2026, 5, 1)).toISOString(),
+    });
+
+    const detail = getTargetGroup(ctx, group.id);
+    assert.equal(detail.findings_on_group.length, TARGET_GROUP_FINDINGS_LIMIT);
+    assert.equal(detail.findings_on_group_total, total);
+    assert.equal(detail.findings_on_group[0].id, `fnd_cap_${String(total - 1).padStart(3, '0')}`);
+    assert.equal(
+      detail.findings_on_group.at(-1).id,
+      `fnd_cap_${String(total - TARGET_GROUP_FINDINGS_LIMIT).padStart(3, '0')}`,
+    );
+    assert.equal(detail.findings_on_group.some((f) => f.id === 'fnd_cap_other_group'), false);
   });
 });

@@ -1,3 +1,5 @@
+import './dev-data-dir.mjs';
+
 import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
 import { resetStoreForTests } from '../../src/store.mjs';
 

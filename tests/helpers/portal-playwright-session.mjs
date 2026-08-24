@@ -1,3 +1,5 @@
+import './dev-data-dir.mjs';
+
 import { PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 import { PORTAL_DETAIL_ENTITY_IDS } from './portal-routes.mjs';
 

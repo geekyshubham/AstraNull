@@ -1,6 +1,7 @@
 /**
  * Lightweight JSON-shape validators for portal revamp contract tests (docs/ux/16 §4).
  */
+import './dev-data-dir.mjs';
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

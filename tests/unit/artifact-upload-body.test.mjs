@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';

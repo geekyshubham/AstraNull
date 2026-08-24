@@ -68,12 +68,24 @@ const PERMISSION_GATED_ROUTES = Object.freeze({
   'release-evidence': 'release_evidence:read',
 });
 
+/**
+ * Routes narrowed below their backend permission. docs/ux/14 §3.1 deleted the customer-facing
+ * release-evidence surface; the auditor role keeps `release_evidence:read` and the landing page.
+ */
+const CUSTOMER_ROLE_NARROWED_ROUTES = Object.freeze({
+  'release-evidence': Object.freeze(['auditor']),
+});
+
 const CUSTOMER_ROLES = ['owner', 'engineer', 'viewer', 'auditor', 'admin', 'soc'];
 /** Operational SOC staff roles only (matches isStaffSocRole / route-access). */
 const STAFF_SOC_ROLES = ['soc_analyst', 'soc_lead'];
 
 function expectedCustomerAccess(role, routeId) {
   if (STAFF_ONLY_ROUTES.has(routeId) || STAFF_SOC_ROUTES.has(routeId)) {
+    return false;
+  }
+  const narrowedRoles = CUSTOMER_ROLE_NARROWED_ROUTES[routeId];
+  if (narrowedRoles && !narrowedRoles.includes(role)) {
     return false;
   }
   const permission = PERMISSION_GATED_ROUTES[routeId];

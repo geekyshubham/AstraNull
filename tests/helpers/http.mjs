@@ -1,3 +1,5 @@
+import './dev-data-dir.mjs';
+
 export async function request(baseUrl, method, path, { headers = {}, body, rawBody } = {}) {
   let payload;
   if (rawBody !== undefined) {

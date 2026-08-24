@@ -15,6 +15,7 @@ import {
 } from '../../src/services/privacyRetention.mjs';
 import { patchCurrentTenant } from '../../src/services/tenants.mjs';
 import { clearStoreCacheForTests, getStore, resetStoreForTests } from '../../src/store.mjs';
+import { useIsolatedDevDataDir } from '../helpers/dev-data-dir.mjs';
 
 function daysAgo(n) {
   return new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
@@ -81,7 +82,7 @@ function baseStore(overrides = {}) {
 describe('metadata privacy retention', () => {
   after(() => {
     process.env.ASTRANULL_NO_PERSIST = '1';
-    delete process.env.ASTRANULL_DEV_DATA_DIR;
+    useIsolatedDevDataDir();
     clearStoreCacheForTests();
   });
 
@@ -299,7 +300,7 @@ describe('metadata privacy retention', () => {
     assert.equal(onDisk.auditLog.length, 0);
 
     rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.ASTRANULL_DEV_DATA_DIR;
+    useIsolatedDevDataDir();
     clearStoreCacheForTests();
     process.env.ASTRANULL_NO_PERSIST = '1';
   });

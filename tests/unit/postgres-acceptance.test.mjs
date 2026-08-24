@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DELEGATION_STATUS } from '../../src/persistence/postgres/wafOrchestratorServiceAdapters.mjs';

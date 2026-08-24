@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';

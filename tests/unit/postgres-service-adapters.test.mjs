@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -4817,6 +4819,40 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(polled.snapshots[0].summary.policy_mode, 'block');
     assert.equal(repoCalls.filter((c) => c.method === 'createConnectorSnapshots').length, 1);
     assert.equal(auditEvents.find((e) => e.action === 'connector.snapshot.created')?.metadata.snapshot_count, 1);
+  });
+
+  it('pollConnector stamps the poll timestamp when a manual poll produces zero snapshots', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const fixed = new Date('2026-07-02T12:00:00.000Z');
+    const statusUpdates = [];
+    const { repositories } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        id: 'conn_1',
+        provider: 'cloudflare',
+        name: 'Edge',
+        config: { read_only: true },
+        status: 'active',
+      }),
+      createConnectorSnapshots: async () => [],
+      updateConnectorStatus: async (_ctx, _id, updates) => {
+        statusUpdates.push(updates);
+        return null;
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => fixed,
+      newId: (prefix) => (prefix === 'poll' ? 'poll_1' : 'csnap_1'),
+    });
+
+    const polled = await svc.pollConnector(ctx, 'conn_1', { snapshots: [] });
+    assert.equal(polled.status, 202);
+    assert.equal(polled.poll_job.snapshot_count, 0);
+    assert.equal(statusUpdates.length, 1);
+    assert.equal(statusUpdates[0].last_success_at, fixed.toISOString());
+    assert.equal(statusUpdates[0].updated_at, fixed.toISOString());
+    // An empty poll reports nothing new; it must not flip status or clear a recorded error.
+    assert.equal(statusUpdates[0].status, undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(statusUpdates[0], 'last_error_at'), false);
   });
 
   it('disableConnector updates status and audits lifecycle', async () => {

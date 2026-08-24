@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import {
+  REPORT_EXPORT_FORMATS,
   REPORT_KINDS,
+  REPORT_PERIODS,
   buildComplianceMapping,
   getReportTemplate,
   listReportTemplates,
   normalizeReportKind,
+  normalizeReportPeriod,
+  reportCapabilities,
+  reportPeriodLabel,
 } from '../../src/contracts/complianceReports.mjs';
 import { verifyCustodyManifest } from '../../src/lib/custody.mjs';
 import { createReport, exportReport } from '../../src/services/reports.mjs';
@@ -33,6 +38,58 @@ describe('compliance report contracts', () => {
     assert.equal(normalizeReportKind('iso-27001'), 'iso27001');
     assert.equal(normalizeReportKind('not_a_real_kind'), 'technical');
     assert.equal(normalizeReportKind(undefined), 'technical');
+  });
+
+  it('reportCapabilities exposes every backend kind and export format with labels', () => {
+    const capabilities = reportCapabilities();
+    assert.deepEqual(
+      capabilities.kinds.map((option) => option.value),
+      [...REPORT_KINDS],
+    );
+    assert.deepEqual(
+      capabilities.formats.map((option) => option.value),
+      [...REPORT_EXPORT_FORMATS],
+    );
+    for (const option of [...capabilities.kinds, ...capabilities.formats]) {
+      assert.equal(typeof option.label, 'string');
+      assert.ok(option.label.length > 0, `missing label for ${option.value}`);
+      // Labels are human-readable, not raw enum values.
+      assert.doesNotMatch(option.label, /_/);
+    }
+    assert.equal(capabilities.default_kind, normalizeReportKind(undefined));
+    assert.ok(REPORT_EXPORT_FORMATS.includes(capabilities.default_format));
+  });
+
+  it('exposes reporting periods with labels and normalizes unknown windows to null', () => {
+    const capabilities = reportCapabilities();
+    assert.deepEqual(
+      capabilities.periods.map((option) => option.value),
+      [...REPORT_PERIODS],
+    );
+    for (const option of capabilities.periods) {
+      assert.equal(typeof option.label, 'string');
+      assert.ok(option.label.length > 0, `missing label for ${option.value}`);
+      assert.doesNotMatch(option.label, /[_-]/);
+    }
+    assert.equal(capabilities.default_period, null);
+    assert.equal(normalizeReportPeriod('last-30-days'), 'last-30-days');
+    assert.equal(normalizeReportPeriod('LAST_30_DAYS'), 'last-30-days');
+    assert.equal(normalizeReportPeriod(undefined), null);
+    assert.equal(normalizeReportPeriod(''), null);
+    assert.equal(normalizeReportPeriod('last-decade'), null);
+    assert.equal(normalizeReportPeriod({}), null);
+    assert.equal(reportPeriodLabel('quarter'), 'Current quarter');
+    assert.equal(reportPeriodLabel('nope'), null);
+  });
+
+  it('createReport stores the requested period and defaults to null', () => {
+    freshStore();
+    const withPeriod = createReport(CTX, { kind: 'technical', period: 'quarter' });
+    assert.equal(withPeriod.period, 'quarter');
+    assert.equal(withPeriod.summary.period, 'quarter');
+    const withoutPeriod = createReport(CTX, { kind: 'technical' });
+    assert.equal(withoutPeriod.period, null);
+    assert.equal(withoutPeriod.summary.period, null);
   });
 
   it('buildComplianceMapping covers framework report kinds', () => {

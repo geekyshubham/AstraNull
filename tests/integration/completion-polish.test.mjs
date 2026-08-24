@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createServer } from '../../src/server.mjs';
 import { demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { REPORT_PERIODS } from '../../src/contracts/complianceReports.mjs';
 import { verifyCustodyManifest } from '../../src/lib/custody.mjs';
 import { getStore } from '../../src/store.mjs';
 import { artifactProofBody, validHighScaleRequestPayload } from '../helpers/highScalePayload.mjs';
@@ -212,6 +213,49 @@ describe('completion polish security and observability', () => {
     const jsonExportAudit = exportAudits.find((a) => a.metadata.format === 'json');
     assert.ok(jsonExportAudit);
     assert.equal(jsonExportAudit.prev_hash, jsonExp.json.custody.previous_audit_hash);
+  });
+
+  it('report period round-trips through create, detail, and list, and unknown windows are rejected', async () => {
+    const h = demoHeaders('admin');
+    const created = await request(baseUrl, 'POST', '/v1/reports', {
+      headers: h,
+      body: { title: 'Period Test', kind: 'technical', period: 'last-30-days' },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.period, 'last-30-days');
+
+    const detail = await request(baseUrl, 'GET', `/v1/reports/${created.json.id}`, { headers: h });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.json.period, 'last-30-days');
+
+    const listed = await request(baseUrl, 'GET', '/v1/reports', { headers: h });
+    assert.equal(listed.status, 200);
+    const listedReport = listed.json.items.find((item) => item.id === created.json.id);
+    assert.equal(listedReport.period, 'last-30-days');
+    assert.deepEqual(
+      listed.json.capabilities.periods.map((option) => option.value),
+      [...REPORT_PERIODS],
+    );
+    assert.equal(listed.json.capabilities.default_period, null);
+
+    const omitted = await request(baseUrl, 'POST', '/v1/reports', {
+      headers: h,
+      body: { title: 'No Period', kind: 'technical' },
+    });
+    assert.equal(omitted.status, 201);
+    assert.equal(omitted.json.period, null);
+
+    const rejected = await request(baseUrl, 'POST', '/v1/reports', {
+      headers: h,
+      body: { title: 'Bad Period', kind: 'technical', period: 'last-decade' },
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.json.error, 'unsupported_period');
+    assert.deepEqual(rejected.json.supported_periods, [...REPORT_PERIODS]);
+    assert.equal(
+      getStore().reports.some((report) => report.title === 'Bad Period'),
+      false,
+    );
   });
 
   it('finding export includes verifiable custody and safe audit metadata', async () => {

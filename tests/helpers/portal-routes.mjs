@@ -1,3 +1,5 @@
+import './dev-data-dir.mjs';
+
 import { PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
 
 /** Baseline entity IDs for detail-route hash query params (`route-params.ts`). */

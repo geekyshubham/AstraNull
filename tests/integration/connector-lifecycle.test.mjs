@@ -62,9 +62,18 @@ describe('connector lifecycle (FT-CRUD-CONN-01)', () => {
     assert.ok([200, 202].includes(polled.status));
     assert.equal(polled.json.poll_job?.status, 'completed');
     assert.ok(polled.json.poll_job?.created_at);
+    assert.equal(polled.json.poll_job.snapshot_count, 0);
 
+    // A poll that completes with zero snapshots is still a completed poll: the stored stamp
+    // must advance on its own, or the portal LAST POLL cell reads as a dead connector.
     const stored = getStore().wafConnectors.find((row) => row.id === connectorId);
-    stored.last_success_at = polled.json.poll_job.created_at;
+    assert.ok(stored.last_success_at, 'poll must stamp the connector poll timestamp');
+    assert.equal(stored.last_success_at, polled.json.poll_job.created_at);
+
+    const listed = await request(baseUrl, 'GET', '/v1/connectors', { headers });
+    assert.equal(listed.status, 200);
+    const listedConnector = listed.json.items.find((item) => item.id === connectorId);
+    assert.equal(listedConnector.last_success_at, stored.last_success_at);
 
     const disabled = await request(baseUrl, 'POST', `/v1/connectors/${connectorId}/disable`, {
       headers,

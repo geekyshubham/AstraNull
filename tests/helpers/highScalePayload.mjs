@@ -1,3 +1,5 @@
+import './dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { sha256Hex } from '../../src/lib/authorizationArtifactLedger.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/services/highScale.mjs';

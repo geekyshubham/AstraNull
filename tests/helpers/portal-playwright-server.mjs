@@ -1,3 +1,5 @@
+import { useIsolatedDevDataDir } from './dev-data-dir.mjs';
+
 import { createServer } from '../../src/server.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
 import { computeReadiness } from '../../src/services/readiness.mjs';
@@ -18,6 +20,10 @@ const TEST_ENV = {
   ASTRANULL_AUTH_MODE: 'dev-headers',
   ASTRANULL_NO_PERSIST: '1',
   ASTRANULL_WAF_POSTURE_ENABLED: '1',
+  // #integrations renders the "connectors are disabled" card without this, so the
+  // connector Poll control the interaction specs exercise does not exist. `npm run dev:api`
+  // sets the same flag, so this matches the surface the app is actually driven on.
+  ASTRANULL_CONNECTORS_ENABLED: '1',
   // Portal E2E drives many route navigations against ONE shared server; each nav
   // fires ~15 parallel /v1 calls via fetchPortalData, so a full-suite run bursts past
   // the default 600-req/60s limiter and starts getting 429s (empty lists → spurious
@@ -37,6 +43,8 @@ function applyTestEnv() {
   for (const [key, value] of Object.entries(TEST_ENV)) {
     process.env[key] = value;
   }
+  // Re-asserted per boot: a spec that restored an env snapshot may have dropped it.
+  TEST_ENV.ASTRANULL_DEV_DATA_DIR = useIsolatedDevDataDir();
 }
 
 /**
@@ -48,6 +56,62 @@ export function seedPortalPlaywrightStore(mutate) {
   mutate?.(store);
   resetStoreForTests(store);
   return getStore();
+}
+
+/** Errors that mean "the connection died", not "the server answered badly". */
+const CONNECTION_RESET_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET']);
+
+function isConnectionReset(err) {
+  for (let cause = err; cause; cause = cause.cause) {
+    if (CONNECTION_RESET_CODES.has(cause.code)) return true;
+  }
+  return false;
+}
+
+/**
+ * `fetch` that survives one dead pooled socket.
+ *
+ * A restart binds a fresh listener, frequently on the SAME ephemeral port the previous one
+ * held. Undici keys its connection pool by origin, so a socket it has not yet observed as
+ * closed can be dispatched onto the new listener and comes back `ECONNRESET` — which is how
+ * FT-PROV-dyn-03 failed intermittently under full-suite load, thrown from the first helper
+ * fetch after `restartPortalPlaywrightServer` resolved and before any navigation. One retry
+ * is enough: the failed attempt evicts the dead socket from the pool.
+ */
+async function fetchWithConnectionRetry(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (!isConnectionReset(err)) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return fetch(url, init);
+  }
+}
+
+const READY_POLL_ATTEMPTS = 40;
+const READY_POLL_MAX_DELAY_MS = 100;
+
+/**
+ * Block until the new listener actually answers, not merely until `listen` called back.
+ *
+ * Any HTTP status counts: `/ready` reports 503 while draining or when a readiness probe is
+ * unhappy, and neither says anything about whether the socket accepts connections — which is
+ * the only property this gate exists to establish.
+ */
+async function waitForPortalPlaywrightReady(baseUrl) {
+  let lastError = null;
+  for (let attempt = 0; attempt < READY_POLL_ATTEMPTS; attempt += 1) {
+    try {
+      await fetchWithConnectionRetry(`${baseUrl}/ready`, { headers: { accept: 'application/json' } });
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(READY_POLL_MAX_DELAY_MS, 5 * (attempt + 1)));
+      });
+    }
+  }
+  throw new Error(`portal playwright server never became reachable at ${baseUrl}: ${lastError?.message ?? 'unknown'}`);
 }
 
 /**
@@ -74,6 +138,8 @@ export async function startPortalPlaywrightServer(options = {}) {
   process.env.PORT = String(port);
   process.env.BASE_URL = baseUrl;
 
+  await waitForPortalPlaywrightReady(baseUrl);
+
   return { server, baseUrl, port };
 }
 
@@ -83,6 +149,9 @@ export async function stopPortalPlaywrightServer() {
   runtime.baseUrl = null;
   runtime.port = null;
   if (!server) return;
+  // Destroys the keep-alive sockets `close()` deliberately leaves serving, so the client's
+  // pool learns they are gone instead of discovering it on the next restart's port.
+  server.closeAllConnections?.();
   await new Promise((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));
   });
@@ -133,7 +202,7 @@ export function portalOwnerHeaders() {
 }
 
 export async function fetchPortalReadinessScore(baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/state`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/state`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/state failed (${res.status})`);
   const json = await res.json();
   const score = json?.readiness?.score;
@@ -144,7 +213,7 @@ export async function fetchPortalReadinessScore(baseUrl = getPortalPlaywrightBas
 }
 
 export async function fetchPortalFindings(baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/findings`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/findings`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/findings failed (${res.status})`);
   const json = await res.json();
   return Array.isArray(json?.items) ? json.items : [];
@@ -155,7 +224,7 @@ export function countOpenFindings(findings) {
 }
 
 export async function fetchPortalVerificationLadder(groupId = PORTAL_BASELINE_IDS.targetGroupId, baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(
+  const res = await fetchWithConnectionRetry(
     `${baseUrl}/v1/target-groups/${encodeURIComponent(groupId)}/verification-ladder`,
     { headers: portalOwnerHeaders() },
   );
@@ -164,26 +233,26 @@ export async function fetchPortalVerificationLadder(groupId = PORTAL_BASELINE_ID
 }
 
 export async function fetchPortalWafCoverageSummary(baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/waf/coverage/summary`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/waf/coverage/summary`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/waf/coverage/summary failed (${res.status})`);
   return res.json();
 }
 
 export async function fetchPortalTargetDetail(targetId = PORTAL_BASELINE_IDS.targetId, baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/targets/${encodeURIComponent(targetId)}`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/targets/${encodeURIComponent(targetId)}`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/targets/${targetId} failed (${res.status})`);
   return res.json();
 }
 
 export async function fetchPortalHighScaleQueue(baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/high-scale-requests?scope=my-tenant`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/high-scale-requests?scope=my-tenant`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/high-scale-requests failed (${res.status})`);
   const json = await res.json();
   return Array.isArray(json?.items) ? json.items : [];
 }
 
 export async function fetchPortalFinding(findingId = PORTAL_BASELINE_IDS.findingId, baseUrl = getPortalPlaywrightBaseUrl()) {
-  const res = await fetch(`${baseUrl}/v1/findings/${encodeURIComponent(findingId)}`, { headers: portalOwnerHeaders() });
+  const res = await fetchWithConnectionRetry(`${baseUrl}/v1/findings/${encodeURIComponent(findingId)}`, { headers: portalOwnerHeaders() });
   if (!res.ok) throw new Error(`GET /v1/findings/${findingId} failed (${res.status})`);
   return res.json();
 }

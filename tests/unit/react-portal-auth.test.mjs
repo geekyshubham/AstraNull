@@ -345,10 +345,13 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole: 'support_engineer' }), true);
   });
 
-  it('gates release-evidence by release_evidence:read', () => {
+  it('narrows release-evidence to the auditor role (docs/ux/14 §3.1)', () => {
     assert.equal(canAccessRoute('viewer', 'release-evidence'), false);
     assert.equal(canAccessRoute('engineer', 'release-evidence'), false);
     assert.equal(canAccessRoute('auditor', 'release-evidence'), true);
-    assert.equal(canAccessRoute('admin', 'release-evidence'), true);
+    // release_evidence:read still covers owner/admin/soc, but the customer surface is auditor-only.
+    assert.equal(canAccessRoute('admin', 'release-evidence'), false);
+    assert.equal(canAccessRoute('owner', 'release-evidence'), false);
+    assert.equal(canAccessRoute('soc', 'release-evidence'), false);
   });
 });

@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { LOCAL_STAGING_DEMO_IDS } from '../../scripts/lib/localStaging.mjs';

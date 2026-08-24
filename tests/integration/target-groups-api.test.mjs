@@ -100,6 +100,65 @@ describe('target groups API CRUD', () => {
     assert.equal(run.json.error, 'target_group_not_found');
   });
 
+  it('list items carry target_count and loa_state without the detail-only fields', async () => {
+    const engineer = demoHeaders('engineer');
+    const created = await request(baseUrl, 'POST', '/v1/target-groups', {
+      headers: engineer,
+      body: { name: 'Summary group', environment_id: 'env_demo' },
+    });
+    const groupId = created.json.id;
+    for (const value of ['one.example.com', 'two.example.com']) {
+      const added = await request(baseUrl, 'POST', `/v1/target-groups/${groupId}/targets`, {
+        headers: engineer,
+        body: { value, kind: 'fqdn' },
+      });
+      assert.equal(added.status, 201);
+    }
+
+    const list = await request(baseUrl, 'GET', '/v1/target-groups', { headers: engineer });
+    assert.equal(list.status, 200);
+
+    const summary = list.json.items.find((g) => g.id === groupId);
+    assert.equal(summary.target_count, 2);
+    assert.equal(summary.loa_state, 'required');
+    assert.equal(summary.targets, undefined);
+    assert.equal(summary.runs_recent, undefined);
+    assert.equal(summary.findings_on_group, undefined);
+
+    // freshStore seeds a signed LOA for tg_1; the list must surface it, not just the detail route.
+    const seeded = list.json.items.find((g) => g.id === 'tg_1');
+    assert.equal(seeded.target_count, 1);
+    assert.equal(seeded.loa_state, 'signed');
+
+    const detail = await request(baseUrl, 'GET', `/v1/target-groups/${groupId}`, {
+      headers: engineer,
+    });
+    assert.equal(detail.json.target_count, summary.target_count);
+    assert.equal(detail.json.loa_state, summary.loa_state);
+  });
+
+  it('archived list items carry the same summary keys', async () => {
+    const engineer = demoHeaders('engineer');
+    const created = await request(baseUrl, 'POST', '/v1/target-groups', {
+      headers: engineer,
+      body: { name: 'Archived summary group' },
+    });
+    const groupId = created.json.id;
+    await request(baseUrl, 'POST', `/v1/target-groups/${groupId}/targets`, {
+      headers: engineer,
+      body: { value: 'archived.example.com', kind: 'fqdn' },
+    });
+    await request(baseUrl, 'DELETE', `/v1/target-groups/${groupId}`, { headers: engineer });
+
+    const archived = await request(baseUrl, 'GET', '/v1/target-groups?archived=true', {
+      headers: engineer,
+    });
+    assert.equal(archived.status, 200);
+    const item = archived.json.items.find((g) => g.id === groupId);
+    assert.equal(item.target_count, 1);
+    assert.equal(item.loa_state, 'required');
+  });
+
   it('returns 409 when archiving a group with an active run', async () => {
     const engineer = demoHeaders('engineer');
     const created = await request(baseUrl, 'POST', '/v1/target-groups', {

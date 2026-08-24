@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import {
+  REPORT_EXPORT_FORMATS,
+  REPORT_KINDS,
+} from '../../src/contracts/complianceReports.mjs';
 import { createServer } from '../../src/server.mjs';
 import { agentHeaders, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
@@ -116,6 +120,27 @@ describe('integration first validation slice', () => {
     const reports = await request(baseUrl, 'GET', '/v1/reports', { headers: demoHeaders('admin') });
     assert.equal(reports.status, 200);
     assert.ok(reports.json.items.some((item) => item.id === report.json.id));
+    // The portal builds its kind/format dropdowns from these authoritative enums.
+    assert.deepEqual(
+      reports.json.capabilities.kinds.map((option) => option.value),
+      [...REPORT_KINDS],
+    );
+    assert.deepEqual(
+      reports.json.capabilities.formats.map((option) => option.value),
+      [...REPORT_EXPORT_FORMATS],
+    );
+    assert.equal(reports.json.capabilities.kinds[0].label, 'Executive');
+    assert.equal(reports.json.capabilities.default_kind, 'technical');
+
+    const badFormat = await request(
+      baseUrl,
+      'GET',
+      `/v1/reports/${report.json.id}/export?format=pdf`,
+      { headers: demoHeaders('admin') },
+    );
+    assert.equal(badFormat.status, 400);
+    assert.equal(badFormat.json.error, 'unsupported_format');
+    assert.deepEqual(badFormat.json.supported_formats, [...REPORT_EXPORT_FORMATS]);
 
     const reportExport = await request(
       baseUrl,

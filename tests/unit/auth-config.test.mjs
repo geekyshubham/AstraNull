@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';

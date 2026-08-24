@@ -7,6 +7,7 @@ import { CHECK_CATALOG, customerSelectableChecks } from '../../src/contracts/che
 import { seedIfEmpty } from '../../src/seed.mjs';
 import { listChecks } from '../../src/services/testRuns.mjs';
 import { createServer } from '../../src/server.mjs';
+import { useIsolatedDevDataDir } from '../helpers/dev-data-dir.mjs';
 import { request } from '../helpers/http.mjs';
 import {
   clearStoreCacheForTests,
@@ -18,7 +19,7 @@ import {
 describe('dev store migration', () => {
   after(() => {
     delete process.env.ASTRANULL_NO_PERSIST;
-    delete process.env.ASTRANULL_DEV_DATA_DIR;
+    useIsolatedDevDataDir();
     clearStoreCacheForTests();
   });
 
@@ -130,7 +131,7 @@ describe('dev store migration', () => {
     assert.equal(onDisk.findings.length, 1);
 
     rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.ASTRANULL_DEV_DATA_DIR;
+    useIsolatedDevDataDir();
     clearStoreCacheForTests();
     process.env.ASTRANULL_NO_PERSIST = '1';
   });

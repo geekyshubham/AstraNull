@@ -180,6 +180,36 @@ describe('postgres report repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('createReport carries period through summary_json and maps it back to the top level', async () => {
+    const pool = createRecordingPool((text, params) => {
+      if (text.startsWith('INSERT INTO reports')) {
+        const summaryParam = JSON.parse(params[5]);
+        assert.equal(summaryParam.period, 'quarter');
+        return {
+          rows: [
+            {
+              ...reportRecord,
+              summary_json: summaryParam,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createReportRepository(pool);
+    const row = await repo.createReport(CTX, { ...reportRecord, period: 'quarter' });
+    assert.equal(row.period, 'quarter');
+    assert.equal(row.summary.period, 'quarter');
+
+    // Rows written before period existed must still read back with an explicit null.
+    const legacy = mapReportRow({
+      ...reportRecord,
+      summary_json: reportRecord.summary,
+      created_at: FIXED_NOW,
+    });
+    assert.equal(legacy.period, null);
+  });
+
   it('getReport uses tenant and id predicates', async () => {
     const pool = createRecordingPool((text, params) => {
       if (text.includes('FROM reports')) {

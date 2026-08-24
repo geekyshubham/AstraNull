@@ -1,4 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
+// Config is evaluated in the runner and in every worker, so this isolates the dev JSON
+// store before any spec (or the in-process portal server it boots) can reach repo `.data`.
+import './tests/helpers/dev-data-dir.mjs';
 
 const baseURL = process.env.BASE_URL ?? 'http://127.0.0.1:0';
 
