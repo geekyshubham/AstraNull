@@ -4,7 +4,7 @@ import { populateTargetDetail } from '../lib/target-detail';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, Session } from '../lib/types';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatRunDuration } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
@@ -36,17 +36,6 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
   return fallback;
-}
-
-function formatRunDuration(run: DataItem): string {
-  const start = Date.parse(String(run.started_at ?? run.created_at ?? ''));
-  const end = Date.parse(String(run.completed_at ?? run.finalized_at ?? run.updated_at ?? ''));
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '—';
-  const totalSeconds = Math.round((end - start) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes <= 0) return `${seconds}s`;
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
 }
 
 function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {

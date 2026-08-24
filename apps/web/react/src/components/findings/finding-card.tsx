@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem } from '../../lib/types';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
@@ -82,9 +83,9 @@ export function FindingCard({
   const verdict = getString(finding, ['verdict'], '');
   const state = getString(finding, ['status', 'state'], 'open');
   const owner = getString(finding, ['assignee', 'owner', 'rem_owner', 'remOwner'], 'unassigned');
-  const checkId = getString(finding, ['check_id'], '');
-  const check = checks.find((entry) => getString(entry, ['check_id']) === checkId);
-  const checkLabel = getString(check ?? {}, ['name', 'title'], checkId || 'check');
+  const checkId = getString(finding, ['check_id', 'check'], '');
+  const check = checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
+  const checkLabel = checkId ? getString(check ?? {}, ['name', 'title'], checkId) : '';
   const groupId = getString(finding, ['target_group_id'], '');
   const group = targetGroups.find((entry) => getString(entry, ['id']) === groupId);
   const groupLabel = getString(group ?? {}, ['name', 'id'], groupId || 'ungrouped');
@@ -92,6 +93,14 @@ export function FindingCard({
   const href = id ? buildDetailHref('finding-detail', id) : '#findings';
 
   const slaState = slaClass(finding);
+  // The check facet is omitted rather than printing a placeholder when the finding
+  // carries no check reference (see docs/ux/14 §10 rule 2 — no static fallbacks).
+  const facets = [
+    { label: 'owner', value: owner },
+    ...(checkLabel ? [{ label: 'check', value: checkLabel }] : []),
+    { label: 'group', value: groupLabel },
+    { label: 'opened', value: formatDate(openedAt) }
+  ];
 
   return (
     <article
@@ -118,13 +127,12 @@ export function FindingCard({
           <span className="fc-state" title={`State ${state} from finding API`}>{state}</span>
         </div>
         <div className="fc-facets">
-          <Facet label="owner" value={owner} />
-          <FacetSep />
-          <Facet label="check" value={checkLabel} />
-          <FacetSep />
-          <Facet label="group" value={groupLabel} />
-          <FacetSep />
-          <Facet label="opened" value={formatDate(openedAt)} />
+          {facets.map((facet, index) => (
+            <Fragment key={facet.label}>
+              {index > 0 ? <FacetSep /> : null}
+              <Facet label={facet.label} value={facet.value} />
+            </Fragment>
+          ))}
         </div>
         <div
           className={`fc-sla mono text-xs${slaState ? ` ${slaState}` : ''}`}

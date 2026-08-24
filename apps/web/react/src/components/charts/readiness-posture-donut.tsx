@@ -1,5 +1,6 @@
 import { buildConicGradient, resolveReadinessPostureSegments } from '../../lib/readiness-posture';
 import type { DataItem, ReadinessPostureSegment, StatePayload } from '../../lib/types';
+import { countLabel } from '../../lib/utils';
 import { EmptyState } from '../ui/empty-state';
 import { Activity } from 'lucide-react';
 
@@ -11,7 +12,7 @@ const SEGMENT_COLORS: Record<string, string> = {
 
 function PostureLegendRow({ segment, total }: { segment: ReadinessPostureSegment; total: number }) {
   const swatch = SEGMENT_COLORS[segment.key];
-  const title = `${segment.label} · ${segment.count} of ${total} checks · ${segment.pct}%`;
+  const title = `${segment.label} · ${segment.count} of ${countLabel(total, 'check')} · ${segment.pct}%`;
   // Prototype simplification: the Review row surfaces the count/total form (e.g. "5/50");
   // Pass and Gap keep the percentage form. All counts stay derived from the resolver.
   const value = segment.key === 'review' ? `${segment.count}/${total}` : `${segment.pct}%`;
@@ -39,11 +40,14 @@ export function ReadinessPostureDonut({
 }) {
   const { segments, total, score } = resolveReadinessPostureSegments(state, runs, checks);
   const correlatedCount = segments.reduce((sum, segment) => sum + segment.count, 0);
-  const gradient = buildConicGradient(segments, score);
-  const ariaLabel = segments
-    .filter((segment) => segment.count > 0)
-    .map((segment) => `${segment.label} ${segment.count} checks ${segment.pct} percent`)
+  const gradient = buildConicGradient(segments);
+  const paintedSegments = segments.filter((segment) => segment.count > 0);
+  const ariaLabel = paintedSegments
+    .map((segment) => `${segment.label} ${countLabel(segment.count, 'check')} ${segment.pct} percent`)
     .join('. ');
+  const ringTitle = paintedSegments
+    .map((segment) => `${segment.label} · ${countLabel(segment.count, 'check')} · ${segment.pct}%`)
+    .join(' · ');
 
   if (total <= 0 && score === null) {
     return (
@@ -61,6 +65,7 @@ export function ReadinessPostureDonut({
         className="gauge gauge--segmented"
         role="img"
         aria-label={ariaLabel || 'Readiness posture donut'}
+        title={ringTitle || 'Posture segments from correlated check verdicts'}
         style={{ ['--gauge-gradient' as string]: gradient }}
       >
         <div className="gauge-hole">
@@ -76,7 +81,7 @@ export function ReadinessPostureDonut({
             <PostureLegendRow key={segment.key} segment={segment} total={total} />
           ))}
         </div>
-        <p className="muted small">{correlatedCount} checks correlated · this cycle</p>
+        <p className="muted small">{countLabel(correlatedCount, 'check')} correlated · this cycle</p>
       </div>
     </div>
   );

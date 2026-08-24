@@ -23,6 +23,14 @@ const ROUTE_PERMISSION: Partial<Record<RouteId, string>> = {
   'release-evidence': 'release_evidence:read',
 };
 
+/**
+ * Routes narrowed below their backend permission (docs/ux/14 §3.1 deleted the
+ * customer-facing release-evidence surface; auditor keeps the landing page).
+ */
+const ROUTE_CUSTOMER_ROLES: Partial<Record<RouteId, readonly string[]>> = {
+  'release-evidence': ['auditor'],
+};
+
 const STAFF_ONLY_ROUTES = new Set<RouteId>(['admin', 'tenant-detail']);
 /** Staff-only SOC execution console. queue-detail is shared: customers complete packs; staff run lifecycle. */
 const STAFF_SOC_ROUTES = new Set<RouteId>(['internal-soc']);
@@ -53,6 +61,11 @@ export function canAccessRoute(
 
   if (STAFF_SOC_ROUTES.has(routeId)) {
     return principal === 'staff' && STAFF_SOC_ROLES.has(staffRole);
+  }
+
+  const narrowedRoles = ROUTE_CUSTOMER_ROLES[routeId];
+  if (narrowedRoles && !narrowedRoles.includes(normalizedRole)) {
+    return false;
   }
 
   const permission = ROUTE_PERMISSION[routeId];

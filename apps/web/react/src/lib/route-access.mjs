@@ -11,6 +11,11 @@ const ROUTE_PERMISSION = Object.freeze({
   'release-evidence': 'release_evidence:read',
 });
 
+/** Routes narrowed below their backend permission (docs/ux/14 §3.1). Keep in sync with route-access.ts. */
+const ROUTE_CUSTOMER_ROLES = Object.freeze({
+  'release-evidence': Object.freeze(['auditor']),
+});
+
 const STAFF_ONLY_ROUTES = new Set(['admin', 'tenant-detail']);
 /** Staff-only SOC execution console. queue-detail is shared for customer pack completion. */
 const STAFF_SOC_ROUTES = new Set(['internal-soc']);
@@ -31,6 +36,11 @@ export function canAccessRoute(role, routeId, context = {}) {
 
   if (STAFF_SOC_ROUTES.has(routeId)) {
     return principal === 'staff' && STAFF_SOC_ROLES.has(staffRole);
+  }
+
+  const narrowedRoles = ROUTE_CUSTOMER_ROLES[routeId];
+  if (narrowedRoles && !narrowedRoles.includes(normalizedRole)) {
+    return false;
   }
 
   const permission = ROUTE_PERMISSION[routeId];

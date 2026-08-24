@@ -68,7 +68,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: 'test-policies',
-    label: 'Scheduler',
+    label: 'Test policies',
     group: 'validation',
     description: 'Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
     icon: CalendarClock

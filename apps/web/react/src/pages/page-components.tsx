@@ -30,6 +30,7 @@ import { TargetGroupPicker } from '../components/policies/target-group-picker';
 import { EmptyState } from '../components/ui/empty-state';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../lib/crud-ui';
+import { apiErrorMessage, humanizeErrorCode } from '../lib/error-messages';
 import { Progress, type ProgressTone } from '../components/ui/progress';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select, type SelectOption } from '../components/ui/select';
@@ -42,8 +43,8 @@ import { buildEnvironmentReadinessRows } from '../lib/environments';
 import { buildDetailHref } from '../lib/route-params';
 import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
-import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel } from '../lib/utils';
+import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
+import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize } from '../lib/utils';
 
 function getString(item: DataItem, keys: string[], fallback = '—') {
   for (const key of keys) {
@@ -704,19 +705,66 @@ function formatDashboardShortRelative(iso: string) {
   return `${days}d`;
 }
 
+const READINESS_SCALE_POINTS = 100;
+
 /**
- * Documented readiness factor weights (points, from src/services/readiness.mjs +
- * src/persistence/postgres/stateServiceAdapters.mjs). Each factor's `score` is emitted in
- * [0, weight] points; per-factor health % = score / weight * 100. Keyed by the factor `key`
- * returned by the state API so the weight binds to real data in both dev and Postgres modes.
+ * Weighted readiness factors from GET /v1/state `readiness.factors[]` (docs/ux/14 §4.1).
+ * Factor scores are points on the 100-point readiness scale, so a factor's bar is its share
+ * of that scale. Nothing here is keyed off a hardcoded factor list: labels, scores, and
+ * details all come from the payload.
  */
-const READINESS_FACTOR_WEIGHTS: Record<string, number> = {
-  coverage: 40,
-  agent_placement: 25,
-  verdicts: 25,
-  evidence_freshness: 15,
-  soc_readiness: 10
-};
+export function ReadinessFactorsPanel({ factors }: { factors: ReadinessFactor[] }) {
+  const rows = factors.filter((factor) => typeof factor?.score === 'number' && Number.isFinite(factor.score));
+
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        icon={Activity}
+        title="Weighted factors unavailable."
+        body="Factor scores appear once the platform publishes an evidence-backed readiness score."
+      />
+    );
+  }
+
+  return (
+    <div className="gauge-legend" data-testid="readiness-factors">
+      {rows.map((factor, index) => {
+        const key = getString(factor as DataItem, ['key'], '');
+        const label = getString(factor as DataItem, ['label', 'key'], 'Factor');
+        const score = Number(factor.score);
+        const scale =
+          typeof factor.weight === 'number' && Number.isFinite(factor.weight) && factor.weight > 0
+            ? factor.weight
+            : READINESS_SCALE_POINTS;
+        const share = Math.min(100, Math.max(0, (score / scale) * 100));
+        const detail = getString(factor as DataItem, ['detail', 'reason'], '');
+        const provenance = `Factor ${key || label}: ${score} of ${scale} points, from GET /v1/state readiness.factors`;
+
+        return (
+          <div className="stack-tight" key={key || `${label}-${index}`} data-testid="readiness-factor-row">
+            <div className="legend-row">
+              <span className="ld" style={{ background: 'var(--success)' }} aria-hidden="true" />
+              <span className="lg-label" title={provenance}>{label}</span>
+              <span
+                className="lg-bar-wrap"
+                role="img"
+                aria-label={`${label} scored ${score} of ${scale} points`}
+                title={provenance}
+              >
+                <span className="lg-bar" style={{ width: `${share}%`, background: 'var(--success)' }} />
+              </span>
+              <span className="lg-pct" title={provenance}>{score}</span>
+              <b title={provenance}>{`/${scale}`}</b>
+            </div>
+            {detail ? (
+              <p className="muted small" title="Factor detail from GET /v1/state readiness.factors[].detail">{detail}</p>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 type CorrelationStatus = 'pass' | 'review' | 'gap' | 'none';
 type CorrelationCellData = { status: CorrelationStatus; pass: number; review: number; gap: number; total: number };
@@ -981,6 +1029,11 @@ export function DashboardPage({
   const tenantId =
     getString(data.tenant ?? {}, ['id', 'tenant_id'], '') || (data.state?.tenant_id ?? '');
   const tenantEyebrow = tenantId && tenantId !== '—' ? `Tenant · ${tenantId.toUpperCase()}` : 'Tenant';
+  const killSwitch = data.state?.kill_switch ?? null;
+  const killSwitchArmed = killSwitch?.active === true;
+  const killSwitchReason = getString((killSwitch ?? {}) as DataItem, ['reason'], '');
+  const killSwitchUpdatedAt = getString((killSwitch ?? {}) as DataItem, ['updated_at'], '');
+  const readinessFactors = Array.isArray(data.state?.readiness?.factors) ? data.state.readiness.factors : [];
 
   function dashboardGroupVerdict(groupId: string): { label: string; tone: UiBadgeTone } {
     const latest = [...data.runs]
@@ -1145,6 +1198,19 @@ export function DashboardPage({
           <DashboardWorkspaceSkeleton />
         ) : (
         <>
+          {killSwitchArmed ? (
+            <div className="form-banner error stack-tight" role="alert">
+              <strong>SOC kill switch is armed</strong>
+              {killSwitchReason ? (
+                <span title="Kill switch reason from GET /v1/state kill_switch.reason">{killSwitchReason}</span>
+              ) : null}
+              {killSwitchUpdatedAt ? (
+                <span title="Kill switch updated_at from GET /v1/state kill_switch.updated_at">
+                  Armed {formatDate(killSwitchUpdatedAt)}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <div className="kpi-row">
             <KpiCell
               label="Readiness"
@@ -1171,7 +1237,7 @@ export function DashboardPage({
                   <span className="unit">%</span>
                 </>
               }
-              delta={`${formatNumber(metrics.targetGroups)} targets`}
+              delta={`${formatNumber(metrics.targetGroups)} ${pluralize(metrics.targetGroups, 'target')}`}
             />
             <KpiCell label="Open findings" value={metrics.openFindings} delta={`${openFindingsAtS2} at Severity 2 (High)`} />
             <KpiCell
@@ -1190,7 +1256,7 @@ export function DashboardPage({
             <Card>
               <CardHeader>
                 <CardTitle>Readiness posture</CardTitle>
-                <CardDescription>{correlatedChecks} checks correlated · this cycle</CardDescription>
+                <CardDescription>{countLabel(correlatedChecks, 'check')} correlated · this cycle</CardDescription>
               </CardHeader>
               <CardContent>
                 <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
@@ -1300,6 +1366,15 @@ export function DashboardPage({
             </CardHeader>
             <CardContent>
               <WafSummaryPanel summary={data.wafCoverageSummary} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Weighted factors</CardTitle>
+              <CardDescription>Each factor contributes its points to the published readiness score.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ReadinessFactorsPanel factors={readinessFactors} />
             </CardContent>
           </Card>
         </>
@@ -1589,8 +1664,7 @@ export function TargetGroupsPage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+      setError(apiErrorMessage(err, 'Action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -1861,7 +1935,12 @@ type ReportExportPreview = {
   textPreview?: string;
 };
 
-const REPORT_KIND_OPTIONS = [
+/**
+ * Offline fallbacks only. The authoritative enums ship in `capabilities` on
+ * `GET /v1/reports` (src/contracts/complianceReports.mjs); these arrays are used
+ * when that payload has not loaded yet or came back empty.
+ */
+const REPORT_KIND_FALLBACK_OPTIONS: SelectOption[] = [
   { value: 'executive', label: 'Executive' },
   { value: 'board', label: 'Board' },
   { value: 'technical', label: 'Technical' },
@@ -1874,11 +1953,50 @@ const REPORT_KIND_OPTIONS = [
   { value: 'internal_audit', label: 'Internal audit' }
 ];
 
-const REPORT_FORMAT_OPTIONS: SelectOption[] = [
+const REPORT_FORMAT_FALLBACK_OPTIONS: SelectOption[] = [
   { value: 'json', label: 'JSON' },
   { value: 'markdown', label: 'Markdown' },
   { value: 'html', label: 'HTML' }
 ];
+
+const REPORT_PERIOD_FALLBACK_OPTIONS: SelectOption[] = [
+  { value: 'last-7-days', label: 'Last 7 days' },
+  { value: 'last-30-days', label: 'Last 30 days' },
+  { value: 'quarter', label: 'Current quarter' },
+  { value: 'all-time', label: 'All time' }
+];
+
+function humanizeOptionValue(value: string) {
+  const spaced = value.replace(/[_-]+/g, ' ').trim();
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : value;
+}
+
+export function reportOptionsFromCapabilities(
+  capabilities: DataItem | null | undefined,
+  key: 'kinds' | 'formats' | 'periods',
+  fallback: SelectOption[]
+): SelectOption[] {
+  const raw = capabilities?.[key];
+  if (!Array.isArray(raw)) return fallback;
+  const options: SelectOption[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      if (entry) options.push({ value: entry, label: humanizeOptionValue(entry) });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as DataItem;
+    const value = getString(item, ['value', 'kind', 'format', 'period', 'id'], '');
+    if (!value) continue;
+    options.push({ value, label: getString(item, ['label', 'title', 'name'], humanizeOptionValue(value)) });
+  }
+  return options.length ? options : fallback;
+}
+
+function clampOptionValue(options: SelectOption[], value: string) {
+  if (options.some((option) => option.value === value)) return value;
+  return options[0]?.value ?? value;
+}
 
 export function ReportsPage({
   data,
@@ -1899,6 +2017,25 @@ export function ReportsPage({
   const [reportFormat, setReportFormat] = useState('json');
   const [reportPeriod, setReportPeriod] = useState('last-30-days');
   const reports = data.reports;
+  const reportKindOptions = reportOptionsFromCapabilities(
+    data.reportCapabilities,
+    'kinds',
+    REPORT_KIND_FALLBACK_OPTIONS
+  );
+  const reportFormatOptions = reportOptionsFromCapabilities(
+    data.reportCapabilities,
+    'formats',
+    REPORT_FORMAT_FALLBACK_OPTIONS
+  );
+  const reportPeriodOptions = reportOptionsFromCapabilities(
+    data.reportCapabilities,
+    'periods',
+    REPORT_PERIOD_FALLBACK_OPTIONS
+  );
+  // A stale selection must never be submitted once the backend drops an enum value.
+  const selectedReportKind = clampOptionValue(reportKindOptions, reportKind);
+  const selectedReportFormat = clampOptionValue(reportFormatOptions, reportFormat);
+  const selectedReportPeriod = clampOptionValue(reportPeriodOptions, reportPeriod);
   const reportExports = data.audit.filter((entry) => getString(entry, ['action'], '') === 'report.exported').length;
   const reportColumns: TableColumn<DataItem>[] = [
     { key: 'report', label: 'Report', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
@@ -1906,7 +2043,12 @@ export function ReportsPage({
     {
       key: 'period',
       label: 'Period',
-      render: (item) => <span className="muted">{getString(item, ['period', 'reporting_period', 'window'], '—')}</span>
+      render: (item) => {
+        const value = getString(item, ['period', 'reporting_period', 'window'], '');
+        if (!value) return <span className="muted">—</span>;
+        const label = reportPeriodOptions.find((option) => option.value === value)?.label ?? humanizeOptionValue(value);
+        return <span className="muted">{label}</span>;
+      }
     },
     { key: 'format', label: 'Format', render: (item) => <span className="mono">{getString(item, ['format', 'export_format'], '—')}</span> },
     { key: 'generated', label: 'Generated', render: (item) => <span className="muted">{formatDate(item.created_at ?? item.generated_at)}</span> }
@@ -1921,8 +2063,7 @@ export function ReportsPage({
       setMessage(success);
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Report action failed.'));
+      setError(apiErrorMessage(err, 'Report action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -1931,11 +2072,11 @@ export function ReportsPage({
 
   async function handleCreateReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const kind = reportKind || 'technical';
-    const format = (reportFormat || 'json') as 'json' | 'markdown' | 'html';
+    const kind = selectedReportKind || 'technical';
+    const format = (selectedReportFormat || 'json') as 'json' | 'markdown' | 'html';
     const created = await runReportAction('create-report', () => requestJson(config, session, '/v1/reports', {
       method: 'POST',
-      body: { title: `AstraNull ${kind} readiness report`, kind, format, period: reportPeriod }
+      body: { title: `AstraNull ${kind} readiness report`, kind, format, period: selectedReportPeriod }
     }), 'Report generated.');
     if (created && typeof created === 'object') {
       await onRefresh();
@@ -1955,7 +2096,11 @@ export function ReportsPage({
       const contentType = response.headers.get('content-type') ?? '';
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(String(payload?.message ?? payload?.error ?? `Export returned ${response.status}`));
+        throw new Error(
+          String(payload?.message ?? '').trim()
+            || humanizeErrorCode(payload?.error)
+            || `Export returned ${response.status}`
+        );
       }
       const triggerDownload = (content: string, mime: string) => {
         try {
@@ -2030,9 +2175,9 @@ export function ReportsPage({
         </CardHeader>
         <CardContent>
           <form className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
-            <Select label="Kind" name="kind" value={reportKind} options={REPORT_KIND_OPTIONS} onChange={setReportKind} />
-            <Select label="Format" name="format" value={reportFormat} options={REPORT_FORMAT_OPTIONS} onChange={setReportFormat} />
-            <Select label="Period" name="period" value={reportPeriod} options={[{ value: 'last-7-days', label: 'Last 7 days' }, { value: 'last-30-days', label: 'Last 30 days' }, { value: 'quarter', label: 'Current quarter' }, { value: 'all-time', label: 'All time' }]} onChange={setReportPeriod} />
+            <Select label="Kind" name="kind" value={selectedReportKind} options={reportKindOptions} onChange={setReportKind} />
+            <Select label="Format" name="format" value={selectedReportFormat} options={reportFormatOptions} onChange={setReportFormat} />
+            <Select label="Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={setReportPeriod} />
             <div className="form-actions full">
               <Button type="submit" loading={busy === 'create-report'}>Generate &amp; export</Button>
               <span className="muted text-xs">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</span>
@@ -2110,6 +2255,15 @@ export function SettingsPage({
   const [rotateSecretId, setRotateSecretId] = useState('');
   const [bootstrapTargetGroupId, setBootstrapTargetGroupId] = useState('');
   const [bootstrapExpiry, setBootstrapExpiry] = useState('1h');
+  const [pendingRetention, setPendingRetention] = useState<{
+    metadata_retention_days: number;
+    evidence_retention: {
+      report_days: number;
+      audit_log_days: number;
+      high_scale_artifact_days: number;
+      legal_hold: boolean;
+    };
+  } | null>(null);
   const tenant = data.tenant;
   const bootstrapTargetGroupOptions: SelectOption[] = [
     { value: '', label: 'No default binding' },
@@ -2176,8 +2330,7 @@ export function SettingsPage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+      setError(apiErrorMessage(err, 'Action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -2267,29 +2420,30 @@ export function SettingsPage({
     }), 'Organization settings saved.');
   }
 
-  async function handleSaveRetention(event: FormEvent<HTMLFormElement>) {
+  function handleSaveRetention(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!window.confirm('Save retention settings? Shorter windows can immediately purge stored metadata.')) return;
+    // Read the form here, not in the confirm handler: `currentTarget` is null once this
+    // synchronous handler returns, and the modal resolves long after that.
     const form = new FormData(event.currentTarget);
-    const metadataDays = Number(form.get('metadata_retention_days') ?? 90);
-    const reportDays = Number(form.get('report_days') ?? 365);
-    const auditLogDays = Number(form.get('audit_log_days') ?? 2555);
-    const highScaleArtifactDays = Number(form.get('high_scale_artifact_days') ?? 2555);
-    const legalHold = form.get('legal_hold') === 'on';
+    setPendingRetention({
+      metadata_retention_days: Number(form.get('metadata_retention_days') ?? 90),
+      evidence_retention: {
+        report_days: Number(form.get('report_days') ?? 365),
+        audit_log_days: Number(form.get('audit_log_days') ?? 2555),
+        high_scale_artifact_days: Number(form.get('high_scale_artifact_days') ?? 2555),
+        legal_hold: form.get('legal_hold') === 'on'
+      }
+    });
+  }
+
+  async function confirmSaveRetention() {
+    const privacySettings = pendingRetention;
+    if (!privacySettings) return;
     await runSettingsAction('save-retention', () => requestJson(config, session, '/v1/tenants/current', {
       method: 'PATCH',
-      body: {
-        privacy_settings: {
-          metadata_retention_days: metadataDays,
-          evidence_retention: {
-            report_days: reportDays,
-            audit_log_days: auditLogDays,
-            high_scale_artifact_days: highScaleArtifactDays,
-            legal_hold: legalHold
-          }
-        }
-      }
+      body: { privacy_settings: privacySettings }
     }), 'Retention policy saved. Metadata purge runs immediately when retention days change.');
+    setPendingRetention(null);
   }
 
   async function handleCreateVaultSecret(event: FormEvent<HTMLFormElement>) {
@@ -2765,6 +2919,15 @@ export function SettingsPage({
         </Card>
       )}
 
+      <ConfirmModal
+        open={Boolean(pendingRetention)}
+        title="Save retention settings?"
+        description={<p>Shorter windows can immediately purge stored metadata.</p>}
+        confirmLabel="Save retention policy"
+        busy={busy === 'save-retention'}
+        onCancel={() => setPendingRetention(null)}
+        onConfirm={() => void confirmSaveRetention()}
+      />
     </div>
   );
 }
@@ -2819,8 +2982,7 @@ export function EnvironmentsPage({
       setShowDeclare(false);
       await onRefresh();
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Could not declare environment.'));
+      setError(apiErrorMessage(err, 'Could not declare environment.'));
     } finally {
       setBusy('');
     }
@@ -3106,8 +3268,7 @@ export function PolicyPage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+      setError(apiErrorMessage(err, 'Action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -3159,8 +3320,7 @@ export function PolicyPage({
       setShowCreateSchedule(false);
       await onRefresh();
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+      setError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
@@ -3191,7 +3351,7 @@ export function PolicyPage({
     <div className="content">
       <PageHeader
         route="test-policies"
-        title="Scheduler"
+        title="Test policies"
         description="Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
         actions={
           <>
@@ -3416,8 +3576,7 @@ export function IntegrationPage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+      setError(apiErrorMessage(err, 'Action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -3583,7 +3742,11 @@ export function IntegrationPage({
       ) : (
         <>
           {(message || error) && (
-            <div className={error ? 'form-banner error' : 'form-banner'}>
+            <div
+              className={error ? 'form-banner error' : 'form-banner'}
+              role={error ? 'alert' : 'status'}
+              aria-live="polite"
+            >
               {error || message}
             </div>
           )}
@@ -4121,8 +4284,7 @@ export function StaffSurfacePage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Staff action failed.'));
+      setError(apiErrorMessage(err, 'Staff action failed.'));
       return null;
     } finally {
       setBusy('');

@@ -14,7 +14,7 @@ import { ROUTE_BY_ID } from '../lib/navigation';
 import { buildDetailHref, getRouteEntityId, getRouteTenantId } from '../lib/route-params';
 import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatDate, scoreTone } from '../lib/utils';
+import { formatDate, formatDurationSeconds, scoreTone } from '../lib/utils';
 import { buildEnvironmentReadinessRows } from '../lib/environments';
 import { AgentHeartbeatPanel } from '../components/agents/agent-heartbeat-panel';
 import { AgentPlacementPanel } from '../components/agents/agent-placement-panel';
@@ -945,19 +945,17 @@ function formatRunDuration(entity: DataItem) {
   }
   const ms = new Date(String(end)).getTime() - new Date(String(start)).getTime();
   if (!Number.isFinite(ms) || ms < 0) return '—';
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds > 24 * 60 * 60) {
-    const hours = Math.round(totalSeconds / 3600);
-    return hours >= 48 ? `${Math.round(hours / 24)}d` : `${hours}h`;
-  }
-  if (totalSeconds >= 3600) {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  return formatDurationSeconds(Math.round(ms / 1000));
+}
+
+function reportPeriodDisplay(data: PortalData, report: DataItem) {
+  const period = getString(report, ['period'], '');
+  if (!period) return '—';
+  const periods = data.reportCapabilities?.periods;
+  const match = Array.isArray(periods)
+    ? (periods as DataItem[]).find((entry) => getString(entry, ['value'], '') === period)
+    : undefined;
+  return match ? getString(match, ['label'], period) : period;
 }
 
 function RunDetailView({
@@ -984,6 +982,8 @@ function RunDetailView({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [confirmFinalizeOpen, setConfirmFinalizeOpen] = useState(false);
   const verdict = entity.verdict as DataItem | undefined;
   const probeEvents = runEvents.filter((event) => getString(event, ['signal_type']) === 'probe_result');
   const agentEvents = runEvents.filter((event) => ['agent_observation', 'agent_no_observation'].includes(getString(event, ['signal_type'])));
@@ -1007,14 +1007,14 @@ function RunDetailView({
     }
   }
 
-  async function cancelRun() {
-    if (!window.confirm('Cancel this run in progress?')) return;
+  async function confirmCancelRun() {
     await runAction(`cancel-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/cancel`, { method: 'POST' }), 'Run cancelled.');
+    setConfirmCancelOpen(false);
   }
 
-  async function finalizeRun() {
-    if (!window.confirm('Force finalize this run now? This locks the verdict.')) return;
+  async function confirmFinalizeRun() {
     await runAction(`finalize-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${entityId}/finalize`, { method: 'POST' }), 'Run finalized after observation window.');
+    setConfirmFinalizeOpen(false);
   }
 
   const milestoneTimeline = [
@@ -1056,8 +1056,8 @@ function RunDetailView({
             ) : null}
             {cancellable ? (
               <>
-                <Button size="sm" variant="danger" loading={busy === `cancel-${entityId}`} disabled={busy !== ''} onClick={() => void cancelRun()}>Cancel</Button>
-                <Button size="sm" variant="ghost" loading={busy === `finalize-${entityId}`} disabled={busy !== ''} onClick={() => void finalizeRun()}>Finalize</Button>
+                <Button size="sm" variant="danger" loading={busy === `cancel-${entityId}`} disabled={busy !== ''} onClick={() => setConfirmCancelOpen(true)}>Cancel</Button>
+                <Button size="sm" variant="ghost" loading={busy === `finalize-${entityId}`} disabled={busy !== ''} onClick={() => setConfirmFinalizeOpen(true)}>Finalize</Button>
               </>
             ) : null}
           </>
@@ -1187,11 +1187,29 @@ function RunDetailView({
       ) : null}
       </>
       ) : null}
+      <ConfirmModal
+        open={confirmCancelOpen}
+        title="Cancel this run in progress?"
+        description={<p>Run {entityId} stops collecting and records no verdict.</p>}
+        confirmLabel="Cancel run"
+        busy={busy === `cancel-${entityId}`}
+        onCancel={() => setConfirmCancelOpen(false)}
+        onConfirm={() => void confirmCancelRun()}
+      />
+      <ConfirmModal
+        open={confirmFinalizeOpen}
+        title="Force finalize this run now?"
+        description={<p>This locks the verdict.</p>}
+        confirmLabel="Force finalize"
+        busy={busy === `finalize-${entityId}`}
+        onCancel={() => setConfirmFinalizeOpen(false)}
+        onConfirm={() => void confirmFinalizeRun()}
+      />
     </div>
   );
 }
 
-const STAFF_ENTITLEMENT_FEATURES = ['waf_posture', 'external_discovery', 'connectors', 'high_scale_program'] as const;
+const STAFF_ENTITLEMENT_FEATURES =['waf_posture', 'external_discovery', 'connectors', 'high_scale_program'] as const;
 
 function TenantDetailView({
   entityId,
@@ -4111,7 +4129,7 @@ function PolicyDetailPage({ entityId, data }: { entityId: string; data: PortalDa
         eyebrow="Validation"
         entityId={entityId}
         title={title}
-        actions={<AnchorButton size="sm" variant="secondary" href="#test-policies">← Scheduler</AnchorButton>}
+        actions={<AnchorButton size="sm" variant="secondary" href="#test-policies">← Test policies</AnchorButton>}
       />
       <div className="metric-grid four">
         <MetricCard label="Cadence" value={formatFactorLabel(cadence)} sub="Scheduled run cadence" icon={Activity} tone="info" />
@@ -4939,6 +4957,7 @@ export function ReportDetailPage({
             <div><span>Status</span><StatusBadge value={getString(report, ['status'], 'ready')} tone={reportStatusBadgeTone(getString(report, ['status'], 'ready'))} fallback="ready" /></div>
             <div><span>Open findings</span><strong>{openFindings}</strong></div>
             <div><span>Kind</span><strong>{getString(report, ['kind'])}</strong></div>
+            <div><span>Period</span><strong>{reportPeriodDisplay(data, report)}</strong></div>
             <div><span>Created</span><strong>{formatDate(report.created_at)}</strong></div>
             <div><span>Report ID</span><strong><code>{entityId}</code></strong></div>
           </CardContent>

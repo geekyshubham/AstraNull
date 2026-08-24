@@ -106,13 +106,14 @@ function buildSegments(pass: number, review: number, gap: number, total: number)
   ];
 }
 
-function scoreRingTone(score: number): 'pass' | 'review' | 'gap' {
-  if (score >= 80) return 'pass';
-  if (score >= 55) return 'review';
-  return 'gap';
-}
+const SEGMENT_SEPARATOR_PCT = 0.6;
 
-export function buildConicGradient(segments: ReadinessPostureSegment[], score?: number | null) {
+/**
+ * Ring arcs are proportional to the real pass/review/gap counts and painted with the
+ * matching semantic tokens (docs/ux/14 §7.4). The readiness score stays in the hole and
+ * never recolors the ring, so the ring is never a single flat non-data color.
+ */
+export function buildConicGradient(segments: ReadinessPostureSegment[]) {
   const colorByKey: Record<string, string> = {
     pass: 'var(--success)',
     review: 'var(--warn)',
@@ -120,29 +121,29 @@ export function buildConicGradient(segments: ReadinessPostureSegment[], score?: 
   };
   const track = 'color-mix(in oklab, var(--bg), var(--fg) 6%)';
 
-  // Published readiness score drives ring fill + tone; segment legend stays separate.
-  if (typeof score === 'number' && Number.isFinite(score)) {
-    const fill = Math.min(100, Math.max(0, Math.round(score)));
-    const tone = scoreRingTone(fill);
-    return `conic-gradient(from -90deg, ${colorByKey[tone]} 0% ${fill}%, ${track} ${fill}% 100%)`;
-  }
-
-  const gapSize = segments.reduce((sum, segment) => sum + segment.count, 0) > 0 ? 0.6 : 0;
-  let cursor = 0;
-  const stops: string[] = [];
-  for (const segment of segments) {
-    if (segment.count <= 0) continue;
-    const end = cursor + segment.pct;
-    stops.push(`${colorByKey[segment.key]} ${cursor}% ${end}%`);
-    cursor = end;
-    if (gapSize > 0 && cursor < 100) {
-      const gapEnd = Math.min(100, cursor + gapSize);
-      stops.push(`color-mix(in oklab, var(--bg), var(--fg) 6%) ${cursor}% ${gapEnd}%`);
-      cursor = gapEnd;
-    }
-  }
-  if (stops.length === 0) {
+  const present = segments.filter((segment) => segment.count > 0);
+  const total = present.reduce((sum, segment) => sum + segment.count, 0);
+  if (total <= 0) {
     return `conic-gradient(from -90deg, ${track} 0% 100%)`;
   }
+
+  const separators = present.length - 1;
+  const arcBudget = 100 - separators * SEGMENT_SEPARATOR_PCT;
+  const at = (value: number) => `${Math.round(value * 100) / 100}%`;
+  let cursor = 0;
+  const stops: string[] = [];
+
+  present.forEach((segment, index) => {
+    const isLast = index === present.length - 1;
+    const end = isLast ? 100 : cursor + (segment.count / total) * arcBudget;
+    stops.push(`${colorByKey[segment.key]} ${at(cursor)} ${at(end)}`);
+    cursor = end;
+    if (!isLast) {
+      const separatorEnd = cursor + SEGMENT_SEPARATOR_PCT;
+      stops.push(`${track} ${at(cursor)} ${at(separatorEnd)}`);
+      cursor = separatorEnd;
+    }
+  });
+
   return `conic-gradient(from -90deg, ${stops.join(', ')})`;
 }

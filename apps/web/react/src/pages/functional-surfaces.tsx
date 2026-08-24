@@ -28,6 +28,7 @@ import { AgentInstallMatrix } from '../components/agents/agent-install-matrix';
 import { FindingsListView } from '../components/findings/findings-list';
 import { RunsPageHeadActions, RunsSocGatePanel } from '../components/runs/runs-soc-gate';
 import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../lib/crud-ui';
+import { apiErrorMessage } from '../lib/error-messages';
 import { buildEvidenceCustodyManifest } from '../lib/custody';
 import { buildEvidenceChainExport, summarizeEvidenceExport } from '../lib/evidence-export';
 import {
@@ -65,7 +66,7 @@ import { requestJson } from '../lib/api';
 
 import { routeTabs } from '../lib/prototype-manifest';
 import { buildDetailHref } from '../lib/route-params';
-import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
+import type { DataItem, PortalConfig, PortalData, PortalDataset, RouteId, Session } from '../lib/types';
 import {
   DRIFT_EVENT_STATUSES,
   VALIDATION_PLAN_SCENARIOS,
@@ -78,7 +79,7 @@ import {
   roadmapTierMeta,
   roadmapTotalItems
 } from '../lib/waf-helpers';
-import { formatDate, scoreTone } from '../lib/utils';
+import { formatDate, formatRunDuration, pluralize, scoreTone } from '../lib/utils';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 
@@ -344,21 +345,17 @@ function resolveTargetGroupName(groups: DataItem[], groupId: string) {
   return getString(group ?? {}, ['name', 'title'], groupId);
 }
 
-function formatRunDuration(run: DataItem) {
-  const start = Date.parse(String(run.started_at ?? run.created_at ?? ''));
-  const end = Date.parse(String(run.completed_at ?? run.finalized_at ?? run.updated_at ?? ''));
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '—';
-  const totalSeconds = Math.round((end - start) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes <= 0) return `${seconds}s`;
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
-}
-
 const IN_PROGRESS_RUN_STATUSES = new Set(['running', 'collecting']);
 
 function isInProgressRunStatus(status: string) {
   return IN_PROGRESS_RUN_STATUSES.has(status);
+}
+
+/** Mirrors CANCELLABLE_STATUSES in src/services/testRuns.mjs and the run-detail action gate. */
+const CANCELLABLE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
+
+function isCancellableRunStatus(status: string) {
+  return CANCELLABLE_RUN_STATUSES.has(status);
 }
 
 function formatStartedAgo(value: unknown) {
@@ -767,8 +764,7 @@ async function runAction<T>(
     if (onRefresh) await onRefresh();
     return result;
   } catch (err) {
-    const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-    setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Action failed.'));
+    setError(apiErrorMessage(err, 'Action failed.'));
     return null;
   } finally {
     setBusy('');
@@ -1120,8 +1116,8 @@ export function AgentsPage({
     <div className="content">
       <PageHeader route="agents" />
       <PageContextSummary>
-        <span className="tabular-nums">{data.targetGroups.length}</span> declared groups ·{' '}
-        <span className="tabular-nums">{data.agents.length}</span> agents ·{' '}
+        <span className="tabular-nums">{data.targetGroups.length}</span>{` ${pluralize(data.targetGroups.length, 'declared group')} · `}
+        <span className="tabular-nums">{data.agents.length}</span>{` ${pluralize(data.agents.length, 'agent')} · `}
         <span className="tabular-nums">{onlineAgents}</span> online
       </PageContextSummary>
       <MutationFeedbackBanner message={message} error={error} />
@@ -1306,7 +1302,7 @@ export function ValidationSurfacePage({
   data: PortalData;
   config: PortalConfig;
   session: Session;
-  onRefresh: () => Promise<void>;
+  onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }) {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -1327,11 +1323,20 @@ export function ValidationSurfacePage({
   const [runStartTargetLoading, setRunStartTargetLoading] = useState(false);
   const [showSocRequestForm, setShowSocRequestForm] = useState(false);
   const [cancelRunId, setCancelRunId] = useState('');
+  const [finalizeRunId, setFinalizeRunId] = useState('');
+  const [pendingSafeRun, setPendingSafeRun] = useState<{
+    targetGroupId: string;
+    targetId: string;
+    checkId: string;
+    groupLabel: string;
+    targetLabel: string;
+    checkLabel: string;
+  } | null>(null);
   const evidenceChainCap = 12;
 
   const firstGroup = data.targetGroups[0] ?? null;
   const safeCheck = data.checks.find((check) => getString(check, ['safety_class']) === 'safe') ?? null;
-  const inFlightRuns = data.runs.filter((run) => ['running', 'collecting', 'planned'].includes(getString(run, ['status'], '')));
+  const inFlightRuns = data.runs.filter((run) => isCancellableRunStatus(getString(run, ['status'], '')));
 
   const checkSafetyCounts = useMemo(() => countChecksBySafetyScope(data.checks), [data.checks]);
   const filteredChecks = useMemo(
@@ -1391,7 +1396,7 @@ export function ValidationSurfacePage({
   useEffect(() => {
     if (route !== 'runs' || inFlightRuns.length === 0) return undefined;
     const timer = window.setInterval(() => {
-      void onRefresh();
+      void onRefresh(['runs', 'state']);
     }, 8000);
     return () => window.clearInterval(timer);
   }, [route, inFlightRuns.length, onRefresh]);
@@ -1403,7 +1408,16 @@ export function ValidationSurfacePage({
       setError('Declare a target group and safe check before starting a run.');
       return;
     }
-    const detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
+    setError('');
+    let detail: DataItem;
+    try {
+      // Previously unguarded: a failed group lookup rejected into `void startSafeRun()` and
+      // the operator saw nothing at all.
+      detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not load the declared target group.'));
+      return;
+    }
     const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
     const targetId = getString(targets[0] ?? {}, ['id'], '');
     const targetLabel = getString(targets[0] ?? {}, ['value', 'hostname', 'id'], targetId);
@@ -1411,13 +1425,24 @@ export function ValidationSurfacePage({
       setError('Add at least one target to the declared group before starting a run.');
       return;
     }
-    const groupLabel = getString(firstGroup, ['name', 'id'], targetGroupId);
-    const checkLabel = checkDisplayName(data.checks, resolvedCheckId);
-    if (!window.confirm(`Start a safe validation run?\n\nTarget group: ${groupLabel}\nTarget: ${targetLabel}\nCheck: ${checkLabel}`)) return;
+    setPendingSafeRun({
+      targetGroupId,
+      targetId,
+      checkId: resolvedCheckId,
+      groupLabel: getString(firstGroup, ['name', 'id'], targetGroupId),
+      targetLabel,
+      checkLabel: checkDisplayName(data.checks, resolvedCheckId)
+    });
+  }
+
+  async function confirmStartSafeRun() {
+    const pending = pendingSafeRun;
+    if (!pending) return;
     await runAction(setBusy, setError, setMessage, 'start-safe-run', () => requestJson(config, session, '/v1/test-runs', {
       method: 'POST',
-      body: { target_group_id: targetGroupId, target_id: targetId, check_id: resolvedCheckId }
+      body: { target_group_id: pending.targetGroupId, target_id: pending.targetId, check_id: pending.checkId }
     }), 'Safe validation run started.', onRefresh);
+    setPendingSafeRun(null);
   }
 
   async function cancelRun(id: string) {
@@ -1437,8 +1462,7 @@ export function ValidationSurfacePage({
       setCancelRunId('');
       await onRefresh();
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Cancel run failed.'));
+      setError(apiErrorMessage(err, 'Cancel run failed.'));
     } finally {
       setBusy('');
     }
@@ -1446,8 +1470,14 @@ export function ValidationSurfacePage({
 
   async function finalizeRun(id: string) {
     if (!id) return;
-    if (!window.confirm('Force finalize this run now? This locks the verdict.')) return;
+    setFinalizeRunId(id);
+  }
+
+  async function confirmFinalizeRun() {
+    const id = finalizeRunId;
+    if (!id) return;
     await runAction(setBusy, setError, setMessage, `finalize-${id}`, () => requestJson(config, session, `/v1/test-runs/${id}/finalize`, { method: 'POST' }), 'Run finalized after observation window.', onRefresh);
+    setFinalizeRunId('');
   }
 
   async function exportEvidenceChain() {
@@ -1691,6 +1721,40 @@ export function ValidationSurfacePage({
         key: 'started',
         label: 'Started',
         render: (item) => <span className="muted">{formatDate(item.started_at ?? item.created_at)}</span>
+      },
+      {
+        key: 'actions',
+        label: 'Actions',
+        render: (item) => {
+          const id = getString(item, ['id'], '');
+          // Same gate the run-detail page uses: cancel and force-finalize are offered while
+          // the run is still in flight (planned/running/collecting).
+          if (!id || !isCancellableRunStatus(getString(item, ['status'], ''))) {
+            return <span className="muted">—</span>;
+          }
+          return (
+            <div className="row-end-actions" onClick={(event) => event.stopPropagation()}>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busy !== ''}
+                loading={busy === `cancel-${id}`}
+                onClick={(event) => { event.stopPropagation(); void cancelRun(id); }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy !== ''}
+                loading={busy === `finalize-${id}`}
+                onClick={(event) => { event.stopPropagation(); void finalizeRun(id); }}
+              >
+                Finalize
+              </Button>
+            </div>
+          );
+        }
       }
     ];
     const canStartRun = Boolean(firstGroup && safeCheck && runStartTargetPreview);
@@ -1761,6 +1825,40 @@ export function ValidationSurfacePage({
             />
           </CardContent>
         </Card>
+        <ConfirmModal
+          open={Boolean(pendingSafeRun)}
+          title="Start a safe validation run?"
+          description={(
+            <>
+              <p>Target group: {pendingSafeRun?.groupLabel}</p>
+              <p>Target: {pendingSafeRun?.targetLabel}</p>
+              <p>Check: {pendingSafeRun?.checkLabel}</p>
+            </>
+          )}
+          confirmLabel="Start safe run"
+          confirmTone="default"
+          busy={busy === 'start-safe-run'}
+          onCancel={() => setPendingSafeRun(null)}
+          onConfirm={() => void confirmStartSafeRun()}
+        />
+        <ConfirmModal
+          open={Boolean(cancelRunId)}
+          title="Cancel this run in progress?"
+          description={<p>Run {cancelRunId} stops collecting and records no verdict.</p>}
+          confirmLabel="Cancel run"
+          busy={busy === `cancel-${cancelRunId}`}
+          onCancel={() => setCancelRunId('')}
+          onConfirm={() => void confirmCancelRun()}
+        />
+        <ConfirmModal
+          open={Boolean(finalizeRunId)}
+          title="Force finalize this run now?"
+          description={<p>This locks the verdict.</p>}
+          confirmLabel="Force finalize"
+          busy={busy === `finalize-${finalizeRunId}`}
+          onCancel={() => setFinalizeRunId('')}
+          onConfirm={() => void confirmFinalizeRun()}
+        />
       </div>
     );
   }
@@ -1796,4 +1894,3 @@ export function ValidationSurfacePage({
     </div>
   );
 }
-

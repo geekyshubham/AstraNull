@@ -5,6 +5,7 @@ import {
   EMPTY_PORTAL_DATA,
   ensurePortalSession,
   fetchPortalData,
+  fetchPortalDatasets,
   loadSession,
   portalSurface,
   REAUTH_REQUIRED_EVENT,
@@ -15,7 +16,7 @@ import {
 } from './lib/api';
 import { getRouteFromLocation } from './lib/navigation';
 import { canAccessRoute } from './lib/route-access';
-import type { PortalConfig, PortalData, RouteId, Session } from './lib/types';
+import type { PortalConfig, PortalData, PortalDataset, RouteId, Session } from './lib/types';
 import { LoginPage, PublicLandingPage, SignupPage, SignupStatusPage, StaffLoginPage } from './pages/public-pages';
 import { RouteView } from './pages/router';
 
@@ -42,13 +43,22 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [data, setData] = useState<PortalData>(EMPTY_PORTAL_DATA);
   const [loading, setLoading] = useState(true);
+  const bootStarted = useRef(false);
+  const lastHydratedRoute = useRef<RouteId | null>(null);
 
   const activeSession = useMemo(() => session ?? {}, [session]);
 
-  const refresh = useCallback(async (nextConfig: PortalConfig | null, nextSession: Session, nextRoute?: RouteId) => {
+  const refresh = useCallback(async (
+    nextConfig: PortalConfig | null,
+    nextSession: Session,
+    nextRoute: RouteId,
+    options: { datasets?: readonly PortalDataset[]; force?: boolean } = {}
+  ) => {
     if (!nextConfig) return;
     try {
-      const payload = await fetchPortalData(nextConfig, nextSession, { route: nextRoute ?? route });
+      const payload = options.datasets
+        ? await fetchPortalDatasets(nextConfig, nextSession, options.datasets)
+        : await fetchPortalData(nextConfig, nextSession, { route: nextRoute, force: options.force });
       setData(payload);
     } catch (error) {
       setData((current) => ({
@@ -57,7 +67,7 @@ export default function App() {
         error: error instanceof Error ? error.message : 'Could not load workspace data.'
       }));
     }
-  }, [route]);
+  }, []);
 
   /**
    * Leave the authenticated surface for the sign-in page of the current surface.
@@ -89,10 +99,10 @@ export default function App() {
   }, [goToLogin]);
 
   useEffect(() => {
-    let mounted = true;
+    if (bootStarted.current) return;
+    bootStarted.current = true;
     async function boot() {
       const gate = await ensurePortalSession(portalSurface(window.location.pathname));
-      if (!mounted) return;
       if (gate.redirectToLogin && !isPublicOnlyPath(window.location.pathname)) {
         // Deployments without a dedicated sign-in page report the portal path
         // itself as login_url, so this must never resolve to the current page.
@@ -107,12 +117,13 @@ export default function App() {
       // a later expiry can still trigger its own single redirect.
       if (nextSession) resetReauthGuard();
       if (!isPublicOnlyPath(window.location.pathname) && nextSession) {
-        await refresh(nextConfig, nextSession, getRouteFromLocation());
+        const bootRoute = getRouteFromLocation();
+        await refresh(nextConfig, nextSession, bootRoute);
+        lastHydratedRoute.current = bootRoute;
       }
-      if (mounted) setLoading(false);
+      setLoading(false);
     }
     boot().catch((error) => {
-      if (!mounted) return;
       setData({
         ...EMPTY_PORTAL_DATA,
         loaded: true,
@@ -120,9 +131,6 @@ export default function App() {
       });
       setLoading(false);
     });
-    return () => {
-      mounted = false;
-    };
   }, [refresh]);
 
   useEffect(() => {
@@ -156,7 +164,7 @@ export default function App() {
     if (!stored) return;
     if (sessionIdentity(stored) === sessionIdentity(session)) return;
     setSession(stored);
-    void refresh(config, stored, route);
+    void refresh(config, stored, route, { force: true });
   }, [route, path, config, loading, refresh, session]);
 
   useEffect(() => {
@@ -171,17 +179,11 @@ export default function App() {
     }
   }, [loading, config, route, activeSession.principal, activeSession.role, activeSession.staff_role]);
 
-  // Re-hydrate when the hash route changes so staff SOC / queue-detail get SOC tenant headers
-  // after navigating from Admin (or other surfaces that skipped customer /v1 hydrate).
-  // Skip the first observation to avoid duplicating the boot-time fetch.
-  const routeHydratePrimed = useRef(false);
   useEffect(() => {
     if (loading || !config || !session) return;
     if (isPublicOnlyPath(path)) return;
-    if (!routeHydratePrimed.current) {
-      routeHydratePrimed.current = true;
-      return;
-    }
+    if (lastHydratedRoute.current === route) return;
+    lastHydratedRoute.current = route;
     void refresh(config, session, route);
   }, [route, loading, config, session, path, refresh]);
 
@@ -196,11 +198,11 @@ export default function App() {
     };
     saveSession(next);
     setSession(next);
-    void refresh(config, next);
+    void refresh(config, next, route, { force: true });
   }
 
   /** Always re-read sessionStorage so SOC execution-tenant updates are not stale. */
-  const handleRefresh = useCallback(async () => {
+  const handleRefresh = useCallback(async (datasets?: readonly PortalDataset[]) => {
     if (!config) return;
     const stored = loadSession();
     // loadSession() returns null once it has purged an expired session. Falling
@@ -213,7 +215,7 @@ export default function App() {
     if (sessionIdentity(stored) !== sessionIdentity(session)) {
       setSession(stored);
     }
-    await refresh(config, stored, route);
+    await refresh(config, stored, route, datasets ? { datasets } : { force: true });
   }, [config, session, refresh, route, goToLogin]);
 
   if (loading || !config) return <LoadingScreen />;

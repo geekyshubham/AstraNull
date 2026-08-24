@@ -90,3 +90,50 @@ const EXPECTED_BEHAVIOR_LABELS: Record<string, string> = {
 export function formatExpectedBehavior(value: string) {
   return EXPECTED_BEHAVIOR_LABELS[value] ?? value.replace(/_/g, ' ');
 }
+
+/** Naive English plural for counted nouns; pass `plural` for irregular words. */
+export function pluralize(count: number, singular: string, plural?: string) {
+  return Math.abs(count) === 1 ? singular : plural ?? `${singular}s`;
+}
+
+/** `${count} ${noun}` with the noun agreeing with the count. */
+export function countLabel(count: number, singular: string, plural?: string) {
+  return `${count} ${pluralize(count, singular, plural)}`;
+}
+
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 60 * SECONDS_PER_MINUTE;
+const SECONDS_PER_DAY = 24 * SECONDS_PER_HOUR;
+
+/**
+ * Humanized elapsed time so multi-day spans stay readable: `42s`, `5m 12s`,
+ * `2h 05m`, `53d 16h`. Negative or non-finite input yields the shared empty placeholder.
+ */
+export function formatDurationSeconds(totalSeconds: number, fallback = '—') {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return fallback;
+  const whole = Math.round(totalSeconds);
+  if (whole < SECONDS_PER_MINUTE) return `${whole}s`;
+  if (whole < SECONDS_PER_HOUR) {
+    const minutes = Math.floor(whole / SECONDS_PER_MINUTE);
+    return `${minutes}m ${String(whole % SECONDS_PER_MINUTE).padStart(2, '0')}s`;
+  }
+  if (whole < SECONDS_PER_DAY) {
+    const hours = Math.floor(whole / SECONDS_PER_HOUR);
+    const minutes = Math.floor((whole % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+    return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  }
+  const days = Math.floor(whole / SECONDS_PER_DAY);
+  const hours = Math.floor((whole % SECONDS_PER_DAY) / SECONDS_PER_HOUR);
+  return `${days}d ${hours}h`;
+}
+
+/**
+ * Elapsed wall-clock time of one run row, humanized by `formatDurationSeconds`.
+ * Shared by the runs table and target-detail runs panel so both read identically.
+ */
+export function formatRunDuration(run: Record<string, unknown>, fallback = '—') {
+  const start = Date.parse(String(run.started_at ?? run.created_at ?? ''));
+  const end = Date.parse(String(run.completed_at ?? run.finalized_at ?? run.updated_at ?? ''));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return fallback;
+  return formatDurationSeconds((end - start) / 1000, fallback);
+}

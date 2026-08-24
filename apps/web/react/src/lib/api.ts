@@ -1,4 +1,5 @@
-import type { DataItem, PortalConfig, PortalData, RouteId, Session, StatePayload } from './types';
+import { CORE_PORTAL_DATASETS, PORTAL_ROUTE_DATASETS } from './types';
+import type { DataItem, PortalConfig, PortalData, PortalDataset, RouteId, Session, StatePayload } from './types';
 import { asArray, DEPLOYMENT_MODE_GAP_MESSAGE } from './utils';
 // Plain ESM so node:test can exercise the real shipped logic rather than a copy of it. These
 // used to be defined here and re-implemented inside the test file, so the tests could not
@@ -69,6 +70,7 @@ export function saveSession(session: Session) {
 
 export function clearSession() {
   sessionStorage.removeItem(SESSION_KEY);
+  resetPortalDataCache();
 }
 
 export function sessionIdentity(session: Session | null | undefined) {
@@ -300,8 +302,33 @@ function friendlyHttpError(path: string, status: number, payload: unknown): stri
   return `Request failed (${status}).`;
 }
 
+const RATE_LIMIT_FALLBACK_BACKOFF_MS = 2000;
+const RATE_LIMIT_MAX_BACKOFF_MS = 10000;
+
+function retryAfterMs(response: Response) {
+  const value = response.headers.get('retry-after')?.trim();
+  if (!value) return RATE_LIMIT_FALLBACK_BACKOFF_MS;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(RATE_LIMIT_MAX_BACKOFF_MS, seconds * 1000);
+  }
+  const retryAt = Date.parse(value);
+  if (Number.isFinite(retryAt)) {
+    return Math.min(RATE_LIMIT_MAX_BACKOFF_MS, Math.max(0, retryAt - Date.now()));
+  }
+  return RATE_LIMIT_FALLBACK_BACKOFF_MS;
+}
+
+async function fetchWithRateLimitRetry(path: string, init: RequestInit) {
+  let response = await fetch(path, init);
+  if (response.status !== 429) return response;
+  await new Promise((resolve) => setTimeout(resolve, retryAfterMs(response)));
+  response = await fetch(path, init);
+  return response;
+}
+
 async function getJson(path: string, headers: Record<string, string>) {
-  const response = await fetch(path, { headers });
+  const response = await fetchWithRateLimitRetry(path, { headers });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     handleAuthFailure(response.status, payload);
@@ -321,7 +348,7 @@ async function requestWithHeaders(
   headers: Record<string, string>,
   options: { method?: string; body?: unknown } = {}
 ) {
-  const response = await fetch(path, {
+  const response = await fetchWithRateLimitRetry(path, {
     method: options.method ?? 'GET',
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
@@ -389,29 +416,6 @@ async function loadOptional<T>(
   }
 }
 
-/**
- * Await a name→request map, splitting it into values and per-dataset errors.
- *
- * Keyed rather than positional on purpose: the previous 41-entry tuple made the
- * dataset name an accident of array order, which is precisely how a failure gets
- * attributed to the wrong table.
- *
- * `values` stays `unknown`-typed; every field is narrowed through `asArray` /
- * `asObject` by the caller below.
- */
-async function resolveLoadMap(entries: Record<string, Promise<LoadResult<unknown>>>) {
-  const keys = Object.keys(entries);
-  const results = await Promise.all(keys.map((key) => entries[key]));
-  const values: Record<string, unknown> = {};
-  const loadErrors: Record<string, string> = {};
-  keys.forEach((key, index) => {
-    const result = results[index];
-    values[key] = result.value;
-    if (result.error) loadErrors[key] = result.error;
-  });
-  return { values, loadErrors };
-}
-
 function asObject(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -419,13 +423,180 @@ function asObject(value: unknown) {
 
 export type FetchPortalDataOptions = {
   route?: RouteId;
+  datasets?: readonly PortalDataset[];
+  includeCore?: boolean;
+  force?: boolean;
 };
+
+type PortalDataCacheEntry = {
+  data: PortalData;
+  loadedDatasets: Set<PortalDataset>;
+};
+
+const portalDataCache = new Map<string, PortalDataCacheEntry>();
+
+const FEATURE_GATED_DATASETS = new Set<PortalDataset>([
+  'connectors',
+  'wafAssets',
+  'wafCoverage',
+  'wafCoverageSummary',
+  'wafRiskRoadmap',
+  'wafValidations',
+  'wafDriftEvents',
+  'wafExceptions',
+  'wafValidationPlans',
+  'wafRetests',
+  'wafActionItems',
+  'cvePipeline',
+  'supplyChainRisks',
+  'discoveryEntities',
+  'discoveryCandidates',
+  'discoveryInbox',
+  'discoverySummary'
+]);
+
+const ALL_PORTAL_DATASETS: readonly PortalDataset[] = [
+  ...CORE_PORTAL_DATASETS,
+  'targetGroups',
+  'agents',
+  'checks',
+  'testPolicies',
+  'runs',
+  'findings',
+  'evidence',
+  'highScale',
+  'reports',
+  'notifications',
+  'releaseEvidence',
+  'releaseAttestation',
+  'audit',
+  'connectors',
+  'secrets',
+  'bootstrapTokens',
+  'serviceAccounts',
+  'wafAssets',
+  'wafCoverage',
+  'wafCoverageSummary',
+  'wafRiskRoadmap',
+  'wafValidations',
+  'wafDriftEvents',
+  'wafExceptions',
+  'wafValidationPlans',
+  'wafRetests',
+  'wafActionItems',
+  'cvePipeline',
+  'supplyChainRisks',
+  'discoveryEntities',
+  'discoveryCandidates',
+  'discoveryInbox',
+  'discoverySummary',
+  'subscriptionSummary',
+  'internalOverview',
+  'internalSignupRequests',
+  'internalTenants',
+  'internalApprovalRequests',
+  'internalAudit'
+];
+
+export function resetPortalDataCache() {
+  portalDataCache.clear();
+}
+
+export function resolvePortalDatasets(route: RouteId, includeCore = true): readonly PortalDataset[] {
+  return [...new Set([
+    ...(includeCore ? CORE_PORTAL_DATASETS : []),
+    ...PORTAL_ROUTE_DATASETS[route]
+  ])];
+}
+
+function requestedPortalDatasets(options: FetchPortalDataOptions) {
+  const includeCore = options.includeCore ?? options.datasets === undefined;
+  const requested = new Set<PortalDataset>(
+    options.datasets
+      ?? (options.route ? resolvePortalDatasets(options.route, includeCore) : ALL_PORTAL_DATASETS)
+  );
+  if (includeCore) {
+    CORE_PORTAL_DATASETS.forEach((dataset) => requested.add(dataset));
+  }
+  if ([...requested].some((dataset) => FEATURE_GATED_DATASETS.has(dataset))) {
+    requested.add('deploymentFeatures');
+  }
+  return requested;
+}
+
+function getPortalDataCacheEntry(identity: string) {
+  const cached = portalDataCache.get(identity);
+  if (cached) return cached;
+  const created: PortalDataCacheEntry = {
+    data: { ...EMPTY_PORTAL_DATA, loadErrors: {} },
+    loadedDatasets: new Set()
+  };
+  portalDataCache.set(identity, created);
+  return created;
+}
+
+function datasetErrorKeys(dataset: PortalDataset): readonly string[] {
+  if (dataset === 'notifications') return ['notificationRules', 'notificationEvents'];
+  return [dataset];
+}
+
+function applyDatasetValue(data: PortalData, dataset: PortalDataset, value: unknown) {
+  switch (dataset) {
+    case 'state':
+      data.state = (value ?? null) as StatePayload | null;
+      break;
+    case 'tenant':
+      data.tenant = asObject(value);
+      break;
+    case 'targetGroups':
+      data.targetGroups = asArray(value);
+      data.targetGroupsMeta = asObject((value as { meta?: unknown } | null)?.meta);
+      break;
+    case 'reports':
+      data.reports = asArray(value);
+      data.reportCapabilities = asObject((value as { capabilities?: unknown } | null)?.capabilities);
+      break;
+    case 'notifications': {
+      const payload = asObject(value);
+      data.notificationRules = Array.isArray(payload?.rules) ? payload.rules as DataItem[] : [];
+      data.notificationEvents = Array.isArray(payload?.events) ? payload.events as DataItem[] : [];
+      break;
+    }
+    case 'releaseAttestation':
+      data.releaseAttestation = asObject(
+        (value as { attestation?: unknown } | null)?.attestation ?? value
+      );
+      break;
+    case 'deploymentFeatures':
+    case 'wafCoverage':
+    case 'wafCoverageSummary':
+    case 'wafRiskRoadmap':
+    case 'discoverySummary':
+    case 'subscriptionSummary':
+    case 'internalOverview':
+      data[dataset] = asObject(value);
+      break;
+    default:
+      data[dataset] = asArray(value);
+  }
+}
+
+async function resolveLoadResults(
+  entries: Partial<Record<PortalDataset, Promise<LoadResult<unknown>>>>
+) {
+  const keys = Object.keys(entries) as PortalDataset[];
+  const values = await Promise.all(keys.map((key) => entries[key] as Promise<LoadResult<unknown>>));
+  return new Map(keys.map((key, index) => [key, values[index]]));
+}
 
 export async function fetchPortalData(
   config: PortalConfig,
   session: Session,
   options: FetchPortalDataOptions = {}
 ): Promise<PortalData> {
+  const identity = sessionIdentity(session);
+  const requested = requestedPortalDatasets(options);
+  const initialCache = getPortalDataCacheEntry(identity);
   const headers = buildApiHeaders(config, session);
   const isStaffSession = session.principal === 'staff';
   const wantsStaffSocHydrate =
@@ -457,10 +628,23 @@ export async function fetchPortalData(
     if (!h) return Promise.resolve(settled(fallback));
     return loadOptional(path, h, fallback);
   };
-  /** Feature-gated off in this deployment — also a real empty state, not an error. */
   const skip = <T,>(fallback: T): Promise<LoadResult<T>> => Promise.resolve(settled(fallback));
-  const deploymentFeaturesResult = await opt('/v1/tenant/deployment-features', customerHeaders, null);
-  const deploymentFeatures = deploymentFeaturesResult.value;
+
+  const results = new Map<PortalDataset, LoadResult<unknown>>();
+  const shouldLoadFeatures = requested.has('deploymentFeatures') && (
+    options.force === true || !initialCache.loadedDatasets.has('deploymentFeatures')
+  );
+  if (shouldLoadFeatures) {
+    const result = await opt('/v1/tenant/deployment-features', customerHeaders, null);
+    results.set('deploymentFeatures', result);
+  }
+  const deploymentFeaturesResult = results.get('deploymentFeatures');
+  const deploymentFeatures = deploymentFeaturesResult && !deploymentFeaturesResult.error
+    ? deploymentFeaturesResult.value
+    : initialCache.data.deploymentFeatures;
+  const featureGateError = deploymentFeaturesResult?.error && !initialCache.loadedDatasets.has('deploymentFeatures')
+    ? deploymentFeaturesResult.error
+    : null;
   const connectorsEnabled =
     deploymentFeatures !== null &&
     typeof deploymentFeatures === 'object' &&
@@ -475,124 +659,103 @@ export async function fetchPortalData(
     (deploymentFeatures as { external_discovery?: unknown }).external_discovery === true;
   const socHeaders = useStaffSocTenantHeaders ? tenantHeaders : customerHeaders;
   const staffHeaders = isStaffSession ? headers : null;
-  // Keys match PortalData field names so a table can look up its own load error.
-  const { values, loadErrors } = await resolveLoadMap({
-    state: opt('/v1/state', socHeaders, null),
-    tenant: opt('/v1/tenants/current', customerHeaders, null),
-    targetGroups: opt('/v1/target-groups', customerHeaders, { items: [] }),
-    agents: opt('/v1/agents', customerHeaders, { items: [] }),
-    checks: opt('/v1/checks', customerHeaders, { items: [] }),
-    testPolicies: opt('/v1/test-policies', customerHeaders, { items: [] }),
-    runs: opt('/v1/test-runs', customerHeaders, { items: [] }),
-    findings: opt('/v1/findings', socHeaders, { items: [] }),
-    evidence: opt('/v1/evidence', customerHeaders, { items: [] }),
-    highScale: opt('/v1/high-scale-requests', socHeaders, { items: [] }),
-    reports: opt('/v1/reports', customerHeaders, { items: [] }),
-    notifications: opt('/v1/notifications', customerHeaders, { rules: [], events: [] }),
-    releaseEvidence: opt('/v1/production-release-evidence', customerHeaders, { items: [] }),
-    releaseAttestation: opt('/v1/production-release-evidence/attestation', customerHeaders, null),
-    audit: opt('/v1/audit-log', customerHeaders, { items: [] }),
-    connectors: connectorsEnabled ? opt('/v1/connectors', customerHeaders, { items: [] }) : skip({ items: [] }),
-    secrets: opt('/v1/secrets', customerHeaders, { items: [] }),
-    bootstrapTokens: opt('/v1/bootstrap-tokens', customerHeaders, { items: [] }),
-    serviceAccounts: opt('/v1/service-accounts', customerHeaders, { items: [] }),
-    wafAssets: wafEnabled ? opt('/v1/waf/assets', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafCoverage: wafEnabled ? opt('/v1/waf/coverage', customerHeaders, null) : skip(null),
-    wafCoverageSummary: wafEnabled ? opt('/v1/waf/coverage/summary', customerHeaders, null) : skip(null),
-    wafRiskRoadmap: wafEnabled ? opt('/v1/waf/coverage/risk-roadmap', customerHeaders, null) : skip(null),
-    wafValidations: wafEnabled ? opt('/v1/waf/validations', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafDriftEvents: wafEnabled ? opt('/v1/waf/drift-events', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafExceptions: wafEnabled ? opt('/v1/waf/exceptions', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafValidationPlans: wafEnabled ? opt('/v1/waf/validation-plans', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafRetests: wafEnabled ? opt('/v1/waf/retests', customerHeaders, { items: [] }) : skip({ items: [] }),
-    wafActionItems: wafEnabled ? opt('/v1/waf/action-items', customerHeaders, { items: [] }) : skip({ items: [] }),
-    cvePipeline: wafEnabled ? opt('/v1/waf/cve-pipeline', customerHeaders, { items: [] }) : skip({ items: [] }),
-    supplyChainRisks: wafEnabled ? opt('/v1/waf/supply-chain/risks', customerHeaders, { items: [] }) : skip({ items: [] }),
-    discoveryEntities: discoveryEnabled ? opt('/v1/discovery/entities', customerHeaders, { items: [] }) : skip({ items: [] }),
-    discoveryCandidates: discoveryEnabled ? opt('/v1/discovery/candidates', customerHeaders, { items: [] }) : skip({ items: [] }),
-    discoveryInbox: discoveryEnabled ? opt('/v1/discovery/inbox', customerHeaders, { items: [] }) : skip({ items: [] }),
-    discoverySummary: discoveryEnabled ? opt('/v1/discovery/reports/summary', customerHeaders, null) : skip(null),
-    subscriptionSummary: opt('/v1/subscription/current', isStaffSession ? null : customerHeaders, null),
-    internalOverview: opt('/internal/admin/overview', staffHeaders, null),
-    internalSignupRequests: opt('/internal/admin/signup-requests', staffHeaders, { items: [] }),
-    internalTenants: opt('/internal/admin/tenants', staffHeaders, { items: [] }),
-    internalApprovalRequests: opt('/internal/admin/approval-requests', staffHeaders, { items: [] }),
-    internalAudit: opt('/internal/admin/audit-log?limit=20', staffHeaders, { items: [] })
-  });
-
-  if (deploymentFeaturesResult.error) {
-    loadErrors.deploymentFeatures = deploymentFeaturesResult.error;
-  }
-  // Both notification collections come from one request, so they share its error.
-  if (loadErrors.notifications) {
-    loadErrors.notificationRules = loadErrors.notifications;
-    loadErrors.notificationEvents = loadErrors.notifications;
-  }
-  const notificationsPayload = values.notifications;
-  // The SOC execution-tenant failure is not attributable to one dataset; it is
-  // why every customer /v1 call was skipped, so it stays a page-level message.
-  const aggregateErrors = [...hydrateErrors, ...Object.values(loadErrors)];
-
-  return {
-    state: (values.state ?? null) as StatePayload | null,
-    tenant: asObject(values.tenant),
-    targetGroups: asArray(values.targetGroups),
-    targetGroupsMeta: asObject((values.targetGroups as { meta?: unknown })?.meta),
-    agents: asArray(values.agents),
-    checks: asArray(values.checks),
-    testPolicies: asArray(values.testPolicies),
-    runs: asArray(values.runs),
-    findings: asArray(values.findings),
-    evidence: asArray(values.evidence),
-    highScale: asArray(values.highScale),
-    reports: asArray(values.reports),
-    notificationRules: Array.isArray((notificationsPayload as { rules?: unknown })?.rules)
-      ? (notificationsPayload as { rules: DataItem[] }).rules
-      : [],
-    notificationEvents: Array.isArray((notificationsPayload as { events?: unknown })?.events)
-      ? (notificationsPayload as { events: DataItem[] }).events
-      : [],
-    releaseEvidence: asArray(values.releaseEvidence),
-    releaseAttestation: asObject(
-      (values.releaseAttestation as { attestation?: unknown } | null)?.attestation
-        ?? values.releaseAttestation
-    ),
-    audit: asArray(values.audit),
-    connectors: asArray(values.connectors),
-    secrets: asArray(values.secrets),
-    bootstrapTokens: asArray(values.bootstrapTokens),
-    serviceAccounts: asArray(values.serviceAccounts),
-    wafAssets: asArray(values.wafAssets),
-    wafCoverage: asObject(values.wafCoverage),
-    wafCoverageSummary: asObject(values.wafCoverageSummary),
-    wafRiskRoadmap: asObject(values.wafRiskRoadmap),
-    wafValidations: asArray(values.wafValidations),
-    wafDriftEvents: asArray(values.wafDriftEvents),
-    wafExceptions: asArray(values.wafExceptions),
-    wafValidationPlans: asArray(values.wafValidationPlans),
-    wafRetests: asArray(values.wafRetests),
-    wafActionItems: asArray(values.wafActionItems),
-    cvePipeline: asArray(values.cvePipeline),
-    supplyChainRisks: asArray(values.supplyChainRisks),
-    discoveryEntities: asArray(values.discoveryEntities),
-    discoveryCandidates: asArray(values.discoveryCandidates),
-    discoveryInbox: asArray(values.discoveryInbox),
-    discoverySummary: asObject(values.discoverySummary),
-    subscriptionSummary: asObject(values.subscriptionSummary),
-    internalOverview: asObject(values.internalOverview),
-    internalSignupRequests: asArray(values.internalSignupRequests),
-    internalTenants: asArray(values.internalTenants),
-    internalApprovalRequests: asArray(values.internalApprovalRequests),
-    internalAudit: asArray(values.internalAudit),
-    deploymentFeatures,
-    loadErrors,
-    loaded: true,
-    error: aggregateErrors.length > 0
-      ? (aggregateErrors.length === 1
-        ? aggregateErrors[0]
-        : `${aggregateErrors[0]} (+${aggregateErrors.length - 1} more load issues)`)
-      : null
+  const gated = <T,>(enabled: boolean, path: string, fallback: T): Promise<LoadResult<T>> => {
+    if (featureGateError) return Promise.resolve({ value: fallback, error: featureGateError });
+    return enabled ? opt(path, customerHeaders, fallback) : skip(fallback);
   };
+  const loaders: Record<PortalDataset, () => Promise<LoadResult<unknown>>> = {
+    state: () => opt('/v1/state', socHeaders, null),
+    tenant: () => opt('/v1/tenants/current', customerHeaders, null),
+    deploymentFeatures: () => opt('/v1/tenant/deployment-features', customerHeaders, null),
+    targetGroups: () => opt('/v1/target-groups', customerHeaders, { items: [] }),
+    agents: () => opt('/v1/agents', customerHeaders, { items: [] }),
+    checks: () => opt('/v1/checks', customerHeaders, { items: [] }),
+    testPolicies: () => opt('/v1/test-policies', customerHeaders, { items: [] }),
+    runs: () => opt('/v1/test-runs', customerHeaders, { items: [] }),
+    findings: () => opt('/v1/findings', socHeaders, { items: [] }),
+    evidence: () => opt('/v1/evidence', customerHeaders, { items: [] }),
+    highScale: () => opt('/v1/high-scale-requests', socHeaders, { items: [] }),
+    reports: () => opt('/v1/reports', customerHeaders, { items: [] }),
+    notifications: () => opt('/v1/notifications', customerHeaders, { rules: [], events: [] }),
+    releaseEvidence: () => opt('/v1/production-release-evidence', customerHeaders, { items: [] }),
+    releaseAttestation: () => opt('/v1/production-release-evidence/attestation', customerHeaders, null),
+    audit: () => opt('/v1/audit-log', customerHeaders, { items: [] }),
+    connectors: () => gated(connectorsEnabled, '/v1/connectors', { items: [] }),
+    secrets: () => opt('/v1/secrets', customerHeaders, { items: [] }),
+    bootstrapTokens: () => opt('/v1/bootstrap-tokens', customerHeaders, { items: [] }),
+    serviceAccounts: () => opt('/v1/service-accounts', customerHeaders, { items: [] }),
+    wafAssets: () => gated(wafEnabled, '/v1/waf/assets', { items: [] }),
+    wafCoverage: () => gated(wafEnabled, '/v1/waf/coverage', null),
+    wafCoverageSummary: () => gated(wafEnabled, '/v1/waf/coverage/summary', null),
+    wafRiskRoadmap: () => gated(wafEnabled, '/v1/waf/coverage/risk-roadmap', null),
+    wafValidations: () => gated(wafEnabled, '/v1/waf/validations', { items: [] }),
+    wafDriftEvents: () => gated(wafEnabled, '/v1/waf/drift-events', { items: [] }),
+    wafExceptions: () => gated(wafEnabled, '/v1/waf/exceptions', { items: [] }),
+    wafValidationPlans: () => gated(wafEnabled, '/v1/waf/validation-plans', { items: [] }),
+    wafRetests: () => gated(wafEnabled, '/v1/waf/retests', { items: [] }),
+    wafActionItems: () => gated(wafEnabled, '/v1/waf/action-items', { items: [] }),
+    cvePipeline: () => gated(wafEnabled, '/v1/waf/cve-pipeline', { items: [] }),
+    supplyChainRisks: () => gated(wafEnabled, '/v1/waf/supply-chain/risks', { items: [] }),
+    discoveryEntities: () => gated(discoveryEnabled, '/v1/discovery/entities', { items: [] }),
+    discoveryCandidates: () => gated(discoveryEnabled, '/v1/discovery/candidates', { items: [] }),
+    discoveryInbox: () => gated(discoveryEnabled, '/v1/discovery/inbox', { items: [] }),
+    discoverySummary: () => gated(discoveryEnabled, '/v1/discovery/reports/summary', null),
+    subscriptionSummary: () => opt('/v1/subscription/current', isStaffSession ? null : customerHeaders, null),
+    internalOverview: () => opt('/internal/admin/overview', staffHeaders, null),
+    internalSignupRequests: () => opt('/internal/admin/signup-requests', staffHeaders, { items: [] }),
+    internalTenants: () => opt('/internal/admin/tenants', staffHeaders, { items: [] }),
+    internalApprovalRequests: () => opt('/internal/admin/approval-requests', staffHeaders, { items: [] }),
+    internalAudit: () => opt('/internal/admin/audit-log?limit=20', staffHeaders, { items: [] })
+  };
+
+  const loadEntries: Partial<Record<PortalDataset, Promise<LoadResult<unknown>>>> = {};
+  requested.forEach((dataset) => {
+    if (dataset === 'deploymentFeatures') return;
+    if (options.force !== true && initialCache.loadedDatasets.has(dataset)) return;
+    loadEntries[dataset] = loaders[dataset]();
+  });
+  const loadedResults = await resolveLoadResults(loadEntries);
+  loadedResults.forEach((result, dataset) => results.set(dataset, result));
+
+  const currentCache = getPortalDataCacheEntry(identity);
+  const data: PortalData = {
+    ...currentCache.data,
+    loadErrors: { ...currentCache.data.loadErrors },
+    loaded: true
+  };
+  const loadedDatasets = new Set(currentCache.loadedDatasets);
+  if (shouldLoadFeatures && deploymentFeaturesResult && !deploymentFeaturesResult.error) {
+    FEATURE_GATED_DATASETS.forEach((dataset) => loadedDatasets.delete(dataset));
+  }
+  results.forEach((result, dataset) => {
+    const errorKeys = datasetErrorKeys(dataset);
+    if (result.error) {
+      errorKeys.forEach((key) => {
+        data.loadErrors[key] = result.error as string;
+      });
+      loadedDatasets.delete(dataset);
+      return;
+    }
+    applyDatasetValue(data, dataset, result.value);
+    errorKeys.forEach((key) => delete data.loadErrors[key]);
+    loadedDatasets.add(dataset);
+  });
+  const aggregateErrors = [...new Set([...hydrateErrors, ...Object.values(data.loadErrors)])];
+  data.error = aggregateErrors.length > 0
+    ? (aggregateErrors.length === 1
+      ? aggregateErrors[0]
+      : `${aggregateErrors[0]} (+${aggregateErrors.length - 1} more load issues)`)
+    : null;
+  portalDataCache.set(identity, { data, loadedDatasets });
+  return data;
+}
+
+export function fetchPortalDatasets(
+  config: PortalConfig,
+  session: Session,
+  datasets: readonly PortalDataset[]
+) {
+  return fetchPortalData(config, session, { datasets, includeCore: false, force: true });
 }
 
 export const EMPTY_PORTAL_DATA: PortalData = {
@@ -608,6 +771,7 @@ export const EMPTY_PORTAL_DATA: PortalData = {
   evidence: [],
   highScale: [],
   reports: [],
+  reportCapabilities: null,
   notificationRules: [],
   notificationEvents: [],
   releaseEvidence: [],

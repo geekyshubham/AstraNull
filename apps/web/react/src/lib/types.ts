@@ -34,6 +34,89 @@ export type RouteId =
   | 'internal-soc'
   | 'queue-detail';
 
+export type PortalDataset =
+  | 'state'
+  | 'tenant'
+  | 'deploymentFeatures'
+  | 'targetGroups'
+  | 'agents'
+  | 'checks'
+  | 'testPolicies'
+  | 'runs'
+  | 'findings'
+  | 'evidence'
+  | 'highScale'
+  | 'reports'
+  | 'notifications'
+  | 'releaseEvidence'
+  | 'releaseAttestation'
+  | 'audit'
+  | 'connectors'
+  | 'secrets'
+  | 'bootstrapTokens'
+  | 'serviceAccounts'
+  | 'wafAssets'
+  | 'wafCoverage'
+  | 'wafCoverageSummary'
+  | 'wafRiskRoadmap'
+  | 'wafValidations'
+  | 'wafDriftEvents'
+  | 'wafExceptions'
+  | 'wafValidationPlans'
+  | 'wafRetests'
+  | 'wafActionItems'
+  | 'cvePipeline'
+  | 'supplyChainRisks'
+  | 'discoveryEntities'
+  | 'discoveryCandidates'
+  | 'discoveryInbox'
+  | 'discoverySummary'
+  | 'subscriptionSummary'
+  | 'internalOverview'
+  | 'internalSignupRequests'
+  | 'internalTenants'
+  | 'internalApprovalRequests'
+  | 'internalAudit';
+
+export const CORE_PORTAL_DATASETS = [
+  'state',
+  'tenant',
+  'deploymentFeatures'
+] as const satisfies readonly PortalDataset[];
+
+export const PORTAL_ROUTE_DATASETS = {
+  dashboard: ['targetGroups', 'agents', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
+  environments: ['targetGroups', 'agents', 'runs', 'findings'],
+  'environment-detail': ['targetGroups', 'agents', 'checks', 'runs', 'findings'],
+  'target-groups': ['targetGroups', 'runs'],
+  'target-group-detail': ['targetGroups', 'agents', 'checks', 'connectors'],
+  'target-detail': [],
+  agents: ['targetGroups', 'agents', 'releaseEvidence'],
+  'agent-detail': ['agents', 'audit', 'checks', 'runs'],
+  checks: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
+  'check-detail': ['checks', 'runs'],
+  'test-policies': ['targetGroups', 'checks', 'testPolicies'],
+  'policy-detail': ['checks', 'testPolicies'],
+  runs: ['targetGroups', 'checks', 'runs', 'findings', 'evidence', 'highScale'],
+  'run-detail': ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
+  findings: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
+  'finding-detail': ['findings', 'wafActionItems'],
+  'evidence-detail': ['evidence', 'findings'],
+  reports: ['reports', 'audit'],
+  'report-detail': ['targetGroups', 'runs', 'findings', 'reports'],
+  integrations: ['connectors', 'secrets'],
+  notifications: ['notifications'],
+  audit: ['audit'],
+  'release-evidence': ['releaseEvidence', 'releaseAttestation'],
+  settings: ['targetGroups', 'agents', 'evidence', 'secrets', 'bootstrapTokens', 'serviceAccounts'],
+  support: ['subscriptionSummary'],
+  subscription: ['subscriptionSummary'],
+  admin: ['internalOverview', 'internalSignupRequests', 'internalTenants', 'internalApprovalRequests', 'internalAudit'],
+  'tenant-detail': ['agents', 'internalTenants', 'internalApprovalRequests'],
+  'internal-soc': ['findings', 'highScale', 'internalTenants', 'internalApprovalRequests'],
+  'queue-detail': ['targetGroups', 'highScale']
+} as const satisfies Record<RouteId, readonly PortalDataset[]>;
+
 export type NavItem = {
   id: RouteId;
   label: string;
@@ -125,6 +208,8 @@ export type PortalData = {
   evidence: DataItem[];
   highScale: DataItem[];
   reports: DataItem[];
+  /** Authoritative report kind/format options from `GET /v1/reports`. */
+  reportCapabilities: DataItem | null;
   notificationRules: DataItem[];
   notificationEvents: DataItem[];
   releaseEvidence: DataItem[];

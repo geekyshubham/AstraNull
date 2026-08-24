@@ -10,6 +10,7 @@ import { PortalLoadingSkeleton } from '../../lib/empty-from-api';
 import { buildMetadataArtifactUploadBody } from '../../lib/high-scale';
 import { sha256CanonicalJsonForCustody } from '../../lib/custody';
 import { requestJson } from '../../lib/api';
+import { apiErrorMessage } from '../../lib/error-messages';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
@@ -177,9 +178,9 @@ export function RunsSocGatePanel({
       setQueue(Array.isArray(payload.items) ? payload.items : []);
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string; missing?: string[] } | undefined;
+      const payload = (err as Error & { payload?: unknown }).payload as { missing?: string[] } | undefined;
       const missing = Array.isArray(payload?.missing) ? ` Missing: ${payload.missing.join(', ')}.` : '';
-      onError(`${payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'High-scale action failed.')}${missing}`);
+      onError(`${apiErrorMessage(err, 'High-scale action failed.')}${missing}`);
       return null;
     } finally {
       setBusy('');
@@ -234,9 +235,7 @@ export function RunsSocGatePanel({
     const requestId = getString(request, ['id'], '');
     if (!requestId) return;
     const filename = 'authorization-pack-metadata.json';
-    // P0#5: derive a real SHA-256 content digest over the uploaded pack bytes
-    // (the metadata-only authorization-pack payload) via crypto.subtle.digest,
-    // instead of a hard-coded placeholder digest.
+    // Custody digest is computed over this canonical metadata-only payload.
     const packContent = {
       artifact_type: 'customer_authorization_letter',
       request_id: requestId,
@@ -402,9 +401,9 @@ export function RunsSocGatePanel({
               <label><span>Window start</span><input name="window_start" type="datetime-local" defaultValue={datetimeLocalValue(24)} required disabled={busy !== ''} /></label>
               <label><span>Window end</span><input name="window_end" type="datetime-local" defaultValue={datetimeLocalValue(48)} required disabled={busy !== ''} /></label>
               <label><span>Max rate (catalog)</span><input name="max_rate" defaultValue="500_rps_metadata" placeholder={HIGH_SCALE_CATALOG_LABELS['500_rps_metadata']} required disabled={busy !== ''} /></label>
-              <label><span>Provider</span><input name="provider_name" defaultValue="Cloudflare" required disabled={busy !== ''} /></label>
-              <label><span>Emergency contact</span><input name="contact_name" defaultValue="Primary on-call" required disabled={busy !== ''} /></label>
-              <label><span>Contact path</span><input name="contact" defaultValue="ops@example.invalid" required disabled={busy !== ''} /></label>
+              <label><span>Provider</span><input name="provider_name" placeholder="CDN or WAF provider fronting this scope" required disabled={busy !== ''} /></label>
+              <label><span>Emergency contact</span><input name="contact_name" placeholder="Name of the on-call owner SOC can reach" required disabled={busy !== ''} /></label>
+              <label><span>Contact path</span><input name="contact" placeholder="Email or phone SOC can reach during the window" required disabled={busy !== ''} /></label>
               <label className="check-row full"><input name="scope_confirmation" type="checkbox" disabled={busy !== ''} /><span>I confirm declared scope and authorization metadata are accurate.</span></label>
               <div className="form-actions full">
                 <Button type="submit" loading={busy === 'create-high-scale'} disabled={busy !== '' || data.targetGroups.length === 0}>Submit request</Button>
