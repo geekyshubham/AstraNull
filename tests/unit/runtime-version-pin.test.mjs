@@ -69,7 +69,7 @@ function findDockerfiles(dir = REPO_ROOT, found = []) {
  * silently exempts whatever gets added later.
  *
  * This omission was real, not hypothetical. The list used to name ci.yml,
- * deploy-digitalocean.yml and portal-revamp.yml, leaving guardianbot.yml — the ONE workflow
+ * deploy-aws.yml and portal-revamp.yml, leaving guardianbot.yml — the ONE workflow
  * that was already SHA-pinned, and the style model the others were pinned to match —
  * unchecked. Unpinning it to `@main` kept the suite green.
  */
@@ -145,13 +145,13 @@ describe('node runtime version pin', () => {
    * lowering the number, which quietly shrinks the guard instead of fixing the walk.
    */
   it('discovers the Dockerfiles and workflows it claims to guard', () => {
-    const deployWorkflow = read('.github/workflows/deploy-digitalocean.yml');
-    const built = /^\s*file:\s*(\S+)/m.exec(deployWorkflow);
-    assert.ok(built, 'deploy-digitalocean.yml declares no `file:` input for the image build.');
+    const compose = read('ops/aws/docker-compose.yml');
+    const built = /^\s*dockerfile:\s*(\S+)/m.exec(compose);
+    assert.ok(built, 'ops/aws/docker-compose.yml declares no `dockerfile:` for the image build.');
     assert.ok(
       dockerfiles.includes(built[1]),
       `the walk found ${dockerfiles.length} Dockerfile(s) (${dockerfiles.join(', ') || 'none'}) `
-      + `but not ${built[1]}, the one deploy-digitalocean.yml builds and ships. Fix the walk: a `
+      + `but not ${built[1]}, the one ops/aws/docker-compose.yml builds and ships. Fix the walk: a `
       + 'scan that misses the production image makes every assertion below vacuous.',
     );
     assert.ok(WORKFLOW_PATHS.length > 0, 'the workflow walk found nothing to pin-check.');
@@ -267,7 +267,7 @@ describe('node runtime version pin', () => {
   /**
    * Tag-only base images are mutable: `node:22-alpine` is republished continuously, so two
    * builds of the same commit can contain different bytes. Digest pinning is what makes the
-   * cosign/SBOM chain in deploy-digitalocean.yml mean anything.
+   * image the AWS VM builds from ops/aws/Dockerfile mean anything.
    */
   it('pins every node base image to a digest, not just a tag', () => {
     for (const relative of dockerfiles) {
@@ -289,11 +289,9 @@ describe('node runtime version pin', () => {
  * tj-actions/changed-files (March 2025) is the worked example: a retargeted tag exfiltrated
  * secrets from every workflow that referenced it by major version.
  *
- * The deploy job is the one that matters most. It holds DIGITALOCEAN_ACCESS_TOKEN,
- * GHCR_CREDENTIALS and ASTRANULL_SECRET_ENCRYPTION_KEY, and carries `id-token: write` for
- * keyless signing — so code running inside it can also mint a cosign signature under this
- * repository's own OIDC identity. The `cosign verify` step would then pass on a poisoned
- * image. Signature verification cannot be stronger than the actions that produce it.
+ * The deploy job is the one that matters most. It holds ASTRANULL_AWS_SSH_KEY, so a
+ * retargeted action tag would get a shell on the production VM. Signature verification
+ * cannot be stronger than the actions that produce the deploy.
  */
 describe('workflow action pinning', () => {
   /** `uses:` lines that resolve within GitHub-hosted refs, i.e. everything but ./local paths. */

@@ -37,7 +37,7 @@ jobs:
       id-token: write
     uses: Geekyshubham/guardianbot/.github/workflows/reusable-image.yml@7524547700e4c3994353f5c61d1625b2bd5e5428
     with:
-      dockerfile: "ops/digitalocean/Dockerfile"
+      dockerfile: "ops/aws/Dockerfile"
       context: "."
       image-name: "ghcr.io/geekyshubham/astranull"
       health-path: "/health"

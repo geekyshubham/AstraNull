@@ -1,0 +1,56 @@
+# Hosted stack on the AstraNull AWS VM. Run from the repo root:
+#   docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: astranull
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: astranull
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U astranull -d astranull"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: ops/aws/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ASTRANULL_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      control-plane:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

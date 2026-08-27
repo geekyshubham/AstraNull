@@ -1,0 +1,38 @@
+name: Deploy AWS
+
+# Push to main rebuilds the VM. CI still runs separately; this job only SSHes
+# and runs ops/aws/deploy.sh (git pull + compose up --build).
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        env:
+          SSH_KEY: ${{ secrets.ASTRANULL_AWS_SSH_KEY }}
+          HOST: ${{ secrets.ASTRANULL_AWS_HOST }}
+          USER: ${{ secrets.ASTRANULL_AWS_USER }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?ASTRANULL_AWS_SSH_KEY is not set}"
+          : "${HOST:?ASTRANULL_AWS_HOST is not set}"
+          user="${USER:-ubuntu}"
+          install -m 600 /dev/null "$HOME/.ssh/astranull-deploy"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-deploy"
+          ssh -i "$HOME/.ssh/astranull-deploy" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=20 \
+            "${user}@${HOST}" \
+            'bash /opt/astranull/ops/aws/deploy.sh'

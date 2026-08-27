@@ -268,7 +268,7 @@ function assertProductionPersistence(env, persistenceMode) {
   // defaults to 'dev-json' off production, so the process booted happily on the local JSON FILE
   // store. Every tenant row would land in .data/astranull-dev.json, vanish on container restart,
   // and never pass through Postgres RLS at all — a silent data-loss and isolation failure rather
-  // than a startup error. Latent today (ops/digitalocean/Dockerfile pins NODE_ENV=production and
+  // than a startup error. Latent today (ops/aws/Dockerfile pins NODE_ENV=production and
   // scripts/railway-staging-start.mjs defaults persistence to postgres), so this closes a
   // misconfiguration path, not an active fault.
   //
