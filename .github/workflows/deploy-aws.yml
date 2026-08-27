@@ -22,12 +22,14 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.ASTRANULL_AWS_SSH_KEY }}
           HOST: ${{ secrets.ASTRANULL_AWS_HOST }}
-          USER: ${{ secrets.ASTRANULL_AWS_USER }}
+          SSH_USER: ${{ secrets.ASTRANULL_AWS_USER }}
         run: |
           set -euo pipefail
           : "${SSH_KEY:?ASTRANULL_AWS_SSH_KEY is not set}"
           : "${HOST:?ASTRANULL_AWS_HOST is not set}"
-          user="${USER:-ubuntu}"
+          user="${SSH_USER:-ubuntu}"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
           install -m 600 /dev/null "$HOME/.ssh/astranull-deploy"
           printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-deploy"
           ssh -i "$HOME/.ssh/astranull-deploy" \
