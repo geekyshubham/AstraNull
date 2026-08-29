@@ -10,6 +10,11 @@ import { resolve4, resolveCname } from 'node:dns/promises';
 import tls from 'node:tls';
 import { classifyWafPosture } from '../contracts/wafPosture.mjs';
 import { classifyWafProductFromSignals } from './wafProductCatalog.mjs';
+import {
+  EDGE_SIGNATURE_CORPUS_VERSION,
+  classifyEdgeFingerprint,
+  extractFingerprintHeaderEntries,
+} from './edgeFingerprint.mjs';
 
 const MAX_BODY_READ_BYTES = 8192;
 const BLOCK_STATUSES = new Set([401, 403, 406, 429, 503]);
@@ -158,6 +163,29 @@ function matchBlockPageSignature(bodyText) {
   return null;
 }
 
+/**
+ * Header values restricted to the fingerprint-corpus allowlist (bounded length) and the
+ * raw body text (bounded) are carried on the snapshot for in-memory edge-signature
+ * classification only. They are metadata-only inputs and are never returned by the scan
+ * result or persisted — result consumers see names, hashes, and classifications.
+ */
+function dedupeHeaderEntries(entries) {
+  const byName = new Map();
+  for (const entry of entries) {
+    const name = String(entry?.name ?? '').toLowerCase();
+    if (!name || byName.has(name)) continue;
+    byName.set(name, { name, value: String(entry?.value ?? '') });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function fingerprintInputs(res, bodyText) {
+  return {
+    fingerprint_header_entries: res ? extractFingerprintHeaderEntries(res) : [],
+    fingerprint_body_text: String(bodyText ?? '').slice(0, MAX_BODY_READ_BYTES),
+  };
+}
+
 function responseSnapshot(res, bodyText = '') {
   if (!res) {
     return {
@@ -169,6 +197,7 @@ function responseSnapshot(res, bodyText = '') {
       block_page_signature_id: null,
       block_page_fingerprint_hash: null,
       connection_dropped: true,
+      ...fingerprintInputs(null, ''),
     };
   }
   const status = res.status ?? 0;
@@ -181,6 +210,7 @@ function responseSnapshot(res, bodyText = '') {
     block_page_signature_id: matchBlockPageSignature(bodyText),
     block_page_fingerprint_hash: hashBodySnippet(bodyText),
     connection_dropped: false,
+    ...fingerprintInputs(res, bodyText),
   };
 }
 
@@ -262,6 +292,7 @@ function detectEvasionBypass(markerResults) {
  * @param {boolean} [input.agentCorroborated=false]
  * @param {boolean} [input.requireAgentForProtected=true]
  * @param {string} [input.domXssValidation='agent_required']
+ * @param {object|null} [input.edgeSignature=null] — classifyEdgeFingerprint() result.
  */
 export function buildOutsideInPostureReport({
   wafDetected = false,
@@ -274,6 +305,7 @@ export function buildOutsideInPostureReport({
   requireAgentForProtected = true,
   evasionBypassSuspected = false,
   domXssValidation = 'agent_required',
+  edgeSignature = null,
 } = {}) {
   const anyMarkerAllowed = markerResults.some((m) => m.allowed === true);
   const anyMarkerBlocked = markerResults.some((m) => m.blocked === true);
@@ -326,17 +358,24 @@ export function buildOutsideInPostureReport({
   }
 
   const best = vendorClassification?.best ?? null;
+  const edgeBest = edgeSignature?.best_vendor ?? null;
+  const corpusWafPresent = edgeSignature?.waf_present === true;
+  const corpusDetected = corpusWafPresent || edgeSignature?.cdn_detected === true;
+  const wafConfidence = best?.confidence
+    ?? (edgeBest ? Math.max(edgeBest.confidence, genericWafDetected ? 0.45 : 0) : (genericWafDetected ? 0.45 : 0));
   return {
     posture_status,
     posture_label,
     reason_codes: [...new Set(reason_codes)],
-    waf_detected: wafDetected || genericWafDetected || Boolean(best),
-    waf_fingerprint_detected: Boolean(best) || wafDetected || genericWafDetected,
+    waf_detected: wafDetected || genericWafDetected || Boolean(best) || corpusWafPresent,
+    waf_fingerprint_detected: Boolean(best) || wafDetected || genericWafDetected || Boolean(edgeBest),
     generic_waf_detected: genericWafDetected,
-    detected_vendor: best?.vendor ?? null,
+    detected_vendor: best?.vendor ?? edgeBest?.vendor ?? null,
     detected_product: best?.product ?? null,
-    waf_product_hint: best ? `${best.vendor}/${best.product}` : null,
-    waf_confidence: best?.confidence ?? (genericWafDetected ? 0.45 : 0),
+    waf_product_hint: best ? `${best.vendor}/${best.product}` : (edgeBest ? `corpus:${edgeBest.vendor}` : null),
+    waf_confidence: wafConfidence,
+    cdn_detected: edgeSignature?.cdn_detected === true,
+    edge_signature_corpus_version: corpusDetected ? (edgeSignature?.corpus_version ?? null) : null,
     validation_passed: validationPassed,
     validation_failed: validationFailed,
     probe_validation_passed: probeValidationPassed,
@@ -911,6 +950,29 @@ export async function runOutsideInWafScan(options = {}) {
   const signalSource = attackSnapshot?.header_names?.length >= baseline?.header_names?.length
     ? attackSnapshot
     : baseline;
+
+  const attackBlocked = Boolean(attackSnapshot
+    && !attackSnapshot.connection_dropped
+    && (attackSnapshot.block_page_signature_id || BLOCK_STATUSES.has(attackSnapshot.status_code)));
+  const dnsTokens = String(dnsChainHint ?? '').split(/\s+/).filter(Boolean);
+  const resolvedIps = dnsTokens.filter((token) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(token) || token.includes(':'));
+  const cnameChain = dnsTokens.filter((token) => !resolvedIps.includes(token));
+  const edgeSignature = classifyEdgeFingerprint({
+    headerEntries: dedupeHeaderEntries([
+      ...(baseline?.fingerprint_header_entries ?? []),
+      ...(signalSource?.fingerprint_header_entries ?? []),
+    ]),
+    cookieNames: [...new Set([
+      ...(baseline?.cookie_names ?? []),
+      ...(signalSource?.cookie_names ?? []),
+    ])],
+    bodyText: attackSnapshot?.fingerprint_body_text ?? '',
+    statusCode: attackBlocked ? attackSnapshot.status_code : null,
+    blockResponse: attackBlocked,
+    resolvedIps,
+    cnameChain,
+  });
+
   const vendorClassification = classifyWafProductFromSignals({
     header_names: [...new Set([...(baseline?.header_names ?? []), ...(signalSource?.header_names ?? [])])],
     cookie_names: [...new Set([...(baseline?.cookie_names ?? []), ...(signalSource?.cookie_names ?? [])])],
@@ -927,7 +989,7 @@ export async function runOutsideInWafScan(options = {}) {
     matched_signals: candidate.matched_signals ?? [],
   }));
 
-  const wafDetected = Boolean(vendorClassification.best) || generic.detected;
+  const wafDetected = Boolean(vendorClassification.best) || generic.detected || edgeSignature.waf_present;
   const evasionBypassSuspected = detectEvasionBypass(markerResults);
   const posture = buildOutsideInPostureReport({
     wafDetected,
@@ -940,6 +1002,7 @@ export async function runOutsideInWafScan(options = {}) {
     requireAgentForProtected: options.requireAgentForProtected !== false,
     evasionBypassSuspected,
     domXssValidation: options.domXssValidation ?? 'agent_required',
+    edgeSignature,
   });
 
   const durationMs = Date.now() - started;
@@ -967,6 +1030,28 @@ export async function runOutsideInWafScan(options = {}) {
     origin_bypass_status_code: originBypassStatus,
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),
     vendor_chain_hints: vendorChainHints,
+    edge_signature: {
+      waf_present: edgeSignature.waf_present,
+      cdn_detected: edgeSignature.cdn_detected,
+      conflicting_vendor_signals: edgeSignature.conflicting_vendor_signals,
+      best_vendor: edgeSignature.best_vendor
+        ? {
+          vendor: edgeSignature.best_vendor.vendor,
+          name: edgeSignature.best_vendor.name,
+          confidence: edgeSignature.best_vendor.confidence,
+          matched_signals: edgeSignature.best_vendor.matched_signals,
+        }
+        : null,
+      vendor_matches: edgeSignature.vendor_matches.slice(0, 5).map((match) => ({
+        vendor: match.vendor,
+        name: match.name,
+        confidence: match.confidence,
+        matched_signals: match.matched_signals,
+      })),
+      address_matches: edgeSignature.address_matches,
+      cname_matches: edgeSignature.cname_matches,
+    },
+    edge_signature_corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
     dns_chain_hint: dnsChainHint,
     tls_protocol_hint: tlsHints.tls_protocol_hint ?? null,
     tls_cipher_hint: tlsHints.tls_cipher_hint ?? null,

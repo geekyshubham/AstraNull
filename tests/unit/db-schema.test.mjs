@@ -25,6 +25,35 @@ describe('db schema contract', () => {
     assert.equal(result.ok, true, result.errors.join('; '));
   });
 
+  it('keeps password credentials and invites tenant-scoped with no plaintext columns', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migrationSql = readFileSync(
+      path.join(ROOT, 'db', 'migrations', '0042_user_password_credentials.sql'),
+      'utf8',
+    );
+
+    for (const sql of [schemaSql, migrationSql]) {
+      assert.match(sql, /CREATE TABLE(?: IF NOT EXISTS)? user_credentials\b/);
+      assert.match(sql, /CREATE TABLE(?: IF NOT EXISTS)? user_password_invites\b/);
+      assert.match(sql, /ALTER TABLE user_credentials FORCE ROW LEVEL SECURITY/);
+      assert.match(sql, /ALTER TABLE user_password_invites FORCE ROW LEVEL SECURITY/);
+      assert.match(sql, /user_password_invites_token_lookup/);
+      assert.match(sql, /fk_user_credentials_user_tenant/);
+      assert.match(sql, /fk_user_password_invites_user_tenant/);
+
+      const credentials = sql.match(
+        /CREATE TABLE(?: IF NOT EXISTS)? user_credentials \([\s\S]*?\n\);/,
+      )[0];
+      const invites = sql.match(
+        /CREATE TABLE(?: IF NOT EXISTS)? user_password_invites \([\s\S]*?\n\);/,
+      )[0];
+      assert.match(credentials, /^\s*password_hash\s+TEXT NOT NULL/m);
+      assert.doesNotMatch(credentials, /^\s*(?:password|plaintext_password|password_plaintext)\s+/m);
+      assert.match(invites, /^\s*token_hash\s+TEXT NOT NULL/m);
+      assert.doesNotMatch(invites, /^\s*(?:token|plaintext_token|invite_token)\s+/m);
+    }
+  });
+
   it('enforces tenants RLS, audit sequence uniqueness, and nullable event_id idempotency', () => {
     const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
     assert.match(schemaSql, /ALTER TABLE tenants ENABLE ROW LEVEL SECURITY/);

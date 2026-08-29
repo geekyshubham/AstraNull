@@ -28,7 +28,6 @@ Every implementation session must preserve these rules from `AGENTS.md`:
 | Agent is outbound-only | Agents must connect outbound over HTTPS, WebSocket, or long-poll. Do not require inbound management ports. |
 | SOC gates high-scale tests | Customers can request high-scale tests, but SOC must approve, schedule, execute, coordinate, stop, and close them. |
 | Evidence over assumptions | Every verdict must attach observed probe data, agent observation, health signal, approval artifact, or explicit customer declaration. |
-| Safe-by-default | Default checks must be bounded, low-volume, non-disruptive, and clearly labeled. |
 | Do not ship attack tooling casually | Do not add raw DDoS scripts, amplification logic, or unmanaged traffic generators. High-scale execution must use governed adapters and authorization controls. |
 
 ## Required Reading Before Coding
@@ -186,7 +185,7 @@ Acceptance bar:
 
 - Agent remains outbound-only.
 - Install, update, health, observation, and uninstall flows work in supported environments.
-- Probe fleet is bounded, rate-limited, observable, and safe by default.
+- Probe fleet is bounded, rate-limited, and observable.
 - Evidence distinguishes external probe data from inside-agent observations.
 
 ### 6. SOC High-Scale Governance
@@ -336,7 +335,7 @@ Use this as the top-level delegation prompt:
 ```text
 You are completing AstraNull to production readiness. First read AGENTS.md, PROGRESS.md, docs/release-checklist.md, docs/product/08-enterprise-production-gap-backlog.md, docs/progress-waf-posture-backlog.md, and docs/production-readiness-completion-guide.md.
 
-Do not treat local tests as production readiness. Close every release blocker with real implementation, tests, docs, progress updates, and metadata-only evidence. Preserve the non-negotiable rules: no default cloud access, no IP inventory discovery, outbound-only agent, SOC-gated high-scale tests, evidence over assumptions, safe-by-default checks, and no unmanaged DDoS tooling.
+Do not treat local tests as production readiness. Close every release blocker with real implementation, tests, docs, progress updates, and metadata-only evidence. Preserve the non-negotiable rules: no default cloud access, no IP inventory discovery, outbound-only agent, SOC-gated high-scale tests, evidence over assumptions, and no unmanaged DDoS tooling.
 
 Work in parallel sessions only with non-overlapping file ownership. Avoid concurrent edits to PROGRESS.md, release checklists, package.json, db/schema.sql, src/server.mjs, apps/web/app.js, and shared persistence files. For each slice, run targeted tests, then update docs and progress. At the end, run npm test, lint, safety, DB schema validation, tenant query audit, WAF OpenAPI validation, git diff --check, release evidence bundle, staging attestation, and release gap audit.
 

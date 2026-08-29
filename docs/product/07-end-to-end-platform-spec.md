@@ -66,9 +66,9 @@ Invite accepted -> Organization selected -> Environment created -> Target group 
 | Generate token | Show one-time install command | Hash token, TTL, scope, max uses | Expired/revoked token explained clearly |
 | Install agent | Linux/Docker/Helm tabs | Agent registers via outbound TLS | Offline/troubleshooting page |
 | Placement test | Friendly diagram shows what agent can prove | Baseline nonce job | Misplaced agent verdict if no signal expected |
-| First run | Button: Run safe validation | Planner creates bounded jobs | Blocked if no agent binding/check prerequisites |
+| First run | Button: Run validation | Planner creates jobs | Blocked if no agent binding/check prerequisites |
 
-### Flow B: Safe validation run
+### Flow B: Validation run
 
 ```text
 User clicks Run -> Planner validates scope -> Agent opens observation window -> Probe sends nonce -> Agent uploads observations -> Correlation engine evaluates -> Verdict/finding/report created
@@ -131,7 +131,7 @@ High-scale state machine:
 |---|---|---|---|
 | Public Landing | Visitors | AstraNull promise, no-access-first framing, sign-up/login actions | Sign up / log in |
 | Sign-Up Intake | Prospects/customers | Organization, contact, requested plan, intended use, region, high-scale interest | Submit account request |
-| Dashboard | All | Readiness score, risk trend, critical findings, agent health, last run | Run safe validation / open finding |
+| Dashboard | All | Readiness score, risk trend, critical findings, agent health, last run | Run validation / open finding |
 | Onboarding Wizard | New users | Stepper, explanation, install commands, first run | Finish setup |
 | Environments | Owner/Admin | Env cards, health, data region, target groups, agents | Create environment |
 | Target Groups | Security/App owners | Service map, targets, agents, checks, runs, findings | Add target / run checks |

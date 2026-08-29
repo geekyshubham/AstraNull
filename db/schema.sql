@@ -59,6 +59,29 @@ CREATE TABLE users (
   UNIQUE (tenant_id, email)
 );
 
+CREATE TABLE user_credentials (
+  user_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  password_hash TEXT NOT NULL,
+  password_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  must_change BOOLEAN NOT NULL DEFAULT FALSE,
+  failed_attempts INT NOT NULL DEFAULT 0,
+  locked_until TIMESTAMPTZ,
+  last_login_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE user_password_invites (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE signup_requests (
   id TEXT PRIMARY KEY,
   organization_name TEXT NOT NULL,
@@ -1037,6 +1060,10 @@ CREATE TABLE platform_metrics (
 -- Tenant-consistent foreign keys: composite UNIQUE (tenant_id, id) on parents; child FKs use (tenant_id, parent_id).
 ALTER TABLE environments ADD CONSTRAINT environments_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE users ADD CONSTRAINT users_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE user_credentials ADD CONSTRAINT fk_user_credentials_user_tenant
+  FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
+ALTER TABLE user_password_invites ADD CONSTRAINT fk_user_password_invites_user_tenant
+  FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE target_groups ADD CONSTRAINT target_groups_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE targets ADD CONSTRAINT targets_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT bootstrap_tokens_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1258,6 +1285,7 @@ CREATE INDEX idx_events_tenant_run_time ON events(tenant_id, test_run_id, timest
 CREATE INDEX idx_evidence_vault_tenant_run_created ON evidence_vault(tenant_id, test_run_id, created_at DESC);
 CREATE INDEX idx_evidence_vault_tenant_related_event ON evidence_vault(tenant_id, related_event_id);
 CREATE UNIQUE INDEX uniq_findings_open_target_check ON findings(tenant_id, target_group_id, target_id, check_id) WHERE status = 'open';
+CREATE INDEX idx_user_password_invites_token_hash ON user_password_invites(token_hash);
 -- Target-detail findings keyset page: (tenant_id, target_id) equality then the
 -- (created_at DESC, id DESC) sort tuple. See db/migrations/0040_findings_created_at_index.sql.
 CREATE INDEX idx_findings_tenant_target_created ON findings(tenant_id, target_id, created_at DESC, id DESC);
@@ -1297,6 +1325,10 @@ ALTER TABLE environments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE environments FORCE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users FORCE ROW LEVEL SECURITY;
+ALTER TABLE user_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_credentials FORCE ROW LEVEL SECURITY;
+ALTER TABLE user_password_invites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_password_invites FORCE ROW LEVEL SECURITY;
 ALTER TABLE tenant_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE tenant_subscriptions ENABLE ROW LEVEL SECURITY;
@@ -1421,6 +1453,18 @@ CREATE POLICY tenant_isolation_environments ON environments
 CREATE POLICY tenant_isolation_users ON users
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY user_credentials_tenant_isolation ON user_credentials
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY user_password_invites_tenant_isolation ON user_password_invites
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY user_password_invites_token_lookup ON user_password_invites
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.tenant_id', true), '') = ''
+    AND token_hash = current_setting('app.password_invite_token_hash', true)
+  );
 CREATE POLICY tenant_isolation_target_groups ON target_groups
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));

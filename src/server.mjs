@@ -17,6 +17,8 @@ import * as breakGlass from './services/breakGlass.mjs';
 import * as subscriptions from './services/subscriptions.mjs';
 import * as publicSite from './services/publicSite.mjs';
 import * as bundledStagingAuth from './services/bundledStagingAuth.mjs';
+import { createPasswordAuthService } from './services/passwordAuth.mjs';
+import { createDevPasswordAuthRepository } from './services/passwordAuthRepository.mjs';
 import { exchangeGuardianBotDastSession } from './services/guardianbotDastSession.mjs';
 import { getTenantDeploymentFeatures } from './services/tenantDeploymentFeatures.mjs';
 import { readArtifactUploadBody } from './lib/authorizationArtifactLedger.mjs';
@@ -73,6 +75,10 @@ import {
   blockPostgresWafDriftScanRoute,
   tryHandleWafDriftScanRoutes,
 } from './routes/wafDriftRoutes.mjs';
+import {
+  isWafEdgeDetectionRoute,
+  tryHandleWafEdgeDetectionRoutes,
+} from './routes/wafEdgeDetectionRoutes.mjs';
 import { isCveFeedInputError, resolveCveFeedItems } from './lib/cveFeedIngest.mjs';
 import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
 import { formatNotificationRuleForRead } from './lib/notifications.mjs';
@@ -128,6 +134,7 @@ function defaultServiceDeps() {
     targetDetail,
     remediation,
     signupIntake,
+    passwordAuth: createPasswordAuthService(createDevPasswordAuthRepository()),
     reports,
     secretVault,
     events,
@@ -213,6 +220,7 @@ function isWafOrchestratorRoute(path) {
 function isWafCorePostureRoute(path) {
   if (!isWafPostureRoute(path)) return false;
   if (path === '/v1/waf/drift-scans/run' || path === '/v1/waf/drift-scans/latest') return false;
+  if (isWafEdgeDetectionRoute(path)) return false;
   if (isWafActionItemRoute(path)) return false;
   if (isWafCvePipelineRoute(path)) return false;
   if (isWafSupplyChainRoute(path)) return false;
@@ -741,6 +749,16 @@ function respondRateLimited(res, retryAfterSeconds) {
     'Cache-Control': 'no-store',
   });
   res.end(payload);
+}
+
+function respondPasswordAuthResult(res, result) {
+  if (!result?.error) return json(res, 200, result);
+  const status = Number(result.status) || 400;
+  if ((status === 429 || status === 423) && result.retry_after_seconds) {
+    res.setHeader('Retry-After', String(result.retry_after_seconds));
+  }
+  const { status: _status, ...body } = result;
+  return json(res, status, body);
 }
 
 export function createServer(options = {}) {
@@ -1631,6 +1649,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, result);
   }
   if (await tryHandleWafDriftScanRoutes(req, res, url, ctx, runtimeConfig, serviceDeps)) return;
+  if (await tryHandleWafEdgeDetectionRoutes(req, res, url, ctx, runtimeConfig, serviceDeps)) return;
   if (method === 'GET' && path === '/v1/waf/drift-events') {
     const gate = requirePermission(ctx, 'waf:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2121,6 +2140,32 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     );
     if (result?.error) return json(res, result.status ?? 404, result);
     return json(res, 200, result);
+  }
+
+  if (path === '/v1/targets' && method === 'GET') {
+    const gate = requirePermission(ctx, 'target_group:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const targetService = serviceDeps.targetGroups;
+    let envelope;
+    if (typeof targetService?.listTargetsEnvelope === 'function') {
+      envelope = await targetService.listTargetsEnvelope(ctx);
+    } else if (typeof targetService?.listTargets === 'function') {
+      const items = await targetService.listTargets(ctx);
+      envelope = {
+        items,
+        count: items.length,
+        meta: {
+          empty_reason: items.length
+            ? null
+            : 'No targets have been declared for this tenant yet.',
+        },
+      };
+    } else if (runtimeConfig.persistenceMode === 'postgres') {
+      return respondPostgresRouteNotWired(res);
+    } else {
+      envelope = targetGroups.listTargetsEnvelope(ctx);
+    }
+    return json(res, 200, envelope);
   }
 
   if (path === '/v1/target-groups' && method === 'GET') {
@@ -3173,6 +3218,34 @@ async function handlePublicApi(req, res, url, runtimeConfig, options = {}) {
 
   if (method === 'GET' && path === '/v1/public/site-config') {
     return json(res, 200, publicSite.getPublicSiteConfig(runtimeConfig));
+  }
+
+  if (
+    method === 'POST'
+    && (path === '/v1/auth/login' || path === '/v1/auth/set-password')
+  ) {
+    if (runtimeConfig.passwordLoginEnabled !== true) {
+      return json(res, 403, {
+        error: 'password_login_disabled',
+        message: 'Password login is not enabled on this deployment.',
+      });
+    }
+    const passwordAuthService = options.services?.passwordAuth;
+    const methodName = path === '/v1/auth/login'
+      ? 'loginWithPassword'
+      : 'setPasswordWithInvite';
+    if (typeof passwordAuthService?.[methodName] !== 'function') {
+      return json(res, 503, {
+        error: 'password_login_unavailable',
+        message: 'Password authentication is not available on this deployment.',
+      });
+    }
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await passwordAuthService[methodName](body, {
+      runtimeConfig,
+      clientKey: options.clientKey,
+    });
+    return respondPasswordAuthResult(res, result);
   }
 
   if (method === 'POST' && path === '/v1/auth/bundled-staging-login') {

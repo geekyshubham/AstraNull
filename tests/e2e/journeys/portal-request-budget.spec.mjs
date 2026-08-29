@@ -17,6 +17,7 @@ import { NAV_ROUTE_IDS } from '../../helpers/portal-routes.mjs';
 const REQUEST_BUDGET = 45;
 const ROUTES_TO_NAVIGATE = [
   { routeId: 'target-groups', label: 'Target groups' },
+  { routeId: 'targets', label: 'Targets' },
   { routeId: 'agents', label: 'Agents' },
   { routeId: 'checks', label: 'Checks' },
   { routeId: 'test-policies', label: 'Test policies' },

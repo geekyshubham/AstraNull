@@ -153,6 +153,24 @@ Each product catalog entry should contain:
 
 Unknown vendors must still produce `waf_present` or `cdn_detected` with explicit confidence limits.
 
+## Ported edge signature corpus (wafw00f + cdncheck)
+
+Beyond the versioned product catalog, AstraNull vendors a generated edge signature corpus:
+
+- **WAF vendors:** 168 vendor signature sets ported from wafw00f plugin data (186 passive
+  header/cookie signatures decidable from one ordinary GET; 320 block-page signatures evaluated
+  only against block evidence an authorized bounded check already captured).
+- **Address + CNAME:** cdncheck CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
+  suffixes, matched metadata-only against resolved DNS chain data.
+- **Module:** `src/lib/edgeFingerprint.mjs` over the generated `src/lib/data/edgeSignatureData.mjs`;
+  scanner results carry `edge_signature` and `edge_signature_corpus_version`, and signed
+  `waf.fingerprint.safe` probe jobs carry corpus version metadata.
+- **Provenance, licenses, and regeneration:** [edge-fingerprint-sources](../attribution/edge-fingerprint-sources.md);
+  decision record in [ADR-0005](../adr/0005-edge-signature-corpus-port.md).
+
+Classification from the corpus never sends traffic by itself and never manufactures block
+evidence; per-signal provenance is retained so operators can audit any vendor match.
+
 ## Done criteria
 
 - Product catalog is versioned and testable.

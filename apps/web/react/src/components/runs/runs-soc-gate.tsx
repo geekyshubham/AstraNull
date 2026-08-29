@@ -454,7 +454,7 @@ export function RunsPageHeadActions({
   return (
     <>
       <Button size="sm" variant="secondary" onClick={onRequestSoc}>Request SOC-gated run</Button>
-      <Button size="sm" loading={safeRunBusy} disabled={safeRunDisabled} onClick={onStartSafeRun}>Run safe checks</Button>
+      <Button size="sm" loading={safeRunBusy} disabled={safeRunDisabled} onClick={onStartSafeRun}>Run checks</Button>
     </>
   );
 }

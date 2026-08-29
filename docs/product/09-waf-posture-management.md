@@ -106,7 +106,7 @@ Use a 0-100 score. Store factor-level evidence so users can understand the score
 |---|---:|
 | WAF coverage calculation latency after scan | less than 15 minutes for normal tenant batch. |
 | False positive reduction | Every risky verdict has evidence and confidence; user can retest. |
-| Safe validation blast radius | Default checks: one to five requests per target per run. |
+| Validation blast radius | Defined per check in catalog probe profiles and SOC authorization packs. |
 | Drift detection window | Daily default, configurable by tenant policy. |
 | Connector data minimization | Store metadata hashes and summaries, not full sensitive policy bodies. |
 | Ticket quality | Every ticket has asset, owner, evidence, severity, remediation, retest link. |

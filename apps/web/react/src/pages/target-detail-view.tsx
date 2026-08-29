@@ -81,7 +81,7 @@ export function TargetDetailView({
   const verification = detail?.verification ?? null;
   const wafPosture = detail?.waf_posture ?? null;
   const eligibility = getString(target, ['eligibility'], 'unknown');
-  // §4.5 header: Run bounded checks is gated when eligibility is not/unverified.
+  // §4.5 header: Run checks is gated when eligibility is not/unverified.
   const canRun = !eligibility.startsWith('not') && !eligibility.startsWith('unverified');
   const verificationState = getString(verification, ['state'], getString(target, ['verification_state'], 'unverified'));
   const provenance = resolveTargetVerificationProvenance(target, verification);
@@ -106,7 +106,7 @@ export function TargetDetailView({
       const refreshed = await populateTargetDetail(config, session, entityId);
       setDetail(refreshed);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to start bounded test run.';
+      const message = err instanceof Error ? err.message : 'Failed to start test run.';
       setError(message);
     } finally {
       setBusy('');
@@ -140,11 +140,11 @@ export function TargetDetailView({
               size="sm"
               className={canRun ? undefined : 'is-locked'}
               disabled={!canRun || busy !== ''}
-              title={canRun ? 'Start bounded checks for this target' : 'Verify to enable testing'}
+              title={canRun ? 'Start checks for this target' : 'Verify to enable testing'}
               loading={busy === 'run-checks'}
               onClick={() => void runBoundedChecks()}
             >
-              Run bounded checks
+              Run checks
             </Button>
           ) : null}
         </div>
@@ -231,8 +231,8 @@ export function TargetDetailView({
     target,
     ['eligibility_reason'],
     canRun
-      ? 'Ownership verified and in scope for bounded validation.'
-      : 'Verify ownership and sign the group LOA to unlock bounded validation.'
+      ? 'Ownership verified and in scope for validation.'
+      : 'Verify ownership and sign the group LOA to unlock validation.'
   );
 
   return (
@@ -244,7 +244,7 @@ export function TargetDetailView({
         <MetricCard label="Kind" value={kind} sub="Declared target type" icon={Target} tone="info" />
         <MetricCard label="Expected behavior" value={formatTargetLabel(getString(target, ['expected_behavior', 'expected'], '—'))} sub="Declared expectation" icon={Activity} tone="muted" />
         <MetricCard label="Verification" value={formatTargetLabel(verificationState)} sub="Ownership signal from target API" icon={ShieldCheck} tone={verificationTone(verificationState)} />
-        <MetricCard label="Eligibility" value={formatTargetLabel(eligibility)} sub={canRun ? 'Eligible for bounded checks' : 'Verify to enable testing'} icon={FileCheck2} tone={canRun ? 'success' : 'warn'} />
+        <MetricCard label="Eligibility" value={formatTargetLabel(eligibility)} sub={canRun ? 'Eligible for checks' : 'Verify to enable testing'} icon={FileCheck2} tone={canRun ? 'success' : 'warn'} />
       </div>
 
       <Card>

@@ -2,21 +2,80 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import { cn, DEPLOYMENT_MODE_GAP_MESSAGE } from '../../lib/utils';
 
 const DATA_TABLE_STYLES = `
+.table-wrap:has(> .data-table),
+.table-wrap.data-table-empty-wrap {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--fg), transparent 96%) inset;
+}
+.table-wrap > .data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.table-wrap > .data-table:has(.table-empty-row) {
+  width: 100%;
+  table-layout: fixed;
+}
+.table-wrap .table-empty-row td,
+.table-wrap .table-empty {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
 .table-wrap .data-table .data-table-head th {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
+  height: 44px;
+  padding: 0 var(--space-4);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  letter-spacing: normal;
+  text-transform: none;
   color: var(--fg-2);
-  font-weight: 500;
-  background: color-mix(in oklab, var(--fg), transparent 96%);
-  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: color-mix(in oklab, var(--surface-raised), var(--fg) 2%);
+  border-bottom: 1px solid var(--border-strong);
+}
+.table-wrap .data-table .data-table-head th:first-child {
+  border-top-left-radius: calc(var(--radius-lg) - 1px);
+}
+.table-wrap .data-table .data-table-head th:last-child {
+  border-top-right-radius: calc(var(--radius-lg) - 1px);
+}
+.table-wrap .data-table tbody td {
+  min-height: 52px;
+  padding: 13px var(--space-4);
+  border-bottom-color: var(--border-soft);
+  background: var(--surface);
+  transition: background var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
 }
 .table-wrap .data-table tbody tr.table-row-zebra td {
-  background: color-mix(in oklab, var(--fg), transparent 98%);
+  background: color-mix(in oklab, var(--surface), var(--fg) 1.6%);
 }
+.table-wrap .data-table tbody tr:hover td,
 .table-wrap .data-table tbody tr.table-row-zebra:hover td {
-  background: color-mix(in oklab, var(--accent), transparent 97%);
+  background: color-mix(in oklab, var(--surface), var(--accent) 5%);
+}
+.table-wrap .data-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: calc(var(--radius-lg) - 1px);
+}
+.table-wrap .data-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: calc(var(--radius-lg) - 1px);
+}
+.table-wrap .data-table tbody .btn-sm {
+  min-height: 34px;
+  padding-block: 0;
+}
+@media (max-width: 700px) {
+  .table-wrap:has(> .data-table) {
+    border-radius: var(--radius-md);
+  }
+  .table-wrap .data-table .data-table-head th,
+  .table-wrap .data-table tbody td {
+    padding-inline: var(--space-3);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .table-wrap .data-table tbody tr td {
@@ -159,17 +218,19 @@ export function DataTable<T>({
   if (items.length === 0) {
     const failed = Boolean(loadError && loadError.trim());
     return (
-      <DataTableChrome columns={columns} className={className}>
-        <tbody>
-          <tr className="table-empty-row">
-            <td colSpan={columns.length}>
-              <div className="table-empty">
-                {failed ? <TableLoadError message={String(loadError).trim()} onRetry={onRetry} /> : empty}
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </DataTableChrome>
+      <>
+        <style>{DATA_TABLE_STYLES}</style>
+        <div
+          className={cn('table-wrap data-table-empty-wrap', className)}
+          tabIndex={0}
+          role="region"
+          aria-label="Data table, empty"
+        >
+          <div className="table-empty">
+            {failed ? <TableLoadError message={String(loadError).trim()} onRetry={onRetry} /> : empty}
+          </div>
+        </div>
+      </>
     );
   }
 

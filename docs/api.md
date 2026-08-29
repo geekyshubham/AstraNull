@@ -7,6 +7,7 @@ This document defines the **production API contract** for AstraNull and records 
 | Mode | Use | Production |
 |---|---|---|
 | **OIDC JWT (`oidc-jwt`)** | `Authorization: Bearer <RS256 compact JWT>` from enterprise IdP | **Default human auth** when `NODE_ENV=production` (or set `ASTRANULL_AUTH_MODE=oidc-jwt`). Verifier requires RS256, `kid`, and RSA signing JWKS keys (`kty`, optional `use`, optional `alg`); JWKS fetch uses a bounded timeout (`ASTRANULL_OIDC_JWKS_FETCH_TIMEOUT_MS`) and **does not follow HTTP redirects**; production startup requires **HTTPS** `ASTRANULL_OIDC_JWKS_URL`. Validates issuer, audience, strict numeric `exp`, optional numeric `nbf`, and maps tenant/user/role claims to AstraNull RBAC. **Not** valid on agent or probe-worker routes. |
+| **Password credential lane** | Public `POST /v1/auth/login` and one-time setup at `POST /v1/auth/set-password`; successful login mints the deployment's existing customer bearer-session format | **Additive and feature-gated** — it does not replace or relax OIDC, bundled-staging, or production auth-mode gates. The current minters support non-production `signed-session` and bundled staging OIDC only; a deployment without one fails closed with `503 password_login_unavailable`. MFA, recovery, and invite email delivery remain production blockers. |
 | **Signed session (`signed-session`)** | HMAC bearer token (`asn1.<payload>.<sig>`) minted with `ASTRANULL_SESSION_SECRET` | **Non-production only** — local tests and operator flows; refused at startup when `NODE_ENV=production`. Not a production IdP. |
 | **Bearer agent credential + production gateway mTLS fingerprint** | `POST /v1/agents/register` → `agc_v1.…` (`agc_v1.<tenantB64>.<agentIdB64>.<random>`) on heartbeat, jobs, observations; legacy opaque `agc_…` still accepted in dev JSON store | **Required** — full credential verified against stored `credential_salt` / `credential_hash`; in production `ASTRANULL_AGENT_IDENTITY_MODE=gateway-mtls` requires a forwarded client certificate SHA-256 fingerprint matching the registered agent fingerprint |
 | **Service account token** | `Authorization: Bearer svc_…` on `/v1/*` and `/internal/*` (not agent or probe-worker routes) | **Built-in automation boundary** — tenant-bound, revocable, scoped; secret shown once at create/rotate as `svc_v1.…` with embedded tenant/account id hints (salted hash of full secret stored; legacy opaque `svc_…` still accepted in dev store). Works independently of human auth mode (`oidc-jwt`, `signed-session`, `dev-headers`). Not a substitute for agent credentials or probe-worker HMAC. |
@@ -27,13 +28,22 @@ This document defines the **production API contract** for AstraNull and records 
 
 `resolveAuthMode()` defaults to `oidc-jwt` when `NODE_ENV=production`. `loadRuntimeConfig()` refuses both `dev-headers` and `signed-session` in production.
 
+### Password authentication configuration
+
+| Variable / public key | Contract |
+|---|---|
+| `ASTRANULL_PASSWORD_LOGIN_ENABLED` | Optional strict `1` / `0` feature flag. When unset, defaults to enabled only for `signed-session` or `oidc-jwt` with bundled staging OIDC enabled; otherwise defaults off. Enabling it never bypasses the production refusal of `dev-headers` or `signed-session`. |
+| `password_login_enabled` | Exact top-level boolean returned by `GET /v1/public/site-config`; clients use it to decide whether to offer the password lane. A missing injected service or unavailable session minter still fails closed at request time with `503`. |
+
+Passwords are stored only as salted scrypt verifiers in the canonical format `scrypt$N=16384,r=8,p=1$<saltB64url>$<hashB64url>` (16-byte random salt, 32-byte derived key). Plaintext passwords and invite tokens are never persisted or audited; invite records store only a SHA-256 token digest. The schema and migration force tenant RLS on `user_credentials` and `user_password_invites`.
+
 Agent calls use `Authorization: Bearer <agc_v1.…>` (or legacy `agc_…` in dev store) on agent-scoped routes. Newly issued credentials embed tenant and agent id lookup hints; verification still uses the full secret against stored salt/hash. Invalid addressed `agc_v1` bearer auth audits `agent.auth_denied` only when a matching `(tenant_id, agent_id)` agent row exists; nonexistent or mismatched hints return `401` without tenant-local audit. Unknown legacy opaque route agents return `401` without audit; invalid legacy opaque for an existing route agent still audits under the confirmed tenant. Production defaults `ASTRANULL_AGENT_IDENTITY_MODE` to `gateway-mtls` and refuses bearer-only mode; the gateway must forward the verified client certificate fingerprint in `x-client-cert-fingerprint`, `x-astranull-client-cert-fingerprint`, or `x-forwarded-client-cert-sha256`, and it must match the agent fingerprint captured at registration. Packaged agents default to HTTPS control-plane URLs (`ASTRANULL_API_URL`); localhost HTTP requires `--allow-insecure-localhost-api` or `ASTRANULL_ALLOW_INSECURE_LOCALHOST_API=1` (developer validation only). Packaged installs persist registration identity at `/var/lib/astranull/identity.json` (`0700` directory / `0600` file; override with `--identity` or `ASTRANULL_AGENT_IDENTITY`). Shipped generic Linux tarballs are validated to block server-side `src/*` imports (packaged source-isolation test). Automation uses `Authorization: Bearer <svc_…>` where human OIDC JWTs are not appropriate; effective access requires both the service account **role** and an explicit **scope** (or `*` for admin-only accounts).
 
 Unless noted, responses are JSON. Errors use `{ "error": "<code>", "message"?: "…" }` with HTTP 4xx/5xx.
 
 ## Safety notes (all endpoints)
 
-- No endpoint starts unmanaged DDoS traffic. Safe checks use bounded probes. `ASTRANULL_PROBE_MODE=simulation` (default outside production) runs metadata-only `SAFE_PROBE_SIMULATION` in-process for developer validation and CI only; startup **refuses** explicit `simulation` when `NODE_ENV=production`. Production defaults to `signed-worker` so external workers consume HMAC-signed jobs via `/internal/probe/*`. Deploying and operating the probe fleet remains a release blocker.
+- Validation checks use governed probe profiles. `ASTRANULL_PROBE_MODE=simulation` (default outside production) runs metadata-only `SAFE_PROBE_SIMULATION` in-process for developer validation and CI only; startup **refuses** explicit `simulation` when `NODE_ENV=production`. Production defaults to `signed-worker` so external workers consume HMAC-signed jobs via `/internal/probe/*`. Deploying and operating the probe fleet remains a release blocker.
 - High-scale **start** must invoke **governed** execution adapters only (SOC role, approved pack, schedule window). `ASTRANULL_HIGH_SCALE_ADAPTER_MODE` defaults to `governed-adapter` in production and `dry-run` outside production; `dry-run` is refused when `NODE_ENV=production`. Developer validation uses adapter dry-run metadata — **production release blocker**: partner/internal governed adapter.
 - Event ingestion rejects `packet_payload` and `raw_packet`.
 - Agent observation ingestion requires a matching **acked** `agent_job_id` (job poll/ack proof); rejects raw packet/log/header/body payload fields; stores **metadata only** after `redactObject`.
@@ -62,7 +72,9 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | GET | `/ready` | — | Readiness for deploy gates: `{ status, service, auth_mode, persistence, probe_mode, probe_worker_secret_configured, timestamp }` (no secrets or database URLs); `503` with `status: not_ready` when the store is unavailable. |
 | GET | `/metrics` | — | Metrics endpoint. The in-process route is unauthenticated; production deployments must restrict scrape access at the gateway/network layer per observability policy. |
 | GET | `/`, `/react-app.js`, `/react-app.css` | — | React SPA shell and bundle assets. |
-| GET | `/v1/public/site-config` | — | Public landing/login/signup configuration with no secrets. |
+| GET | `/v1/public/site-config` | — | Public landing/login/signup configuration with no secrets, including exact top-level boolean `password_login_enabled`. |
+| POST | `/v1/auth/login` | — | Feature-gated customer password exchange; stored user tenant/role are authoritative. |
+| POST | `/v1/auth/set-password` | — | Feature-gated one-time invite consumption and password setup; does not log the user in. |
 | POST | `/v1/auth/bundled-staging-login` | — | Bundled staging login exchange for hosted/local staging. Not a production enterprise IdP substitute. |
 | POST | `/v1/signup-requests` | — | Public account request intake. Returns `201 { request }`, `400 validation_failed`, `403 signup_disabled`, `409 duplicate_request`, or `429 rate_limited`. |
 | GET | `/v1/signup-requests/:id` | — | Public-safe signup request status (`{ request }`) or `404`. |
@@ -70,6 +82,72 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | GET | `/v1/checks` | — | Global check catalog. **Production gate:** tenant-aware RBAC if catalog is customized per tenant. |
 | GET | `/v1/state` | `tenant:read` | Dashboard aggregate. In `postgres` mode uses `runtime.services.state.getState` (evidence-backed readiness from Postgres repositories); high-scale counts and kill-switch state return explicit not-wired metadata until those route families migrate. |
 | GET | `/v1/placement/reviews` | `target_group:read` | Optional query `target_group_id`. Metadata-only per-target-group placement diagnostics (`proven`, `needs_baseline`, `missing_agent`, `misplaced_risk`) with summary counts, bound/online agent ids, recent observation counts, and warnings. `404` `not_found` when `target_group_id` is not declared for the tenant. Postgres mode uses `runtime.services.placement.listPlacementReviews`. |
+
+## Password login and one-time setup
+
+Both routes are unauthenticated, JSON-only, bounded by `ASTRANULL_MAX_JSON_BODY_BYTES`, protected by the API-wide limiter, and additionally protected by password-auth client/email buckets. They are additive to the bundled staging exchange: existing bundled-login feature gates and production refusals are unchanged. Error bodies below do not include the service's internal numeric `status` field.
+
+### `POST /v1/auth/login`
+
+Request:
+
+```json
+{
+  "email": "person@example.com",
+  "password": "the account password (1-200 characters at this boundary)",
+  "tenant_id": "optional-tenant-id"
+}
+```
+
+`email` is trimmed and lowercased. `tenant_id` only scopes account lookup; it never supplies identity or authorization. Any client-supplied `role` is ignored. Without `tenant_id`, exactly one matching tenant is required; the session's `tenant_id`, `user_id`, and `role` always come from the stored user.
+
+| HTTP | Response | Condition |
+|---|---|---|
+| `200` | `{ "access_token": "…", "token_type": "Bearer", "expires_in": 3600, "principal": "customer", "tenant_id": "…", "user_id": "…", "role": "owner|admin|engineer|soc|auditor|viewer" }` | Correct credential for an active user, no forced change, and an available session minter. |
+| `400` | `{ "error": "validation_failed", "message": "One or more authentication fields are invalid.", "fields": ["email"|"password"|"tenant_id", …] }` | Malformed/missing email, empty or over-200-character password, or invalid optional tenant id. |
+| `400` | `{ "error": "tenant_required", "message": "This email belongs to more than one tenant; tenant_id is required." }` | More than one tenant has the normalized email and no tenant was supplied. |
+| `401` | `{ "error": "invalid_credentials", "message": "Email or password is incorrect." }` | Unknown user, wrong tenant, active user without a credential, malformed stored verifier, or wrong password. Unknown users, missing credentials, and wrong passwords deliberately share this exact response and comparable scrypt work; a malformed stored verifier fails safely without process error. |
+| `403` | `{ "error": "password_setup_required", "message": "Set a password using the current invitation before signing in." }` | Stored user is still `invited`. |
+| `403` | `{ "error": "account_disabled", "message": "This account is disabled." }` | Stored user is not active or invited. |
+| `403` | `{ "error": "password_change_required", "message": "The password must be changed before this account can sign in." }` | Correct credential has `must_change=true`. |
+| `423` | `{ "error": "account_locked", "message": "The account is temporarily locked. Try again later.", "retry_after_seconds": <seconds> }` | The fifth consecutive credential failure establishes a 15-minute lock and returns `423`; later attempts while locked also return `423` without scrypt. Header `Retry-After` equals `retry_after_seconds`. A successful login resets the counter and lock. |
+| `429` | `{ "error": "rate_limited", "message": "Too many authentication attempts. Try again later.", "retry_after_seconds": <seconds> }` | Password-auth client/email limiter. Header `Retry-After` is present. The earlier API-wide limiter can instead return `{ "error": "rate_limited" }`, also with `Retry-After`. |
+| `503` | `{ "error": "password_login_unavailable", "message": "Password login cannot mint sessions on this deployment." }` | Credentials are valid but the deployment has no supported customer-session minter. |
+
+Unknown email, ambiguous-email, and pre-lookup client-rate-limit outcomes cannot safely emit a tenant audit event because no tenant has been authenticated. Once lookup establishes a known account, outcomes emit `auth.password_login.succeeded`, `auth.password_login.failed`, or `auth.password_login.locked`; audit metadata never includes the password or verifier.
+
+### `POST /v1/auth/set-password`
+
+Request:
+
+```json
+{
+  "token": "pwi_<one-time-secret>",
+  "password": "a policy-compliant password"
+}
+```
+
+Password policy is 12–200 characters, at least three of lowercase/uppercase/digit/symbol, must not contain the invited email's local part (case-insensitive), and must not be in the built-in common-password denylist.
+
+| HTTP | Response | Condition |
+|---|---|---|
+| `200` | `{ "status": "password_set", "tenant_id": "…", "user_id": "…", "email": "…" }` | The password verifier is upserted, invite consumed, user activated, and lockout/forced-change state reset. This is one Postgres tenant transaction. **No bearer token is returned; the client must call `/v1/auth/login` separately.** |
+| `400` | `{ "error": "validation_failed", "message": "One or more authentication fields are invalid.", "fields": ["token"|"password", …] }` | Missing/empty token or password, token over 2048 characters, or password over 200 characters. |
+| `400` | `{ "error": "weak_password", "message": "The password does not meet the password policy.", "failures": [<code>, …] }` | Policy failure. Endpoint-visible assessment codes are `too_short`, `insufficient_character_classes`, `contains_email_local_part`, and `common_password`; the underlying policy helper also reports `invalid_type` and `too_long`, but the HTTP boundary maps those two cases to `validation_failed` first. |
+| `401` | `{ "error": "invalid_invite", "message": "The password invitation is invalid or has already been used." }` | Token is unknown or consumed, the bound user is missing/disabled, or another request wins the atomic consume race. |
+| `410` | `{ "error": "invite_expired", "message": "The password invitation has expired." }` | Invite expiry is at or before request time, including the transaction-time recheck. |
+| `429` | Same password-auth/API-wide limiter variants described above. | Too many setup attempts from the client bucket. |
+
+### Common route-level failures
+
+| HTTP | Response | Condition |
+|---|---|---|
+| `400` | `{ "error": "invalid_json" }` | Body is not valid JSON. |
+| `403` | `{ "error": "password_login_disabled", "message": "Password login is not enabled on this deployment." }` | Feature flag is off; applies to both login and setup. |
+| `413` | `{ "error": "payload_too_large" }` | Body exceeds `ASTRANULL_MAX_JSON_BODY_BYTES`. |
+| `503` | `{ "error": "password_login_unavailable", "message": "Password authentication is not available on this deployment." }` | Required injected password service method is absent. |
+
+Invite issuance is intentionally a backend service/staff operation, not a new public HTTP endpoint. `issuePasswordInvite` returns the `pwi_…` token once while persisting only its digest and auditing `auth.password.invite_issued`; password setup audits `auth.password.set`. The current slice does not send email. MFA enforcement, invite delivery, password reset/account recovery, a production session-minting integration for this lane, and staging/security/operations evidence remain explicit production blockers.
 
 ## Tenant and environments
 
@@ -86,6 +164,7 @@ When limited, the API returns HTTP `429` with JSON `{ "error": "rate_limited" }`
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
 | GET | `/v1/target-groups` | `target_group:read` | `?archived=true` lists soft-deleted groups only | `{ items, count }` active groups by default (`deleted_at` / `archived_at` null). Each item carries the group row plus summary keys `target_count` (declared targets in the group) and `loa_state` (`signed` when an active LOA signature exists, else `required`). The heavier detail fields (`targets[]`, `runs_recent`, `findings_on_group`) stay on `GET /v1/target-groups/:id`. |
+| GET | `/v1/targets` | `target_group:read` | — | `{ items, count, meta }` tenant-scoped inventory across active target groups. Each row includes target/group/environment identity, expected behavior, latest tenant-bound verification state and provenance, bounded-test eligibility/reason, manual or explicit-import source context, metadata, and `created_at`. It performs no automatic inventory discovery. |
 | POST | `/v1/target-groups` | `target_group:write` | `{ name, environment_id?, description?, timezone?, safe_test_windows?, safety_policy? }` | `201` group. `safe_test_windows`: `[{ start_at, end_at, reason? }]`. `safety_policy`: `{ max_runs_per_hour?, min_seconds_between_runs? }` (defaults `60` / `0`). |
 | GET | `/v1/target-groups/:id` | `target_group:read` | — | Group with `targets[]` plus the detail enrichment both persistence adapters return: `target_count`, `loa_state`, `loa` (`{ state, signer_name, signed_at, custody_digest_sha256 }` or `null`), `runs_recent` (newest 6 by `started_at`), `findings_on_group` (`{ id, target_id, title, severity, status }`, newest 50 by `created_at`), `findings_on_group_total` (integer count of all findings on the group, so a capped list can render "showing 50 of N"), and `meta` empty-state reasons. |
 | PATCH | `/v1/target-groups/:id` | `target_group:write` | partial group fields | Updated group or `404`. |
@@ -135,6 +214,7 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
+| POST | `/v1/waf/edge-detection` | `waf:run` | `{ hostname, timeout_ms? }` — a declared hostname or IP literal only (URLs, credentials, paths, and ports are rejected with `400 invalid_hostname`). | `200 { detection }` — metadata-only passive edge fingerprint: `waf_present`, `cdn_detected`, `best_vendor` (vendor/name/confidence/matched_signals), `vendor_matches`, `address_matches` (cdncheck CDN/WAF CIDR provenance), `cname_matches`, `dns_chain`, `tier: "passive_only"`, `corpus_version`, `requests_sent: 1`, `baseline_status_code`, `request_error_class`, `duration_ms`. Exactly one bounded passive GET is sent to the declared host (no redirects followed, no markers, no attack traffic); block-page signatures are never evaluated on this path. Audits `waf.edge_detection_ran` with metadata-only fields. `timeout_ms` clamps to 250–10000 (default 4000). |
 | GET | `/v1/waf/assets` | `waf:read` | — | `{ items }` tenant-scoped declared WAF assets. |
 | POST | `/v1/waf/assets` | `waf:write` | `{ target_group_id, canonical_url? \| hostname?, target_id?, owner_hint?, expected_waf_required? }` | `201 { asset }`. Discovery candidates cannot be auto-approved through this route. |
 | GET | `/v1/waf/assets/:id` | `waf:read` | — | `{ asset, current_posture? }` or `404`. |

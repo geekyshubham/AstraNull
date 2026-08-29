@@ -23,6 +23,8 @@ function emptyStore() {
     tenants: [],
     environments: [],
     users: [],
+    userCredentials: [],
+    userPasswordInvites: [],
     targetGroups: [],
     targets: [],
     testPolicies: [],

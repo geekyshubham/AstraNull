@@ -1113,81 +1113,495 @@ export function AgentsPage({
   }
 
   return (
-    <div className="content">
-      <PageHeader route="agents" />
+    <div className="content agents-page">
+      <style>{`
+.agents-page .agents-boundary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--elev-ring);
+}
+.agents-page .agents-boundary-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+.agents-page .agents-boundary-item + .agents-boundary-item {
+  border-left: 1px solid var(--border-soft);
+}
+.agents-page .agents-boundary-icon,
+.agents-page .agents-operations-icon {
+  display: grid;
+  width: var(--space-8);
+  height: var(--space-8);
+  place-items: center;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--fg-2);
+}
+.agents-page .agents-boundary-copy,
+.agents-page .agents-card-heading,
+.agents-page .agents-operations-copy,
+.agents-page .agents-secret-copy,
+.agents-page .agents-trust-form-head {
+  min-width: 0;
+}
+.agents-page .agents-boundary-copy strong,
+.agents-page .agents-install-flow strong {
+  display: block;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.agents-page .agents-boundary-copy p,
+.agents-page .agents-install-flow p,
+.agents-page .agents-operations-copy p,
+.agents-page .agents-secret-copy p,
+.agents-page .agents-trust-form-head p {
+  max-width: 70ch;
+  margin: var(--space-1) 0 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.agents-page .agents-panel-stack {
+  gap: var(--space-5);
+}
+.agents-page .agents-card-header,
+.agents-page .agents-secret-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.agents-page .agents-card-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.agents-page .agents-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--border-soft);
+}
+.agents-page .agents-summary-grid > div {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+}
+.agents-page .agents-summary-grid dt {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.agents-page .agents-summary-grid dd {
+  margin: var(--space-1) 0 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+.agents-page .agents-summary-grid span {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.agents-page .agents-fleet-table .traffic-path-label,
+.agents-page .agents-trust-table .traffic-path-label {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.agents-page .agents-install-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  list-style: none;
+}
+.agents-page .agents-install-flow li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-4);
+}
+.agents-page .agents-install-flow li + li {
+  border-left: 1px solid var(--border-soft);
+}
+.agents-page .agents-step-index {
+  display: grid;
+  width: var(--space-6);
+  height: var(--space-6);
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.agents-page .agents-bootstrap-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.agents-page .agents-bootstrap-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  gap: var(--space-4);
+  align-items: end;
+}
+.agents-page .agents-bootstrap-controls .field {
+  margin: 0;
+}
+.agents-page .agents-bootstrap-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.agents-page .agents-bootstrap-facts > div {
+  min-width: 0;
+  padding: var(--space-3);
+}
+.agents-page .agents-bootstrap-facts > div + div {
+  border-left: 1px solid var(--border-soft);
+}
+.agents-page .agents-bootstrap-facts dt {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.agents-page .agents-bootstrap-facts dd {
+  overflow: hidden;
+  margin: var(--space-1) 0 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agents-page .agents-secret-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid color-mix(in oklab, var(--warn), transparent 45%);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.agents-page .agents-secret-copy h3,
+.agents-page .agents-operations-copy h2,
+.agents-page .agents-trust-form-head h3 {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+.agents-page .agents-secret-panel .codeblock,
+.agents-page .agents-secret-panel .muted {
+  margin: 0;
+}
+.agents-page .agents-operations-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--proof-surface);
+  padding: var(--space-4) var(--space-5);
+}
+.agents-page .agents-operations-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.agents-page .agents-trust-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(17rem, 0.55fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.agents-page .agents-trust-table {
+  min-width: 0;
+}
+.agents-page .agents-trust-form {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+  padding: var(--space-4);
+}
+.agents-page .agents-trust-form-head {
+  grid-column: 1 / -1;
+}
+@media (max-width: 960px) {
+  .agents-page .agents-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .agents-page .agents-trust-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 760px) {
+  .agents-page .agents-boundary,
+  .agents-page .agents-install-flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agents-page .agents-boundary-item + .agents-boundary-item,
+  .agents-page .agents-install-flow li + li {
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+  .agents-page .agents-bootstrap-controls {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .agents-page .agents-operations-note {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .agents-page .agents-operations-meta {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 520px) {
+  .agents-page .agents-summary-grid,
+  .agents-page .agents-bootstrap-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agents-page .agents-bootstrap-facts > div + div {
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+  .agents-page .agents-card-header,
+  .agents-page .agents-secret-heading {
+    flex-direction: column;
+  }
+}
+      `}</style>
+      <PageHeader
+        route="agents"
+        title="Agent fleet"
+        description="Operate outbound-only observation agents, one-time registration credentials, and signed update trust."
+        actions={(
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={busy === 'refresh'}
+            disabled={busy !== ''}
+            onClick={() => void handleAgentsRefresh()}
+          >
+            Refresh
+          </Button>
+        )}
+      />
       <PageContextSummary>
         <span className="tabular-nums">{data.targetGroups.length}</span>{` ${pluralize(data.targetGroups.length, 'declared group')} · `}
-        <span className="tabular-nums">{data.agents.length}</span>{` ${pluralize(data.agents.length, 'agent')} · `}
-        <span className="tabular-nums">{onlineAgents}</span> online
+        <span className="tabular-nums">{data.agents.length}</span>{` ${pluralize(data.agents.length, 'registered agent')} · `}
+        <span className="tabular-nums">{onlineAgents}</span> reported online
       </PageContextSummary>
       <MutationFeedbackBanner message={message} error={error} />
+
+      <section className="agents-boundary" aria-label="Agent network and placement boundaries">
+        <div className="agents-boundary-item">
+          <span className="agents-boundary-icon" aria-hidden="true"><Network size={17} /></span>
+          <div className="agents-boundary-copy">
+            <strong>Outbound-only control</strong>
+            <p>Agents initiate the HTTPS control channel to AstraNull. No inbound management port or firewall rule is required.</p>
+          </div>
+        </div>
+        <div className="agents-boundary-item">
+          <span className="agents-boundary-icon" aria-hidden="true"><Target size={17} /></span>
+          <div className="agents-boundary-copy">
+            <strong>Placement is evidence</strong>
+            <p>Place each agent inside the observation zone for its declared target group. Registration alone does not prove protected-path visibility.</p>
+          </div>
+        </div>
+      </section>
+
       <Tabs
         value={agentsTab}
-        options={[
-          { id: 'fleet' as const, label: 'Fleet', count: data.agents.length },
-          { id: 'install' as const, label: 'Install' },
-          { id: 'operations' as const, label: 'Operations' }
-        ]}
+        options={AGENT_SURFACE_TABS.map((tab) => ({
+          ...tab,
+          count: tab.id === 'fleet' ? data.agents.length : undefined
+        }))}
         onChange={setAgentsTab}
         className="tabs-wrap"
         ariaLabel="Agents sections"
         getTabId={(id) => `agents-tab-${id}`}
         getPanelId={(id) => `agents-panel-${id}`}
       />
+
       {agentsTab === 'fleet' ? (
-        <div className="stack" role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
-        <SurfaceTableCard
-          title="Installed agents"
-          description="Outbound-only observation agents. They call AstraNull over HTTPS. Click a row to open the agent detail."
-          columns={fleetColumns}
-          items={data.agents}
-          getRowProps={(item) => {
-            const id = getString(item, ['id'], '');
-            return buildDetailHashRowProps(
-              'agent-detail',
-              id,
-              `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`
-            );
-          }}
-          empty={(
-            <EmptyState
-              icon={Bot}
-              title="No agents have registered yet."
-              body="Create a bootstrap token below, then install an outbound-only agent."
-            />
-          )}
-        />
+        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
+          <Card density="compact" className="agents-fleet-summary">
+            <CardHeader className="agents-card-header">
+              <div className="agents-card-heading">
+                <CardTitle>Fleet snapshot</CardTitle>
+                <CardDescription>Counts reflect registered records and returned fields. They are not a readiness verdict.</CardDescription>
+              </div>
+              <Badge tone="muted">Reported data</Badge>
+            </CardHeader>
+            <CardContent>
+              <dl className="agents-summary-grid" aria-label="Agent fleet summary">
+                <div>
+                  <dt>Registered</dt>
+                  <dd>{data.agents.length}</dd>
+                  <span>Agent records</span>
+                </div>
+                <div>
+                  <dt>Reported online</dt>
+                  <dd>{onlineAgents}</dd>
+                  <span>API status is online</span>
+                </div>
+                <div>
+                  <dt>Group-bound</dt>
+                  <dd>{data.agents.filter((agent) => Boolean(getString(agent, ['target_group_id'], ''))).length}</dd>
+                  <span>Target group id present</span>
+                </div>
+                <div>
+                  <dt>Placement declared</dt>
+                  <dd>{data.agents.filter((agent) => {
+                    const placement = getString(agent, ['placement_type', 'placement'], '').toLowerCase();
+                    return Boolean(placement && !['unbound', 'unknown', 'none'].includes(placement));
+                  }).length}</dd>
+                  <span>Placement type present</span>
+                </div>
+              </dl>
+            </CardContent>
+          </Card>
+
+          <SurfaceTableCard
+            title="Registered agents"
+            description="Outbound-only observation agents. Status is shown exactly as reported; readiness requires correlated probe and agent evidence. Select a row for details."
+            columns={fleetColumns}
+            items={data.agents}
+            contentClassName="agents-fleet-table"
+            getRowId={(item, index) => getString(item, ['id'], '') || index}
+            getRowProps={(item) => {
+              const id = getString(item, ['id'], '');
+              return buildDetailHashRowProps(
+                'agent-detail',
+                id,
+                `Open agent ${getString(item, ['hostname', 'name', 'id'], id)} detail`
+              );
+            }}
+            empty={(
+              <EmptyState
+                icon={Bot}
+                title="No agents have registered yet."
+                body="Create a one-time bootstrap token, then deploy an outbound-only agent in the intended observation zone."
+                actionLabel="Open install workflow"
+                onAction={() => setAgentsTab('install')}
+              />
+            )}
+          />
         </div>
       ) : null}
+
       {agentsTab === 'install' ? (
-        <div className="stack" role="tabpanel" id="agents-panel-install" aria-labelledby="agents-tab-install">
-        <Card>
-          <CardHeader>
-            <CardTitle>Bootstrap token</CardTitle>
-            <CardDescription>
-              Pick a token lifetime, then use “Create bootstrap token” below. The one-time secret is shown once — reveal, copy, or revoke it here.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="stack-tight">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
-              <Select
-                label="Token expiry"
-                value={tokenExpiryMinutes}
-                options={TOKEN_EXPIRY_OPTIONS}
-                onChange={setTokenExpiryMinutes}
-                disabled={busy !== ''}
-              />
-            </div>
-            {tokenSecret ? (
-              <Card className="secret-card">
-                <CardHeader>
-                  <CardTitle>One-time bootstrap token secret</CardTitle>
-                  <CardDescription>
-                    Shown once. It is not returned by list APIs and will not be visible after refresh.
-                    {tokenId ? <> Token id <code className="traffic-path-label">{tokenId}</code>.</> : null}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="stack-tight">
+        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-install" aria-labelledby="agents-tab-install">
+          <ol className="agents-install-flow" aria-label="Agent installation sequence">
+            <li>
+              <span className="agents-step-index" aria-hidden="true">1</span>
+              <div>
+                <strong>Choose a short lifetime</strong>
+                <p>The registration secret is limited to one agent and expires at the selected time.</p>
+              </div>
+            </li>
+            <li>
+              <span className="agents-step-index" aria-hidden="true">2</span>
+              <div>
+                <strong>Create and copy once</strong>
+                <p>Create the bootstrap token in the deployment panel, then copy the secret before leaving this page.</p>
+              </div>
+            </li>
+            <li>
+              <span className="agents-step-index" aria-hidden="true">3</span>
+              <div>
+                <strong>Deploy at the observation point</strong>
+                <p>Use the appropriate install path, then verify the returned registration and placement fields in Fleet.</p>
+              </div>
+            </li>
+          </ol>
+
+          <Card className="agents-bootstrap-card">
+            <CardHeader className="agents-card-header">
+              <div className="agents-card-heading">
+                <CardTitle>Bootstrap registration</CardTitle>
+                <CardDescription>
+                  This lifetime applies to the next token created from the deployment panel. The secret is returned only once.
+                </CardDescription>
+              </div>
+              <Badge tone="muted">1 registration</Badge>
+            </CardHeader>
+            <CardContent className="agents-bootstrap-content">
+              <div className="agents-bootstrap-controls">
+                <Select
+                  label="Token expiry"
+                  value={tokenExpiryMinutes}
+                  options={TOKEN_EXPIRY_OPTIONS}
+                  onChange={setTokenExpiryMinutes}
+                  disabled={busy !== ''}
+                />
+                <dl className="agents-bootstrap-facts" aria-label="Bootstrap token scope">
+                  <div>
+                    <dt>Registration limit</dt>
+                    <dd>1 agent</dd>
+                  </div>
+                  <div>
+                    <dt>Target scope</dt>
+                    <dd title={firstGroup ? getString(firstGroup, ['name', 'title', 'id']) : 'Tenant only'}>
+                      {firstGroup ? getString(firstGroup, ['name', 'title', 'id']) : 'Tenant only'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {tokenSecret ? (
+                <section className="agents-secret-panel secret-card" aria-labelledby="bootstrap-secret-title">
+                  <div className="agents-secret-heading">
+                    <div className="agents-secret-copy">
+                      <h3 id="bootstrap-secret-title">One-time bootstrap token secret</h3>
+                      <p>
+                        It is not returned by list APIs and will not be visible after refresh.
+                        {tokenId ? <> Token id <code className="traffic-path-label">{tokenId}</code>.</> : null}
+                      </p>
+                    </div>
+                    <Badge tone={tokenRevoked ? 'danger' : 'warn'}>{tokenRevoked ? 'Revoked' : 'Shown once'}</Badge>
+                  </div>
                   <pre className="codeblock" aria-label="Bootstrap token secret">
                     {tokenRevoked ? 'Token revoked.' : tokenRevealed ? tokenSecret : MASKED_TOKEN_SECRET}
                   </pre>
@@ -1220,23 +1634,43 @@ export function AgentsPage({
                     </Button>
                   </div>
                   {copyNotice ? <p className="muted" role="status" aria-live="polite">{copyNotice}</p> : null}
-                </CardContent>
-              </Card>
-            ) : null}
-          </CardContent>
-        </Card>
-        <AgentInstallMatrix
-          data={data}
-          tokenSecret={tokenSecret}
-          onCreateToken={() => void createBootstrapToken()}
-          createBusy={busy === 'create-bootstrap-token'}
-          actionsDisabled={busy !== ''}
-        />
+                </section>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <AgentInstallMatrix
+            data={data}
+            tokenSecret={tokenSecret}
+            onCreateToken={() => void createBootstrapToken()}
+            createBusy={busy === 'create-bootstrap-token'}
+            actionsDisabled={busy !== ''}
+          />
         </div>
       ) : null}
+
       {agentsTab === 'operations' ? (
-        <div className="stack" role="tabpanel" id="agents-panel-operations" aria-labelledby="agents-tab-operations">
-        <div className="split">
+        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-operations" aria-labelledby="agents-tab-operations">
+          <section className="agents-operations-note" aria-labelledby="signed-release-boundary-title">
+            <span className="agents-operations-icon" aria-hidden="true"><ShieldCheck size={17} /></span>
+            <div className="agents-operations-copy">
+              <h2 id="signed-release-boundary-title">Signed release boundary</h2>
+              <p>Rollouts reference signed manifests; the trust inventory controls which update-signing public keys agents accept.</p>
+            </div>
+            <div className="agents-operations-meta" aria-label="Release and trust key counts">
+              {auxLoading ? (
+                <Badge tone="muted">Loading controls</Badge>
+              ) : (
+                <>
+                  <Badge tone="muted">{updateReleases.length} {pluralize(updateReleases.length, 'release')}</Badge>
+                  <Badge tone="muted">
+                    {trustKeys.filter((key) => getString(key, ['status']) === 'active').length} active {pluralize(trustKeys.filter((key) => getString(key, ['status']) === 'active').length, 'key')}
+                  </Badge>
+                </>
+              )}
+            </div>
+          </section>
+
           <SurfaceTableCard
             title="Release rollout"
             description="Tenant agent release rollouts. Agents pull signed updates over the outbound channel. Request rollback to move eligible agents to the previous signed version."
@@ -1244,6 +1678,7 @@ export function AgentsPage({
             items={updateReleases}
             loading={auxLoading}
             loadingLabel="Loading agent releases"
+            getRowId={(item, index) => getString(item, ['id'], '') || index}
             empty={(
               <EmptyState
                 icon={Bot}
@@ -1252,39 +1687,54 @@ export function AgentsPage({
               />
             )}
           />
-          <Card>
-            <CardHeader>
-              <CardTitle>Trust keys</CardTitle>
-              <CardDescription>
-                Ed25519 signing keys that agents trust for update manifests. Revoking a key makes agents reject updates signed with it.
-              </CardDescription>
+
+          <Card className="agents-trust-card">
+            <CardHeader className="agents-card-header">
+              <div className="agents-card-heading">
+                <CardTitle>Update trust keys</CardTitle>
+                <CardDescription>
+                  Ed25519 public keys accepted for update manifests. Revoking a key makes agents reject updates signed with it.
+                </CardDescription>
+              </div>
+              {!auxLoading ? (
+                <Badge tone="muted">
+                  {trustKeys.filter((key) => getString(key, ['status']) === 'active').length} active
+                </Badge>
+              ) : null}
             </CardHeader>
-            <CardContent className="product-form stack">
-              {auxLoading ? (
-                <TableSkeleton rows={2} label="Loading trust keys" />
-              ) : (
-                <DataTable
-                  columns={trustKeyColumns}
-                  items={trustKeys}
-                  empty={(
-                    <EmptyState
-                      icon={KeyRound}
-                      title="No trust keys registered."
-                      body="Add the public key from your agent update signing ceremony."
-                    />
-                  )}
-                />
-              )}
-              <form className="product-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
+            <CardContent className="agents-trust-layout">
+              <div className="agents-trust-table" aria-busy={auxLoading || undefined}>
+                {auxLoading ? (
+                  <TableSkeleton rows={2} label="Loading trust keys" />
+                ) : (
+                  <DataTable
+                    columns={trustKeyColumns}
+                    items={trustKeys}
+                    getRowId={(item, index) => getString(item, ['id'], '') || index}
+                    empty={(
+                      <EmptyState
+                        icon={KeyRound}
+                        title="No trust keys registered."
+                        body="Add the public key from your agent update signing ceremony."
+                      />
+                    )}
+                  />
+                )}
+              </div>
+
+              <form className="product-form agents-trust-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
+                <div className="agents-trust-form-head">
+                  <h3>Register a public key</h3>
+                  <p>Add the DER base64 public key produced by the governed update-signing workflow.</p>
+                </div>
                 <label><span>Key name</span><input name="name" placeholder="production signing key" /></label>
-                <label className="full"><span>Public key (DER base64)</span><textarea name="public_key_der_base64" rows={3} placeholder="MCowBQYDK2VwAyEA…" required /></label>
+                <label className="full"><span>Public key (DER base64)</span><textarea name="public_key_der_base64" rows={4} placeholder="MCowBQYDK2VwAyEA…" required /></label>
                 <div className="form-actions full">
                   <Button type="submit" loading={busy === 'add-trust-key'} disabled={busy !== ''}>Register trust key</Button>
                 </div>
               </form>
             </CardContent>
           </Card>
-        </div>
         </div>
       ) : null}
     </div>
@@ -1405,7 +1855,7 @@ export function ValidationSurfacePage({
     const targetGroupId = getString(firstGroup, ['id'], '');
     const resolvedCheckId = checkId ?? getString(safeCheck ?? {}, ['check_id'], '');
     if (!targetGroupId || !resolvedCheckId) {
-      setError('Declare a target group and safe check before starting a run.');
+      setError('Declare a target group and check before starting a run.');
       return;
     }
     setError('');
@@ -1441,7 +1891,7 @@ export function ValidationSurfacePage({
     await runAction(setBusy, setError, setMessage, 'start-safe-run', () => requestJson(config, session, '/v1/test-runs', {
       method: 'POST',
       body: { target_group_id: pending.targetGroupId, target_id: pending.targetId, check_id: pending.checkId }
-    }), 'Safe validation run started.', onRefresh);
+    }), 'Validation run started.', onRefresh);
     setPendingSafeRun(null);
   }
 
@@ -1799,12 +2249,12 @@ export function ValidationSurfacePage({
         ) : null}
         {!canStartRun && startDisabledReason ? (
           <div className="form-banner neutral" role="note">
-            Start a safe run from “Run safe checks” above once ready — {startDisabledReason}
+            Start a run from “Run checks” above once ready — {startDisabledReason}
           </div>
         ) : null}
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
-          <CardHeader><CardTitle>Recent runs</CardTitle><CardDescription>safe runs · click a row to open the correlated verdict</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Recent runs</CardTitle><CardDescription>runs · click a row to open the correlated verdict</CardDescription></CardHeader>
           <CardContent>
             <DataTable
               columns={runColumns}
@@ -1816,7 +2266,7 @@ export function ValidationSurfacePage({
               empty={renderFriendlyEmptyState({
                 icon: Activity,
                 title: 'No test runs yet.',
-                body: 'Start a safe validation run after declaring target scope.',
+                body: 'Start a validation run after declaring target scope.',
                 actionLabel: 'Start safe run',
                 onAction: () => void startSafeRun()
               })}
@@ -1827,7 +2277,7 @@ export function ValidationSurfacePage({
         </Card>
         <ConfirmModal
           open={Boolean(pendingSafeRun)}
-          title="Start a safe validation run?"
+          title="Start a validation run?"
           description={(
             <>
               <p>Target group: {pendingSafeRun?.groupLabel}</p>
@@ -1835,7 +2285,7 @@ export function ValidationSurfacePage({
               <p>Check: {pendingSafeRun?.checkLabel}</p>
             </>
           )}
-          confirmLabel="Start safe run"
+          confirmLabel="Start run"
           confirmTone="default"
           busy={busy === 'start-safe-run'}
           onCancel={() => setPendingSafeRun(null)}

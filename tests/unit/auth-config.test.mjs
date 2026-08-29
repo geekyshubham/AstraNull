@@ -25,11 +25,13 @@ afterEach(() => {
 describe('runtime auth config', () => {
   it('defaults to dev-headers when NODE_ENV is not production', () => {
     delete process.env.ASTRANULL_AUTH_MODE;
+    delete process.env.ASTRANULL_PASSWORD_LOGIN_ENABLED;
     delete process.env.ASTRANULL_NO_PERSIST;
     process.env.NODE_ENV = 'test';
     assert.equal(resolveAuthMode(), 'dev-headers');
     const cfg = loadRuntimeConfig();
     assert.equal(cfg.authMode, 'dev-headers');
+    assert.equal(cfg.passwordLoginEnabled, false);
     assert.equal(cfg.sessionSecret, null);
     assert.equal(cfg.maxJsonBodyBytes, 65536);
     assert.equal(cfg.shutdownGraceMs, 30000);
@@ -212,6 +214,19 @@ describe('runtime auth config', () => {
     process.env.ASTRANULL_AUTH_MODE = 'signed-session';
     delete process.env.ASTRANULL_SESSION_SECRET;
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_SESSION_SECRET/);
+  });
+
+  it('defaults password login on for a session minter and honours strict overrides', () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ASTRANULL_AUTH_MODE = 'signed-session';
+    process.env.ASTRANULL_SESSION_SECRET = TEST_SECRET;
+    delete process.env.ASTRANULL_PASSWORD_LOGIN_ENABLED;
+    assert.equal(loadRuntimeConfig().passwordLoginEnabled, true);
+
+    process.env.ASTRANULL_PASSWORD_LOGIN_ENABLED = '0';
+    assert.equal(loadRuntimeConfig().passwordLoginEnabled, false);
+    process.env.ASTRANULL_PASSWORD_LOGIN_ENABLED = 'yes';
+    assert.throws(() => loadRuntimeConfig(), /ASTRANULL_PASSWORD_LOGIN_ENABLED must be 1 or 0/);
   });
 
   it('requires OIDC settings for oidc-jwt mode', () => {

@@ -7,6 +7,7 @@ export type RouteId =
   | 'environments'
   | 'environment-detail'
   | 'target-groups'
+  | 'targets'
   | 'target-group-detail'
   | 'target-detail'
   | 'agents'
@@ -39,6 +40,7 @@ export type PortalDataset =
   | 'tenant'
   | 'deploymentFeatures'
   | 'targetGroups'
+  | 'targets'
   | 'agents'
   | 'checks'
   | 'testPolicies'
@@ -89,7 +91,8 @@ export const PORTAL_ROUTE_DATASETS = {
   environments: ['targetGroups', 'agents', 'runs', 'findings'],
   'environment-detail': ['targetGroups', 'agents', 'checks', 'runs', 'findings'],
   'target-groups': ['targetGroups', 'runs'],
-  'target-group-detail': ['targetGroups', 'agents', 'checks', 'connectors'],
+  targets: ['targets', 'targetGroups'],
+  'target-group-detail': ['targetGroups', 'agents', 'checks', 'testPolicies', 'connectors'],
   'target-detail': [],
   agents: ['targetGroups', 'agents', 'releaseEvidence'],
   'agent-detail': ['agents', 'audit', 'checks', 'runs'],
@@ -104,7 +107,7 @@ export const PORTAL_ROUTE_DATASETS = {
   'evidence-detail': ['evidence', 'findings'],
   reports: ['reports', 'audit'],
   'report-detail': ['targetGroups', 'runs', 'findings', 'reports'],
-  integrations: ['connectors', 'secrets'],
+  integrations: ['connectors', 'secrets', 'targetGroups'],
   notifications: ['notifications'],
   audit: ['audit'],
   'release-evidence': ['releaseEvidence', 'releaseAttestation'],
@@ -143,6 +146,8 @@ export type PortalConfig = {
   authMode: string;
   siteConfig: Record<string, unknown>;
   bundledLoginEnabled: boolean;
+  /** Server offers the credential lane: POST /v1/auth/login + /v1/auth/set-password. */
+  passwordLoginEnabled: boolean;
   loginUrl: string;
   portalPath: string;
   staffLoginPath: string;
@@ -200,6 +205,8 @@ export type PortalData = {
   tenant: DataItem | null;
   targetGroups: DataItem[];
   targetGroupsMeta: DataItem | null;
+  targets: DataItem[];
+  targetsMeta: DataItem | null;
   agents: DataItem[];
   checks: DataItem[];
   testPolicies: DataItem[];

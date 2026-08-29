@@ -8,7 +8,7 @@ Route WAF posture findings and recommendations to the tools teams already use.
 
 AstraNull should group related findings into action items to reduce ticket noise.
 
-Action items are persisted in dev-json and Postgres with tenant-scoped storage and dedupe on `(tenant_id, waf_asset_id, primary_reason)` when a WAF asset is linked. `buildRemediationPayload` produces redacted connector payloads for Jira, ServiceNow, Splunk HEC, Sentinel, XSOAR, Slack, Teams, email, and generic webhook shapes. Outbound delivery is **safe-by-default** through `src/lib/remediationDelivery.mjs` and `POST /v1/waf/action-items/:id/deliver` (defaults to `dry_run` / metadata-only preview; no network I/O unless delivery mode and destination are explicitly configured).
+Action items are persisted in dev-json and Postgres with tenant-scoped storage and dedupe on `(tenant_id, waf_asset_id, primary_reason)` when a WAF asset is linked. `buildRemediationPayload` produces redacted connector payloads for Jira, ServiceNow, Splunk HEC, Sentinel, XSOAR, Slack, Teams, email, and generic webhook shapes. Outbound delivery is **opt-in by default** through `src/lib/remediationDelivery.mjs` and `POST /v1/waf/action-items/:id/deliver` (defaults to `dry_run` / metadata-only preview; no network I/O unless delivery mode and destination are explicitly configured).
 
 | Field | Meaning |
 |---|---|

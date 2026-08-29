@@ -214,6 +214,7 @@ const BASE_STATIC_ROUTE_ALIASES = {
   '/reports': '/index.html',
   '/run-detail': '/index.html',
   '/runs': '/index.html',
+  '/set-password': '/index.html',
   '/settings': '/index.html',
   '/signup': '/index.html',
   '/signup.html': '/index.html',

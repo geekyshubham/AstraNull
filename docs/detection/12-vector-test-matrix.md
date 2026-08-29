@@ -8,7 +8,7 @@ This matrix defines what AstraNull should validate. It intentionally describes d
 |---|---|---|
 | S0 Config/Declaration | Customer | No traffic or only metadata validation |
 | S1 Single Probe | Customer | One or few labeled packets/requests |
-| S2 Low-Rate Safe | Customer with caps | Bounded non-disruptive validation |
+| S2 Low-Rate Safe | Customer with caps | Customer-runnable validation |
 | S3 Controlled Scenario | SOC approval | Higher sensitivity, strict ROE |
 | S4 High-Scale Simulation | SOC only | Provider/customer authorization and live stop controls required |
 
@@ -128,7 +128,7 @@ The utility reads `CHECK_CATALOG` and validates that:
 
 | Policy class | Required metadata | Runnable? |
 |---|---|---|
-| Customer-runnable (`safe`) | `allowed_payload_type` (bounded `probe_profile.kind`), `max_rate` / `max_duration_seconds`, `approval_level=customer_self_service`, `stop_conditions`, `evidence_required`, signed `probe_profile`, `failure_handling` (remediation/explanation templates) | Yes — bounded safe probes only |
+| Customer-runnable (`safe`) | `allowed_payload_type` (`probe_profile.kind`), `max_rate` / `max_duration_seconds`, `approval_level=customer_self_service`, `stop_conditions`, `evidence_required`, signed `probe_profile`, `failure_handling` (remediation/explanation templates) | Yes — customer-runnable probes per catalog profile |
 | SOC request marker (`soc_gated`) | `approval_level=soc_request_only`, `stop_conditions`, `evidence_required`, `request_marker`; no `probe_profile` or live probe simulation | No — customer may request; SOC approves and executes |
 
 The emitted manifest lists every customer-runnable policy and SOC request marker with validation gaps (if any). The command exits nonzero when gaps exist so vector matrix release review can block promotion until catalog policy metadata is complete.

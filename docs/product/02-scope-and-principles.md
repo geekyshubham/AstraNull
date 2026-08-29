@@ -27,7 +27,6 @@ AstraNull proves DDoS readiness for **customer-declared targets** without requir
 4. **Outbound-only control**: The agent calls AstraNull; AstraNull does not need to connect inbound to the customer network.
 5. **SOC gates risk**: Anything high-scale must be controlled by internal SOC processes.
 6. **Evidence-first UX**: Every page should answer: what was tested, what happened, what proof exists, what should be done next.
-7. **Safe default**: The default test library must be non-disruptive.
 
 ## Product tiers
 

@@ -3,9 +3,11 @@ import {
   Activity,
   Bot,
   CheckCircle2,
+  Cloud,
   ClipboardList,
   FileCheck2,
   FileText,
+  Globe2,
   KeyRound,
   LifeBuoy,
   ListChecks,
@@ -657,8 +659,8 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
   if (!data.runs.some((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))) {
     steps.push({
       key: 'first-run',
-      title: 'Run a bounded safe validation',
-      detail: 'Complete at least one low-volume check to populate readiness evidence.',
+      title: 'Run validation',
+      detail: 'Complete at least one check to populate readiness evidence.',
       href: '#runs',
       tone: 'info'
     });
@@ -912,7 +914,7 @@ function DashboardCorrelationMatrix({
       <EmptyState
         icon={Network}
         title="No declared target groups yet."
-        body="Declare target groups before the correlation matrix can map vector families to bounded verdicts."
+        body="Declare target groups before the correlation matrix can map vector families to verdicts."
         actionHref="#target-groups"
         actionLabel="Open target groups"
       />
@@ -1246,7 +1248,7 @@ export function DashboardPage({
               delta="all heartbeats ≤ 30s"
             />
             <KpiCell
-              label="Last safe run"
+              label="Last run"
               value={lastSafeRunValue}
               delta={lastRun ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount} checks` : 'No runs yet'}
             />
@@ -1284,7 +1286,7 @@ export function DashboardPage({
               <CardHeader>
                 <div>
                   <CardTitle>Recent runs</CardTitle>
-                  <CardDescription>safe-by-default · bounded</CardDescription>
+                  <CardDescription>Recent validation activity</CardDescription>
                 </div>
                 <AnchorButton variant="ghost" size="sm" href="#runs">All runs</AnchorButton>
               </CardHeader>
@@ -1297,7 +1299,7 @@ export function DashboardPage({
                     const id = getString(item, ['id'], '');
                     return id ? detailRowProps('run-detail', id, `Open run ${id} detail`) : {};
                   }}
-                  empty={<EmptyState icon={ListChecks} title="No test runs yet." body="Start a safe validation from Test Runs after declaring scope." actionHref="#runs" actionLabel="Open test runs" />}
+                  empty={<EmptyState icon={ListChecks} title="No test runs yet." body="Start a validation run from Test Runs after declaring scope." actionHref="#runs" actionLabel="Open test runs" />}
                 />
               </CardContent>
             </Card>
@@ -1386,7 +1388,7 @@ export function DashboardPage({
           <Card>
             <CardHeader>
               <CardTitle>Readiness trend</CardTitle>
-              <CardDescription>Score trajectory derived from bounded validation run history.</CardDescription>
+              <CardDescription>Score trajectory derived from validation run history.</CardDescription>
             </CardHeader>
             <CardContent>
               {score === null ? (
@@ -3148,7 +3150,7 @@ export function PolicyPage({
     .sort((left, right) => left.localeCompare(right));
   const nextRunLabel = upcomingRuns.length > 0 ? formatDate(upcomingRuns[0]) : '—';
   const policyCheckOptions: SelectOption[] = [
-    { value: '', label: 'Select safe check' },
+    { value: '', label: 'Select check' },
     ...safeChecks.map((check) => ({
       value: getString(check, ['check_id']),
       label: getString(check, ['name', 'check_id'])
@@ -3285,7 +3287,7 @@ export function PolicyPage({
       return;
     }
     if (!checkId) {
-      setError('Select a safe check from the catalog before creating a policy.');
+      setError('Select a check from the catalog before creating a policy.');
       return;
     }
     const day = String(form.get('safe_window_day') ?? '').trim();
@@ -3312,7 +3314,7 @@ export function PolicyPage({
         });
       }
       setMessage(formatMutationSuccessMessage(
-        `Created ${policyTargetGroupIds.length} test ${policyTargetGroupIds.length === 1 ? 'policy' : 'policies'} from declared scope and safe check catalog.`,
+        `Created ${policyTargetGroupIds.length} test ${policyTargetGroupIds.length === 1 ? 'policy' : 'policies'} from declared scope and check catalog.`,
         lastResult
       ));
       setPolicyTargetGroupIds([]);
@@ -3352,7 +3354,7 @@ export function PolicyPage({
       <PageHeader
         route="test-policies"
         title="Test policies"
-        description="Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
+        description="Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
         actions={
           <>
             <Button
@@ -3370,7 +3372,7 @@ export function PolicyPage({
         <KpiCell
           label="Active schedules"
           value={formatNumber(data.testPolicies.length)}
-          delta={`${safeChecks.length} safe checks bindable`}
+          delta={`${safeChecks.length} checks bindable`}
         />
         <KpiCell
           label="Next run"
@@ -3388,13 +3390,13 @@ export function PolicyPage({
       )}
       <Card className="card--dense">
         <PanelCardHeader
-          title="Safe validation schedules"
+          title="Validation schedules"
           description={
             <>
-              Scheduled bindings between declared target groups and customer-runnable safe checks.
+              Scheduled bindings between declared target groups and customer-runnable checks.
               {' '}
               <span className="muted small">
-                {data.testPolicies.length} active · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
+                {data.testPolicies.length} active · {safeChecks.length} checks · {socGatedChecks.length} SOC-gated
               </span>
             </>
           }
@@ -3415,7 +3417,7 @@ export function PolicyPage({
             empty={renderFriendlyEmptyState({
               icon: ClipboardList,
               title: 'No schedules yet.',
-              body: 'Create a safe validation schedule after declaring target groups and reviewing the safe check catalog.',
+              body: 'Create a validation schedule after declaring target groups and reviewing the check catalog.',
               actionLabel: 'New schedule',
               onAction: () => setShowCreateSchedule(true)
             })}
@@ -3424,8 +3426,8 @@ export function PolicyPage({
       </Card>
       <FormModal
         open={showCreateSchedule}
-        title="Create safe validation schedule"
-        description="Bind a customer-runnable safe check to an active declared target group. SOC-gated checks remain request-only."
+        title="Create validation schedule"
+        description="Bind a customer-runnable check to an active declared target group. SOC-gated checks remain request-only."
         wide
         onClose={() => setShowCreateSchedule(false)}
       >
@@ -3443,7 +3445,7 @@ export function PolicyPage({
                 disabled={data.targetGroups.length === 0 || busy !== ''}
               />
               <Select
-                label="Safe check"
+                label="Check"
                 value={policyCheckId}
                 options={policyCheckOptions}
                 disabled={safeChecks.length === 0}
@@ -3509,6 +3511,245 @@ const CONNECTOR_SNAPSHOT_KIND_OPTIONS = [
   { value: 'vulnerability', label: 'Vulnerability' }
 ] as const;
 
+type DnsProviderDirectoryEntry = {
+  id: string;
+  label: string;
+  mark: string;
+  icon: LucideIcon;
+  backendProvider: 'cloudflare' | 'aws_waf' | 'generic_waf';
+  supportsCredentialPolling: boolean;
+  capability: string;
+  description: string;
+  tone: 'signal' | 'accent' | 'warn' | 'success';
+};
+
+const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
+  {
+    id: 'cloudflare',
+    label: 'Cloudflare',
+    mark: 'CF',
+    icon: Cloud,
+    backendProvider: 'cloudflare',
+    supportsCredentialPolling: true,
+    capability: 'Read-only polling',
+    description: 'Vault-backed polling can collect normalized DNS and edge metadata without making provider changes.',
+    tone: 'accent'
+  },
+  {
+    id: 'route53',
+    label: 'Route 53',
+    mark: 'R53',
+    icon: Network,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic read-only record with operator-supplied DNS-zone snapshots; no live Route 53 credential polling.',
+    tone: 'warn'
+  },
+  {
+    id: 'godaddy',
+    label: 'GoDaddy',
+    mark: 'GD',
+    icon: Globe2,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic read-only record for normalized domain inventory and manual DNS-zone evidence.',
+    tone: 'success'
+  },
+  {
+    id: 'namecheap',
+    label: 'Namecheap',
+    mark: 'NC',
+    icon: Globe2,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic read-only record for normalized domain inventory and manual DNS-zone evidence.',
+    tone: 'signal'
+  },
+  {
+    id: 'hetzner_dns',
+    label: 'Hetzner DNS',
+    mark: 'HZ',
+    icon: ServerCog,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic metadata connector for manually supplied DNS-zone snapshots; no live credential polling.',
+    tone: 'accent'
+  },
+  {
+    id: 'google_cloud_dns',
+    label: 'Google Cloud DNS',
+    mark: 'GCP',
+    icon: Cloud,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic read-only record for normalized cloud DNS metadata; live Cloud DNS polling is not available here.',
+    tone: 'success'
+  },
+  {
+    id: 'azure_dns',
+    label: 'Azure DNS',
+    mark: 'AZ',
+    icon: Cloud,
+    backendProvider: 'generic_waf',
+    supportsCredentialPolling: false,
+    capability: 'Manual metadata',
+    description: 'Generic read-only record for normalized cloud DNS metadata; live Azure DNS polling is not available here.',
+    tone: 'signal'
+  },
+  {
+    id: 'aws',
+    label: 'AWS',
+    mark: 'AWS',
+    icon: Cloud,
+    backendProvider: 'aws_waf',
+    supportsCredentialPolling: true,
+    capability: 'WAF metadata polling',
+    description: 'Vault-backed AWS WAF polling is available; DNS-zone evidence remains a manual metadata workflow.',
+    tone: 'warn'
+  }
+];
+
+const INTEGRATION_PAGE_STYLES = `
+.integration-page .dns-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: var(--space-3);
+}
+.integration-page .dns-provider-card {
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--proof-surface);
+  transition: border-color var(--motion-fast) var(--motion-ease), background var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease);
+}
+.integration-page .dns-provider-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-raised);
+}
+.integration-page .dns-provider-card-head,
+.integration-page .dns-provider-card-footer,
+.integration-page .dns-directory-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.integration-page .dns-provider-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3);
+}
+.integration-page .dns-provider-mark {
+  display: grid;
+  width: var(--space-12);
+  height: var(--space-12);
+  flex: 0 0 var(--space-12);
+  grid-template-rows: 1fr auto;
+  place-items: center;
+  padding: var(--space-2) var(--space-1);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-md);
+  background: var(--signal-soft);
+  color: var(--signal);
+}
+.integration-page .dns-provider-mark[data-tone='accent'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.integration-page .dns-provider-mark[data-tone='warn'] {
+  background: color-mix(in oklab, var(--warn), transparent 88%);
+  color: var(--warn);
+}
+.integration-page .dns-provider-mark[data-tone='success'] {
+  background: color-mix(in oklab, var(--success), transparent 88%);
+  color: var(--success);
+}
+.integration-page .dns-provider-mark span {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: var(--tracking-caps);
+}
+.integration-page .dns-provider-name {
+  min-width: 0;
+}
+.integration-page .dns-provider-name strong {
+  display: block;
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.integration-page .dns-provider-name span,
+.integration-page .dns-provider-record-count {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.integration-page .dns-provider-description {
+  min-height: calc(var(--space-12) + var(--space-2));
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.integration-page .dns-provider-card-footer {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+.integration-page .dns-directory-note {
+  max-width: 72ch;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .integration-page .dns-directory-heading,
+  .integration-page .dns-provider-card-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .integration-page .dns-provider-card-footer .btn {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .integration-page .dns-provider-card {
+    transition: none;
+  }
+}
+`;
+
+function getDirectoryProvider(id: string) {
+  return DNS_PROVIDER_DIRECTORY.find((provider) => provider.id === id) ?? DNS_PROVIDER_DIRECTORY[0];
+}
+
+function connectorDirectoryProvider(connector: DataItem) {
+  const provider = getString(connector, ['provider'], '').toLowerCase();
+  if (provider === 'cloudflare') return getDirectoryProvider('cloudflare');
+  if (provider === 'aws_waf') return getDirectoryProvider('aws');
+  if (provider !== 'generic_waf') return null;
+  const config = getNestedItem(connector, ['config']) ?? getNestedItem(connector, ['config_json']);
+  const ownerHint = getString(config ?? {}, ['owner_hint'], '').toLowerCase();
+  return DNS_PROVIDER_DIRECTORY.find((entry) => entry.backendProvider === 'generic_waf' && entry.id === ownerHint) ?? null;
+}
+
+function formatConnectorProvider(connector: DataItem) {
+  const directoryProvider = connectorDirectoryProvider(connector);
+  if (directoryProvider) return directoryProvider.label;
+  const provider = getString(connector, ['provider'], 'unrecorded');
+  return provider.replaceAll('_', ' ');
+}
+
 export function IntegrationPage({
   data,
   config,
@@ -3521,9 +3762,12 @@ export function IntegrationPage({
   onRefresh: () => Promise<void>;
 }) {
   const [selectedConnectorId, setSelectedConnectorId] = useState('');
+  const [selectedCreateProviderId, setSelectedCreateProviderId] = useState('cloudflare');
+  const [domainTargetGroupId, setDomainTargetGroupId] = useState(() => getString(data.targetGroups[0] ?? {}, ['id'], ''));
   const [showConnectorAdvanced, setShowConnectorAdvanced] = useState(false);
   const [showCreateConnector, setShowCreateConnector] = useState(false);
   const [showManualSnapshot, setShowManualSnapshot] = useState(false);
+  const [showAddDomain, setShowAddDomain] = useState(false);
   const [snapshots, setSnapshots] = useState<DataItem[]>([]);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -3536,14 +3780,33 @@ export function IntegrationPage({
   const selectedConnector =
     activeConnectors.find((connector) => getString(connector, ['id'], '') === selectedConnectorId) ?? activeConnectors[0];
   const effectiveConnectorId = getString(selectedConnector ?? {}, ['id'], '');
+  const selectedCreateProvider = getDirectoryProvider(selectedCreateProviderId);
+  const effectiveDomainTargetGroupId = data.targetGroups.some(
+    (group) => getString(group, ['id'], '') === domainTargetGroupId
+  ) ? domainTargetGroupId : getString(data.targetGroups[0] ?? {}, ['id'], '');
+
+  useEffect(() => {
+    if (effectiveDomainTargetGroupId !== domainTargetGroupId) {
+      setDomainTargetGroupId(effectiveDomainTargetGroupId);
+    }
+  }, [domainTargetGroupId, effectiveDomainTargetGroupId]);
 
   const connectorColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Connector', render: (item) => getString(item, ['name', 'id']) },
-    { key: 'provider', label: 'Provider', render: (item) => <Badge tone="info">{getString(item, ['provider'])}</Badge> },
+    { key: 'provider', label: 'Provider', render: (item) => <Badge tone="info">{formatConnectorProvider(item)}</Badge> },
+    {
+      key: 'mode',
+      label: 'Capability',
+      render: (item) => {
+        const provider = getString(item, ['provider'], '').toLowerCase();
+        const hasCredentialPoll = ['cloudflare', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
+        return <Badge tone={hasCredentialPoll ? 'success' : 'muted'}>{hasCredentialPoll ? 'Credential polling' : 'Manual metadata'}</Badge>;
+      }
+    },
     { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : getString(item, ['status']) === 'error' ? 'danger' : 'muted'}>{getString(item, ['status'])}</Badge> },
     { key: 'last_poll', label: 'Last poll', render: (item) => formatDate(item.last_polled_at ?? item.last_success_at ?? item.last_poll_at) },
     { key: 'poll_errors', label: 'Poll errors', render: (item) => getNumber(item, ['poll_error_count', 'error_count'], 0) },
-    { key: 'secret', label: 'Secret ref', render: (item) => getString(item, ['secret_id'], 'manual snapshots only') },
+    { key: 'secret', label: 'Secret ref', render: (item) => getString(item, ['secret_id'], 'none — manual only') },
     { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
       key: 'actions',
@@ -3551,13 +3814,24 @@ export function IntegrationPage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const status = getString(item, ['status'], '').toLowerCase();
+        const provider = getString(item, ['provider'], '').toLowerCase();
         const isDisabled = status === 'disabled';
+        const canPoll = ['cloudflare', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
         const rowBusy = busy === `validate-${id}` || busy === `poll-${id}` || busy === `snapshots-${id}` || busy === `disable-${id}`;
         const rowBlocked = busy !== '' && !rowBusy;
         return (
           <div className="row-actions row-actions--compact" aria-busy={rowBusy || undefined}>
             <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void validateConnector(id)}>Validate</Button>
-            <Button size="sm" variant="secondary" loading={busy === `poll-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void pollConnector(id)}>Poll</Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={busy === `poll-${id}`}
+              disabled={rowBlocked || isDisabled || !canPoll}
+              title={canPoll ? 'Request a bounded read-only provider poll.' : 'Live polling is unavailable; use a manual metadata snapshot.'}
+              onClick={() => void pollConnector(id)}
+            >
+              Poll
+            </Button>
             <Button size="sm" variant="ghost" loading={busy === `snapshots-${id}`} disabled={rowBlocked} onClick={() => void loadSnapshots(id)}>Snapshots</Button>
             <Button size="sm" variant="danger" loading={busy === `disable-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void disableConnector(id)}>Disable</Button>
           </div>
@@ -3565,6 +3839,19 @@ export function IntegrationPage({
       }
     }
   ];
+
+  function openCreateConnector(providerId = 'cloudflare') {
+    setSelectedCreateProviderId(providerId);
+    setError('');
+    setMessage('');
+    setShowCreateConnector(true);
+  }
+
+  function openAddDomain() {
+    setError('');
+    setMessage('');
+    setShowAddDomain(true);
+  }
 
   async function runAction<T>(label: string, action: () => Promise<T>, success: string) {
     setBusy(label);
@@ -3583,17 +3870,54 @@ export function IntegrationPage({
     }
   }
 
+  async function handleAddSingleDomain(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!effectiveDomainTargetGroupId) {
+      setError('Create a target group before adding a domain.');
+      return;
+    }
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const hostname = String(form.get('hostname') ?? '').trim();
+    const expectedBehavior = String(form.get('expected_behavior') ?? '').trim();
+    if (!hostname) {
+      setError('Hostname is required.');
+      return;
+    }
+    if (!expectedBehavior) {
+      setError('Select the expected behavior for this domain.');
+      return;
+    }
+    const added = await runAction(
+      'add-single-domain',
+      () => requestJson(config, session, `/v1/target-groups/${encodeURIComponent(effectiveDomainTargetGroupId)}/targets`, {
+        method: 'POST',
+        body: {
+          kind: 'fqdn',
+          value: hostname,
+          expected_behavior: expectedBehavior
+        }
+      }),
+      'Domain added to the declared target group.'
+    );
+    if (added) {
+      formElement.reset();
+      setShowAddDomain(false);
+    }
+  }
+
   async function handleCreateConnector(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const provider = String(form.get('provider') ?? 'cloudflare');
+    const directoryProvider = getDirectoryProvider(String(form.get('provider') ?? selectedCreateProviderId));
+    const provider = directoryProvider.backendProvider;
     const name = String(form.get('name') ?? '').trim();
-    const secretInput = String(form.get('secret') ?? '').trim();
-    const externalSecretId = String(form.get('secret_id') ?? '').trim();
+    const secretInput = directoryProvider.supportsCredentialPolling ? String(form.get('secret') ?? '').trim() : '';
+    const externalSecretId = directoryProvider.supportsCredentialPolling ? String(form.get('secret_id') ?? '').trim() : '';
     const resourceRefHash = String(form.get('resource_ref_hash') ?? '').trim();
     const region = String(form.get('region') ?? '').trim();
-    const defaultSnapshotKind = String(form.get('default_snapshot_kind') ?? 'waf_policy');
+    const defaultSnapshotKind = String(form.get('default_snapshot_kind') ?? (provider === 'aws_waf' ? 'waf_policy' : 'dns_zone'));
     if (!name) {
       setError('Connector name is required.');
       return;
@@ -3623,8 +3947,9 @@ export function IntegrationPage({
           config: {
             read_only: true,
             default_snapshot_kind: defaultSnapshotKind,
+            ...(provider === 'generic_waf' ? { owner_hint: directoryProvider.id } : {}),
             ...(provider === 'cloudflare' && resourceRefHash ? { zone_ref_hash: resourceRefHash } : {}),
-            ...(provider === 'aws_waf' && resourceRefHash ? { resource_ref_hash: resourceRefHash } : {}),
+            ...(provider !== 'cloudflare' && resourceRefHash ? { resource_ref_hash: resourceRefHash } : {}),
             ...(provider === 'aws_waf' && region ? { region_summary: region } : {})
           }
         }
@@ -3633,7 +3958,9 @@ export function IntegrationPage({
       if (created.connector?.id) setSelectedConnectorId(String(created.connector.id));
       setShowCreateConnector(false);
       return created;
-    }, 'Connector created from backend API.');
+    }, directoryProvider.supportsCredentialPolling
+      ? 'Read-only connector created from the backend API.'
+      : 'Manual metadata connector created from the backend API.');
   }
 
   async function validateConnector(id: string) {
@@ -3698,69 +4025,133 @@ export function IntegrationPage({
     );
     const nextSnapshots = result && typeof result === 'object' && 'snapshots' in result ? (result as { snapshots?: DataItem[] }).snapshots : null;
     if (Array.isArray(nextSnapshots)) setSnapshots(nextSnapshots);
-    formElement.reset();
-    setShowManualSnapshot(false);
+    if (result) {
+      formElement.reset();
+      setShowManualSnapshot(false);
+    }
   }
 
   return (
-    <div className="content">
+    <div className="content integration-page">
+      <style>{INTEGRATION_PAGE_STYLES}</style>
       <PageHeader
         route="integrations"
-        eyebrow="Connectors"
+        eyebrow="DNS & edge integrations"
         actions={
-          connectorsEnabled ? (
-            <>
-              <Button variant="default" size="sm" onClick={() => setShowCreateConnector(true)}>Add connector</Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={activeConnectors.length === 0}
-                onClick={() => setShowManualSnapshot(true)}
-              >
-                Manual snapshot
-              </Button>
-            </>
-          ) : null
+          <>
+            <Button variant="default" size="sm" disabled={busy !== ''} onClick={openAddDomain}>+ Add single domain</Button>
+            {connectorsEnabled ? (
+              <>
+                <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => openCreateConnector()}>Add connector</Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={activeConnectors.length === 0 || busy !== ''}
+                  onClick={() => {
+                    setError('');
+                    setMessage('');
+                    setShowManualSnapshot(true);
+                  }}
+                >
+                  Manual snapshot
+                </Button>
+              </>
+            ) : null}
+          </>
         }
       />
       <PageContextSummary>
-        <span className="tabular-nums">{data.connectors.length}</span> connectors ·{' '}
-        <span className="tabular-nums">{data.secrets.length}</span> secret refs · WAF posture{' '}
-        {featureFlags?.waf_posture ? 'enabled' : 'off'}
+        <span className="tabular-nums">{DNS_PROVIDER_DIRECTORY.length}</span> DNS provider paths ·{' '}
+        <span className="tabular-nums">{data.connectors.length}</span> connector records · provider access remains optional
       </PageContextSummary>
+      {(message || error) && (
+        <div
+          className={error ? 'form-banner error' : 'form-banner'}
+          role={error ? 'alert' : 'status'}
+          aria-live="polite"
+        >
+          {error || message}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <div className="dns-directory-heading">
+            <div>
+              <CardTitle id="dns-provider-directory-title">DNS provider directory</CardTitle>
+              <CardDescription className="dns-directory-note">
+                Choose an optional read-only metadata path, or add one declared domain without provider credentials. No provider is connected by viewing this directory.
+              </CardDescription>
+            </div>
+            <Badge tone="info">Optional integrations</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="dns-provider-grid" aria-labelledby="dns-provider-directory-title">
+            {DNS_PROVIDER_DIRECTORY.map((provider) => {
+              const ProviderIcon = provider.icon;
+              const configuredCount = data.connectors.filter(
+                (connector) => connectorDirectoryProvider(connector)?.id === provider.id
+              ).length;
+              return (
+                <article className="dns-provider-card" key={provider.id}>
+                  <div className="dns-provider-card-head">
+                    <div className="dns-provider-identity">
+                      <div className="dns-provider-mark" data-tone={provider.tone} aria-hidden="true">
+                        <ProviderIcon size={18} strokeWidth={1.8} />
+                        <span>{provider.mark}</span>
+                      </div>
+                      <div className="dns-provider-name">
+                        <strong>{provider.label}</strong>
+                        <span>DNS / edge metadata</span>
+                      </div>
+                    </div>
+                    <Badge tone={provider.supportsCredentialPolling ? 'info' : 'muted'}>{provider.capability}</Badge>
+                  </div>
+                  <p className="dns-provider-description">{provider.description}</p>
+                  <div className="dns-provider-card-footer">
+                    <span className="dns-provider-record-count tabular-nums">
+                      {configuredCount > 0 ? `${configuredCount} configured` : 'Optional'}
+                    </span>
+                    {connectorsEnabled ? (
+                      <Button size="sm" variant="secondary" onClick={() => openCreateConnector(provider.id)}>
+                        Configure
+                      </Button>
+                    ) : (
+                      <Badge tone="muted">Connector feature off</Badge>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {!connectorsEnabled ? (
         <Card>
           <CardHeader>
-            <CardTitle>Connectors are disabled for this tenant</CardTitle>
-            <CardDescription>Connectors and WAF posture enrichment are disabled for this tenant. Contact support to enable read-only connector features.</CardDescription>
+            <CardTitle>Connector add-on is disabled</CardTitle>
+            <CardDescription>Provider connector records and snapshots are not enabled for this tenant.</CardDescription>
           </CardHeader>
           <CardContent className="callout-list">
-            <CalloutNote icon={ShieldCheck} tone="info">Core DDoS validation still works from declared target groups without cloud credentials.</CalloutNote>
-            <CalloutNote icon={FileCheck2}>Connector credentials must be stored as encrypted secret references before provider polling.</CalloutNote>
+            <CalloutNote icon={ShieldCheck} tone="info">Core DDoS validation and the single-domain workflow continue to work without cloud credentials.</CalloutNote>
+            <CalloutNote icon={FileCheck2}>Contact support only if you need optional read-only connector metadata.</CalloutNote>
           </CardContent>
         </Card>
       ) : (
         <>
-          {(message || error) && (
-            <div
-              className={error ? 'form-banner error' : 'form-banner'}
-              role={error ? 'alert' : 'status'}
-              aria-live="polite"
-            >
-              {error || message}
-            </div>
-          )}
           <Card className="card--dense">
             <PanelCardHeader
               title="Configured connectors"
-              description="Validate, poll, and disable connectors — plaintext credentials are never rendered."
+              description="Validate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered."
               trailing={<Badge tone="info">{data.connectors.length} total</Badge>}
             />
             <CardContent>
               <DataTable
                 columns={connectorColumns}
                 items={data.connectors}
-                empty={<EmptyState icon={PlugZap} title="No connectors configured." body="Create a read-only connector or continue using manual evidence workflows without provider access." />}
+                empty={<EmptyState icon={PlugZap} title="No connectors configured." body="Configure an optional read-only provider record, or keep using declared domains and manual evidence without provider access." />}
               />
             </CardContent>
           </Card>
@@ -3768,7 +4159,7 @@ export function IntegrationPage({
             <Card className="card--dense">
               <PanelCardHeader
                 title="Loaded connector snapshots"
-                description="From poll results or manual metadata ingest."
+                description="Returned by a supported provider poll or manual metadata ingest."
                 trailing={<Badge tone="muted">{snapshots.length}</Badge>}
               />
               <CardContent className="support-evidence-list">
@@ -3784,56 +4175,85 @@ export function IntegrationPage({
               </CardContent>
             </Card>
           ) : null}
+
           <FormModal
             open={showCreateConnector}
-            title="Create read-only connector"
-            description="Store a provider credential in the encrypted secret vault or reference an existing secret, then create a metadata-only connector."
+            title={`Configure ${selectedCreateProvider.label}`}
+            description={selectedCreateProvider.supportsCredentialPolling
+              ? 'Create a read-only connector. A vault-backed credential enables the implemented provider poll worker; a connector without one remains metadata/manual.'
+              : 'Create a generic read-only metadata connector. Live provider credential polling is not implemented for this option.'}
             wide
             onClose={() => setShowCreateConnector(false)}
           >
+            {error ? <div className="form-banner error" role="alert">{error}</div> : null}
             <form className="product-form" onSubmit={handleCreateConnector} aria-busy={busy === 'create-connector' || undefined}>
               <fieldset disabled={busy !== ''}>
                 <label>
                   <span>Provider</span>
-                  <select name="provider" defaultValue="cloudflare">
-                    <option value="cloudflare">Cloudflare</option>
-                    <option value="aws_waf">AWS WAF</option>
+                  <select
+                    name="provider"
+                    value={selectedCreateProviderId}
+                    onChange={(event) => setSelectedCreateProviderId(event.target.value)}
+                  >
+                    {DNS_PROVIDER_DIRECTORY.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.label} — {provider.supportsCredentialPolling ? provider.capability : 'manual metadata'}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label>
-                  <span>Name</span>
-                  <input name="name" placeholder="edge-readonly" required />
+                  <span>Connector name</span>
+                  <input name="name" placeholder={`${selectedCreateProvider.id}-readonly`} required />
                 </label>
-                <label className="full">
-                  <span>API key or credential JSON</span>
-                  <textarea name="secret" rows={4} placeholder='Cloudflare token, or AWS JSON: {"access_key_id":"...","secret_access_key":"...","region":"us-east-1"}' />
-                </label>
-                <p className="muted full">Credentials are stored encrypted in the tenant secret vault before the connector is created. Plaintext is never shown again after submit.</p>
-                {activeConnectors.length > 0 ? (
-                  <details className="full" open={showConnectorAdvanced} onToggle={(event) => setShowConnectorAdvanced((event.currentTarget as HTMLDetailsElement).open)}>
-                    <summary>Advanced options</summary>
+                {selectedCreateProvider.supportsCredentialPolling ? (
+                  <>
+                    <label className="full">
+                      <span>API key or credential JSON</span>
+                      <textarea
+                        name="secret"
+                        rows={4}
+                        placeholder={selectedCreateProvider.backendProvider === 'cloudflare'
+                          ? 'Read-only Cloudflare API token'
+                          : 'Read-only AWS credential JSON'}
+                      />
+                    </label>
+                    <p className="muted full">Credentials are encrypted in the tenant vault and never shown again. Leave blank to keep this connector metadata/manual only.</p>
+                  </>
+                ) : (
+                  <div className="full">
+                    <CalloutNote icon={FileCheck2} tone="info">
+                      {selectedCreateProvider.label} uses the backend&apos;s generic connector contract. Do not enter provider credentials; add normalized metadata with Manual snapshot.
+                    </CalloutNote>
+                  </div>
+                )}
+                <details className="full" open={showConnectorAdvanced} onToggle={(event) => setShowConnectorAdvanced((event.currentTarget as HTMLDetailsElement).open)}>
+                  <summary>Advanced metadata</summary>
+                  {selectedCreateProvider.supportsCredentialPolling ? (
                     <label>
                       <span>Existing secret ref</span>
                       <input name="secret_id" placeholder="secret_..." />
                     </label>
-                    <label>
-                      <span>Resource hash</span>
-                      <input name="resource_ref_hash" placeholder="Optional zone/web ACL hash" />
-                    </label>
+                  ) : null}
+                  <label>
+                    <span>Resource hash</span>
+                    <input name="resource_ref_hash" placeholder="Optional zone or resource hash" />
+                  </label>
+                  {selectedCreateProvider.backendProvider === 'aws_waf' ? (
                     <label>
                       <span>AWS region</span>
                       <input name="region" placeholder="us-east-1" />
                     </label>
-                    <label>
-                      <span>Default snapshot kind</span>
-                      <select name="default_snapshot_kind" defaultValue="waf_policy">
-                        {CONNECTOR_SNAPSHOT_KIND_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </details>
-                ) : null}
+                  ) : null}
+                  <label>
+                    <span>Default snapshot kind</span>
+                    <select name="default_snapshot_kind" defaultValue={selectedCreateProvider.backendProvider === 'aws_waf' ? 'waf_policy' : 'dns_zone'}>
+                      {CONNECTOR_SNAPSHOT_KIND_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </details>
                 <div className="form-actions full">
                   <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowCreateConnector(false)}>Cancel</Button>
                   <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">Create connector</Button>
@@ -3841,27 +4261,29 @@ export function IntegrationPage({
               </fieldset>
             </form>
           </FormModal>
+
           <FormModal
             open={showManualSnapshot}
             title="Manual metadata snapshot"
-            description="Use this when provider polling is unavailable or encryption is not configured locally."
+            description="Use this for generic providers, or whenever credential-backed polling is unavailable. Only normalized metadata is accepted."
             wide
             onClose={() => setShowManualSnapshot(false)}
           >
-            <form className="product-form" onSubmit={handleManualSnapshot}>
+            {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+            <form className="product-form" onSubmit={handleManualSnapshot} aria-busy={busy.startsWith('snapshot-') || undefined}>
               <label className="full">
                 <span>Connector</span>
                 <select value={effectiveConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)}>
                   {activeConnectors.map((connector) => (
                     <option key={getString(connector, ['id'])} value={getString(connector, ['id'])}>
-                      {getString(connector, ['name'])} - {getString(connector, ['provider'])}
+                      {getString(connector, ['name'])} — {formatConnectorProvider(connector)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
                 <span>Snapshot kind</span>
-                <select name="snapshot_kind" defaultValue="waf_policy">
+                <select name="snapshot_kind" defaultValue="dns_zone">
                   {CONNECTOR_SNAPSHOT_KIND_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
@@ -3897,12 +4319,72 @@ export function IntegrationPage({
               </label>
               <div className="form-actions full">
                 <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowManualSnapshot(false)}>Cancel</Button>
-                <Button disabled={busy !== '' || !effectiveConnectorId} type="submit">Ingest snapshot</Button>
+                <Button loading={busy.startsWith('snapshot-')} disabled={busy !== '' || !effectiveConnectorId} type="submit">Ingest snapshot</Button>
               </div>
             </form>
           </FormModal>
         </>
       )}
+
+      <FormModal
+        open={showAddDomain}
+        title="Add single domain"
+        description="Declare one hostname and its expected behavior. This does not discover provider inventory or require cloud credentials."
+        onClose={() => setShowAddDomain(false)}
+      >
+        {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+        {data.targetGroups.length === 0 ? (
+          <EmptyState
+            icon={Target}
+            title="Create a target group first."
+            body="Every declared domain must belong to a customer-defined target group before it can be validated."
+            actionLabel="Open target groups"
+            actionHref="#target-groups"
+          />
+        ) : (
+          <form className="product-form" onSubmit={handleAddSingleDomain} aria-busy={busy === 'add-single-domain' || undefined}>
+            <label className="full">
+              <span>Target group</span>
+              <select
+                name="target_group_id"
+                value={effectiveDomainTargetGroupId}
+                onChange={(event) => setDomainTargetGroupId(event.target.value)}
+              >
+                {data.targetGroups.map((group) => {
+                  const id = getString(group, ['id'], '');
+                  return <option key={id} value={id}>{getString(group, ['name'], id)}</option>;
+                })}
+              </select>
+            </label>
+            <label className="full">
+              <span>Hostname</span>
+              <input
+                name="hostname"
+                className="mono"
+                placeholder="checkout.example.com"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                required
+                autoFocus
+              />
+            </label>
+            <label className="full">
+              <span>Expected behavior</span>
+              <select name="expected_behavior" defaultValue="block_at_edge" required>
+                <option value="block_at_edge">Block at edge</option>
+                <option value="absorb_at_origin">Absorb at origin</option>
+                <option value="rate_shape">Rate shape</option>
+              </select>
+            </label>
+            <p className="muted full">Ownership verification is still required before live external probes can be dispatched.</p>
+            <div className="form-actions full">
+              <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowAddDomain(false)}>Cancel</Button>
+              <Button type="submit" loading={busy === 'add-single-domain'} disabled={busy !== '' || !effectiveDomainTargetGroupId}>Add domain</Button>
+            </div>
+          </form>
+        )}
+      </FormModal>
     </div>
   );
 }
@@ -3998,7 +4480,7 @@ export function SupportPage({ data, session }: { data: PortalData; session: Sess
       <Card>
         <CardHeader>
           <CardTitle>Support workflows</CardTitle>
-          <CardDescription>Customer-safe escalation paths that stay within governed validation boundaries.</CardDescription>
+          <CardDescription>Customer escalation paths within authorized validation boundaries.</CardDescription>
         </CardHeader>
         <CardContent className="row-actions">
           <AnchorButton href="#findings" variant="secondary" size="sm">Review open findings ({openFindings})</AnchorButton>
@@ -4019,25 +4501,168 @@ const ENTITLEMENT_FEATURE_LABELS: Record<(typeof ENTITLEMENT_FEATURES)[number], 
   high_scale_program: 'High-scale program'
 };
 
+const SUBSCRIPTION_PAGE_STYLES = `
+.subscription-page .subscription-plan-heading,
+.subscription-page .subscription-section-heading,
+.subscription-page .subscription-entitlement-pill,
+.subscription-page .subscription-signal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.subscription-page .subscription-plan-heading {
+  align-items: flex-start;
+}
+.subscription-page .subscription-plan-title {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.subscription-page .subscription-plan-title .eyebrow {
+  margin: 0;
+}
+.subscription-page .subscription-plan-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-6);
+}
+.subscription-page .subscription-plan-fact {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+}
+.subscription-page .subscription-plan-fact dt {
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-plan-fact dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.subscription-page .subscription-section + .subscription-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border-soft);
+}
+.subscription-page .subscription-section-heading {
+  align-items: flex-end;
+  margin-bottom: var(--space-3);
+}
+.subscription-page .subscription-section-heading h3,
+.subscription-page .subscription-section-heading p {
+  margin: 0;
+}
+.subscription-page .subscription-section-heading h3 {
+  color: var(--fg);
+  font-size: var(--text-base);
+}
+.subscription-page .subscription-section-heading p {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.subscription-page .subscription-usage-list {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.subscription-page .subscription-usage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4);
+}
+.subscription-page .subscription-usage-row + .subscription-usage-row {
+  border-top: 1px solid var(--border-soft);
+}
+.subscription-page .subscription-usage-copy,
+.subscription-page .subscription-usage-count {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.subscription-page .subscription-usage-copy strong,
+.subscription-page .subscription-usage-count strong {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.subscription-page .subscription-usage-copy span,
+.subscription-page .subscription-usage-count span,
+.subscription-page .subscription-limit-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-usage-count {
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.subscription-page .subscription-usage-row .progress,
+.subscription-page .subscription-limit-note {
+  grid-column: 1 / -1;
+}
+.subscription-page .subscription-signal-grid,
+.subscription-page .subscription-entitlement-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-2);
+}
+.subscription-page .subscription-signal,
+.subscription-page .subscription-entitlement-pill {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+}
+.subscription-page .subscription-signal > div,
+.subscription-page .subscription-entitlement-pill > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.subscription-page .subscription-signal span,
+.subscription-page .subscription-entitlement-pill span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-signal strong,
+.subscription-page .subscription-entitlement-pill strong {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+@media (max-width: 640px) {
+  .subscription-page .subscription-plan-heading,
+  .subscription-page .subscription-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .subscription-page .subscription-usage-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .subscription-page .subscription-usage-row > .badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+`;
+
 function formatEntitlementGrantSource(value: string) {
   if (!value || value === 'plan only') return 'Plan default';
   if (value.startsWith('plan:')) return `Plan default (${value.slice(5)})`;
   return value;
-}
-
-function usageMeter(label: string, used: number, limit: number) {
-  const hasLimit = limit >= 0;
-  const percent = hasLimit && limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  return (
-    <div className="factor" key={label}>
-      <div>
-        <strong>{label}</strong>
-        <span>{hasLimit ? `${used} / ${limit}` : `${used} recorded`}</span>
-      </div>
-      <Badge tone={hasLimit && used >= limit ? 'warn' : 'info'}>{hasLimit ? `${percent}%` : 'unlimited'}</Badge>
-      {hasLimit ? <Progress value={percent} tone={used >= limit ? 'warn' : 'accent'} /> : null}
-    </div>
-  );
 }
 
 export function SubscriptionPage({ data }: { data: PortalData }) {
@@ -4052,60 +4677,57 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
   const entitlementGrants = Array.isArray(subscription?.entitlement_grants) ? subscription.entitlement_grants as DataItem[] : [];
   const hasSubscription = Boolean(subscription);
   const planLabel = hasSubscription ? getString(plan ?? {}, ['name'], getString(subscription ?? {}, ['plan_id'], 'Recorded plan')) : 'Not configured';
+  const readUsage = (key: string) => {
+    const value = usage?.[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  };
   const safeRunsLimit = getNestedNumber(subscription, ['limits', 'safe_runs_per_hour'], -1);
-  const safeRunsUsed = getNumber(usage ?? {}, ['safe_runs_started_last_hour']);
-  const highScaleEnabled = effectiveEntitlements?.high_scale_program === true;
+  const safeRunsUsed = readUsage('safe_runs_started_last_hour');
   const targetGroupLimit = getNestedNumber(subscription, ['limits', 'target_groups'], -1);
-  const targetGroupUsage = getNumber(usage ?? {}, ['target_groups']);
+  const targetGroupUsage = readUsage('target_groups');
   const usersLimit = getNestedNumber(subscription, ['limits', 'users'], -1);
+  const usersUsed = readUsage('users');
   const agentsLimit = getNestedNumber(subscription, ['limits', 'agents'], -1);
-  const agentsUsed = getNumber(usage ?? {}, ['agents']);
-  const subscriptionStatus = getString(subscription ?? {}, ['status'], '—');
+  const agentsUsed = readUsage('agents');
   const highScaleMonthLimit = getNestedNumber(subscription, ['limits', 'high_scale_requests_per_month'], -1);
-  const highScaleMonthUsed = getNumber(usage ?? {}, ['high_scale_requests_this_month']);
-  const highScaleKpiUsed = summary
-    ? (highScaleMonthUsed > 0 ? highScaleMonthUsed : getNumber(usage ?? {}, ['pending_high_scale_requests']))
-    : 0;
-  const planKpiSub = summary ? `${subscriptionStatus} · current plan` : 'current plan';
-  const agentsKpiValue = summary ? (agentsLimit >= 0 ? `${agentsUsed}/${agentsLimit}` : agentsUsed) : '—';
-  const agentsKpiSub = summary ? (agentsLimit >= 0 ? `of ${agentsLimit} licensed` : 'recorded in workspace') : 'of — licensed';
-  const highScaleKpiValue = summary
-    ? (highScaleMonthLimit >= 0 ? `${highScaleKpiUsed}/${highScaleMonthLimit}` : highScaleKpiUsed)
-    : '—';
-  const highScaleKpiSub = summary
-    ? (highScaleMonthLimit >= 0
-      ? 'requests this month'
-      : highScaleEnabled
-        ? 'SOC-gated · program enabled'
-        : 'SOC-gated · program disabled')
-    : 'requests this month';
-  const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], '');
-
-  const subscriptionKpiRow = (
-    <div className="metric-grid three">
-      <MetricCard label="Plan" value={summary ? planLabel : '—'} sub={planKpiSub} icon={ShieldCheck} tone={hasSubscription ? 'info' : 'muted'} />
-      <MetricCard
-        label="Agents used"
-        value={agentsKpiValue}
-        sub={agentsKpiSub}
-        icon={Bot}
-        tone={summary && agentsLimit >= 0 && agentsUsed >= agentsLimit ? 'warn' : 'info'}
-      />
-      <MetricCard
-        label="High-scale / month"
-        value={highScaleKpiValue}
-        sub={highScaleKpiSub}
-        icon={Siren}
-        tone={summary && highScaleMonthLimit >= 0 && highScaleKpiUsed >= highScaleMonthLimit ? 'warn' : 'muted'}
-      />
-    </div>
-  );
+  const highScaleMonthUsed = readUsage('high_scale_requests_this_month');
+  const openFindings = readUsage('open_findings');
+  const pendingHighScale = readUsage('pending_high_scale_requests');
+  const subscriptionStatus = getString(subscription ?? {}, ['status'], 'unrecorded');
+  const highScaleEntitlement = effectiveEntitlements?.high_scale_program;
+  const highScaleLabel = highScaleEntitlement === true ? 'enabled' : highScaleEntitlement === false ? 'disabled' : 'not recorded';
+  const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], 'unassigned');
+  const entitlementRows: DataItem[] = ENTITLEMENT_FEATURES.map((feature) => {
+    const grant = entitlementGrants.find((entry) => getString(entry, ['feature'], '') === feature);
+    const planValue = planEntitlements?.[feature];
+    const effectiveValue = effectiveEntitlements?.[feature];
+    const normalizedPlanValue = typeof planValue === 'boolean' ? planValue : null;
+    const normalizedEffectiveValue = typeof effectiveValue === 'boolean' ? effectiveValue : null;
+    return {
+      feature,
+      plan_enabled: normalizedPlanValue,
+      effective_enabled: normalizedEffectiveValue,
+      grant_source: grant
+        ? getString(grant, ['source'], 'staff grant')
+        : normalizedPlanValue === null ? 'not recorded' : 'plan only'
+    };
+  });
+  const recordedEntitlements = entitlementRows.filter((row) => typeof row.effective_enabled === 'boolean');
+  const enabledEntitlements = recordedEntitlements.filter((row) => row.effective_enabled === true).length;
+  const usageRows = [
+    { label: 'Target groups', description: 'Declared validation scopes', used: targetGroupUsage, limit: targetGroupLimit },
+    { label: 'Users', description: 'Workspace members', used: usersUsed, limit: usersLimit },
+    { label: 'Agents', description: 'Registered observation agents', used: agentsUsed, limit: agentsLimit },
+    { label: 'Runs', description: 'Started in the current hour', used: safeRunsUsed, limit: safeRunsLimit },
+    { label: 'High-scale requests', description: 'Current month · SOC-gated', used: highScaleMonthUsed, limit: highScaleMonthLimit }
+  ];
+  const recordedUsageCount = usageRows.filter((row) => row.used !== null).length;
 
   if (!hasSubscription) {
     return (
-      <div className="content">
+      <div className="content subscription-page">
+        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
         <PageHeader route="subscription" eyebrow="Entitlements" />
-        {subscriptionKpiRow}
         <EmptyState
           icon={LifeBuoy}
           title="No subscription configured for this tenant."
@@ -4121,108 +4743,203 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
   }
 
   return (
-    <div className="content">
-      <PageHeader route="subscription" eyebrow="Entitlements" />
-      {subscriptionKpiRow}
+    <div className="content subscription-page">
+      <style>{SUBSCRIPTION_PAGE_STYLES}</style>
+      <PageHeader route="subscription" eyebrow="Plan & usage" />
       <PageContextSummary>
-        {planLabel} · safe runs{' '}
-        <span className="tabular-nums">{safeRunsUsed}</span>
-        {safeRunsLimit >= 0 ? ` / ${safeRunsLimit}` : ''} per hour · high-scale program{' '}
-        {highScaleEnabled ? 'enabled' : 'disabled'}
+        {planLabel} · runs{' '}
+        <span className="tabular-nums">
+          {safeRunsUsed === null ? 'not recorded' : `${safeRunsUsed}${safeRunsLimit >= 0 ? ` / ${safeRunsLimit}` : ''}`}
+        </span>{' '}
+        per hour · high-scale program {highScaleLabel}
       </PageContextSummary>
-      <div className="split">
-        <Card>
-          <CardHeader>
-            <CardTitle>Contract posture</CardTitle>
-            <CardDescription>Billing metadata, entitlement limits, and account state for this tenant.</CardDescription>
-          </CardHeader>
-          <CardContent className="kv-list">
-              <>
-                <div><span>Plan</span><strong>{planLabel}</strong></div>
-                <div><span>Status</span><Badge tone={subscriptionStatusBadgeTone(getString(subscription ?? {}, ['status']))}>{getString(subscription ?? {}, ['status'])}</Badge></div>
-                <div><span>Effective</span><strong>{formatDate(subscription?.effective_at)}</strong></div>
-                <div><span>Renewal</span><strong>{formatDate(subscription?.renewal_at)}</strong></div>
-                <div><span>Data region</span><strong>{getString(account ?? support ?? {}, ['region'], 'unrecorded')}</strong></div>
-                <div><span>Lifecycle</span><Badge tone={lifecycleBadgeTone(getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'))}>{getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded')}</Badge></div>
-                <div><span>Support owner</span><strong>{getString(account ?? {}, ['support_owner'], supportOwner || 'unassigned')}</strong></div>
-                <div><span>Contract ref</span><strong>{getString(account ?? {}, ['contract_reference'], 'unrecorded')}</strong></div>
-              </>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>Usage against limits</CardTitle>
-            <CardDescription>Live workspace counts compared to subscription limits.</CardDescription>
-          </CardHeader>
-          <CardContent className="factor-list">
-              <>
-                {usageMeter('Target groups', targetGroupUsage, targetGroupLimit)}
-                {usageMeter('Users', getNumber(usage ?? {}, ['users']), usersLimit)}
-                {usageMeter('Agents', getNumber(usage ?? {}, ['agents']), agentsLimit)}
-                {usageMeter('Safe runs / hour', safeRunsUsed, safeRunsLimit)}
-                <div className="factor">
-                  <div><strong>Open findings</strong><span>{getNumber(usage ?? {}, ['open_findings'])} active records</span></div>
-                  <Badge tone={getNumber(usage ?? {}, ['open_findings']) > 0 ? 'warn' : 'success'}>{getNumber(usage ?? {}, ['open_findings'])}</Badge>
+
+      <Card className="subscription-plan-surface">
+        <CardHeader>
+          <div className="subscription-plan-heading">
+            <div className="subscription-plan-title">
+              <p className="eyebrow">Current plan</p>
+              <CardTitle>{planLabel}</CardTitle>
+              <CardDescription>Contract posture, live workspace usage, and effective access in one view.</CardDescription>
+            </div>
+            <Badge tone={subscriptionStatusBadgeTone(subscriptionStatus)}>{subscriptionStatus}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <dl className="subscription-plan-facts">
+            <div className="subscription-plan-fact">
+              <dt>Effective</dt>
+              <dd>{formatDate(subscription?.effective_at)}</dd>
+            </div>
+            <div className="subscription-plan-fact">
+              <dt>Renewal</dt>
+              <dd>{formatDate(subscription?.renewal_at)}</dd>
+            </div>
+            <div className="subscription-plan-fact">
+              <dt>Data region</dt>
+              <dd>{getString(account ?? support ?? {}, ['region'], 'unrecorded')}</dd>
+            </div>
+            <div className="subscription-plan-fact">
+              <dt>Lifecycle</dt>
+              <dd><Badge tone={lifecycleBadgeTone(getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'))}>{getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded')}</Badge></dd>
+            </div>
+            <div className="subscription-plan-fact">
+              <dt>Support owner</dt>
+              <dd>{getString(account ?? {}, ['support_owner'], supportOwner)}</dd>
+            </div>
+            <div className="subscription-plan-fact">
+              <dt>Contract ref</dt>
+              <dd>{getString(account ?? {}, ['contract_reference'], 'unrecorded')}</dd>
+            </div>
+          </dl>
+
+          <section className="subscription-section" aria-labelledby="subscription-usage-title">
+            <div className="subscription-section-heading">
+              <div>
+                <h3 id="subscription-usage-title">Usage against plan limits</h3>
+                <p>Joined usage rows keep each recorded count, plan limit, and progress measure together.</p>
+              </div>
+              <Badge tone={recordedUsageCount === usageRows.length ? 'info' : 'muted'}>{recordedUsageCount} / {usageRows.length} recorded</Badge>
+            </div>
+            {usage ? (
+              <div className="subscription-usage-list" role="list" aria-label="Subscription usage">
+                {usageRows.map((row) => {
+                  const hasUsage = row.used !== null;
+                  const hasLimit = row.limit >= 0;
+                  const percent = hasUsage && hasLimit
+                    ? row.limit > 0 ? Math.min(100, Math.round((row.used! / row.limit) * 100)) : row.used! > 0 ? 100 : 0
+                    : null;
+                  const atLimit = hasUsage && hasLimit && (row.limit === 0 ? row.used! > 0 : row.used! >= row.limit);
+                  return (
+                    <div className="subscription-usage-row" role="listitem" key={row.label}>
+                      <div className="subscription-usage-copy">
+                        <strong>{row.label}</strong>
+                        <span>{row.description}</span>
+                      </div>
+                      <div className="subscription-usage-count" aria-label={`${row.label} count and limit`}>
+                        <strong>{hasUsage ? formatNumber(row.used!) : 'Not recorded'}</strong>
+                        <span>{hasUsage ? (hasLimit ? `of ${formatNumber(row.limit)}` : 'used · limit not recorded') : 'Usage unavailable'}</span>
+                      </div>
+                      <Badge tone={percent === null ? 'muted' : atLimit ? 'warn' : 'info'}>
+                        {percent === null ? (hasUsage ? 'Limit not recorded' : 'No usage record') : `${percent}%`}
+                      </Badge>
+                      {percent !== null ? (
+                        <Progress
+                          value={percent}
+                          tone={atLimit ? 'warn' : 'accent'}
+                          label={`${row.label} usage, ${row.used} of ${row.limit}`}
+                        />
+                      ) : (
+                        <span className="subscription-limit-note">Progress is hidden until both usage and a plan limit are recorded.</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan metadata is available, but the subscription API did not return workspace usage counts." />
+            )}
+          </section>
+
+          <section className="subscription-section" aria-labelledby="subscription-signals-title">
+            <div className="subscription-section-heading">
+              <div>
+                <h3 id="subscription-signals-title">Workspace signals</h3>
+                <p>Operational counts are shown separately because they are not subscription limits.</p>
+              </div>
+            </div>
+            <div className="subscription-signal-grid">
+              <div className="subscription-signal">
+                <div>
+                  <strong>Open findings</strong>
+                  <span>Active readiness records</span>
                 </div>
-                <div className="factor">
-                  <div><strong>Pending high-scale</strong><span>{getNumber(usage ?? {}, ['pending_high_scale_requests'])} awaiting SOC workflow</span></div>
-                  <Badge tone={getNumber(usage ?? {}, ['pending_high_scale_requests']) > 0 ? 'warn' : 'muted'}>{getNumber(usage ?? {}, ['pending_high_scale_requests'])}</Badge>
+                <Badge tone={openFindings === null ? 'muted' : openFindings > 0 ? 'warn' : 'success'}>{openFindings === null ? 'Not recorded' : formatNumber(openFindings)}</Badge>
+              </div>
+              <div className="subscription-signal">
+                <div>
+                  <strong>Pending high-scale</strong>
+                  <span>Awaiting SOC workflow</span>
                 </div>
-              </>
-          </CardContent>
-        </Card>
-      </div>
+                <Badge tone={pendingHighScale === null ? 'muted' : pendingHighScale > 0 ? 'warn' : 'muted'}>{pendingHighScale === null ? 'Not recorded' : formatNumber(pendingHighScale)}</Badge>
+              </div>
+            </div>
+          </section>
+
+          <section className="subscription-section" aria-labelledby="subscription-entitlement-summary-title">
+            <div className="subscription-section-heading">
+              <div>
+                <h3 id="subscription-entitlement-summary-title">Effective entitlement summary</h3>
+                <p>Explicit API values only; missing entitlement fields are labeled as not recorded.</p>
+              </div>
+              <Badge tone={recordedEntitlements.length > 0 && enabledEntitlements > 0 ? 'success' : 'muted'}>
+                {recordedEntitlements.length > 0 ? `${enabledEntitlements} / ${recordedEntitlements.length} enabled` : 'Not recorded'}
+              </Badge>
+            </div>
+            <div className="subscription-entitlement-grid" role="list" aria-label="Effective entitlements">
+              {entitlementRows.map((row) => {
+                const feature = getString(row, ['feature'], '');
+                const value = row.effective_enabled;
+                return (
+                  <div className="subscription-entitlement-pill" role="listitem" key={feature}>
+                    <div>
+                      <strong>{ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature}</strong>
+                      <span>Effective access</span>
+                    </div>
+                    <Badge tone={value === true ? 'success' : 'muted'}>
+                      {value === true ? 'Enabled' : value === false ? 'Disabled' : 'Not recorded'}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Entitlement breakdown</CardTitle>
           <CardDescription>Plan defaults, staff grants, and effective feature access for this tenant.</CardDescription>
         </CardHeader>
         <CardContent>
-            <DataTable
-              columns={[
-                {
-                  key: 'feature',
-                  label: 'Feature',
-                  render: (item) => {
-                    const feature = getString(item, ['feature']);
-                    return ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature;
-                  }
-                },
-                {
-                  key: 'plan',
-                  label: 'Plan default',
-                  render: (item) => (
-                    <Badge tone={item.plan_enabled === true ? 'success' : 'muted'}>
-                      {item.plan_enabled === true ? 'enabled' : 'disabled'}
-                    </Badge>
-                  )
-                },
-                {
-                  key: 'effective',
-                  label: 'Effective',
-                  render: (item) => (
-                    <Badge tone={item.effective_enabled === true ? 'success' : 'warn'}>
-                      {item.effective_enabled === true ? 'enabled' : 'disabled'}
-                    </Badge>
-                  )
-                },
-                {
-                  key: 'grant',
-                  label: 'Grant source',
-                  render: (item) => formatEntitlementGrantSource(getString(item, ['grant_source'], 'plan only'))
+          <DataTable
+            columns={[
+              {
+                key: 'feature',
+                label: 'Feature',
+                render: (item) => {
+                  const feature = getString(item, ['feature']);
+                  return ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature;
                 }
-              ]}
-              items={ENTITLEMENT_FEATURES.map((feature) => {
-                const grant = entitlementGrants.find((entry) => getString(entry, ['feature'], '') === feature);
-                return {
-                  feature,
-                  plan_enabled: planEntitlements?.[feature] === true,
-                  effective_enabled: effectiveEntitlements?.[feature] === true,
-                  grant_source: grant ? getString(grant, ['source'], 'staff grant') : 'plan only'
-                };
-              })}
-              empty={<EmptyState icon={ShieldCheck} title="No entitlement features." body="Plan feature entitlements were not returned by the subscription API." />}
-            />
+              },
+              {
+                key: 'plan',
+                label: 'Plan default',
+                render: (item) => (
+                  <Badge tone={item.plan_enabled === true ? 'success' : 'muted'}>
+                    {item.plan_enabled === true ? 'Enabled' : item.plan_enabled === false ? 'Disabled' : 'Not recorded'}
+                  </Badge>
+                )
+              },
+              {
+                key: 'effective',
+                label: 'Effective',
+                render: (item) => (
+                  <Badge tone={item.effective_enabled === true ? 'success' : 'muted'}>
+                    {item.effective_enabled === true ? 'Enabled' : item.effective_enabled === false ? 'Disabled' : 'Not recorded'}
+                  </Badge>
+                )
+              },
+              {
+                key: 'grant',
+                label: 'Grant source',
+                render: (item) => formatEntitlementGrantSource(getString(item, ['grant_source'], 'not recorded'))
+              }
+            ]}
+            items={entitlementRows}
+            empty={<EmptyState icon={ShieldCheck} title="No entitlement features." body="Plan feature entitlements were not returned by the subscription API." />}
+          />
         </CardContent>
       </Card>
     </div>

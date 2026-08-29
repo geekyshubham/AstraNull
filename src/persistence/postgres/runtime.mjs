@@ -10,6 +10,7 @@ import {
 import { createCoreCatalogRepository } from './coreCatalogRepository.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
+import { createPasswordAuthRepository } from './passwordAuthRepository.mjs';
 import { createAgentControlRepository } from './agentControlRepository.mjs';
 import { createValidationEvidenceRepository } from './validationEvidenceRepository.mjs';
 import { createReportRepository } from './reportRepository.mjs';
@@ -38,6 +39,7 @@ import { createInternalManagementRepository } from './internalManagementReposito
 import {
   createPostgresAgentServices,
   createPostgresAuthServices,
+  createPostgresPasswordAuthServices,
   createPostgresCatalogServices,
   createPostgresSecretVaultServices,
   createPostgresValidationServices,
@@ -74,6 +76,7 @@ export const POSTGRES_RUNTIME_REPOSITORY_KEYS = Object.freeze([
   'coreCatalog',
   'audit',
   'authTokens',
+  'passwordAuth',
   'agentControl',
   'validationEvidence',
   'reports',
@@ -103,6 +106,7 @@ const DEFAULT_REPOSITORY_FACTORIES = {
   coreCatalog: createCoreCatalogRepository,
   audit: createAuditRepository,
   authTokens: createAuthTokenRepository,
+  passwordAuth: createPasswordAuthRepository,
   agentControl: createAgentControlRepository,
   validationEvidence: createValidationEvidenceRepository,
   reports: createReportRepository,
@@ -192,6 +196,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const retentionServices = createPostgresRetentionServices(repositories);
     const catalogServices = createPostgresCatalogServices(repositories);
     const authServices = createPostgresAuthServices(repositories, options.authServiceOptions);
+    const passwordAuthServices = createPostgresPasswordAuthServices(repositories);
     const agentServices = createPostgresAgentServices(repositories, {
       ...options.agentServiceOptions,
       tokens: authServices.tokens,
@@ -264,6 +269,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const services = {
       ...catalogServices,
       ...authServices,
+      passwordAuth: passwordAuthServices,
       ...agentServices,
       ...validationServices,
       ...reportServices,

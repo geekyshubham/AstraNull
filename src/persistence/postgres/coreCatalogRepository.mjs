@@ -1,4 +1,5 @@
 import { newId } from '../../lib/ids.mjs';
+import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { runMetadataRetentionInTransaction } from './retentionRepository.mjs';
@@ -213,6 +214,82 @@ function mapDetailTargetRow(row) {
   };
 }
 
+function optionalString(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const normalized = String(value).trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function mapTargetInventoryRow(row) {
+  const mapped = mapTargetRow(row);
+  if (!mapped) return null;
+  const metadata = asObject(row.metadata_json);
+  const verificationState = optionalString(
+    row.verification_state,
+    metadata.verification_state,
+    metadata.verify_state,
+  ) ?? 'unverified';
+  const sourceKind = optionalString(
+    row.verification_source_kind,
+    metadata.verification_source_kind,
+  );
+  const sourceRef = row.verification_source_ref
+    ?? metadata.verification_source_ref
+    ?? null;
+  const transitionedAt = toIso(
+    row.verification_transitioned_at ?? metadata.verification_transitioned_at,
+  ) ?? null;
+  const importIntegration = optionalString(
+    row.import_integration,
+    row.import_source,
+    metadata.import_integration,
+    metadata.import_source,
+    asObject(sourceRef).bulk_import ? asObject(sourceRef).source : null,
+  );
+  const source = optionalString(
+    row.source,
+    metadata.source,
+    metadata.target_source,
+  ) ?? (importIntegration ? 'import' : 'manual');
+  const proof = ownershipProofFromStates({
+    groupState: row.ownership_status,
+    targetState: verificationState,
+  });
+  const explicitEligibility = row.eligibility ?? metadata.eligibility;
+  const eligibility = explicitEligibility == null
+    ? proof.verified ? 'eligible' : 'not_eligible'
+    : typeof explicitEligibility === 'boolean'
+      ? explicitEligibility ? 'eligible' : 'not_eligible'
+      : String(explicitEligibility).trim().toLowerCase() || 'not_eligible';
+  const eligibilityReason = row.eligibility_reason
+    ?? metadata.eligibility_reason
+    ?? (eligibility === 'eligible' ? null : 'verification_required');
+
+  return {
+    ...mapped,
+    target_group_name: row.target_group_name,
+    environment_id: row.environment_id ?? null,
+    environment_name: row.environment_name ?? null,
+    expected_behavior: row.expected_behavior ?? row.expected_behavior_default ?? null,
+    verification_state: verificationState,
+    verification: {
+      state: verificationState,
+      source_kind: sourceKind,
+      source_ref: sourceRef,
+      transitioned_at: transitionedAt,
+    },
+    eligibility,
+    eligibility_reason: eligibilityReason,
+    source,
+    import_source: importIntegration,
+    import_integration: importIntegration,
+    created_at: toIso(row.created_at),
+  };
+}
+
 /**
  * @param {import('pg').Pool} pool
  */
@@ -376,6 +453,49 @@ export function createCoreCatalogRepository(pool) {
           params,
         );
         return mapEnvironmentRow(rows[0]);
+      });
+    },
+
+    async listTargets(ctx) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value,
+                  t.expected_behavior, t.metadata_json, t.created_at,
+                  tg.name AS target_group_name, tg.environment_id,
+                  tg.expected_behavior_default, tg.ownership_status,
+                  environment.name AS environment_name,
+                  verification.state AS verification_state,
+                  verification.source_kind AS verification_source_kind,
+                  verification.source_ref AS verification_source_ref,
+                  verification.transitioned_at AS verification_transitioned_at
+           FROM targets t
+           JOIN target_groups tg
+             ON tg.id = t.target_group_id AND tg.tenant_id = t.tenant_id
+           LEFT JOIN environments environment
+             ON environment.id = tg.environment_id AND environment.tenant_id = t.tenant_id
+           LEFT JOIN LATERAL (
+             SELECT tv.state, tv.source_kind, tv.source_ref, tv.transitioned_at
+             FROM target_verifications tv
+             WHERE tv.tenant_id = $1 AND tv.target_id = t.id
+             ORDER BY tv.transitioned_at DESC,
+                      CASE tv.state
+                        WHEN 'user_confirmed' THEN 4
+                        WHEN 'agent_verified' THEN 3
+                        WHEN 'dns_verified' THEN 2
+                        WHEN 'pending' THEN 1
+                        ELSE 0
+                      END DESC,
+                      tv.id DESC
+             LIMIT 1
+           ) verification ON TRUE
+           WHERE t.tenant_id = $1
+             AND tg.tenant_id = $1
+             AND tg.deleted_at IS NULL
+             AND tg.archived_at IS NULL
+           ORDER BY t.created_at DESC, t.id`,
+          [ctx.tenantId],
+        );
+        return rows.map(mapTargetInventoryRow);
       });
     },
 
@@ -814,5 +934,6 @@ export {
   mapTargetGroupDetail,
   mapTargetGroupRow,
   mapDetailTargetRow,
+  mapTargetInventoryRow,
   mapTargetRow,
 };

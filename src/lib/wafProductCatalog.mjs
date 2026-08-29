@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CVE_SAFE_VALIDATION_CHECK_ID } from '../contracts/cvePipeline.mjs';
+import { edgeSignatureProbeEvidenceFields } from './edgeFingerprint.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CATALOG_REL = path.join('db', 'seeds', 'waf-product-catalog.json');
@@ -610,6 +611,7 @@ export function wafFingerprintProbeEvidenceFields(checkId) {
   return {
     waf_fingerprint_catalog_version: manifest.catalog_version,
     waf_fingerprint_catalog_entry_count: manifest.entry_count,
+    ...edgeSignatureProbeEvidenceFields(checkId),
   };
 }
 

@@ -17,23 +17,24 @@ import {
 import { getRouteFromLocation } from './lib/navigation';
 import { canAccessRoute } from './lib/route-access';
 import type { PortalConfig, PortalData, PortalDataset, RouteId, Session } from './lib/types';
-import { LoginPage, PublicLandingPage, SignupPage, SignupStatusPage, StaffLoginPage } from './pages/public-pages';
+import { LoginPage, PublicLandingPage, SetPasswordPage, SignupPage, SignupStatusPage, StaffLoginPage } from './pages/public-pages';
 import { RouteView } from './pages/router';
 
+/**
+ * Boot handoff: render nothing until config resolves.
+ *
+ * The HTML shell (apps/web/index.html) paints a branded overlay before this
+ * module even downloads, and tears it down on React's first commit into #root.
+ * Rendering a second React spinner here meant every visitor saw two different
+ * loaders back to back. Committing an empty tree keeps #root childless, so the
+ * shell overlay stays up — one loader, one handoff, straight into the page.
+ */
 function LoadingScreen() {
-  return (
-    <div className="loading-screen">
-      <div className="loading-card">
-        <div className="spinner" />
-        <strong>Loading AstraNull</strong>
-        <p>Preparing the readiness console.</p>
-      </div>
-    </div>
-  );
+  return null;
 }
 
 function isPublicOnlyPath(path: string) {
-  return ['/', '/landing.html', '/login', '/login.html', '/signup', '/signup.html', '/signup-status', '/internal/admin/login', '/staff-login.html'].includes(path);
+  return ['/', '/landing.html', '/login', '/login.html', '/signup', '/signup.html', '/signup-status', '/set-password', '/internal/admin/login', '/staff-login.html'].includes(path);
 }
 
 export default function App() {
@@ -224,6 +225,7 @@ export default function App() {
   if (path === '/login' || path === '/login.html') return <LoginPage config={config} />;
   if (path === '/signup' || path === '/signup.html') return <SignupPage config={config} />;
   if (path === '/signup-status') return <SignupStatusPage />;
+  if (path === '/set-password') return <SetPasswordPage config={config} />;
   if (path === '/internal/admin/login' || path === '/staff-login.html') return <StaffLoginPage config={config} />;
 
   return (

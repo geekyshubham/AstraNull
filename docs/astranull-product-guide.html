@@ -144,7 +144,6 @@
       <tr><td><strong>Outbound-only control</strong></td><td>Agents call AstraNull over HTTPS; no inbound management ports required.</td></tr>
       <tr><td><strong>SOC gates risk</strong></td><td>High-scale simulations are request-only; SOC approves, executes, and stops them.</td></tr>
       <tr><td><strong>Evidence-first UX</strong></td><td>Every page answers: what was tested, what happened, what proof exists, what to do next.</td></tr>
-      <tr><td><strong>Safe by default</strong></td><td>Default checks are low-volume, bounded, and non-disruptive.</td></tr>
     </tbody>
   </table>
 
@@ -344,7 +343,7 @@
   <table>
     <thead><tr><th>Class</th><th>Description</th><th>Execution Owner</th></tr></thead>
     <tbody>
-      <tr><td><strong>Safe</strong></td><td>Single/few labeled probes; non-disruptive.</td><td>Customer engineer</td></tr>
+      <tr><td><strong>Safe</strong></td><td>Customer-runnable validation checks.</td><td>Customer engineer</td></tr>
       <tr><td><strong>Controlled</strong></td><td>Bounded repeated probes with explicit caps.</td><td>Customer admin/engineer</td></tr>
       <tr><td><strong>SOC-gated</strong></td><td>High-scale or disruptive potential.</td><td>AstraNull SOC only</td></tr>
       <tr><td><strong>Prohibited</strong></td><td>Exploit payloads, unmanaged attack generation.</td><td>Never customer-runnable</td></tr>

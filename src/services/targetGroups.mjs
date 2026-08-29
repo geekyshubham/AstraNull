@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { newId } from '../lib/ids.mjs';
+import { ownershipProofFromStates, VERIFICATION_RANK } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 
@@ -8,6 +9,163 @@ const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
 /** Detail-page cap on runs / findings, mirrored by the Postgres adapter. */
 const TARGET_GROUP_RUNS_RECENT_LIMIT = 6;
 export const TARGET_GROUP_FINDINGS_LIMIT = 50;
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function toIso(value) {
+  if (value == null) return null;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
+function optionalString(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const normalized = String(value).trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function latestTargetVerifications(tenantId) {
+  const latestByTarget = new Map();
+  for (const row of getStore().targetVerifications ?? []) {
+    if (row.tenant_id !== tenantId) continue;
+    const previous = latestByTarget.get(row.target_id);
+    const rowAt = String(row.transitioned_at ?? '');
+    const previousAt = String(previous?.transitioned_at ?? '');
+    if (
+      !previous
+      || rowAt > previousAt
+      || (rowAt === previousAt
+        && (VERIFICATION_RANK[row.state] ?? 0) > (VERIFICATION_RANK[previous.state] ?? 0))
+    ) {
+      latestByTarget.set(row.target_id, row);
+    }
+  }
+  return latestByTarget;
+}
+
+function targetInventoryItem(target, group, environment, verification) {
+  const metadata = asObject(target.metadata ?? target.metadata_json);
+  const verificationState = optionalString(
+    verification?.state,
+    target.verification_state,
+    target.verify_state,
+    metadata.verification_state,
+    metadata.verify_state,
+  ) ?? 'unverified';
+  const sourceKind = optionalString(
+    verification?.source_kind,
+    target.verification_source_kind,
+    metadata.verification_source_kind,
+  );
+  const sourceRef = verification?.source_ref
+    ?? target.verification_source_ref
+    ?? metadata.verification_source_ref
+    ?? null;
+  const transitionedAt = toIso(
+    verification?.transitioned_at
+      ?? target.verification_transitioned_at
+      ?? metadata.verification_transitioned_at,
+  );
+  const importIntegration = optionalString(
+    target.import_integration,
+    target.import_source,
+    metadata.import_integration,
+    metadata.import_source,
+    asObject(sourceRef).bulk_import ? asObject(sourceRef).source : null,
+  );
+  const source = optionalString(
+    target.source,
+    metadata.source,
+    metadata.target_source,
+  ) ?? (importIntegration ? 'import' : 'manual');
+  const proof = ownershipProofFromStates({
+    groupState: group.ownership_status,
+    targetState: verificationState,
+  });
+  const explicitEligibility = target.eligibility ?? metadata.eligibility;
+  const eligibility = explicitEligibility == null
+    ? proof.verified ? 'eligible' : 'not_eligible'
+    : typeof explicitEligibility === 'boolean'
+      ? explicitEligibility ? 'eligible' : 'not_eligible'
+      : String(explicitEligibility).trim().toLowerCase() || 'not_eligible';
+  const eligibilityReason = target.eligibility_reason
+    ?? metadata.eligibility_reason
+    ?? (eligibility === 'eligible' ? null : 'verification_required');
+
+  return {
+    id: target.id,
+    tenant_id: target.tenant_id,
+    target_group_id: target.target_group_id,
+    target_group_name: group.name,
+    environment_id: group.environment_id ?? null,
+    environment_name: environment?.name ?? null,
+    kind: target.kind,
+    value: target.value,
+    expected_behavior: target.expected_behavior ?? group.expected_behavior_default ?? null,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+    verification_state: verificationState,
+    verification: {
+      state: verificationState,
+      source_kind: sourceKind,
+      source_ref: sourceRef,
+      transitioned_at: transitionedAt,
+    },
+    eligibility,
+    eligibility_reason: eligibilityReason,
+    source,
+    import_source: importIntegration,
+    import_integration: importIntegration,
+    created_at: toIso(target.created_at),
+  };
+}
+
+/** Tenant-scoped target inventory used by the Targets page. */
+export function listTargets(ctx) {
+  const store = getStore();
+  const groups = new Map(
+    store.targetGroups
+      .filter((group) => group.tenant_id === ctx.tenantId && !isArchivedTargetGroup(group))
+      .map((group) => [group.id, group]),
+  );
+  const environments = new Map(
+    store.environments
+      .filter((environment) => environment.tenant_id === ctx.tenantId)
+      .map((environment) => [environment.id, environment]),
+  );
+  const verifications = latestTargetVerifications(ctx.tenantId);
+
+  return store.targets
+    .filter((target) => target.tenant_id === ctx.tenantId && groups.has(target.target_group_id))
+    .map((target) => {
+      const group = groups.get(target.target_group_id);
+      return targetInventoryItem(
+        target,
+        group,
+        environments.get(group.environment_id),
+        verifications.get(target.id),
+      );
+    })
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
+      || String(a.id).localeCompare(String(b.id)));
+}
+
+export function listTargetsEnvelope(ctx) {
+  const items = listTargets(ctx);
+  return {
+    items,
+    count: items.length,
+    meta: {
+      empty_reason: items.length
+        ? null
+        : 'No targets have been declared for this tenant yet.',
+    },
+  };
+}
 
 export function isArchivedTargetGroup(group) {
   return Boolean(group?.deleted_at ?? group?.archived_at);

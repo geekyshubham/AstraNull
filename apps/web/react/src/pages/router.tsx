@@ -15,6 +15,7 @@ import {
   TargetGroupsPage
 } from './page-components';
 import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } from './governance-pages';
+import { TargetsPage } from './targets-page';
 
 const DETAIL_ROUTES = new Set<RouteId>([
   'target-group-detail',
@@ -45,6 +46,9 @@ export function RouteView({ route, data, config, session, onRefresh }: RouteView
   if (route === 'environments') return <EnvironmentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'target-groups') {
     return <TargetGroupsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
+  }
+  if (route === 'targets') {
+    return <TargetsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (route === 'agents') {
     return <AgentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;

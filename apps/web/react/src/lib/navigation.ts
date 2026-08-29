@@ -5,6 +5,7 @@ import {
   CalendarClock,
   ClipboardList,
   CreditCard,
+  Crosshair,
   FileText,
   Gauge,
   KeyRound,
@@ -29,7 +30,7 @@ export const NAV_GROUP_LABELS: Record<SurfaceKind, string> = {
   staff: 'Staff'
 };
 
-/** Fifteen customer-visible sidebar items + two staff items (detail routes omitted). */
+/** Seventeen customer-visible sidebar items + two staff items (detail routes omitted). */
 export const NAV_ITEMS: NavItem[] = [
   {
     id: 'dashboard',
@@ -53,6 +54,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Target
   },
   {
+    id: 'targets',
+    label: 'Targets',
+    group: 'scope',
+    description: 'All declared hostnames and IPs with verification, eligibility, source, and group context.',
+    icon: Crosshair
+  },
+  {
     id: 'agents',
     label: 'Agents',
     group: 'scope',
@@ -63,14 +71,14 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'checks',
     label: 'Checks',
     group: 'validation',
-    description: 'Safe-by-default readiness checks and SOC-gated high-scale scenarios.',
+    description: 'Readiness checks and SOC-gated high-scale scenarios.',
     icon: ListChecks
   },
   {
     id: 'test-policies',
     label: 'Test policies',
     group: 'validation',
-    description: 'Scheduled validation cadences, safe windows, and target bindings. Each schedule declares when bounded checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
+    description: 'Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled.',
     icon: CalendarClock
   },
   {

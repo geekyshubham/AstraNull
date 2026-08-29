@@ -7,7 +7,7 @@ const PLACEMENT_STATUS_COPY: Record<string, { label: string; hint: string }> = {
   },
   needs_baseline: {
     label: 'Needs a test run',
-    hint: 'Agent is installed — run a safe check so it can observe traffic.',
+    hint: 'Agent is installed — run a check so it can observe traffic.',
   },
   missing_agent: {
     label: 'No agent',

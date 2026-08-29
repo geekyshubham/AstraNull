@@ -70,6 +70,28 @@ Implementation status: `GET /v1/waf/coverage` returns status counts in developer
 - Client cannot raise request count, timeout, or concurrency above catalog maximums.
 - Server rejects raw payload fields.
 
+## Edge detection API (hostname → WAF/CDN)
+
+One governed passive path for "is this host behind a WAF/CDN?" — built on the ported
+wafw00f + cdncheck signature corpus (`src/lib/edgeFingerprint.mjs`, ADR-0005).
+
+| Method | Path | Permission | Request | Response |
+|---|---|---|---|---|
+| POST | `/v1/waf/edge-detection` | `waf:run` | `{ hostname, timeout_ms? }` | `200 { detection }`. |
+
+Behavior contract:
+
+- `hostname` is a declared hostname or IP literal; URLs/credentials/paths/ports → `400 invalid_hostname`.
+- Exactly **one** bounded passive GET (HTTPS except loopback; no redirects followed, ≤8KB body read in memory only).
+- Passive signature tier only: block-page signatures are never evaluated here and no marker or
+  attack traffic is sent. The result is detection, never a validation verdict.
+- DNS metadata: bounded CNAME chain (≤4 hops) plus A/AAAA; address/CNAME classification carries
+  per-signal provenance against the cdncheck corpus.
+- Metadata-only: header values and body text never appear in the response or the audit record;
+  audits `waf.edge_detection_ran` with booleans, vendor key, and counts.
+- Stateless — works identically in dev-json and Postgres modes; feature-gated by
+  `ASTRANULL_WAF_POSTURE_ENABLED`; portal action: "Detect edge" on target-group detail.
+
 ## Baseline and drift APIs
 
 | Method | Path | Permission | Request | Response |

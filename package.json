@@ -117,6 +117,7 @@
     "waf:catalog:seed": "node scripts/seed-waf-product-catalog.mjs",
     "probe:fleet:matrix:evidence": "node scripts/probe-fleet-matrix-evidence.mjs",
     "vector:safety:evidence": "node scripts/vector-safety-policy-evidence.mjs",
+    "vector:taxonomy:validate": "node scripts/validate-resource-exhaustion-taxonomy.mjs",
     "secret:rotation:evidence": "node scripts/secret-rotation-drill-evidence.mjs",
     "observability:slo:evidence": "node scripts/observability-slo-evidence.mjs",
     "support:readiness:evidence": "node scripts/support-readiness-evidence.mjs",

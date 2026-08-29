@@ -137,7 +137,7 @@ function deliveryStatusForChannel(channel) {
   }
   return {
     status: 'queued_provider_not_configured',
-    reason: 'outbound_provider_not_configured_safe_by_default',
+    reason: 'outbound_provider_not_configured_opt_in',
     attempted: false,
   };
 }

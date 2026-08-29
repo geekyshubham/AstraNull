@@ -2,7 +2,7 @@
 
 ## Implemented behavior
 
-Customer notification **rules** and a per-event **delivery-attempt ledger** live in the dev JSON store (`notificationRules`, `notificationEvents`) for developer validation and in Postgres through `runtime.services.notifications` when `ASTRANULL_PERSISTENCE_MODE=postgres`. Outbound delivery is **safe-by-default**: no email, Slack, Microsoft Teams, or webhook HTTP traffic is sent unless delivery mode is explicitly enabled. Default mode (`metadata_only`, unset `ASTRANULL_NOTIFICATION_DELIVERY_MODE`) preserves metadata-only `queued_provider_not_configured` for external channels.
+Customer notification **rules** and a per-event **delivery-attempt ledger** live in the dev JSON store (`notificationRules`, `notificationEvents`) for developer validation and in Postgres through `runtime.services.notifications` when `ASTRANULL_PERSISTENCE_MODE=postgres`. Outbound delivery is **opt-in by default**: no email, Slack, Microsoft Teams, or webhook HTTP traffic is sent unless delivery mode is explicitly enabled. Default mode (`metadata_only`, unset `ASTRANULL_NOTIFICATION_DELIVERY_MODE`) preserves metadata-only `queued_provider_not_configured` for external channels.
 
 ### Rule validation
 
@@ -23,7 +23,7 @@ Invalid `channel` or `trigger` values return `{ error, status: 400 }`. Arbitrary
 |---|---|
 | `finding.high_severity` | Critical finding created |
 | `agent.offline` | Agent heartbeat loss |
-| `safe_test.completed` | Bounded safe test finished |
+| `safe_test.completed` | Validation test finished |
 | `high_scale.state_change` | High-scale workflow state transitions |
 | `report.ready` | Report generation complete |
 | `bootstrap_token.created` | Bootstrap token issued |

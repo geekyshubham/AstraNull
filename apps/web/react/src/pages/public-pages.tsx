@@ -3,6 +3,8 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Eye,
+  EyeOff,
   FileCheck2,
   LockKeyhole,
   ShieldCheck,
@@ -314,7 +316,7 @@ const LANDING_PRINCIPLES = [
   },
   {
     title: 'SOC-gated high-scale',
-    body: 'Default validation is low-volume, bounded, and non-disruptive. High-scale assessments are reviewed and executed by the AstraNull SOC after approval. Customers submit requests, never run floods themselves.'
+    body: 'High-scale assessments are reviewed and executed by the AstraNull SOC after approval. Customers submit requests, never run floods themselves.'
   }
 ];
 
@@ -326,8 +328,8 @@ const LANDING_FLOW = [
   },
   {
     step: '02',
-    title: 'Place agents, run safe checks',
-    body: 'Install outbound-only agents and run the safe-by-default check catalog: origin-bypass, L3/L4, DNS, L7/API. Each check is bounded and metadata-only unless you escalate.'
+    title: 'Place agents, run checks',
+    body: 'Install outbound-only agents and run the check catalog: origin-bypass, L3/L4, DNS, L7/API, and volumetric scenarios.'
   },
   {
     step: '03',
@@ -343,7 +345,7 @@ const LANDING_FLOW = [
 
 const LANDING_COMPARE = [
   ['Requires cloud credentials', 'No. Declared scope only.', 'Often', 'Yes, read/write'],
-  ['Default probe posture', 'Bounded & non-disruptive', 'High-volume by default', 'Passive metrics only'],
+  ['Default probe posture', 'Full validation spectrum', 'High-volume by default', 'Passive metrics only'],
   ['Inside + outside correlation', 'Probes + placed agents', 'Outside only', 'Inside only'],
   ['High-scale execution', 'SOC-gated after approval', 'Self-service', 'Not available'],
   ['Exportable evidence trail', 'Evidence vault + custody', 'Run logs', 'Metric exports']
@@ -351,7 +353,7 @@ const LANDING_COMPARE = [
 
 const LANDING_TRUST_ITEMS = [
   { icon: Check, text: 'No cloud credentials required' },
-  { icon: Check, text: 'Low-volume, bounded probes' },
+  { icon: Check, text: 'Volumetric and application-layer checks' },
   { icon: Check, text: 'SOC-governed high-scale' },
   { icon: Check, text: 'Evidence-backed verdicts' }
 ] as const;
@@ -363,7 +365,7 @@ const LANDING_USE_CASES = [
   },
   {
     quote: 'High-traffic media & CDN teams that want real high-scale assurance, but only under governance. No self-service floods pointed at production.',
-    attr: 'SRE & edge owners. SOC-governed high-scale, bounded probes the rest of the time.'
+    attr: 'SRE & edge owners. SOC-governed high-scale plus customer-runnable validation across the catalog.'
   }
 ];
 
@@ -389,7 +391,7 @@ function ReadinessConsolePreview() {
           tenant · <b style={{ color: 'var(--fg)' }}>acme-prod</b>
         </span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 'var(--space-5)', alignItems: 'center' }}>
+      <div className="public-preview-body" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 'var(--space-5)', alignItems: 'center' }}>
         <div style={{ position: 'relative', width: '120px', height: '120px', display: 'grid', placeItems: 'center' }}>
           <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden="true" style={{ transform: 'rotate(-90deg)' }}>
             <circle cx="60" cy="60" r="53" fill="none" stroke="var(--border)" strokeWidth="8" />
@@ -415,9 +417,9 @@ function ReadinessConsolePreview() {
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+        <div className="public-preview-verdicts" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
           {verdicts.map((verdict) => (
-            <div key={verdict.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <div className="public-preview-row" key={verdict.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
               <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg)' }}>{verdict.id}</span>
               <span className="muted" style={{ fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>{verdict.kind}</span>
               <Badge tone={verdict.tone}>{verdict.state}</Badge>
@@ -441,9 +443,9 @@ function ProofChainSection() {
   const nodes: { label: string; title: string; body: string; src: string[] }[] = [
     {
       label: 'Outside probe',
-      title: 'Origin reached directly under bounded load.',
-      body: 'A bounded 50 RPS origin-bypass request reached the origin at 47 ms; the scrubber tier was bypassed at the second hop. No high-volume traffic was generated.',
-      src: ['probe · probe-eu-west-2', 'bound · 50 RPS · metadata-only']
+      title: 'Origin reached directly under load.',
+      body: 'A 12k RPS origin-bypass request reached the origin at 47 ms; the scrubber tier was bypassed at the second hop.',
+      src: ['probe · probe-eu-west-2', '12k RPS · origin-bypass']
     },
     {
       label: 'Inside agent',
@@ -453,8 +455,8 @@ function ProofChainSection() {
     },
     {
       label: 'Correlated verdict',
-      title: 'Origin exposed under bounded load → Gap.',
-      body: 'Probe and agent agree the origin is reachable behind the declared edge. Verdict: Gap, severity S2, owner edge-sre. Retest opens automatically on the next safe window.',
+      title: 'Origin exposed under load → Gap.',
+      body: 'Probe and agent agree the origin is reachable behind the declared edge. Verdict: Gap, severity S2, owner edge-sre. Retest opens automatically on the next scheduled window.',
       src: ['custody · json-key-sorted-v1', 'sha256 4c1b…e7a9 · signed']
     }
   ];
@@ -508,11 +510,9 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   return (
     <PublicShell loginHref={loginUrl} signupEnabled={signupEnabled}>
       <main className="public-wrap">
-        <p className="auth-field-help">
-          <a href="#how">Skip to how it works</a>
-        </p>
+        <a className="skip-link" href="#how">Skip to how it works</a>
         <section className="public-hero">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-8)', alignItems: 'center' }}>
+          <div className="public-hero-grid">
             <div>
               <p className="eyebrow">DDoS readiness validation</p>
               <h1>
@@ -637,19 +637,91 @@ export function PublicLandingPage({ config }: PublicPageProps) {
   );
 }
 
+function retryAfterLabel(json: Record<string, unknown>, response: Response) {
+  const fromBody = Number(json.retry_after_seconds);
+  const fromHeader = Number(response.headers.get('Retry-After'));
+  const seconds = Number.isFinite(fromBody) && fromBody > 0
+    ? fromBody
+    : Number.isFinite(fromHeader) && fromHeader > 0 ? fromHeader : 0;
+  if (!seconds) return 'in a few minutes';
+  if (seconds < 90) return `in ${Math.ceil(seconds)} seconds`;
+  return `in about ${Math.ceil(seconds / 60)} minutes`;
+}
+
+/**
+ * Human copy for the credential lane's documented failures (see docs/api.md).
+ *
+ * `invalid_credentials` stays deliberately vague — the server returns the same
+ * response for an unknown email and a wrong password so the form cannot be used
+ * to enumerate accounts, and saying more here would undo that.
+ */
+function passwordLoginErrorMessage(response: Response, code: string, json: Record<string, unknown>) {
+  switch (code) {
+    case 'invalid_credentials':
+      return 'Email or password is incorrect.';
+    case 'validation_failed':
+      return 'Enter a valid work email and your account password.';
+    case 'tenant_required':
+      return 'This email is registered in more than one workspace. Enter the tenant ID to continue.';
+    case 'password_setup_required':
+      return 'This account has no password yet. Use the invitation link from your administrator to set one.';
+    case 'password_change_required':
+      return 'Your password must be changed before you can sign in. Use the invitation link from your administrator.';
+    case 'account_disabled':
+      return 'This account is disabled. Contact your AstraNull administrator.';
+    case 'account_locked':
+      return `Too many failed attempts. This account is temporarily locked — try again ${retryAfterLabel(json, response)}.`;
+    case 'rate_limited':
+      return `Too many sign-in attempts. Try again ${retryAfterLabel(json, response)}.`;
+    case 'password_login_disabled':
+    case 'password_login_unavailable':
+      return 'Password sign-in is not available on this deployment. Contact your administrator for a login link.';
+    default:
+      return String(json.message ?? code ?? 'Login failed.');
+  }
+}
+
+const PASSWORD_POLICY_LABELS: Record<string, string> = {
+  too_short: 'Use at least 12 characters.',
+  too_long: 'Use at most 200 characters.',
+  invalid_type: 'Enter a password.',
+  insufficient_character_classes:
+    'Mix at least three of: lowercase, uppercase, digits, symbols.',
+  contains_email_local_part: 'Do not reuse the name part of your email address.',
+  common_password: 'This password is too common. Choose something less guessable.'
+};
+
+function passwordPolicyMessages(failures: unknown): string[] {
+  if (!Array.isArray(failures)) return [];
+  return failures.map((code) => PASSWORD_POLICY_LABELS[String(code)] ?? String(code));
+}
+
 export function LoginPage({ config }: PublicPageProps) {
   usePageMeta({ title: 'Log in · AstraNull Customer Portal' });
 
   const [userId, setUserId] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [tenantId, setTenantId] = useState('');
+  const [tenantRequired, setTenantRequired] = useState(false);
   const [role, setRole] = useState('admin');
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState('');
   const [loading, setLoading] = useState(false);
+  const [stagingBypass, setStagingBypass] = useState(false);
 
   const isDevHeaders = config.authMode === 'dev-headers';
   const isOidc = isOidcJwtMode(config);
-  const showStagingRolePicker = isDevHeaders || config.bundledLoginEnabled;
   const idpRedirect = useMemo(() => resolveOidcLoginRedirect(config, 'customer'), [config]);
-  const loginDisabled = isOidc && !config.bundledLoginEnabled && !idpRedirect;
+  // The credential lane is the real one. Dev headers stay ahead of it because that
+  // mode has no credential store at all; everything else prefers a password.
+  const passwordLane = !isDevHeaders && config.passwordLoginEnabled && !idpRedirect;
+  // The old user-id + self-selected-role exchange is a staging bypass, not a login.
+  // Once a password lane exists it is demoted behind an explicit disclosure so it
+  // can never be mistaken for authentication.
+  const stagingLane = isDevHeaders || (config.bundledLoginEnabled && !idpRedirect);
+  const showStagingRolePicker = stagingLane && (!passwordLane || stagingBypass);
+  const loginDisabled = isOidc && !passwordLane && !config.bundledLoginEnabled && !idpRedirect;
 
   useEffect(() => {
     const existing = loadSession();
@@ -670,18 +742,16 @@ export function LoginPage({ config }: PublicPageProps) {
 
   const cardDescription = isDevHeaders
     ? 'Developer validation mode: continue with local tenant headers (no password required).'
-    : config.bundledLoginEnabled
-      ? 'Bundled staging login mints a short-lived bearer session for this environment.'
-      : idpRedirect
-        ? 'Redirecting to your organization sign-in provider.'
-        : 'Sign-in is managed by your organization identity provider.';
+    : passwordLane
+      ? 'Sign in with your work email and account password.'
+      : config.bundledLoginEnabled
+        ? 'Bundled staging login mints a short-lived bearer session for this environment.'
+        : idpRedirect
+          ? 'Redirecting to your organization sign-in provider.'
+          : 'Sign-in is managed by your organization identity provider.';
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (loginDisabled) return;
-    setError('');
-    setLoading(true);
-
+  /** Submit the staging bypass exchange: no credential, role taken from the picker. */
+  async function submitStagingBypass() {
     if (isDevHeaders) {
       saveSession({
         mode: 'dev-headers',
@@ -693,22 +763,60 @@ export function LoginPage({ config }: PublicPageProps) {
       window.location.href = config.portalPath;
       return;
     }
+    const response = await fetch('/v1/auth/bundled-staging-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        principal: 'customer',
+        tenant_id: 'ten_demo',
+        user_id: userId.trim(),
+        role
+      })
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(json.message ?? json.error ?? 'Login failed.'));
+    saveSession(sessionFromLoginResponse(json as Record<string, unknown>));
+    window.location.href = config.portalPath;
+  }
+
+  /** Submit real credentials to the password lane. Role/tenant come from the server. */
+  async function submitPasswordLogin() {
+    const body: Record<string, unknown> = { email: userId.trim(), password };
+    const scopedTenant = tenantId.trim();
+    if (scopedTenant) body.tenant_id = scopedTenant;
+
+    const response = await fetch('/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (!response.ok) {
+      const code = String(json.error ?? '');
+      setErrorCode(code);
+      if (code === 'tenant_required') setTenantRequired(true);
+      throw new Error(passwordLoginErrorMessage(response, code, json));
+    }
+    // Never keep the plaintext in component state past a successful exchange.
+    setPassword('');
+    saveSession(sessionFromLoginResponse(json));
+    window.location.href = config.portalPath;
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (loginDisabled) return;
+    setError('');
+    setErrorCode('');
+    setLoading(true);
 
     try {
-      const response = await fetch('/v1/auth/bundled-staging-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({
-          principal: 'customer',
-          tenant_id: 'ten_demo',
-          user_id: userId.trim(),
-          role
-        })
-      });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(String(json.message ?? json.error ?? 'Login failed.'));
-      saveSession(sessionFromLoginResponse(json as Record<string, unknown>));
-      window.location.href = config.portalPath;
+      if (passwordLane && !stagingBypass) {
+        await submitPasswordLogin();
+      } else {
+        await submitStagingBypass();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed.');
       setLoading(false);
@@ -724,7 +832,7 @@ export function LoginPage({ config }: PublicPageProps) {
             <p className="auth-lead">
               {isDevHeaders
                 ? 'Local developer validation uses tenant headers to preview RBAC without a password.'
-                : 'Review declared targets, agent heartbeats, safe validation runs, and SOC-governed high-scale intake from one tenant-scoped surface.'}
+                : 'Review declared targets, agent heartbeats, validation runs, and SOC-governed high-scale intake from one tenant-scoped surface.'}
             </p>
             <AuthAsidePoints
               items={[
@@ -758,16 +866,64 @@ export function LoginPage({ config }: PublicPageProps) {
             ) : (
               <form className="auth-form" onSubmit={submit} aria-busy={loading}>
                 <label htmlFor="login-user-id">
-                  <span>{isDevHeaders || config.bundledLoginEnabled ? 'Work email / user ID' : 'User ID'}</span>
+                  <span>{passwordLane || isDevHeaders || config.bundledLoginEnabled ? 'Work email' : 'User ID'}</span>
                   <input
                     id="login-user-id"
+                    type={passwordLane && !stagingBypass ? 'email' : 'text'}
                     value={userId}
                     onChange={(event) => setUserId(event.target.value)}
                     autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
                     required={!loginDisabled}
                     disabled={loginDisabled}
                   />
                 </label>
+                {passwordLane && !stagingBypass ? (
+                  <>
+                    <label htmlFor="login-password">
+                      <span>Password</span>
+                      <span className="auth-password-field">
+                        <input
+                          id="login-password"
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                          autoComplete="current-password"
+                          required
+                          maxLength={200}
+                          disabled={loginDisabled}
+                        />
+                        <button
+                          type="button"
+                          className="auth-password-toggle"
+                          onClick={() => setShowPassword((current) => !current)}
+                          aria-pressed={showPassword}
+                        >
+                          {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                          <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
+                        </button>
+                      </span>
+                    </label>
+                    {tenantRequired ? (
+                      <label htmlFor="login-tenant-scope">
+                        <span>Tenant ID</span>
+                        <input
+                          id="login-tenant-scope"
+                          value={tenantId}
+                          onChange={(event) => setTenantId(event.target.value)}
+                          className="mono"
+                          autoComplete="off"
+                          required
+                          aria-describedby="login-tenant-scope-help"
+                        />
+                        <span className="auth-field-help" id="login-tenant-scope-help">
+                          This email is registered in more than one workspace. Enter the tenant ID you want to sign in to.
+                        </span>
+                      </label>
+                    ) : null}
+                  </>
+                ) : null}
                 {isDevHeaders ? (
                   <label htmlFor="login-tenant-id">
                     <span>Tenant</span>
@@ -791,7 +947,14 @@ export function LoginPage({ config }: PublicPageProps) {
                     ) : null}
                   </div>
                 ) : null}
-                {error ? <p className="form-error" role="alert">{error}</p> : null}
+                {error ? (
+                  <div className="form-error" role="alert">
+                    <p>{error}</p>
+                    {errorCode === 'password_setup_required' || errorCode === 'password_change_required' ? (
+                      <p><a href="/set-password">Set a password with an invitation</a></p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="auth-form-actions row-actions">
                   <Button type="submit" loading={loading} disabled={loginDisabled}>
                     Continue to portal
@@ -799,6 +962,220 @@ export function LoginPage({ config }: PublicPageProps) {
                   <Button type="button" variant="secondary" disabled={loginDisabled} onClick={() => enterDemoPortal(config.portalPath)}>
                     Try demo
                   </Button>
+                </div>
+                {passwordLane && stagingLane ? (
+                  <details
+                    className="auth-bypass"
+                    open={stagingBypass}
+                    onToggle={(event) => setStagingBypass((event.currentTarget as HTMLDetailsElement).open)}
+                  >
+                    <summary>Staging role bypass</summary>
+                    <p className="auth-field-help">
+                      <TriangleAlert size={14} aria-hidden="true" />
+                      Non-production only. This exchange mints a session from a self-selected role and
+                      verifies no credential. It exists for staging walkthroughs and is refused on
+                      production deployments.
+                    </p>
+                  </details>
+                ) : null}
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </AuthPageLayout>
+    </PublicShell>
+  );
+}
+
+/**
+ * Consume a one-time password invitation.
+ *
+ * `POST /v1/auth/set-password` deliberately does NOT return a session, so this
+ * page hands the user to /login afterwards rather than signing them in.
+ */
+export function SetPasswordPage({ config }: PublicPageProps) {
+  usePageMeta({ title: 'Set your password · AstraNull', robots: 'noindex, nofollow' });
+
+  const [token, setToken] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('token')?.trim() ?? '';
+  });
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [policyFailures, setPolicyFailures] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState<Record<string, unknown> | null>(null);
+
+  // A token in the query string is a live secret; drop it from the address bar so
+  // it does not persist in history or leak through a Referer on the next click.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('token')) return;
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError('');
+    setPolicyFailures([]);
+
+    if (password !== confirm) {
+      setError('The two passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('/v1/auth/set-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ token: token.trim(), password })
+      });
+      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        const code = String(json.error ?? '');
+        if (code === 'weak_password') {
+          setPolicyFailures(passwordPolicyMessages(json.failures));
+          throw new Error('That password does not meet the password policy.');
+        }
+        if (code === 'invalid_invite') {
+          throw new Error('This invitation is invalid or has already been used. Ask your administrator for a new one.');
+        }
+        if (code === 'invite_expired') {
+          throw new Error('This invitation has expired. Ask your administrator for a new one.');
+        }
+        if (code === 'rate_limited') {
+          throw new Error(`Too many attempts. Try again ${retryAfterLabel(json, response)}.`);
+        }
+        throw new Error(String(json.message ?? code ?? 'Could not set the password.'));
+      }
+      setPassword('');
+      setConfirm('');
+      setToken('');
+      setDone(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set the password.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl}>
+      <AuthPageLayout
+        aside={(
+          <>
+            <h1 className="auth-title">Set your account password.</h1>
+            <p className="auth-lead">
+              Your administrator issued a one-time invitation for this account. Setting a password
+              activates it and closes the invitation — it cannot be reused.
+            </p>
+            <AuthAsidePoints
+              items={[
+                { icon: LockKeyhole, text: 'Stored as a salted scrypt verifier, never in plaintext' },
+                { icon: ShieldCheck, text: 'Your role and workspace come from your account, not this form' },
+                { icon: FileCheck2, text: 'Activation is written to the tenant audit log' }
+              ]}
+            />
+          </>
+        )}
+        footer={<p><a href={config.loginUrl}>Back to log in</a></p>}
+      >
+        <Card className="auth-card">
+          <AuthCardHeader
+            badge={<Badge tone="info">One-time invitation</Badge>}
+            title={done ? 'Password set' : 'Set your password'}
+            description={done
+              ? 'The account is active. Sign in with your work email and the password you just chose.'
+              : 'Paste the invitation token you were given, then choose a password of at least 12 characters.'}
+          />
+          <CardContent>
+            {done ? (
+              <div className="success-panel" role="status" aria-live="polite">
+                <div className="callout info">
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                  <p className="success-panel-lead">
+                    Password set for {String(done.email ?? 'your account')}. The invitation is now closed.
+                  </p>
+                </div>
+                <div className="auth-form-actions">
+                  <AnchorButton href={config.loginUrl}>Continue to log in</AnchorButton>
+                </div>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={submit} aria-busy={loading}>
+                <label htmlFor="set-password-token">
+                  <span>Invitation token</span>
+                  <input
+                    id="set-password-token"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    className="mono"
+                    placeholder="pwi_…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    disabled={loading}
+                  />
+                </label>
+                <label htmlFor="set-password-new">
+                  <span>New password</span>
+                  <span className="auth-password-field">
+                    <input
+                      id="set-password-new"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={200}
+                      required
+                      disabled={loading}
+                      aria-describedby="set-password-policy"
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowPassword((current) => !current)}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                      <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
+                    </button>
+                  </span>
+                  <span className="auth-field-help" id="set-password-policy">
+                    At least 12 characters, mixing at least three of: lowercase, uppercase, digits, symbols.
+                    Do not reuse the name part of your email address.
+                  </span>
+                </label>
+                <label htmlFor="set-password-confirm">
+                  <span>Confirm password</span>
+                  <input
+                    id="set-password-confirm"
+                    type={showPassword ? 'text' : 'password'}
+                    value={confirm}
+                    onChange={(event) => setConfirm(event.target.value)}
+                    autoComplete="new-password"
+                    required
+                    disabled={loading}
+                  />
+                </label>
+                {error ? (
+                  <div className="form-error" role="alert">
+                    <p>{error}</p>
+                    {policyFailures.length > 0 ? (
+                      <ul>
+                        {policyFailures.map((message) => <li key={message}>{message}</li>)}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="auth-form-actions">
+                  <Button type="submit" loading={loading}>Set password</Button>
                 </div>
               </form>
             )}
@@ -988,7 +1365,7 @@ export function SignupPage({ config }: PublicPageProps) {
             <p className="auth-lead">Provisioning is review-gated. Operations validates organization details, intended use, and plan fit before creating a tenant workspace.</p>
             <AuthAsidePoints
               items={[
-                { icon: ShieldCheck, text: 'Safe-by-default validation is available immediately after approval' },
+                { icon: ShieldCheck, text: 'Validation is available immediately after approval' },
                 { icon: Siren, text: 'High-scale programs stay SOC-scheduled and pack-gated' },
                 { icon: UserRound, text: 'Track request status any time with your request ID' }
               ]}

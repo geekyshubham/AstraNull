@@ -1069,7 +1069,7 @@ function RunDetailView({
       <>
       <div className="metric-grid four">
         <MetricCard label="Target group" value={groupName} sub="Declared scope under test" icon={Target} tone="info" />
-        <MetricCard label="Check" value={checkDisplayName(data.checks, getString(entity, ['check_id'], ''))} sub={getString(entity, ['vector_family'], 'safe check')} icon={FileCheck2} tone="muted" />
+        <MetricCard label="Check" value={checkDisplayName(data.checks, getString(entity, ['check_id'], ''))} sub={getString(entity, ['vector_family'], 'check')} icon={FileCheck2} tone="muted" />
         <MetricCard label="Verdict" value={formatStatusLabel(verdictValue, 'pending')} sub={`placement ${getNestedString(verdict ?? {}, ['placement_confidence', 'level'], 'unknown')}`} icon={ShieldCheck} tone={verdictBadgeTone(verdictValue)} />
         <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
       </div>
@@ -1090,7 +1090,7 @@ function RunDetailView({
           <Card>
             <CardHeader>
               <CardTitle>Probe result</CardTitle>
-              <CardDescription>Outside observations from bounded probes.</CardDescription>
+              <CardDescription>Outside observations from probes.</CardDescription>
             </CardHeader>
             <CardContent>
               {probeEvents.length === 0 ? (
@@ -1930,7 +1930,7 @@ function TargetGroupDetailView({
               <DataTable
                 columns={policyColumns}
                 items={relatedPolicies}
-                empty={<EmptyState icon={FileCheck2} title="No policies bound." body="Bind safe checks through test policies before scheduling runs." actionLabel="Open test policies" actionHref="#test-policies" />}
+                empty={<EmptyState icon={FileCheck2} title="No policies bound." body="Bind checks through test policies before scheduling runs." actionLabel="Open test policies" actionHref="#test-policies" />}
               />
             </CardContent>
           </Card>
@@ -1943,7 +1943,7 @@ function TargetGroupDetailView({
               <DataTable
                 columns={runColumns}
                 items={relatedRuns}
-                empty={<EmptyState icon={Activity} title="No runs yet." body="Start a safe run after declaring targets and binding checks." actionLabel="Open test runs" actionHref="#runs" />}
+                empty={<EmptyState icon={Activity} title="No runs yet." body="Start a run after declaring targets and binding checks." actionLabel="Open test runs" actionHref="#runs" />}
               />
             </CardContent>
           </Card>
@@ -2346,7 +2346,7 @@ function AgentDetailView({
                 items={agentObservationRuns}
                 getRowId={(run) => getString(run, ['id'], '')}
                 getRowProps={(run) => detailRowNavProps('run-detail', getString(run, ['id'], ''))}
-                empty={<EmptyState icon={Activity} title={targetGroupId ? 'No correlated runs yet.' : 'Agent not bound to a group.'} body={targetGroupId ? 'Runs on this target group appear here once safe checks execute.' : 'Bind this agent to a target group to correlate run observations.'} actionLabel="Open test runs" actionHref="#runs" />}
+                empty={<EmptyState icon={Activity} title={targetGroupId ? 'No correlated runs yet.' : 'Agent not bound to a group.'} body={targetGroupId ? 'Runs on this target group appear here once checks execute.' : 'Bind this agent to a target group to correlate run observations.'} actionLabel="Open test runs" actionHref="#runs" />}
               />
             </CardContent>
           </Card>
@@ -2562,7 +2562,7 @@ function FindingDetailView({
     await runAction(`retest-run-${entityId}`, () => requestJson(config, session, '/v1/test-runs', {
       method: 'POST',
       body: { target_group_id: targetGroupId, target_id: targetId, check_id: checkId }
-    }), 'Safe validation retest started.');
+    }), 'Validation retest started.');
   }
 
   async function exportFinding() {
@@ -3886,7 +3886,7 @@ function CheckDetailPage({ entityId, data }: { entityId: string; data: PortalDat
   const family = getString(check, ['vector_family', 'family'], '');
   const safetyClass = getString(check, ['safety_class'], '');
   const bound = checkBoundLabel(check);
-  const description = getString(check, ['description', 'summary'], 'Bounded safe check correlated with agent observation before a verdict is asserted.');
+  const description = getString(check, ['description', 'summary'], 'Check correlated with agent observation before a verdict is asserted.');
   const latest = latestCheckVerdict(data.runs, entityId);
   const method = getString(check, ['method'], safetyClass === 'safe' ? `${bound} · agent-corroborated` : 'governed · SOC-scheduled');
   const title = getString(check, ['name', 'check_id', 'id'], entityId);
@@ -4012,7 +4012,7 @@ function CheckDetailPage({ entityId, data }: { entityId: string; data: PortalDat
         <Card>
           <CardHeader>
             <CardTitle>Evidence &amp; safety bounds</CardTitle>
-            <CardDescription>How the run stays bounded and what evidence a verdict requires.</CardDescription>
+            <CardDescription>How the run is governed and what evidence a verdict requires.</CardDescription>
           </CardHeader>
           <CardContent className="stack">
             {evidenceRequired.length ? (

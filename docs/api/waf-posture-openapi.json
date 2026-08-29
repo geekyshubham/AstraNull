@@ -3,7 +3,7 @@
   "info": {
     "title": "AstraNull WAF Posture and Orchestrator API",
     "version": "0.2.0-contract-draft",
-    "description": "Machine-readable contract for the optional AstraNull WAF posture add-on and WAF orchestrator routes. AstraNull is a no-access-first DDoS readiness validation platform: core flows do not require cloud or WAF credentials, and customer target scope is declared—not discovered as a required feature. WAF validation is safe-by-default: bounded safe checks, metadata-only evidence, rejection of raw packet/payload/header/body fields, and SOC-gated high-scale paths remain outside this add-on’s customer-runnable surface. Enable with `ASTRANULL_WAF_POSTURE_ENABLED=1`. When disabled, `/v1/waf/*` returns `404` with `waf_feature_disabled`. This artifact documents intended HTTP shapes and RBAC from `docs/backend/13-waf-posture-api-contract.md`; it is not a claim that staging/live execution, provider connectors, security observability, or release signoff gates are closed—the WAF orchestrator is not production-ready until those external gates close.",
+    "description": "Machine-readable contract for the optional AstraNull WAF posture add-on and WAF orchestrator routes. AstraNull is a no-access-first DDoS readiness validation platform: core flows do not require cloud or WAF credentials, and customer target scope is declared—not discovered as a required feature. WAF validation uses bounded checks, metadata-only evidence, rejection of raw packet/payload/header/body fields, and SOC-gated high-scale paths remain outside this add-on’s customer-runnable surface. Enable with `ASTRANULL_WAF_POSTURE_ENABLED=1`. When disabled, `/v1/waf/*` returns `404` with `waf_feature_disabled`. This artifact documents intended HTTP shapes and RBAC from `docs/backend/13-waf-posture-api-contract.md`; it is not a claim that staging/live execution, provider connectors, security observability, or release signoff gates are closed—the WAF orchestrator is not production-ready until those external gates close.",
     "contact": {
       "name": "AstraNull API contract",
       "url": "https://github.com/checkred/astranull/blob/main/docs/backend/13-waf-posture-api-contract.md"
@@ -887,7 +887,7 @@
       "post": {
         "tags": ["waf-cve-playbooks"],
         "summary": "Coordinated safe retest across playbook vendor slices",
-        "description": "Starts bounded safe retest across all assets in an approved playbook.",
+        "description": "Starts validation retest across all assets in an approved playbook.",
         "operationId": "retestCveMitigationPlaybook",
         "security": [{ "bearerAuth": ["waf:run"] }],
         "parameters": [{ "$ref": "#/components/parameters/CvePipelineItemId" }],

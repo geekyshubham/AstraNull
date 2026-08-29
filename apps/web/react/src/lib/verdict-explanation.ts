@@ -104,7 +104,7 @@ function resolveWafPostureRemediation(context: {
     steps.push('Enable WAF coverage for the declared asset and validate with a safe marker retest.');
   }
   if (probeEventsHaveError(probeEvents)) {
-    steps.push('Verify the declared URL is reachable from external probes and accepts bounded HEAD requests.');
+    steps.push('Verify the declared URL is reachable from external probes.');
   }
   if (noObsEvents.length || agentPlacementUnbound(context.detail ?? null)) {
     steps.push('Bind an outbound agent to the target group and confirm canary observation is enabled.');
@@ -200,7 +200,7 @@ export function summarizePlacementConfidence(
     return 'Placement confidence is supported by job-bound agent observation correlated to this run.';
   }
   if (noObsEvents.length) {
-    return 'Placement confidence is limited: bounded window ended with agent_no_observation and no matching observation.';
+    return 'Placement confidence is limited: the observation window ended with agent_no_observation and no matching observation.';
   }
   return 'Placement confidence cannot be proven from run events yet.';
 }

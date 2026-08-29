@@ -19,6 +19,8 @@ import {
   POSTGRES_AGENT_AUTH_SERVICE_METHODS,
   POSTGRES_AGENT_SERVICE_METHODS,
   POSTGRES_AUTH_TOKEN_SERVICE_METHODS,
+  POSTGRES_PASSWORD_AUTH_SERVICE_METHODS,
+  PASSWORD_AUTH_REPOSITORY_METHODS,
   POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS,
   POSTGRES_VALIDATION_EVIDENCE_SERVICE_METHODS,
   POSTGRES_VALIDATION_FINDINGS_SERVICE_METHODS,
@@ -114,6 +116,13 @@ function createHarness(overrides = {}) {
           ...AUTH_TOKEN_REPOSITORY_METHODS,
           ...SERVICE_ACCOUNT_REPOSITORY_METHODS,
         ]) {
+          repo[method] = async () => null;
+        }
+        return repo;
+      }
+      if (key === 'passwordAuth') {
+        const repo = {};
+        for (const method of PASSWORD_AUTH_REPOSITORY_METHODS) {
           repo[method] = async () => null;
         }
         return repo;
@@ -291,6 +300,7 @@ describe('postgres runtime adapter', () => {
       'coreCatalog',
       'audit',
       'authTokens',
+      'passwordAuth',
       'agentControl',
       'validationEvidence',
       'reports',
@@ -349,6 +359,10 @@ describe('postgres runtime adapter', () => {
     }
     for (const method of POSTGRES_SERVICE_ACCOUNT_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.serviceAccounts[method], 'function', method);
+    }
+    assert.ok(runtime.services.passwordAuth);
+    for (const method of POSTGRES_PASSWORD_AUTH_SERVICE_METHODS) {
+      assert.equal(typeof runtime.services.passwordAuth[method], 'function', method);
     }
     for (const method of POSTGRES_AGENT_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.agents[method], 'function', method);

@@ -2,7 +2,7 @@
 
 ## Core rule
 
-Default AstraNull checks must be safe, low-volume, bounded, and scoped to customer-declared targets.
+AstraNull checks must be scoped to customer-declared targets and governed by safety class, rate caps, and SOC gates.
 
 ## Safety classes
 

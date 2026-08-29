@@ -23,6 +23,7 @@ const PREFIX = {
   signup: 'sgn',
   internalAudit: 'iaud',
   approval: 'appr',
+  passwordInvite: 'pwi',
   dns: 'dns',
   tv: 'tv',
   loa: 'loa',

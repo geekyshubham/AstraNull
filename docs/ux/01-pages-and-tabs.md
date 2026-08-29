@@ -14,7 +14,8 @@ This is the master page map for AstraNull.
 | Sign-Up Intake | Prospects/customers | Submit account request metadata for review or provisioning. |
 | Dashboard | Everyone | Enterprise readiness overview. |
 | Onboarding | New users | Guided setup: environment, targets, agent install, heartbeat verification, optional placement test, first safe run. |
-| Target Groups | Engineers, security architects | Define what to validate. |
+| Target Groups | Engineers, security architects | Define business-service scope, expected behavior, checks, and schedules. |
+| Targets | Engineers, security architects | Review all customer-declared hostnames/IPs with group, environment, verification provenance, bounded-test eligibility, source, and added time; add one domain or remove a declaration without deleting retained evidence. |
 | Agents | Engineers, platform teams | Install, monitor, troubleshoot agents. |
 | Checks Library | Security architects, engineers | Understand and enable readiness checks. |
 | Test Runs | Engineers, SOC, auditors | Inspect execution, timeline, evidence, verdicts. |
@@ -54,7 +55,7 @@ Customer-facing navigation must not include `Internal Management` or `SOC Consol
 | Install agent | Copy Linux/Docker/Helm command | Shows outbound-only install tabs | Optional — agent registration recommended. |
 | Verify heartbeat | Wait on wizard | Polls `GET /v1/agents` until heartbeat or timeout | Online agent with `last_heartbeat_at`; timeout shows friendly troubleshooting empty state with retry and Agents page links. |
 | Placement test | Start optional safe canary run | Starts `path.protected_canary.safe` against declared target | Optional — bounded metadata-only canary to strengthen placement confidence. |
-| First safe run | Start validation | Starts customer-runnable safe check (e.g. `origin.direct_bypass.safe`) | Safe test run created. |
+| First safe run | Start validation | Starts customer-runnable check (e.g. `origin.direct_bypass.safe`) | Test run created. |
 | Review result | Open runs/evidence/findings | Links to verdict and evidence chain | Verdicted run exists. |
 
 Wizard panels surface **placement confidence** hints (from readiness diagnostics and agent capabilities) on heartbeat verification and placement-test steps. Heartbeat verification does not render raw agent credentials or payloads.

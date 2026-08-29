@@ -23,5 +23,6 @@
 | [WAF Posture UX](ux/13-waf-posture-ux.md) | Page map, tables, detail views, microcopy. |
 | [WAF Workflows](flows/07-waf-posture-workflows.md) | End-to-end onboarding, drift, CVE, discovery, remediation flows. |
 | [Safe WAF Validation Policy](security/05-waf-safe-validation-policy.md) | Safety boundaries and prohibited behavior. |
+| [Edge Fingerprint Source Attribution](attribution/edge-fingerprint-sources.md) | wafw00f + cdncheck corpus provenance, licenses, regeneration, tier policy. |
 | [WAF Build Backlog](progress-waf-posture-backlog.md) | Agent-ready implementation milestones. |
 | [Exposure Management Research Map](sources/exposure-management-research-map.md) | Public capability patterns, doc audit status, and re-audit checklist. |

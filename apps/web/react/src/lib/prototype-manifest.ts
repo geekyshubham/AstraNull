@@ -135,7 +135,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'overview',
     source: 'onboarding.html',
     status: 'React implemented',
-    summary: 'Guided first environment, target group, outbound agent, heartbeat, safe run, and evidence review.'
+    summary: 'Guided first environment, target group, outbound agent, heartbeat, test run, and evidence review.'
   },
   {
     id: 'environments',
@@ -212,7 +212,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'validation',
     source: 'test-policies.html',
     status: 'React implemented',
-    summary: 'Cadence, declared target bindings, expected verdicts, windows, and safe-by-default policy cards.'
+    summary: 'Cadence, declared target bindings, expected verdicts, windows, and policy cards.'
   },
   {
     id: 'runs',
@@ -508,10 +508,10 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   'target-groups': [
     { id: 'overview', label: 'Overview', summary: 'Declared target groups with readiness and owner context.', evidence: 'Customer-provided scope declaration.' },
     { id: 'targets', label: 'Targets', summary: 'Manual or CSV/API-imported targets only.', evidence: 'Declared targets and explicit expected behavior.' },
-    { id: 'expected-behavior', label: 'Expected Behavior', summary: 'Expected paths, health signals, and protective baseline.', evidence: 'Customer declaration and observed safe checks.' },
+    { id: 'expected-behavior', label: 'Expected Behavior', summary: 'Expected paths, health signals, and protective baseline.', evidence: 'Customer declaration and observed checks.' },
     { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to declared scope.', evidence: 'Agent heartbeat and placement confidence.' },
-    { id: 'checks', label: 'Checks', summary: 'Safe check bindings and coverage.', evidence: 'Check catalog and policy bindings.' },
-    { id: 'runs', label: 'Runs', summary: 'Recent safe validation activity.', evidence: 'Run timeline and verdicts.' },
+    { id: 'checks', label: 'Checks', summary: 'Check bindings and coverage.', evidence: 'Check catalog and policy bindings.' },
+    { id: 'runs', label: 'Runs', summary: 'Recent validation activity.', evidence: 'Run timeline and verdicts.' },
     { id: 'findings', label: 'Findings', summary: 'Open and closed gaps for this group.', evidence: 'Finding custody references.' },
     { id: 'settings', label: 'Settings', summary: 'Archive, owners, windows, and safety policy.', evidence: 'Audited tenant action.' }
   ],
@@ -527,25 +527,25 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   checks: [
     { id: 'recommended', label: 'Recommended', summary: 'Starter checks based on declared service context.', evidence: 'Check catalog safety class and target bindings.' },
     { id: 'origin-bypass', label: 'Origin Bypass', summary: 'Bounded origin protection checks.', evidence: 'Probe metadata and agent observation.' },
-    { id: 'l3l4', label: 'L3/L4', summary: 'Low-volume TCP and reachability validation families.', evidence: 'Bounded probe results.' },
+    { id: 'l3l4', label: 'L3/L4', summary: 'TCP and reachability validation families.', evidence: 'Probe results.' },
     { id: 'dns', label: 'DNS', summary: 'Resolver and delegation readiness checks.', evidence: 'DNS lookup metadata.' },
     { id: 'l7api', label: 'L7/API', summary: 'Safe application path and API posture checks.', evidence: 'HEAD/marker observations without sensitive content.' },
     { id: 'protocols', label: 'Protocols', summary: 'TLS and protocol hygiene checks.', evidence: 'Handshake and metadata observations.' },
     { id: 'high-scale', label: 'High-Scale', summary: 'Request-only scenarios that require SOC governance.', evidence: 'Authorization pack and SOC decision artifacts.' },
-    { id: 'custom', label: 'Custom', summary: 'Customer-defined safe checks bound to declarations.', evidence: 'Policy record and reviewed scope.' }
+    { id: 'custom', label: 'Custom', summary: 'Customer-defined checks bound to declarations.', evidence: 'Policy record and reviewed scope.' }
   ],
   'test-policies': [
-    { id: 'cadence', label: 'Cadence', summary: 'Daily, weekly, monthly, and event-driven safe validation windows.', evidence: 'Policy schedule and target binding.' },
+    { id: 'cadence', label: 'Cadence', summary: 'Daily, weekly, monthly, and event-driven validation windows.', evidence: 'Policy schedule and target binding.' },
     { id: 'bindings', label: 'Target Bindings', summary: 'Policies bind only to declared target groups.', evidence: 'Declared target-group reference.' },
-    { id: 'expected-verdicts', label: 'Expected Verdicts', summary: 'Expected pass, warn, or fail behavior for each safe check.', evidence: 'Customer declaration and check contract.' },
+    { id: 'expected-verdicts', label: 'Expected Verdicts', summary: 'Expected pass, warn, or fail behavior for each check.', evidence: 'Customer declaration and check contract.' },
     { id: 'windows', label: 'Safe Windows', summary: 'Local maintenance and observation windows.', evidence: 'Policy record and audit.' },
-    { id: 'guardrails', label: 'Guardrails', summary: 'Low-volume and bounded validation settings.', evidence: 'Safe test policy enforcement.' },
+    { id: 'guardrails', label: 'Guardrails', summary: 'Schedule and authorization settings.', evidence: 'Test policy enforcement.' },
     { id: 'soc-gates', label: 'SOC Gates', summary: 'High-scale policies remain request-only for customers.', evidence: 'Authorization and SOC decision artifacts.' }
   ],
   runs: [
     { id: 'summary', label: 'Summary', summary: 'Current verdict, target group, check family, and guardrail state.', evidence: 'Run record and policy snapshot.' },
     { id: 'timeline', label: 'Timeline', summary: 'Ordered run lifecycle from scheduling through final verdict.', evidence: 'Run events and audit entries.' },
-    { id: 'probe-results', label: 'Probe Results', summary: 'Outside observations from bounded probes.', evidence: 'Probe result records.' },
+    { id: 'probe-results', label: 'Probe Results', summary: 'Outside observations from probes.', evidence: 'Probe result records.' },
     { id: 'agent-observations', label: 'Agent Observations', summary: 'Inside observations from outbound-only canaries.', evidence: 'Agent observation records.' },
     { id: 'correlation', label: 'Correlation', summary: 'Truth table explaining why the verdict was assigned.', evidence: 'Observed facts and correlation logic.' },
     { id: 'evidence', label: 'Evidence', summary: 'Custody-ready artifacts generated by the run.', evidence: 'Evidence ledger references.' },
@@ -668,14 +668,14 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Target groups and declared targets', surface: 'Target Groups, Target Detail', status: 'Visible', relationship: 'The declared target group is the unit of validation.' },
       { name: 'Expected behavior model', surface: 'Target Groups', status: 'Visible', relationship: 'Expected paths and health signals support verdict interpretation.' },
       { name: 'CSV/API import for declared scope', surface: 'Target Groups, APIs', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
-      { name: 'Guided first safe run', surface: 'Onboarding', status: 'Visible', relationship: 'Connects setup to first bounded validation evidence.' },
+      { name: 'Guided first test run', surface: 'Onboarding', status: 'Visible', relationship: 'Connects setup to first validation evidence.' },
       { name: 'Role-based navigation and permissions', surface: 'Portal Shell', status: 'Partial', relationship: 'Controls SOC, audit, and release evidence visibility.' }
     ]
   },
   {
     id: 'agent-probe',
     title: 'Outbound Agents And Probe Fleet',
-    summary: 'Inside/outside observations stay bounded and traceable.',
+    summary: 'Inside/outside observations stay traceable.',
     items: [
       { name: 'Outbound-only agent install', surface: 'Agents, Onboarding', status: 'Visible', relationship: 'Agent calls AstraNull over outbound HTTPS and needs no inbound management port.' },
       { name: 'Agent heartbeat and placement', surface: 'Agents, Agent Detail', status: 'Visible', relationship: 'Heartbeat plus placement canary increases confidence.' },
@@ -687,12 +687,12 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
   },
   {
     id: 'validation-verdicts',
-    title: 'Safe Validation And Verdicts',
-    summary: 'Checks, runs, findings, and scoring preserve safe-by-default behavior.',
+    title: 'Validation And Verdicts',
+    summary: 'Checks, runs, findings, and scoring preserve governed validation behavior.',
     items: [
-      { name: 'Safe check catalog', surface: 'Checks Library', status: 'Visible', relationship: 'Safe and SOC-gated checks are clearly separated.' },
+      { name: 'Check catalog', surface: 'Checks Library', status: 'Visible', relationship: 'Customer-runnable and SOC-gated checks are clearly separated.' },
       { name: 'Check families', surface: 'Checks Library', status: 'Visible', relationship: 'Origin, L3/L4, DNS, L7/API, TLS, protocol, operations, and high-scale families.' },
-      { name: 'Safe test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, target group, and safe windows.' },
+      { name: 'Test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, target group, and schedule windows.' },
       { name: 'Run detail visualizations', surface: 'Test Runs, Run Detail', status: 'Visible', relationship: 'Timeline, probe results, observations, correlation, evidence, and events.' },
       { name: 'Correlation engine and verdict logic', surface: 'Runs, Evidence, Dashboard', status: 'Partial', relationship: 'Verdicts link to observed facts instead of assumptions.' },
       { name: 'Readiness scoring', surface: 'Dashboard, Reports', status: 'Visible', relationship: 'Aggregates coverage, findings, freshness, placement, and SOC readiness.' },
@@ -721,7 +721,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'WAF asset coverage and effectiveness', surface: 'WAF Asset Detail', status: 'Visible', relationship: 'Pass rate, control-bypass classes, risk tier, and actions.' },
       { name: 'WAF deployment roadmap and risk scoring', surface: 'WAF Posture', status: 'Visible', relationship: 'Turns posture evidence into prioritized rollout recommendations.' },
       { name: 'WAF scenario cadence', surface: 'WAF Posture', status: 'Visible', relationship: 'Safe scenarios are scheduled and explained without customer-run high-scale controls.' },
-      { name: 'WAF validation planning and runs', surface: 'WAF Posture, Evidence', status: 'Partial', relationship: 'Plans and safe runs create protected-claim evidence.' },
+      { name: 'WAF validation planning and runs', surface: 'WAF Posture, Evidence', status: 'Partial', relationship: 'Plans and validation runs create protected-claim evidence.' },
       { name: 'WAF drift queue, scans, retests', surface: 'WAF Posture', status: 'Partial', relationship: 'Drift events connect to retest and remediation actions.' },
       { name: 'WAF read-only connectors', surface: 'WAF Posture, Integrations', status: 'Partial', relationship: 'Optional connector snapshots enrich posture but are not core requirements.' },
       { name: 'WAF report kinds and catalog', surface: 'Reports, WAF Posture', status: 'Partial', relationship: 'Executive coverage, technical evidence, drift audit, connector health, compliance, and board brief.' }
@@ -803,7 +803,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
 export const RELATIONSHIP_FLOWS: RelationshipFlow[] = [
   {
     title: 'Declared Scope To First Verdict',
-    steps: ['Environment', 'Target group', 'Expected behavior', 'Outbound agent', 'Safe check', 'Run correlation', 'Evidence vault'],
+    steps: ['Environment', 'Target group', 'Expected behavior', 'Outbound agent', 'Check', 'Run correlation', 'Evidence vault'],
     outcome: 'A readiness verdict backed by customer declaration, probe result, agent observation, and custody reference.'
   },
   {
@@ -819,7 +819,7 @@ export const RELATIONSHIP_FLOWS: RelationshipFlow[] = [
   {
     title: 'WAF Posture To Roadmap',
     steps: ['Asset snapshot', 'Scenario cadence', 'Validation plan', 'Drift queue', 'CVE match', 'Action item', 'Report'],
-    outcome: 'Risk-prioritized WAF readiness roadmap grounded in metadata and safe validation evidence.'
+    outcome: 'Risk-prioritized WAF readiness roadmap grounded in metadata and validation evidence.'
   },
   {
     title: 'Discovery Candidate To Declared Scope',

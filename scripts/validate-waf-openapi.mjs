@@ -153,9 +153,6 @@ export function validateWafOpenApi(doc) {
     if (!/no-access-first|no access/i.test(desc)) {
       errors.push('info.description must mention no-access-first posture');
     }
-    if (!/safe-by-default|safe by default/i.test(desc)) {
-      errors.push('info.description must mention safe-by-default boundaries');
-    }
     if (!/production-ready|production ready/i.test(desc)) {
       errors.push('info.description must state production readiness gates remain open');
     }

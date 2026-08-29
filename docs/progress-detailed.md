@@ -84,7 +84,7 @@ Bounded, single-connection, metadata-only live probes now back these safe checks
 | `tls.idle_connection_timeout.safe` | `tls_session` | One bounded TLS handshake (node:tls); records negotiated protocol/cipher/authorized, then closes. No application data. |
 | `protocol.http2_stream_concurrency.safe` | `http2_settings` | One bounded h2 session (node:http2); reads advertised SETTINGS (max concurrent streams), then closes. No request stream, no flood. |
 
-Deliberately kept `metadata_marker` (safety / feasibility judgment per `AGENTS.md` safe-by-default and "do not ship attack tooling casually"):
+Deliberately kept `metadata_marker` (safety / feasibility judgment per `AGENTS.md` and "do not ship attack tooling casually"):
 
 | Check | Why not a live probe |
 |---|---|

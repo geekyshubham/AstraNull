@@ -140,6 +140,31 @@ export function mapAzureInventory(raw) {
   return items;
 }
 
+function normalizeFqdn(value) {
+  return String(value ?? '').trim().replace(/\.+$/, '').toLowerCase();
+}
+
+export function mapHetznerDnsInventory(raw) {
+  const candidate = raw?.zones ?? raw?.result?.zones ?? raw?.result ?? raw ?? [];
+  const zones = Array.isArray(candidate)
+    ? candidate
+    : candidate && typeof candidate === 'object' && (candidate.name || candidate.zone)
+      ? [candidate]
+      : [];
+  return zones.map((zone) => {
+    const value = normalizeFqdn(zone?.name ?? zone?.zone ?? zone?.domain);
+    if (!value) return null;
+    const status = String(zone?.status ?? '').trim().toLowerCase();
+    return {
+      kind: 'fqdn',
+      value,
+      label: zone?.label ?? zone?.display_name ?? value,
+      resource_ref: zone?.id ?? `hetzner_dns:zone:${value}`,
+      importable: !['deleting', 'failed'].includes(status),
+    };
+  }).filter(Boolean);
+}
+
 const PROVIDER_MAPPERS = Object.freeze({
   cloudflare: mapCloudflareInventory,
   route53: mapRoute53Inventory,
@@ -151,13 +176,18 @@ const PROVIDER_MAPPERS = Object.freeze({
   azure: mapAzureInventory,
 });
 
+const PROVIDER_MAPPER_ALIASES = Object.freeze({
+  hetzner: mapHetznerDnsInventory,
+  hetzner_dns: mapHetznerDnsInventory,
+});
+
 /**
  * @param {string} provider
  * @param {unknown} raw
  */
 export function mapProviderInventory(provider, raw) {
   const key = String(provider ?? '').trim().toLowerCase();
-  const mapper = PROVIDER_MAPPERS[key];
+  const mapper = PROVIDER_MAPPERS[key] ?? PROVIDER_MAPPER_ALIASES[key];
   if (!mapper) return [];
   const mapped = mapper(raw).map(normalizeItem).filter(Boolean);
   assertNoSecrets(mapped);

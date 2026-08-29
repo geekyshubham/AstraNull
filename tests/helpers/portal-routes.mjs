@@ -23,6 +23,7 @@ export const NAV_ROUTE_IDS = Object.freeze([
   'dashboard',
   'environments',
   'target-groups',
+  'targets',
   'agents',
   'checks',
   'test-policies',
@@ -69,7 +70,7 @@ export const PUBLIC_ROUTE_ENTRIES = Object.freeze([
 ]);
 
 /**
- * FT-A11Y-01 route matrix: 25 app routes (NAV_ITEMS + DETAIL_ROUTE_ITEMS) + 5 public routes.
+ * FT-A11Y-01 route matrix: all app routes (NAV_ITEMS + DETAIL_ROUTE_ITEMS) + public routes.
  * @typedef {'public' | 'customer' | 'staff-admin' | 'staff-soc'} PortalRouteSurface
  * @typedef {{ routeId: string, surface: PortalRouteSurface, pathname?: string }} PortalRouteScan
  */

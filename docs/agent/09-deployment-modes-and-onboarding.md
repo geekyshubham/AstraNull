@@ -24,7 +24,7 @@ Customers asked for two things:
 Both must be reconciled with AstraNull's non-negotiable product rules
 ([`AGENTS.md`](../../AGENTS.md), [`docs/product/02-scope-and-principles.md`](../product/02-scope-and-principles.md)):
 no default cloud access, no IP-inventory discovery, **outbound-only management**, evidence
-over assumptions, and safe-by-default probes.
+over assumptions.
 
 ## 2. Core design decisions
 
@@ -471,7 +471,7 @@ correlate with an agent observation).
 | Token validated on every report | §6 gate before endpoint use or probing. |
 | User must confirm ownership | No high-confidence verdict / SOC flow without confirmation. |
 | External-only labeled honestly | Never "proven" without agent correlation. |
-| Safe-by-default probes | Rate caps, bounded requests. |
+| Bounded probes | Rate caps, bounded requests. |
 | SOC gates high-scale/offensive | Existing workflow unchanged. |
 | No secrets in image | Runtime env/secret only; CI scan; docs + Helm templates. |
 | Metadata-only evidence | No raw payloads/headers stored. |

@@ -13,6 +13,7 @@ export function getPublicSiteConfig(runtimeConfig) {
     customer_portal_path: '/app',
     auth_mode: runtimeConfig.authMode ?? 'dev-headers',
     bundled_staging_login_enabled: runtimeConfig.bundledStagingOidc === true,
+    password_login_enabled: runtimeConfig.passwordLoginEnabled === true,
     feature_flags: {
       waf_posture: runtimeConfig.featureFlags?.wafPostureEnabled === true,
       external_discovery: runtimeConfig.featureFlags?.externalDiscoveryEnabled === true,

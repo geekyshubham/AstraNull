@@ -6,6 +6,8 @@
 - [`15-crud-operations-backlog.md`](15-crud-operations-backlog.md) — every CRUD / delete / edit gap the prototype leaves open.
 - [`reference-2026-07/`](reference-2026-07/) — the OD prototype (index.html + styles.css + app.js) as read-only visual reference.
 
+
+> **2026-08 Targets amendment:** The shipped React IA adds a first-class `#targets` customer route directly below `#target-groups`. It hydrates `GET /v1/targets` plus target-group destinations and shows customer-declared hostname/IP, group/environment, verification provenance, bounded-test eligibility/reason, explicit manual/provider source, and added time. Users may add one domain or remove a declaration; retained evidence is not deleted. This amendment does not permit automatic IP inventory discovery or unmanaged traffic execution.
 ## 1. Purpose
 
 Migrate the React portal at `apps/web/react/` from its current 44-route surface (July 2026) to the leaner, evidence-first IA demonstrated in the prototype. **Visual parity is the floor, not the ceiling** — the real build must add CRUD flows, RBAC gating, and API wiring the prototype does not demonstrate (see [CRUD backlog](15-crud-operations-backlog.md)).
@@ -18,7 +20,7 @@ Every change below still satisfies the immovable rules in [`PRODUCT.md`](../../P
 - Agent is outbound-only. The Agents surface still shows install snippets + heartbeat; no inbound management port is implied anywhere.
 - SOC gates high-scale. Customers **request**, SOC **executes**. The customer-facing SOC console at `#soc` is removed; the SOC-gated inline queue on Test runs is the customer's only touch point.
 - Evidence over assertion. Every verdict, chip state, and readiness KPI in the new IA points at a corroborating source field (see §7 verification chip taxonomy).
-- Safe-by-default. Bounded checks stay bounded; unverified targets are gated from running (see §6 target verification ladder).
+- Unverified targets are gated from running (see §6 target verification ladder).
 - Brand personality: calm, rigorous, defensible. Anti-references (dark hacker console, growth-SaaS gradients, cloud-inventory scanner) still hold; the revamp's Resend-derived void-black + frost-border palette is intentional restraint, not console theatre.
 
 ## 3. What changes at IA level

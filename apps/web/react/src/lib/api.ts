@@ -142,6 +142,7 @@ export async function fetchPortalConfig(): Promise<PortalConfig> {
     authMode,
     siteConfig,
     bundledLoginEnabled: siteConfig.bundled_staging_login_enabled === true,
+    passwordLoginEnabled: siteConfig.password_login_enabled === true,
     loginUrl: String(siteConfig.login_url ?? '/login'),
     portalPath: String(siteConfig.customer_portal_path ?? '/app'),
     staffLoginPath: '/internal/admin/login'
@@ -214,6 +215,11 @@ export async function ensurePortalSession(surface: 'customer' | 'staff' = 'custo
       return { config, session: null, redirectToLogin: true, loginUrl: idpRedirect };
     }
     if (config.bundledLoginEnabled) {
+      return { config, session: null, redirectToLogin: true, loginUrl: loginPath };
+    }
+    // The credential lane is served from the login page itself, so an anonymous
+    // visitor is sent there rather than told sign-in is unconfigured.
+    if (config.passwordLoginEnabled && surface !== 'staff') {
       return { config, session: null, redirectToLogin: true, loginUrl: loginPath };
     }
     return {
@@ -458,6 +464,7 @@ const FEATURE_GATED_DATASETS = new Set<PortalDataset>([
 const ALL_PORTAL_DATASETS: readonly PortalDataset[] = [
   ...CORE_PORTAL_DATASETS,
   'targetGroups',
+  'targets',
   'agents',
   'checks',
   'testPolicies',
@@ -551,6 +558,10 @@ function applyDatasetValue(data: PortalData, dataset: PortalDataset, value: unkn
     case 'targetGroups':
       data.targetGroups = asArray(value);
       data.targetGroupsMeta = asObject((value as { meta?: unknown } | null)?.meta);
+      break;
+    case 'targets':
+      data.targets = asArray(value);
+      data.targetsMeta = asObject((value as { meta?: unknown } | null)?.meta);
       break;
     case 'reports':
       data.reports = asArray(value);
@@ -668,6 +679,7 @@ export async function fetchPortalData(
     tenant: () => opt('/v1/tenants/current', customerHeaders, null),
     deploymentFeatures: () => opt('/v1/tenant/deployment-features', customerHeaders, null),
     targetGroups: () => opt('/v1/target-groups', customerHeaders, { items: [] }),
+    targets: () => opt('/v1/targets', customerHeaders, { items: [] }),
     agents: () => opt('/v1/agents', customerHeaders, { items: [] }),
     checks: () => opt('/v1/checks', customerHeaders, { items: [] }),
     testPolicies: () => opt('/v1/test-policies', customerHeaders, { items: [] }),
@@ -763,6 +775,8 @@ export const EMPTY_PORTAL_DATA: PortalData = {
   tenant: null,
   targetGroups: [],
   targetGroupsMeta: null,
+  targets: [],
+  targetsMeta: null,
   agents: [],
   checks: [],
   testPolicies: [],

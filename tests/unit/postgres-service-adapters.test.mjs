@@ -185,6 +185,7 @@ describe('postgres catalog service adapters', () => {
       'patchEnvironment',
     ]);
     assert.deepEqual(CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS, [
+      'listTargets',
       'listTargetGroups',
       'createTargetGroup',
       'getTargetGroup',
@@ -194,7 +195,7 @@ describe('postgres catalog service adapters', () => {
       'patchTarget',
       'deleteTarget',
     ]);
-    assert.equal(CORE_CATALOG_SERVICE_METHODS.length, 13);
+    assert.equal(CORE_CATALOG_SERVICE_METHODS.length, 14);
   });
 
   it('fails early when coreCatalog is missing', () => {
@@ -229,6 +230,7 @@ describe('postgres catalog service adapters', () => {
     await tenants.createEnvironment(ctx, { name: 'E' });
     await tenants.patchEnvironment(ctx, 'env_1', { name: 'E2' });
 
+    await targetGroups.listTargets(ctx);
     await targetGroups.listTargetGroups(ctx);
     await targetGroups.createTargetGroup(ctx, { name: 'G' });
     await targetGroups.getTargetGroup(ctx, 'tg_1');
@@ -242,20 +244,21 @@ describe('postgres catalog service adapters', () => {
     assert.deepEqual(calls[0], { method: 'getCurrentTenant', args: [ctx] });
     assert.deepEqual(calls[1], { method: 'patchCurrentTenant', args: [ctx, { name: 'T' }] });
     assert.deepEqual(calls[4], { method: 'patchEnvironment', args: [ctx, 'env_1', { name: 'E2' }] });
-    assert.deepEqual(calls[8], {
+    assert.deepEqual(calls[5], { method: 'listTargets', args: [ctx] });
+    assert.deepEqual(calls[9], {
       method: 'addTarget',
       args: [ctx, 'tg_1', { kind: 'hostname', value: 'x.example' }],
     });
-    assert.deepEqual(calls[9], {
+    assert.deepEqual(calls[10], {
       method: 'patchTargetGroup',
       args: [ctx, 'tg_1', { name: 'G2' }],
     });
-    assert.deepEqual(calls[10], { method: 'archiveTargetGroup', args: [ctx, 'tg_1'] });
-    assert.deepEqual(calls[11], {
+    assert.deepEqual(calls[11], { method: 'archiveTargetGroup', args: [ctx, 'tg_1'] });
+    assert.deepEqual(calls[12], {
       method: 'patchTarget',
       args: [ctx, 'tg_1', 'tgt_1', { value: 'y.example' }],
     });
-    assert.deepEqual(calls[12], {
+    assert.deepEqual(calls[13], {
       method: 'deleteTarget',
       args: [ctx, 'tg_1', 'tgt_1'],
     });

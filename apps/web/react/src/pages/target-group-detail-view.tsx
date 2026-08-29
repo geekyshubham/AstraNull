@@ -9,12 +9,12 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react';
-import { Activity, Bot, Check, Globe, ShieldHalf, Target, TriangleAlert } from 'lucide-react';
+import { Activity, Bot, CalendarClock, Check, Globe, Plus, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate } from '../lib/utils';
-import { VerifyChip, resolveVerifyChipState, resolveTargetVerificationProvenance } from '../lib/verify-chip';
+import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { emptyStateFromApi, PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -103,6 +103,51 @@ const tgDetailStyles = `
    callout no longer wears the unsigned warn border. Border + icon tone only, token-driven. */
 .tg-detail-view .callout-loa[data-loa-state="signed"] { border-color: color-mix(in oklab, var(--success), transparent 55%); }
 .tg-detail-view .callout-loa[data-loa-state="signed"] .callout-icon { color: var(--success); border-color: color-mix(in oklab, var(--success), transparent 55%); }
+.tg-detail-view .tg-page-head { align-items: flex-start; gap: var(--space-4); }
+.tg-detail-view .tg-page-copy { min-width: 0; }
+.tg-detail-view .tg-page-summary { margin: var(--space-2) 0 0; color: var(--fg-2); }
+.tg-detail-view .tg-title-meta { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2); }
+.tg-detail-view .tg-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.tg-detail-view .tg-head-actions .btn { display: inline-flex; align-items: center; gap: var(--space-2); }
+.tg-detail-view .kpi-value--status { font-size: var(--text-lg); }
+.tg-detail-view .target-primary { display: flex; align-items: flex-start; gap: var(--space-3); min-width: 0; }
+.tg-detail-view .target-primary-copy { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.tg-detail-view .target-primary-copy strong { color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.tg-detail-view .target-primary-copy .target-id { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.tg-detail-view .target-status-stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+.tg-detail-view .target-status-note { color: var(--muted); font-size: var(--text-xs); }
+.tg-detail-view .target-actions { justify-content: flex-end; flex-wrap: wrap; gap: var(--space-1); }
+.tg-detail-view .target-actions .btn { display: inline-flex; align-items: center; gap: var(--space-1); }
+.tg-detail-view .tg-target-row { cursor: pointer; }
+.tg-detail-view .safety-boundary { display: flex; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--accent) 4%); color: var(--fg-2); }
+.tg-detail-view .safety-boundary svg { flex: 0 0 auto; color: var(--accent); margin-top: var(--space-1); }
+.tg-detail-view .safety-boundary strong { display: block; margin-bottom: var(--space-1); color: var(--fg); }
+.tg-detail-view .safety-boundary p { margin: 0; }
+.tg-detail-view .check-choice { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.tg-detail-view .check-choice input { accent-color: var(--accent); cursor: pointer; }
+.tg-detail-view .check-primary { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.tg-detail-view .check-primary strong { color: var(--fg); font-size: var(--text-sm); }
+.tg-detail-view .check-primary .check-description { color: var(--fg-2); font-size: var(--text-xs); text-wrap: pretty; }
+.tg-detail-view .check-primary .check-id { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.tg-detail-view .check-policy-stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.tg-detail-view .check-policy-binding { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.tg-detail-view .schedule-builder { margin-top: var(--space-5); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }
+.tg-detail-view .schedule-builder-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.tg-detail-view .schedule-builder-head h3 { margin: 0; color: var(--fg); font-family: var(--font-display); font-size: var(--text-base); }
+.tg-detail-view .schedule-builder-head p { margin: var(--space-1) 0 0; color: var(--fg-2); }
+.tg-detail-view .schedule-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); width: 100%; margin: 0; padding: 0; border: 0; }
+.tg-detail-view .schedule-fields label { min-width: 0; }
+.tg-detail-view .schedule-selected { margin: 0; color: var(--fg-2); }
+.tg-detail-view .schedule-role-note { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-soft); color: var(--fg-2); }
+.tg-detail-view .schedule-role-note strong { color: var(--fg); }
+@media (max-width: 900px) {
+  .tg-detail-view .schedule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .tg-detail-view .tg-page-head, .tg-detail-view .schedule-builder-head { flex-direction: column; }
+  .tg-detail-view .tg-head-actions { width: 100%; justify-content: flex-start; }
+  .tg-detail-view .schedule-fields { grid-template-columns: minmax(0, 1fr); }
+}
 `;
 
 function ensureStyles(id: string, css: string) {
@@ -149,6 +194,62 @@ function targetVerificationState(item: DataItem) {
 
 function canRunTest(state: string) {
   return RUN_ENABLED_STATES.has(state.trim().toLowerCase());
+}
+
+function humanizeLabel(value: string, fallback = '—') {
+  const normalized = value.trim();
+  if (!normalized) return fallback;
+  const label = normalized.replace(/[_-]+/g, ' ');
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+}
+
+function targetSourceLabel(item: DataItem) {
+  const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
+    ? item.metadata as DataItem
+    : null;
+  const source = getString(
+    item,
+    ['source', 'declaration_source', 'source_kind'],
+    getString(metadata, ['source', 'connector_id', 'declared_via'], '')
+  );
+  return source ? humanizeLabel(source) : 'Manual declaration';
+}
+
+function isCustomerRunnableCheck(check: DataItem) {
+  const constraints = check.safety_constraints
+    && typeof check.safety_constraints === 'object'
+    && !Array.isArray(check.safety_constraints)
+    ? check.safety_constraints as DataItem
+    : null;
+  return getString(check, ['safety_class'], '').toLowerCase() === 'safe'
+    && getString(check, ['risk_class'], '').toLowerCase() !== 'soc_gated'
+    && constraints?.customer_runnable !== false;
+}
+
+function checkSafetySummary(check: DataItem) {
+  const constraints = check.safety_constraints
+    && typeof check.safety_constraints === 'object'
+    && !Array.isArray(check.safety_constraints)
+    ? check.safety_constraints as DataItem
+    : null;
+  const maxEvents = getString(constraints, ['max_events', 'max_requests'], '');
+  const maxDuration = getString(constraints, ['max_duration_seconds'], '');
+  const parts: string[] = [];
+  if (maxEvents) parts.push(`≤ ${maxEvents} events`);
+  if (maxDuration) parts.push(`≤ ${maxDuration}s`);
+  return parts.join(' · ') || 'Catalog-defined';
+}
+
+function formatPolicySafeWindow(policy: DataItem) {
+  const windows = Array.isArray(policy.safe_windows) ? policy.safe_windows as DataItem[] : [];
+  const first = windows[0];
+  if (!first || typeof first !== 'object' || Array.isArray(first)) return 'Window not declared';
+  const day = getString(first, ['day'], '');
+  const start = getString(first, ['start'], '');
+  const end = getString(first, ['end'], '');
+  const timezone = getString(first, ['timezone'], 'UTC');
+  const range = start && end ? `${start}–${end}` : start || end;
+  return [day, range, timezone].filter(Boolean).join(' ') || 'Window not declared';
 }
 
 /** Map a DNS challenge record onto a §7.1 verification-chip state. */
@@ -271,9 +372,11 @@ export function TargetGroupDetailView({
   const [inventoryRows, setInventoryRows] = useState<DataItem[]>([]);
   const [inventoryMeta, setInventoryMeta] = useState<DataItem | null>(null);
   const [selectedInventory, setSelectedInventory] = useState<Set<string>>(new Set());
+  const [edgeDetection, setEdgeDetection] = useState<DataItem | null>(null);
   const [showLoaModal, setShowLoaModal] = useState(false);
   const [showOnboardModal, setShowOnboardModal] = useState(false);
   const [onboardTab, setOnboardTab] = useState<OnboardTab>('fqdn');
+  const [selectedPolicyCheckId, setSelectedPolicyCheckId] = useState('');
 
   const onRefreshRef = useRef(onRefresh);
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
@@ -281,6 +384,7 @@ export function TargetGroupDetailView({
   const targets = Array.isArray(entity.targets) ? entity.targets as DataItem[] : [];
   const agents = Array.isArray(data.agents) ? data.agents as DataItem[] : [];
   const checks = Array.isArray(data.checks) ? data.checks as DataItem[] : [];
+  const policyItems = Array.isArray(data.testPolicies) ? data.testPolicies as DataItem[] : [];
   const relatedRuns = Array.isArray(entity.runs_recent) ? entity.runs_recent as DataItem[] : [];
   const relatedFindings = Array.isArray(entity.findings_on_group) ? entity.findings_on_group as DataItem[] : [];
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
@@ -298,10 +402,30 @@ export function TargetGroupDetailView({
       : 'muted';
   const validationMode = getString(entity, ['validation_mode'], 'agent_assisted');
   const ladderSteps = Array.isArray(ladder?.steps) ? ladder.steps as DataItem[] : [];
+  const customerRunnableChecks = checks.filter(isCustomerRunnableCheck);
+  const relatedPolicies = policyItems.filter(
+    (policy) => getString(policy, ['target_group_id'], '') === entityId
+  );
+  const policiesByCheckId = new Map<string, DataItem[]>();
+  for (const policy of relatedPolicies) {
+    const checkId = getString(policy, ['check_id'], '');
+    if (!checkId) continue;
+    policiesByCheckId.set(checkId, [...(policiesByCheckId.get(checkId) ?? []), policy]);
+  }
+  const firstRunnableCheckId = getString(customerRunnableChecks[0], ['check_id', 'id'], '');
+  const effectiveSelectedPolicyCheckId = customerRunnableChecks.some(
+    (check) => getString(check, ['check_id', 'id'], '') === selectedPolicyCheckId
+  ) ? selectedPolicyCheckId : firstRunnableCheckId;
+  const selectedPolicyCheck = customerRunnableChecks.find(
+    (check) => getString(check, ['check_id', 'id'], '') === effectiveSelectedPolicyCheckId
+  ) ?? null;
+  const canCreateScheduledPolicy = ['owner', 'admin', 'engineer'].includes(
+    String(session.role ?? '').trim().toLowerCase()
+  );
 
-  // First customer-runnable safe check — the concrete check a bounded Run test executes.
-  const safeCheck = checks.find((check) => getString(check, ['safety_class'], '') === 'safe') ?? null;
-  const safeCheckId = getString(safeCheck, ['check_id'], '');
+  // First customer-runnable check — the concrete check a Run test executes.
+  const safeCheck = customerRunnableChecks[0] ?? null;
+  const safeCheckId = getString(safeCheck, ['check_id', 'id'], '');
   const verifiedTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
 
   // Active DNS challenge shown in the panel: freshest verify result, then freshly issued, then list.
@@ -436,6 +560,24 @@ export function TargetGroupDetailView({
     }
   }
 
+  async function removeTarget(item: DataItem) {
+    const targetId = getString(item, ['id'], '');
+    if (!targetId) return;
+    const targetLabel = getString(item, ['value'], targetId);
+    const confirmed = window.confirm(
+      `Remove ${targetLabel} from this target group?\n\nThis removes the declaration and stops future scheduled validation for this target. Active runs must finish or be cancelled first. Existing evidence is retained.`
+    );
+    if (!confirmed) return;
+    await runAction(`remove-target-${targetId}`, async () => {
+      await requestJson(
+        config,
+        session,
+        `/v1/target-groups/${encodeURIComponent(entityId)}/targets/${encodeURIComponent(targetId)}`,
+        { method: 'DELETE' }
+      );
+    }, `Target ${targetLabel} removed from the declared scope.`);
+  }
+
   function submitFqdnTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -564,7 +706,7 @@ export function TargetGroupDetailView({
 
   async function runBoundedTest(targetId: string) {
     if (!safeCheckId) {
-      setError('No customer-runnable safe check is available to run.');
+      setError('No customer-runnable check is available to run.');
       setMessage('');
       return;
     }
@@ -573,7 +715,93 @@ export function TargetGroupDetailView({
         method: 'POST',
         body: { check_id: safeCheckId, target_group_id: entityId, target_id: targetId }
       });
-    }, 'Bounded safe test run started.');
+    }, 'Test run started.');
+  }
+
+  // Passive-only edge detection: one bounded GET + DNS metadata through the governed
+  // /v1/waf/edge-detection route. Metadata-only — no validation verdict is implied.
+  async function runEdgeDetection(item: DataItem) {
+    const hostname = getString(item, ['value'], '');
+    const targetId = getString(item, ['id'], '');
+    if (!hostname) {
+      setError('This target has no declared hostname to detect.');
+      setMessage('');
+      return;
+    }
+    setBusy(`edge-detect-${targetId}`);
+    setError('');
+    setMessage('');
+    try {
+      const payload = await requestJson(config, session, '/v1/waf/edge-detection', {
+        method: 'POST',
+        body: { hostname }
+      }) as DataItem;
+      setEdgeDetection(payload.detection as DataItem | null);
+      setMessage('');
+    } catch (err) {
+      setEdgeDetection(null);
+      setError(err instanceof Error ? err.message : 'Edge detection failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function submitScheduledPolicy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (!canCreateScheduledPolicy) {
+      setError('Your role cannot create test policies. Ask an organization owner or administrator.');
+      setMessage('');
+      return;
+    }
+    if (!effectiveSelectedPolicyCheckId || !selectedPolicyCheck) {
+      setError('Select a customer-runnable check before creating a schedule.');
+      setMessage('');
+      return;
+    }
+    const cadence = String(form.get('cadence') ?? 'weekly').trim();
+    const expectedVerdict = String(form.get('expected_verdict') ?? 'pass').trim();
+    const day = String(form.get('safe_window_day') ?? '').trim();
+    const start = String(form.get('safe_window_start') ?? '').trim();
+    const end = String(form.get('safe_window_end') ?? '').trim();
+    const timezone = String(form.get('safe_window_timezone') ?? 'UTC').trim() || 'UTC';
+    if (!day || !start || !end) {
+      setError('A day, start time, and end time are required for the schedule window.');
+      setMessage('');
+      return;
+    }
+    if (start >= end) {
+      setError('Safe window end time must be later than its start time.');
+      setMessage('');
+      return;
+    }
+
+    setBusy('create-test-policy');
+    setError('');
+    setMessage('');
+    try {
+      await requestJson(config, session, '/v1/test-policies', {
+        method: 'POST',
+        body: {
+          target_group_id: entityId,
+          check_id: effectiveSelectedPolicyCheckId,
+          cadence,
+          expected_verdict: expectedVerdict,
+          safe_windows: [{ day, start, end, timezone }]
+        }
+      });
+      const checkName = getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId);
+      setMessage(
+        `${checkName} scheduled ${humanizeLabel(cadence).toLowerCase()} inside ${day} ${start}–${end} ${timezone}.`
+      );
+      formElement.reset();
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create the test policy.');
+    } finally {
+      setBusy('');
+    }
   }
 
   async function submitLoa(event: FormEvent<HTMLFormElement>) {
@@ -604,10 +832,11 @@ export function TargetGroupDetailView({
     return {
       role: 'link',
       tabIndex: 0,
-      style: { cursor: 'pointer' },
+      className: 'tg-target-row',
       'aria-label': `Open target ${getString(item, ['value'], id)}`,
       onClick: go,
       onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
+        if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           go();
@@ -617,31 +846,54 @@ export function TargetGroupDetailView({
   }
 
   const targetColumns: TableColumn<DataItem>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => <span className="mono">{getString(item, ['kind'], '—')}</span> },
-    { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
-    { key: 'expected', label: 'Expected behavior', render: (item) => <span className="mono">{getString(item, ['expected_behavior', 'expected'], '—')}</span> },
     {
-      key: 'verification',
-      label: 'Verification',
+      key: 'target',
+      label: 'Target',
+      render: (item) => (
+        <div className="target-primary">
+          <Badge tone="muted" mono>{getString(item, ['kind'], 'target')}</Badge>
+          <span className="target-primary-copy">
+            <strong className="mono">{getString(item, ['value'], '—')}</strong>
+            <span className="target-id mono">{getString(item, ['id'], '—')}</span>
+          </span>
+        </div>
+      )
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      render: (item) => <Badge tone="muted" title="Declaration source from target metadata">{targetSourceLabel(item)}</Badge>
+    },
+    {
+      key: 'expected',
+      label: 'Expected behavior',
+      render: (item) => <span>{humanizeLabel(getString(item, ['expected_behavior', 'expected'], ''))}</span>
+    },
+    {
+      key: 'status',
+      label: 'Status',
       render: (item) => {
         const state = targetVerificationState(item);
         const provenance = resolveTargetVerificationProvenance(item, targetVerificationEnvelope(item));
-        const chip = resolveVerifyChipState(state, provenance);
-        return <span className={chip.className} title={chip.title}><span className="vc-dot" aria-hidden="true" />{chip.label}</span>;
+        return (
+          <span className="target-status-stack">
+            <VerifyChip state={state} provenance={provenance} />
+            <span className="target-status-note">{canRunTest(state) ? 'Checks enabled' : 'Verify before testing'}</span>
+          </span>
+        );
       }
     },
     {
       key: 'last_probe',
-      label: 'Last probe',
+      label: 'Last result',
       render: (item) => {
-        // Prototype shows the last correlated verdict per target. The target-group API does not
-        // expose a per-target probe verdict yet, so render it only when present and fall back to
-        // an explicit em dash (empty is correct — never fabricate a verdict badge).
+        // The target-group API does not always expose a per-target correlated verdict. Keep
+        // missing evidence explicit rather than fabricating a success state.
         const probe = getString(item, ['last_probe', 'last_verdict'], '');
         if (!probe) return <span className="muted">—</span>;
         const key = probe.trim().toLowerCase();
         const tone = key === 'pass' ? 'success' : key === 'gap' || key === 'fail' ? 'danger' : 'warn';
-        return <Badge tone={tone} title={`Last probe verdict ${probe} from target API`}>{probe}</Badge>;
+        return <Badge tone={tone} title={`Last probe verdict ${probe} from target API`}>{humanizeLabel(probe)}</Badge>;
       }
     },
     {
@@ -651,14 +903,16 @@ export function TargetGroupDetailView({
         const id = getString(item, ['id'], '');
         const runnable = canRunTest(targetVerificationState(item));
         const runReady = runnable && Boolean(safeCheckId);
+        const removing = busy === `remove-target-${id}`;
         const runTitle = runnable
-          ? (safeCheckId ? 'Run bounded safe test' : 'No customer-runnable safe check available')
+          ? (safeCheckId ? 'Run test' : 'No customer-runnable check available')
           : 'Verify to enable testing';
         return (
-          <div className="row-end-actions" onClick={(event) => event.stopPropagation()}>
+          <div className="row-end-actions target-actions" onClick={(event) => event.stopPropagation()}>
             <Button
               size="sm"
               variant="ghost"
+              disabled={!id || removing}
               onClick={(event) => { event.stopPropagation(); verifyTarget(item); }}
             >
               Verify
@@ -666,15 +920,106 @@ export function TargetGroupDetailView({
             <Button
               size="sm"
               variant="ghost"
+              disabled={!id || busy === `edge-detect-${id}` || removing}
+              title="Detect WAF/CDN edge for this hostname (one passive request, metadata-only)"
+              loading={busy === `edge-detect-${id}`}
+              onClick={(event) => { event.stopPropagation(); void runEdgeDetection(item); }}
+            >
+              Detect edge
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               className={runReady ? undefined : 'is-locked'}
-              disabled={!runReady || busy === `run-test-${id}`}
+              disabled={!runReady || busy === `run-test-${id}` || removing}
               title={runTitle}
               loading={busy === `run-test-${id}`}
               onClick={(event) => { event.stopPropagation(); void runBoundedTest(id); }}
             >
               Run test
             </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={!id || busy === `run-test-${id}`}
+              loading={removing}
+              aria-label={`Remove target ${getString(item, ['value'], id)}`}
+              onClick={(event) => { event.stopPropagation(); void removeTarget(item); }}
+            >
+              <Trash2 size={13} /> Remove
+            </Button>
           </div>
+        );
+      }
+    }
+  ];
+
+  const checkColumns: TableColumn<DataItem>[] = [
+    {
+      key: 'select',
+      label: 'Select',
+      render: (item) => {
+        const checkId = getString(item, ['check_id', 'id'], '');
+        const checkName = getString(item, ['name', 'check_id'], checkId);
+        return (
+          <label className="check-choice">
+            <input
+              type="radio"
+              name="target-group-policy-check"
+              value={checkId}
+              checked={effectiveSelectedPolicyCheckId === checkId}
+              onChange={() => setSelectedPolicyCheckId(checkId)}
+              aria-label={`Select ${checkName} for the scheduled policy`}
+            />
+          </label>
+        );
+      }
+    },
+    {
+      key: 'check',
+      label: 'Customer-runnable check',
+      render: (item) => {
+        const checkId = getString(item, ['check_id', 'id'], '—');
+        const description = getString(item, ['description', 'summary'], '');
+        return (
+          <span className="check-primary">
+            <strong>{getString(item, ['name'], checkId)}</strong>
+            {description ? <span className="check-description">{description}</span> : null}
+            <span className="check-id mono">{checkId}</span>
+          </span>
+        );
+      }
+    },
+    {
+      key: 'family',
+      label: 'Family',
+      render: (item) => <Badge tone="muted">{humanizeLabel(getString(item, ['vector_family'], 'other'))}</Badge>
+    },
+    {
+      key: 'bounds',
+      label: 'Catalog bounds',
+      render: (item) => <span className="mono small">{checkSafetySummary(item)}</span>
+    },
+    {
+      key: 'policy',
+      label: 'Current schedule',
+      render: (item) => {
+        const checkId = getString(item, ['check_id', 'id'], '');
+        const boundPolicies = policiesByCheckId.get(checkId) ?? [];
+        if (boundPolicies.length === 0) return <span className="muted small">Not scheduled in hydrated data</span>;
+        return (
+          <span className="check-policy-stack">
+            {boundPolicies.map((policy, index) => {
+              const state = getString(policy, ['state'], 'active').toLowerCase();
+              const cadence = humanizeLabel(getString(policy, ['cadence'], 'manual'));
+              return (
+                <span className="check-policy-binding" key={getString(policy, ['id', 'policy_id'], `${checkId}-${index}`)}>
+                  <Badge tone={state === 'paused' ? 'warn' : 'success'} title={`Policy ${state}`}>{cadence}</Badge>
+                  <span className="mono muted small">{formatPolicySafeWindow(policy)}</span>
+                </span>
+              );
+            })}
+          </span>
         );
       }
     }
@@ -726,13 +1071,20 @@ export function TargetGroupDetailView({
 
   return (
     <div className="content stack-tight tg-detail-view">
-      <div className="page-head">
-        <div>
+      <div className="page-head tg-page-head">
+        <div className="tg-page-copy">
           <p className="eyebrow">Declared business service</p>
           <h1 className="page-title">{getString(entity, ['name'], entityId)}</h1>
-          <p className="muted mono">{entityId}</p>
+          <p className="tg-page-summary">{getString(entity, ['description'], 'Manage declared scope, prove ownership, and schedule readiness checks.')}</p>
+          <div className="tg-title-meta">
+            <span className="muted mono">{entityId}</span>
+            <Badge tone="muted">Environment {getString(entity, ['environment_id'], '—')}</Badge>
+          </div>
         </div>
-        <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
+        <div className="tg-head-actions">
+          <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
+          <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
+        </div>
       </div>
 
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
@@ -774,19 +1126,19 @@ export function TargetGroupDetailView({
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">Ownership</div>
-          <div className="kpi-value" style={{ fontSize: '18px' }}>
+          <div className="kpi-value kpi-value--status">
             <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
           </div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">LOA</div>
-          <div className="kpi-value" style={{ fontSize: '18px' }}>
+          <div className="kpi-value kpi-value--status">
             <Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge>
           </div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">Validation mode</div>
-          <div className="kpi-value" style={{ fontSize: '18px' }}>{validationMode}</div>
+          <div className="kpi-value kpi-value--status">{humanizeLabel(validationMode)}</div>
         </div>
       </div>
 
@@ -891,16 +1243,32 @@ export function TargetGroupDetailView({
         </CardContent>
       </Card>
 
-      {/* (5) Declared targets — clickable rows deep-link to target detail; per-row Verify + Run test. */}
+      {/* (5) Declared targets — clickable rows deep-link to target detail; actions stay explicit. */}
       <Card>
         <CardHeader>
           <div>
             <CardTitle>Declared targets</CardTitle>
-            <CardDescription>Env <span className="mono">{getString(entity, ['environment_id'], '—')}</span> · expected behavior declared per row · unverified targets cannot be run against</CardDescription>
+            <CardDescription>Customer-declared scope only. Verify each target before any check can run.</CardDescription>
           </div>
-          <Button size="sm" onClick={() => openOnboardModal()}>Edit targets</Button>
+          <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
         </CardHeader>
         <CardContent>
+          {edgeDetection ? (
+            <div
+              className="form-banner info"
+              role="status"
+              title={`Edge fingerprint from wafw00f + cdncheck signature corpus v${getString(edgeDetection, ['corpus_version'], '?')} · passive tier · ${getString(edgeDetection, ['requests_sent'], '1')} bounded request(s)`}
+            >
+              Edge detection for <strong>{getString(edgeDetection, ['hostname'], '')}</strong>:{' '}
+              {edgeDetection.waf_present === true
+                ? `WAF detected — ${getString(edgeDetection, ['best_vendor', 'name'], getString(edgeDetection, ['best_vendor', 'vendor'], 'unknown vendor'))}`
+                : 'no WAF signature matched'}
+              {' · '}
+              {edgeDetection.cdn_detected === true ? 'CDN detected' : 'no CDN detected'}
+              {edgeDetection.conflicting_vendor_signals === true ? ' · conflicting vendor signals — treat vendor as inconclusive' : ''}
+              . Metadata-only passive scan; this is not a validation verdict.
+            </div>
+          ) : null}
           <DataTable
             columns={targetColumns}
             items={targets}
@@ -912,7 +1280,7 @@ export function TargetGroupDetailView({
                 icon={Target}
                 title="No targets declared yet"
                 body="Declare a domain, IP, or cloud inventory selection to start validating this group. Nothing runs until a target is verified."
-                actionLabel="+ Add Target"
+                actionLabel="Add target"
                 onAction={() => openOnboardModal()}
               />
             }
@@ -920,7 +1288,129 @@ export function TargetGroupDetailView({
         </CardContent>
       </Card>
 
-      {/* (6) Findings on this group — Target column deep-links target detail. */}
+      {/* (6) Customer-runnable checks and schedule creation. */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Rules &amp; schedule</CardTitle>
+            <CardDescription>Select a catalog customer-runnable check, review any hydrated policy binding, and define when it may run.</CardDescription>
+          </div>
+          <Badge tone="info">{customerRunnableChecks.length} customer-runnable {customerRunnableChecks.length === 1 ? 'check' : 'checks'}</Badge>
+        </CardHeader>
+        <CardContent>
+          <div className="safety-boundary" role="note" aria-label="Scheduling boundary">
+            <CalendarClock size={18} aria-hidden="true" />
+            <div>
+              <strong>Authorized validation only</strong>
+              <p>Schedules dispatch only the selected customer-runnable check under catalog limits, the declared schedule window, authorization gates, and the tenant kill switch. High-scale scenarios remain SOC-gated. They do not authorize or launch unmanaged DDoS traffic.</p>
+            </div>
+          </div>
+          {data.loadErrors.testPolicies ? (
+            <div className="form-banner error" role="alert">Scheduled policy data could not be hydrated — {data.loadErrors.testPolicies}</div>
+          ) : null}
+          <DataTable
+            columns={checkColumns}
+            items={customerRunnableChecks}
+            className="rules-table"
+            selectedId={effectiveSelectedPolicyCheckId}
+            getRowId={(item, index) => getString(item, ['check_id', 'id'], String(index))}
+            loadError={data.loadErrors.checks}
+            empty={
+              <EmptyState
+                icon={ShieldHalf}
+                title="No customer-runnable checks"
+                body="The hydrated check catalog does not currently contain a check that can be scheduled by a customer. SOC-gated checks are intentionally excluded."
+              />
+            }
+          />
+          {!data.loadErrors.testPolicies && relatedPolicies.length === 0 ? (
+            <p className="muted small">No existing schedule is present in hydrated policy data for this target group.</p>
+          ) : null}
+
+          {canCreateScheduledPolicy ? (
+            <form className="product-form schedule-builder" onSubmit={(event) => void submitScheduledPolicy(event)}>
+              <div className="schedule-builder-head full">
+                <div>
+                  <h3>Create a schedule</h3>
+                  <p>Cadence repeats eligibility only. Every dispatch is still checked against ownership, LOA, catalog bounds, rate limits, safe window, and kill switch.</p>
+                </div>
+                <Badge tone={effectiveSelectedPolicyCheckId ? 'success' : 'warn'}>{effectiveSelectedPolicyCheckId ? 'Check selected' : 'Select a check'}</Badge>
+              </div>
+              <p className="schedule-selected full">
+                Selected rule: <strong>{getString(selectedPolicyCheck, ['name', 'check_id'], 'None')}</strong>
+                {effectiveSelectedPolicyCheckId ? <span className="mono muted"> · {effectiveSelectedPolicyCheckId}</span> : null}
+              </p>
+              <fieldset className="schedule-fields full" disabled={busy === 'create-test-policy'}>
+                <legend className="sr-only">Scheduled policy settings</legend>
+                <label>
+                  <span>Cadence</span>
+                  <select name="cadence" defaultValue="weekly" required>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Expected verdict</span>
+                  <select name="expected_verdict" defaultValue="pass" required>
+                    <option value="pass">Pass</option>
+                    <option value="warn">Warn</option>
+                    <option value="manual_review">Manual review</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Safe window day</span>
+                  <select name="safe_window_day" defaultValue="Mon" required>
+                    <option value="Mon">Monday</option>
+                    <option value="Tue">Tuesday</option>
+                    <option value="Wed">Wednesday</option>
+                    <option value="Thu">Thursday</option>
+                    <option value="Fri">Friday</option>
+                    <option value="Sat">Saturday</option>
+                    <option value="Sun">Sunday</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Safe window start</span>
+                  <input name="safe_window_start" type="time" defaultValue="02:00" required />
+                </label>
+                <label>
+                  <span>Safe window end</span>
+                  <input name="safe_window_end" type="time" defaultValue="04:00" required />
+                </label>
+                <label>
+                  <span>Window timezone</span>
+                  <input
+                    name="safe_window_timezone"
+                    defaultValue={getString(entity, ['timezone'], getString(data.tenant, ['timezone'], 'UTC'))}
+                    placeholder="UTC"
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                  />
+                </label>
+              </fieldset>
+              <div className="form-actions full">
+                <Button
+                  type="submit"
+                  loading={busy === 'create-test-policy'}
+                  disabled={!effectiveSelectedPolicyCheckId || customerRunnableChecks.length === 0}
+                >
+                  Create schedule
+                </Button>
+                <AnchorButton size="sm" variant="secondary" href="#test-policies">Open all policies</AnchorButton>
+              </div>
+            </form>
+          ) : (
+            <div className="schedule-role-note" role="note">
+              <strong>Read-only schedule view</strong>
+              <span>An organization owner, administrator, or engineer can create validation policies. SOC-gated scenarios continue through the governed SOC workflow.</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* (7) Findings on this group — Target column deep-links target detail. */}
       <Card>
         <CardHeader><CardTitle>Findings on this group</CardTitle></CardHeader>
         <CardContent>
@@ -1105,7 +1595,7 @@ export function TargetGroupDetailView({
                   <dt>Target group</dt><dd>{getString(entity, ['name'], entityId)}</dd>
                 </dl>
               </div>
-              <label className="checkrow full"><input type="checkbox" name="attested" /><span>I attest that declared targets in scope are authorized for bounded validation.</span></label>
+              <label className="checkrow full"><input type="checkbox" name="attested" /><span>I attest that declared targets in scope are authorized for validation.</span></label>
               <label><span>Signer name</span><input name="signer_name" required /></label>
               <label><span>Signer title</span><input name="signer_title" required /></label>
               <label><span>Signed date</span><input name="signed_date" type="date" required /></label>

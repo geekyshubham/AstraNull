@@ -32,6 +32,8 @@ describe('staff roles and route boundaries', () => {
     assert.equal(isPublicApiRoute('/v1/signup-requests', 'POST'), true);
     assert.equal(isPublicApiRoute('/v1/public/site-config', 'GET'), true);
     assert.equal(isPublicApiRoute('/v1/auth/bundled-staging-login', 'POST'), true);
+    assert.equal(isPublicApiRoute('/v1/auth/login', 'POST'), true);
+    assert.equal(isPublicApiRoute('/v1/auth/set-password', 'POST'), true);
     assert.equal(isPublicApiRoute('/v1/tenants/current', 'GET'), false);
     assert.equal(isInternalAdminRoute('/internal/admin/tenants'), true);
     assert.equal(isInternalAdminRoute('/internal/soc/kill-switch'), false);

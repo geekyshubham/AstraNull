@@ -28,7 +28,7 @@ export const AUTHORIZATION_ARTIFACT_CATALOG: ReadonlyArray<{
   {
     artifact_type: 'customer_authorization_letter',
     title: 'Customer Authorization Letter',
-    purpose: 'Customer confirms that AstraNull SOC is authorized to coordinate the bounded validation.',
+    purpose: 'Customer confirms that AstraNull SOC is authorized to coordinate the validation.',
     legal_review_required: true
   },
   {

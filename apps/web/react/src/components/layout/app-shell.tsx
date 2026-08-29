@@ -208,7 +208,7 @@ export function AppShell({
             <b>{tenantId}</b>
             {environment ? <> · {environment}</> : null}
           </span>
-          <span>safe-by-default · SOC-gated</span>
+          <span>SOC-gated high-scale</span>
           {showRoleSwitcher ? (
             <Select
               label="Role (dev)"

@@ -22,7 +22,7 @@ This catalog lists vectors AstraNull should understand for readiness validation.
 
 | Risk class | Description | Execution owner |
 |---|---|---|
-| Safe | Single/few labeled probes; non-disruptive. | Customer can run. |
+| Safe | Customer-runnable validation checks. | Customer can run. |
 | Controlled | Bounded repeated probes; explicit warning and caps. | Customer admin/engineer with permissions. |
 | SOC-gated | High-scale or disruptive potential. | AstraNull SOC only. |
 
@@ -42,6 +42,10 @@ This catalog lists vectors AstraNull should understand for readiness validation.
 The production-safe catalog in `src/contracts/checks.mjs` maps matrix rows to versioned `check_id` entries. Customer-runnable checks use bounded allowlisted `probe_profile` kinds, from simple `http_head` / `tcp_connect` / `dns_resolve` / `metadata_marker` probes to fixed capability probes such as `host_sni_bypass`, `origin_leak_scan`, `port_scan_bounded`, DNS/TLS/protocol posture probes, and WAF marker/fingerprint probes. Each customer-runnable entry must carry `stop_conditions`, `evidence_required`, and `required_customer_setup`. Disruptive or high-scale matrix rows (connection exhaustion, multi-vector drills, provider telemetry validation, kill-switch drills) are **SOC-gated request markers** without customer probe profiles.
 
 This catalog is defensive metadata: it must not be interpreted as a library of amplification, reflection, spoofing, or unmanaged traffic-generation recipes.
+
+## Resource-exhaustion taxonomy
+
+DDoS attacks are also classified by **what resource they exhaust** (bandwidth, packet-processing, TCP state, DNS QPS, application RPS, etc.). See [Resource-Exhaustion Taxonomy](19-resource-exhaustion-taxonomy.md) and the machine-readable registry in `src/contracts/resourceExhaustionTaxonomy.mjs`. Validate coverage with `npm run vector:taxonomy:validate`.
 
 ## Completion criteria
 

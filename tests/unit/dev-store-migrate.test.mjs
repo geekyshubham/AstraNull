@@ -71,6 +71,8 @@ describe('dev store migration', () => {
     assert.equal(after.auditLog.length, 1);
     assert.equal(after.targetGroups.length, 1);
     assert.deepEqual(after.serviceAccounts, []);
+    assert.deepEqual(after.userCredentials, []);
+    assert.deepEqual(after.userPasswordInvites, []);
     assert.deepEqual(after.encryptedSecrets, []);
     assert.deepEqual(after.agentUpdateReleases, []);
     assert.deepEqual(after.agentUpdateStatuses, []);
@@ -207,6 +209,8 @@ describe('dev store migration', () => {
       targets: [],
       bootstrapTokens: [],
       serviceAccounts: [],
+      userCredentials: [],
+      userPasswordInvites: [],
       agents: [],
       agentJobs: [],
       ownershipVerifications: [],

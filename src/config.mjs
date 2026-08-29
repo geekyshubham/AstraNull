@@ -615,6 +615,11 @@ export function loadRuntimeConfig(env = process.env) {
     deploymentProfile,
     bundledStagingOidc,
     bundledStagingStaffLogin,
+    passwordLoginEnabled: parseOptionalBoolean(
+      env.ASTRANULL_PASSWORD_LOGIN_ENABLED,
+      'ASTRANULL_PASSWORD_LOGIN_ENABLED',
+      authMode === 'signed-session' || (authMode === 'oidc-jwt' && bundledStagingOidc),
+    ),
     publicSite: {
       loginUrl: publicLoginUrl,
       signupEnabled: publicSignupEnabled,

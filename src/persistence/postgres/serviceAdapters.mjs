@@ -9,6 +9,7 @@ export const CORE_CATALOG_TENANT_SERVICE_METHODS = Object.freeze([
 
 /** @type {readonly string[]} */
 export const CORE_CATALOG_TARGET_GROUP_SERVICE_METHODS = Object.freeze([
+  'listTargets',
   'listTargetGroups',
   'createTargetGroup',
   'getTargetGroup',
@@ -32,6 +33,12 @@ export {
   SERVICE_ACCOUNT_REPOSITORY_METHODS,
   createPostgresAuthServices,
 } from './authServiceAdapters.mjs';
+
+export {
+  PASSWORD_AUTH_REPOSITORY_METHODS,
+  POSTGRES_PASSWORD_AUTH_SERVICE_METHODS,
+  createPostgresPasswordAuthServices,
+} from './passwordAuthServiceAdapters.mjs';
 
 export {
   AGENT_AUDIT_REPOSITORY_METHODS,

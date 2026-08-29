@@ -15,7 +15,6 @@ Build **AstraNull**, a no-access-first DDoS readiness validation platform. The s
 | Agent is outbound-only | Agent must call AstraNull over outbound HTTPS/WebSocket/long-poll. Do not require inbound management ports. |
 | SOC gates high-scale tests | Customers can request high-scale tests. Only SOC can approve, schedule, execute, coordinate, stop, and close them. |
 | Evidence over assumptions | Every verdict must be tied to observed probe data, agent observation, health signal, approval artifact, or explicit customer-provided declaration. |
-| Safe-by-default | Default checks must be low-volume, bounded, non-disruptive, and clearly labeled. |
 | Do not ship attack tooling casually | Do not add raw, reusable DDoS attack scripts, amplification logic, or unmanaged traffic generators. High-scale execution must be governed and authorized. |
 
 ## Implementation agent roles

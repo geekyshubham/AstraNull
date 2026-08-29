@@ -107,9 +107,11 @@
   </style>
 </head>
 <body>
-  <div id="root">
-    <!-- Pre-mount splash — React replaces this on its first commit (createRoot). -->
-    <div id="boot-splash" role="status" aria-live="polite" aria-label="Loading the AstraNull console">
+  <!-- Pre-mount splash. Sits OUTSIDE #root, because createRoot(#root).render()
+       clears #root's children on first commit — and App renders an empty tree
+       until config resolves, so a splash inside #root would blank out mid-boot.
+       The observer below removes it once React commits real content. -->
+  <div id="boot-splash" role="status" aria-live="polite" aria-label="Loading the AstraNull console">
       <div class="boot-inner">
         <div class="boot-loader">
           <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
@@ -128,7 +130,25 @@
         <p class="boot-status">Loading console</p>
       </div>
     </div>
-  </div>
+  <div id="root"></div>
+  <script>
+    (function () {
+      var splash = document.getElementById('boot-splash');
+      var root = document.getElementById('root');
+      if (!splash || !root) return;
+      function mounted() { return !!root.querySelector('*'); }
+      function remove() {
+        if (splash.parentNode) splash.parentNode.removeChild(splash);
+      }
+      if (mounted()) { remove(); return; }
+      var obs = new MutationObserver(function () {
+        if (!mounted()) return;
+        obs.disconnect();
+        remove();
+      });
+      obs.observe(root, { childList: true, subtree: true });
+    })();
+  </script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
