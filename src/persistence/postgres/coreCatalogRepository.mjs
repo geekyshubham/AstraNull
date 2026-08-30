@@ -3,7 +3,8 @@ import {
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
-import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
+import { isProviderVerifiedDnsEvidence } from '../../lib/connectorProviders/domainInventory.mjs';
+import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../../lib/ownershipPolicy.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { runMetadataRetentionInTransaction } from './retentionRepository.mjs';
@@ -464,6 +465,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
                         WHEN 'user_confirmed' THEN 4
                         WHEN 'agent_verified' THEN 3
                         WHEN 'dns_verified' THEN 2
+                        WHEN 'provider_verified' THEN 2
                         WHEN 'pending' THEN 1
                         ELSE 0
                       END DESC,
@@ -660,7 +662,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         timezone: String(body.timezone ?? 'UTC').trim() || 'UTC',
         safe_test_windows: Array.isArray(body.safe_test_windows) ? body.safe_test_windows : [],
         safety_policy: normalizeSafetyPolicy(body.safety_policy),
-        validation_mode: body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted',
+        validation_mode: body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only',
       };
 
       return withTenantContext(pool, ctx.tenantId, async (client) => {
@@ -826,7 +828,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         if (body.timezone !== undefined) add('timezone', String(body.timezone).trim() || 'UTC');
         if (body.safe_test_windows !== undefined) add('safe_test_windows', JSON.stringify(body.safe_test_windows), '::jsonb');
         if (body.safety_policy !== undefined) add('safety_policy', JSON.stringify(normalizeSafetyPolicy(body.safety_policy)), '::jsonb');
-        if (body.validation_mode !== undefined) add('validation_mode', body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted');
+        if (body.validation_mode !== undefined) add('validation_mode', body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only');
         if (sets.length === 0) return mapTargetGroupRow(current);
 
         params.push(id, ctx.tenantId);
@@ -1026,6 +1028,9 @@ export function createCoreCatalogRepository(pool, options = {}) {
       const connectorKeys = options.connectorInventoryKeys instanceof Set
         ? options.connectorInventoryKeys
         : new Set(options.connectorInventoryKeys ?? []);
+      const connectorEvidence = options.connectorInventoryEvidence instanceof Map
+        ? options.connectorInventoryEvidence
+        : new Map();
       if (body.connector_id && (!connector || connector.id !== body.connector_id)) {
         return { error: 'connector_inventory_not_verified', status: 400 };
       }
@@ -1054,6 +1059,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
             skipped.push({ value: normalized.value, reason: 'connector_item_not_found' });
             continue;
           }
+          const itemEvidence = connector ? connectorEvidence.get(key) : null;
+          const providerVerified = isProviderVerifiedDnsEvidence(connector, itemEvidence);
           const duplicate = await client.query(
             `SELECT id FROM targets
              WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
@@ -1067,12 +1074,29 @@ export function createCoreCatalogRepository(pool, options = {}) {
           }
 
           const targetId = newId('target');
-          const verifyState = ['fqdn', 'dns_zone'].includes(normalized.kind) ? 'pending' : 'awaiting_heartbeat';
+          const verifyState = providerVerified
+            ? 'provider_verified'
+            : ['fqdn', 'dns_zone'].includes(normalized.kind) ? 'pending' : 'awaiting_heartbeat';
           const declaredSource = String(body.source ?? 'customer').trim() || 'customer';
           const metadata = {
             ...normalized.metadata,
             ...(connector
-              ? { managed_provenance: { kind: 'connector_inventory', connector_id: connector.id, provider: connector.provider ?? null } }
+              ? {
+                  managed_provenance: {
+                    kind: providerVerified ? 'provider_account' : 'connector_inventory',
+                    connector_id: connector.id,
+                    provider: itemEvidence?.provider ?? connector.provider ?? null,
+                    snapshot_kind: itemEvidence?.snapshot_kind ?? null,
+                    snapshot_id: itemEvidence?.snapshot_id ?? null,
+                    resource_ref_hash: itemEvidence?.resource_ref ?? null,
+                    observed_at: itemEvidence?.observed_at ?? null,
+                    poll_generation: itemEvidence?.poll_generation ?? null,
+                    evidence_source: itemEvidence?.evidence_source ?? 'manual_metadata',
+                    candidate_source: itemEvidence?.candidate_source ?? null,
+                    inventory_complete: itemEvidence?.inventory_complete === true,
+                    inventory_truncated: itemEvidence?.inventory_truncated === true,
+                  },
+                }
               : { declared_import: { label: declaredSource, trusted: false } }),
           };
           try {
@@ -1098,8 +1122,13 @@ export function createCoreCatalogRepository(pool, options = {}) {
               metadata: {
                 target_group_id: groupId,
                 changed_fields: ['kind', 'value', 'expected_behavior', 'metadata'],
-                provenance_trust: connector ? 'connector_inventory' : 'customer_declared',
+                provenance_trust: providerVerified ? 'provider_account' : connector ? 'connector_inventory' : 'customer_declared',
                 connector_id: connector?.id ?? null,
+                snapshot_id: providerVerified ? itemEvidence.snapshot_id : null,
+                provider: providerVerified ? itemEvidence.provider : null,
+                snapshot_kind: providerVerified ? itemEvidence.snapshot_kind : null,
+                poll_generation: providerVerified ? itemEvidence.poll_generation : null,
+                resource_ref_hash: providerVerified ? itemEvidence.resource_ref : null,
                 dropped_untrusted_fields: normalized.dropped_fields,
               },
             }, now);
@@ -1108,9 +1137,21 @@ export function createCoreCatalogRepository(pool, options = {}) {
                  id, tenant_id, target_id, state, source_kind, source_ref,
                  transitioned_at, transitioned_by, audit_entry_id
                ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9)`,
-              [newId('tv'), ctx.tenantId, targetId, verifyState === 'pending' ? 'pending' : 'unverified',
-                connector ? 'connector_inventory' : 'customer_declaration',
-                JSON.stringify(connector ? { connector_id: connector.id } : { declared_source: declaredSource }),
+              [newId('tv'), ctx.tenantId, targetId,
+                verifyState === 'provider_verified' ? 'provider_verified' : verifyState === 'pending' ? 'pending' : 'unverified',
+                providerVerified ? 'provider_account' : connector ? 'connector_inventory' : 'customer_declaration',
+                JSON.stringify(providerVerified
+                  ? {
+                      connector_id: connector.id,
+                      provider: itemEvidence.provider,
+                      snapshot_kind: itemEvidence.snapshot_kind,
+                      evidence_source: itemEvidence.evidence_source,
+                      resource_ref_hash: itemEvidence.resource_ref,
+                      snapshot_id: itemEvidence.snapshot_id,
+                      observed_at: itemEvidence.observed_at,
+                      poll_generation: itemEvidence.poll_generation,
+                    }
+                  : connector ? { connector_id: connector.id } : { declared_source: declaredSource }),
                 now, ctx.userId ?? 'system', auditEntry.id],
             );
             imported.push({ ...mapTargetRow(inserted.rows[0]), verify_state: verifyState });
@@ -1119,12 +1160,27 @@ export function createCoreCatalogRepository(pool, options = {}) {
           }
         }
         if (imported.length > 0) {
+          const summaryRows = await client.query(
+            `SELECT (
+               SELECT tv.state
+               FROM target_verifications tv
+               WHERE tv.tenant_id = t.tenant_id AND tv.target_id = t.id
+               ORDER BY tv.transitioned_at DESC, tv.id DESC
+               LIMIT 1
+             ) AS state
+             FROM targets t
+             WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.deleted_at IS NULL`,
+            [ctx.tenantId, groupId],
+          );
+          const ownershipStatus = ownershipSummaryFromTargetStates(
+            summaryRows.rows.map((row) => row.state ?? 'unverified'),
+          );
           await client.query(
             `UPDATE target_groups
-             SET ownership_status = 'unverified'
+             SET ownership_status = $3
              WHERE tenant_id = $1 AND id = $2
                AND deleted_at IS NULL AND archived_at IS NULL`,
-            [ctx.tenantId, groupId],
+            [ctx.tenantId, groupId, ownershipStatus],
           );
         }
         return { imported, skipped, count: imported.length };

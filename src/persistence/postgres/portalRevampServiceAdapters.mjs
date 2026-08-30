@@ -4,6 +4,7 @@ import { encodeBase32 } from '../../lib/base32.mjs';
 import { mapProviderInventory } from '../../lib/connectorInventory.mjs';
 import { paginateItems } from '../../lib/cursorPagination.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
+import { isCurrentSuccessfulProviderSnapshot } from '../../lib/connectorProviders/domainInventory.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { PORTAL_REVAMP_REPOSITORY_METHODS } from './portalRevampRepository.mjs';
@@ -169,55 +170,93 @@ async function loadConnectorInventory(repositories, ctx, connectorId) {
   }
 
   const snapshots = await connectorRepository.listConnectorSnapshots(ctx, connectorId);
-  const seenResources = new Set();
   const inventory = new Map();
-  for (const snapshot of snapshots) {
-    const resourceKey = snapshot.resource_ref_hash ?? snapshot.id;
-    if (seenResources.has(resourceKey)) continue;
-    seenResources.add(resourceKey);
+  const evidenceRanks = new Map();
+  const rememberCandidate = (candidate, evidence, rank) => {
+    if (candidate?.importable === false) return;
+    try {
+      const normalized = normalizeTargetInput(candidate);
+      const key = targetDedupeKey(normalized);
+      if ((evidenceRanks.get(key) ?? -1) >= rank) return;
+      evidenceRanks.set(key, rank);
+      inventory.set(key, {
+        kind: normalized.kind,
+        value: normalized.value,
+        label: String(candidate.label ?? normalized.value).slice(0, 300),
+        importable: true,
+        ...evidence,
+      });
+    } catch {
+      // Fail closed for malformed provider rows; never return an unvalidated target.
+    }
+  };
 
-    const mapped = mapProviderInventory(connector.provider, snapshot.summary);
-    const direct = snapshot.summary && typeof snapshot.summary === 'object'
-      ? snapshot.summary.items ?? snapshot.summary.inventory_items ?? []
+  for (const snapshot of snapshots) {
+    const currentSuccessfulPoll = isCurrentSuccessfulProviderSnapshot(connector, snapshot);
+    if (snapshot.evidence_source === 'provider_api' && !currentSuccessfulPoll) continue;
+
+    const summary = snapshot.summary && typeof snapshot.summary === 'object'
+      ? snapshot.summary
+      : {};
+    let mapped = [];
+    try {
+      mapped = mapProviderInventory(connector.provider, summary);
+    } catch {
+      mapped = [];
+    }
+    const hostnames = Array.isArray(summary.hostnames)
+      ? summary.hostnames.map((value) => ({ kind: 'fqdn', value }))
       : [];
+    const direct = Array.isArray(summary.items)
+      ? summary.items
+      : Array.isArray(summary.inventory_items) ? summary.inventory_items : [];
+    const candidateSource = mapped.length || hostnames.length || direct.length
+      ? 'snapshot_inventory'
+      : 'display_ref';
     const candidates = mapped.length
       ? mapped
-      : Array.isArray(direct) && direct.length
-        ? direct
-        : snapshot.display_ref
-          ? [{
-              kind: /(?:ip|address)/i.test(snapshot.snapshot_kind) ? 'ip'
-                : /url/i.test(snapshot.snapshot_kind) ? 'url' : 'fqdn',
-              value: snapshot.display_ref,
-              label: snapshot.display_ref,
-              importable: true,
-            }]
-          : [];
+      : hostnames.length
+        ? hostnames
+        : direct.length
+          ? direct
+          : snapshot.display_ref
+            ? [{
+                kind: /(?:ip|address)/i.test(snapshot.snapshot_kind) ? 'ip'
+                  : /url/i.test(snapshot.snapshot_kind) ? 'url' : 'fqdn',
+                value: snapshot.display_ref,
+                label: snapshot.display_ref,
+                importable: true,
+              }]
+            : [];
 
     for (const candidate of candidates) {
-      if (candidate?.importable === false) continue;
-      try {
-        const normalized = normalizeTargetInput(candidate);
-        const key = targetDedupeKey(normalized);
-        if (inventory.has(key)) continue;
-        inventory.set(key, {
-          kind: normalized.kind,
-          value: normalized.value,
-          label: String(candidate.label ?? normalized.value).slice(0, 300),
-          resource_ref: snapshot.resource_ref_hash ?? null,
-          importable: true,
-          observed_at: snapshot.observed_at ?? null,
-        });
-      } catch {
-        // Fail closed for malformed provider rows; never return an unvalidated target.
-      }
+      rememberCandidate(candidate, {
+        provider: snapshot.provider ?? connector.provider ?? null,
+        snapshot_kind: snapshot.snapshot_kind ?? null,
+        resource_ref: snapshot.resource_ref_hash ?? null,
+        observed_at: snapshot.observed_at ?? null,
+        snapshot_id: snapshot.id ?? null,
+        poll_generation: currentSuccessfulPoll ? connector.last_success_at : null,
+        evidence_source: snapshot.evidence_source ?? 'manual_metadata',
+        candidate_source: candidateSource,
+        current_successful_poll: currentSuccessfulPoll,
+        inventory_complete: snapshot.inventory_complete === true,
+        inventory_truncated: snapshot.inventory_truncated === true,
+      }, currentSuccessfulPoll ? 2 : 1);
     }
   }
 
   const items = [...inventory.values()].sort((left, right) => left.value.localeCompare(right.value));
   return {
-    connector: { id: connector.id, provider: connector.provider, name: connector.name, status: connector.status },
-    discovered_at: snapshots[0]?.observed_at ?? connector.last_success_at ?? null,
+    connector: {
+      id: connector.id,
+      provider: connector.provider,
+      name: connector.name,
+      status: connector.status,
+      has_secret: Boolean(connector.secret_id),
+      last_success_at: connector.last_success_at ?? null,
+    },
+    discovered_at: connector.last_success_at ?? snapshots[0]?.observed_at ?? null,
     items,
   };
 }
@@ -604,16 +643,17 @@ export function createPostgresPortalRevampServices(deps) {
         throw new Error('Postgres target import requires coreCatalog.bulkImportTargets().');
       }
       let trustedConnector = null;
-      let connectorInventoryKeys = new Set();
+      let connectorInventoryEvidence = new Map();
       if (body.connector_id) {
         const inventory = await loadConnectorInventory(repositories, ctx, String(body.connector_id));
         if (inventory.error) return inventory;
         trustedConnector = inventory.connector;
-        connectorInventoryKeys = new Set(inventory.items.map((item) => targetDedupeKey(item)));
+        connectorInventoryEvidence = new Map(inventory.items.map((item) => [targetDedupeKey(item), item]));
       }
       return repositories.coreCatalog.bulkImportTargets(ctx, groupId, body, {
         trustedConnector,
-        connectorInventoryKeys,
+        connectorInventoryKeys: new Set(connectorInventoryEvidence.keys()),
+        connectorInventoryEvidence,
       });
     },
   };

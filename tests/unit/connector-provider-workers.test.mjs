@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, it } from 'node:test';
-import { pollAwsWaf } from '../../src/lib/connectorProviders/awsWaf.mjs';
+import {
+  AWS_WAF_RESPONSE_MAX_BYTES,
+  pollAwsWaf,
+} from '../../src/lib/connectorProviders/awsWaf.mjs';
 import { pollCloudflare } from '../../src/lib/connectorProviders/cloudflare.mjs';
+import {
+  pollAkamaiEdgeDns,
+  pollGoDaddy,
+  pollIbmNs1,
+  pollNamecheap,
+} from '../../src/lib/connectorProviders/domainInventory.mjs';
 import {
   CONNECTOR_POLL_FETCH_DEFAULT_TIMEOUT_MS,
   CONNECTOR_POLL_INVENTORY_PAGE_SIZE,
@@ -149,7 +158,7 @@ describe('connector provider helpers', () => {
     });
     assert.equal(result.snapshots.length, 1);
     const snap = result.snapshots[0];
-    assert.equal(snap.snapshot_kind, 'waf_policy');
+    assert.equal(snap.snapshot_kind, 'dns_zone');
     assert.equal(snap.display_ref, 'app.example.com');
     assert.equal(snap.summary.policy_mode, 'block');
     assert.equal(snap.summary.rule_count, 2);
@@ -330,6 +339,106 @@ describe('connector provider helpers', () => {
       (err) => {
         assert.equal(err.code, 'provider_poll_failed');
         assert.match(err.message, /bounded timeout/i);
+        return true;
+      },
+    );
+  });
+
+  it('rejects AWS region origin injection before issuing a request', async () => {
+    for (const region of ['us-east-1.attacker.example', 'us-east-1/path']) {
+      let requests = 0;
+      await assert.rejects(
+        () => pollAwsWaf({
+          credentials: {
+            access_key_id: 'AKIATESTKEY',
+            secret_access_key: 'secret-test-key',
+            region,
+          },
+          fetchFn: async () => {
+            requests += 1;
+            throw new Error('must not fetch');
+          },
+        }),
+        (err) => {
+          assert.equal(err.code, 'credentials_invalid');
+          assert.match(err.message, /one safe AWS region label/i);
+          return true;
+        },
+      );
+      assert.equal(requests, 0);
+    }
+  });
+
+  it('keeps AWS WAF requests under amazonaws.com and rejects redirects', async () => {
+    const requests = [];
+    await assert.rejects(
+      () => pollAwsWaf({
+        credentials: {
+          access_key_id: 'AKIATESTKEY',
+          secret_access_key: 'secret-test-key',
+          region: 'us-west-2',
+        },
+        fetchFn: async (url, init) => {
+          requests.push({ url: String(url), init });
+          return { ok: false, status: 302, json: async () => ({}) };
+        },
+      }),
+      (err) => {
+        assert.equal(err.code, 'provider_redirect_not_allowed');
+        assert.equal(err.status, 302);
+        return true;
+      },
+    );
+    assert.equal(requests.length, 1);
+    const endpoint = new URL(requests[0].url);
+    assert.equal(endpoint.hostname, 'wafv2.us-west-2.amazonaws.com');
+    assert.equal(endpoint.hostname.endsWith('.amazonaws.com'), true);
+    assert.equal(requests[0].init.redirect, 'manual');
+  });
+
+  it('applies the AWS timeout through response body consumption', async () => {
+    await assert.rejects(
+      () => pollAwsWaf({
+        credentials: {
+          access_key_id: 'AKIATESTKEY',
+          secret_access_key: 'secret-test-key',
+          region: 'us-east-1',
+        },
+        fetchFn: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => new Promise(() => {}),
+        }),
+        fetchTimeoutMs: 40,
+      }),
+      (err) => {
+        assert.equal(err.code, 'provider_poll_failed');
+        assert.match(err.message, /consume.*bounded timeout/i);
+        return true;
+      },
+    );
+  });
+
+  it('rejects AWS response bodies above the byte cap', async () => {
+    const oversized = JSON.stringify({
+      WebACLs: [],
+      padding: 'x'.repeat(AWS_WAF_RESPONSE_MAX_BYTES),
+    });
+    await assert.rejects(
+      () => pollAwsWaf({
+        credentials: {
+          access_key_id: 'AKIATESTKEY',
+          secret_access_key: 'secret-test-key',
+          region: 'us-east-1',
+        },
+        fetchFn: async () => new Response(oversized, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      }),
+      (err) => {
+        assert.equal(err.code, 'provider_response_too_large');
+        assert.match(err.message, /byte limit/i);
         return true;
       },
     );
@@ -538,6 +647,96 @@ describe('connector provider helpers', () => {
     assert.equal(result.snapshots.length, CONNECTOR_POLL_MAX_INVENTORY_ITEMS);
     assert.equal(result.health, 'degraded');
     assert.deepEqual(result.permission_gaps, ['truncated_inventory']);
+  });
+
+  it('polls Akamai EdgeDNS with EdgeGrid auth and returns bounded DNS zones', async () => {
+    let request;
+    const result = await pollAkamaiEdgeDns({
+      credentials: {
+        host: 'example.luna.akamaiapis.net',
+        access_token: 'access',
+        client_token: 'client',
+        client_secret: 'secret',
+      },
+      observedAt: '2026-07-02T12:00:00.000Z',
+      now: new Date('2026-07-02T12:00:00.000Z'),
+      nonce: 'nonce-1',
+      fetchFn: async (url, init) => {
+        request = { url: String(url), init };
+        return { ok: true, status: 200, json: async () => ({ zones: [{ zone: 'Example.COM.' }] }) };
+      },
+    });
+    assert.match(request.url, /^https:\/\/example\.luna\.akamaiapis\.net\/config-dns\/v2\/zones\?showAll=true$/);
+    assert.match(request.init.headers.Authorization, /^EG1-HMAC-SHA256 /);
+    assert.equal(request.init.redirect, 'manual');
+    assert.equal(result.snapshots[0].snapshot_kind, 'dns_zone');
+    assert.equal(result.snapshots[0].display_ref, 'example.com');
+    assert.equal(JSON.stringify(result).includes('secret'), false);
+  });
+
+  it('requires Namecheap client IP and normalizes XML domain inventory', async () => {
+    let requestedUrl = '';
+    await assert.rejects(
+      () => pollNamecheap({ credentials: { api_username: 'user', api_key: 'key' } }),
+      /client_ip/,
+    );
+    const result = await pollNamecheap({
+      credentials: { api_username: 'user', api_key: 'key', client_ip: '203.0.113.10', env_type: 'sandbox' },
+      observedAt: '2026-07-02T12:00:00.000Z',
+      fetchFn: async (url, init) => {
+        requestedUrl = String(url);
+        assert.equal(init.redirect, 'manual');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '<ApiResponse Status="OK"><DomainGetListResult><Domain ID="7" Name="Example.com" /></DomainGetListResult><Paging TotalItems="1" /></ApiResponse>',
+        };
+      },
+    });
+    assert.match(requestedUrl, /^https:\/\/api\.sandbox\.namecheap\.com\/xml\.response\?/);
+    assert.match(requestedUrl, /ClientIp=203\.0\.113\.10/);
+    assert.equal(result.snapshots[0].display_ref, 'example.com');
+    assert.equal(result.inventory_complete, true);
+  });
+
+  it('polls GoDaddy and IBM NS1 only at fixed provider origins', async () => {
+    const requests = [];
+    const jsonResponse = (body) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => body,
+    });
+    const godaddy = await pollGoDaddy({
+      credentials: { key: 'key', secret: 'secret' },
+      fetchFn: async (url, init) => {
+        requests.push({ url: String(url), init });
+        return jsonResponse([{ domain: 'one.example' }]);
+      },
+    });
+    const ns1 = await pollIbmNs1({
+      credentials: { api_key: 'ns1-key' },
+      fetchFn: async (url, init) => {
+        requests.push({ url: String(url), init });
+        return jsonResponse([{ zone: 'two.example' }]);
+      },
+    });
+    assert.match(requests[0].url, /^https:\/\/api\.godaddy\.com\/v1\/domains\?/);
+    assert.match(requests[1].url, /^https:\/\/api\.nsone\.net\/v1\/zones\?/);
+    assert.equal(requests.every((request) => request.init.redirect === 'manual'), true);
+    assert.equal(godaddy.snapshots[0].display_ref, 'one.example');
+    assert.equal(ns1.snapshots[0].display_ref, 'two.example');
+  });
+
+  it('parses allowlisted credential fields for each DNS provider', () => {
+    assert.deepEqual(parseProviderSecret('{"host":"edge.luna.akamaiapis.net","access_token":"a","client_token":"c","client_secret":"s"}', 'akamai_edgedns'), {
+      host: 'edge.luna.akamaiapis.net', access_token: 'a', client_token: 'c', client_secret: 's',
+    });
+    assert.deepEqual(parseProviderSecret('{"username":"u","key":"k","clientIp":"203.0.113.10","environment":"sandbox"}', 'namecheap'), {
+      api_username: 'u', api_key: 'k', client_ip: '203.0.113.10', env_type: 'sandbox',
+    });
+    assert.deepEqual(parseProviderSecret('{"key":"k","secret":"s","ignored":"drop"}', 'godaddy'), { key: 'k', secret: 's' });
+    assert.deepEqual(parseProviderSecret('plain-ns1-key', 'ibm_ns1'), { api_key: 'plain-ns1-key' });
   });
 
   it('retries retryable provider failures with bounded attempts', async () => {

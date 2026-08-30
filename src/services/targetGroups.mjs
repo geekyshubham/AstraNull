@@ -5,7 +5,15 @@ import {
   targetValidationResponse,
 } from '../contracts/targetManagement.mjs';
 import { newId } from '../lib/ids.mjs';
-import { ownershipProofFromStates, VERIFICATION_RANK } from '../lib/ownershipPolicy.mjs';
+import {
+  isCurrentSuccessfulProviderSnapshot,
+  isProviderVerifiedDnsEvidence,
+} from '../lib/connectorProviders/domainInventory.mjs';
+import {
+  ownershipProofFromStates,
+  ownershipSummaryFromTargetStates,
+  VERIFICATION_RANK,
+} from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
 
@@ -318,7 +326,7 @@ export function createTargetGroup(ctx, body = {}) {
     safety_policy: normalizeSafetyPolicy(body.safety_policy),
     ownership_status: 'unverified',
     dns_ownership: null,
-    validation_mode: body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted',
+    validation_mode: body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only',
     created_at: new Date().toISOString(),
   };
   getStore().targetGroups.push(record);
@@ -419,7 +427,7 @@ export function patchTargetGroup(ctx, id, body = {}) {
   }
   if (body.safety_policy !== undefined) { group.safety_policy = normalizeSafetyPolicy(body.safety_policy); changedFields.push('safety_policy'); }
   if (body.validation_mode !== undefined) {
-    group.validation_mode = body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted';
+    group.validation_mode = body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only';
     changedFields.push('validation_mode');
   }
 
@@ -621,15 +629,84 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
     : null;
   if (connectorId && !connector) return { error: 'connector_not_found', status: 404 };
 
-  const rawInventory = connector
-    ? (Array.isArray(connector.inventory_items)
+  const connectorEvidence = new Map();
+  if (connector) {
+    const evidenceRanks = new Map();
+    const rememberEvidence = (normalized, evidence, rank) => {
+      const key = targetDedupeKey(normalized);
+      if ((evidenceRanks.get(key) ?? -1) >= rank) return;
+      evidenceRanks.set(key, rank);
+      connectorEvidence.set(key, {
+        kind: normalized.kind,
+        value: normalized.value,
+        ...evidence,
+      });
+    };
+
+    const rawInventory = Array.isArray(connector.inventory_items)
       ? connector.inventory_items
-      : Array.isArray(connector.inventory_cache?.items) ? connector.inventory_cache.items : [])
-    : [];
-  const connectorKeys = new Set();
-  for (const item of rawInventory) {
-    try { connectorKeys.add(targetDedupeKey(item)); } catch { /* ignore malformed connector snapshots */ }
+      : Array.isArray(connector.inventory_cache?.items) ? connector.inventory_cache.items : [];
+    for (const item of rawInventory) {
+      if (item?.importable === false) continue;
+      try {
+        const normalized = normalizeTargetInput(item);
+        rememberEvidence(normalized, {
+          provider: connector.provider ?? null,
+          snapshot_kind: null,
+          snapshot_id: null,
+          resource_ref: null,
+          observed_at: null,
+          poll_generation: null,
+          evidence_source: 'manual_metadata',
+          candidate_source: 'legacy_inventory',
+          inventory_complete: false,
+          inventory_truncated: false,
+        }, 0);
+      } catch { /* ignore malformed connector inventory */ }
+    }
+
+    const snapshots = (store.wafConnectorSnapshots ?? [])
+      .filter((snapshot) => snapshot.tenant_id === ctx.tenantId && snapshot.connector_id === connector.id)
+      .sort((left, right) => String(right.observed_at).localeCompare(String(left.observed_at)));
+    for (const snapshot of snapshots) {
+      const currentSuccessfulPoll = isCurrentSuccessfulProviderSnapshot(connector, snapshot);
+      if (snapshot.evidence_source === 'provider_api' && !currentSuccessfulPoll) continue;
+
+      const summary = asObject(snapshot.summary_json ?? snapshot.summary);
+      const hostnames = Array.isArray(summary.hostnames) ? summary.hostnames : [];
+      const direct = Array.isArray(summary.items)
+        ? summary.items
+        : Array.isArray(summary.inventory_items) ? summary.inventory_items : [];
+      const candidateSource = hostnames.length || direct.length ? 'snapshot_inventory' : 'display_ref';
+      const candidates = hostnames.length
+        ? hostnames.map((value) => ({ kind: 'fqdn', value }))
+        : direct.length
+          ? direct
+          : snapshot.display_ref
+            ? [{ kind: 'fqdn', value: snapshot.display_ref }]
+            : [];
+      for (const candidate of candidates) {
+        if (candidate?.importable === false) continue;
+        try {
+          const normalized = normalizeTargetInput(candidate);
+          rememberEvidence(normalized, {
+            provider: snapshot.provider ?? connector.provider ?? null,
+            snapshot_kind: snapshot.snapshot_kind ?? null,
+            snapshot_id: snapshot.id ?? null,
+            resource_ref: snapshot.resource_ref_hash ?? null,
+            observed_at: snapshot.observed_at ?? null,
+            poll_generation: currentSuccessfulPoll ? connector.last_success_at : null,
+            evidence_source: snapshot.evidence_source ?? 'manual_metadata',
+            candidate_source: candidateSource,
+            current_successful_poll: currentSuccessfulPoll,
+            inventory_complete: snapshot.inventory_complete === true,
+            inventory_truncated: snapshot.inventory_truncated === true,
+          }, currentSuccessfulPoll ? 2 : 1);
+        } catch { /* ignore malformed provider snapshots */ }
+      }
+    }
   }
+  const connectorKeys = new Set(connectorEvidence.keys());
 
   const items = Array.isArray(body.items) ? body.items : [];
   const imported = [];
@@ -648,6 +725,8 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       skipped.push({ value: normalized.value, reason: 'connector_item_not_found' });
       continue;
     }
+    const itemEvidence = connector ? connectorEvidence.get(key) : null;
+    const providerVerified = isProviderVerifiedDnsEvidence(connector, itemEvidence);
     const existing = store.targets.find(
       (target) => target.tenant_id === ctx.tenantId
         && target.target_group_id === groupId
@@ -659,11 +738,28 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       continue;
     }
 
-    const verifyState = normalized.kind === 'fqdn' || normalized.kind === 'dns_zone' ? 'pending' : 'awaiting_heartbeat';
+    const verifyState = providerVerified
+      ? 'provider_verified'
+      : normalized.kind === 'fqdn' || normalized.kind === 'dns_zone' ? 'pending' : 'awaiting_heartbeat';
     const metadata = {
       ...normalized.metadata,
       ...(connector
-        ? { managed_provenance: { kind: 'connector_inventory', connector_id: connector.id, provider: connector.provider ?? null } }
+        ? {
+            managed_provenance: {
+              kind: providerVerified ? 'provider_account' : 'connector_inventory',
+              connector_id: connector.id,
+              provider: itemEvidence?.provider ?? connector.provider ?? null,
+              snapshot_kind: itemEvidence?.snapshot_kind ?? null,
+              snapshot_id: itemEvidence?.snapshot_id ?? null,
+              resource_ref_hash: itemEvidence?.resource_ref ?? null,
+              observed_at: itemEvidence?.observed_at ?? null,
+              poll_generation: itemEvidence?.poll_generation ?? null,
+              evidence_source: itemEvidence?.evidence_source ?? 'manual_metadata',
+              candidate_source: itemEvidence?.candidate_source ?? null,
+              inventory_complete: itemEvidence?.inventory_complete === true,
+              inventory_truncated: itemEvidence?.inventory_truncated === true,
+            },
+          }
         : { declared_import: { label: source, trusted: false } }),
     };
     const target = {
@@ -690,8 +786,13 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       metadata: {
         target_group_id: groupId,
         changed_fields: ['kind', 'value', 'expected_behavior', 'metadata'],
-        provenance_trust: connector ? 'connector_inventory' : 'customer_declared',
+        provenance_trust: providerVerified ? 'provider_account' : connector ? 'connector_inventory' : 'customer_declared',
         connector_id: connector?.id ?? null,
+        snapshot_id: providerVerified ? itemEvidence.snapshot_id : null,
+        provider: providerVerified ? itemEvidence.provider : null,
+        snapshot_kind: providerVerified ? itemEvidence.snapshot_kind : null,
+        poll_generation: providerVerified ? itemEvidence.poll_generation : null,
+        resource_ref_hash: providerVerified ? itemEvidence.resource_ref : null,
         dropped_untrusted_fields: normalized.dropped_fields,
       },
     });
@@ -699,9 +800,20 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
       id: newId('tv'),
       tenant_id: ctx.tenantId,
       target_id: target.id,
-      state: verifyState === 'pending' ? 'pending' : 'unverified',
-      source_kind: connector ? 'connector_inventory' : 'customer_declaration',
-      source_ref: connector ? { connector_id: connector.id } : { declared_source: source },
+      state: verifyState === 'provider_verified' ? 'provider_verified' : verifyState === 'pending' ? 'pending' : 'unverified',
+      source_kind: providerVerified ? 'provider_account' : connector ? 'connector_inventory' : 'customer_declaration',
+      source_ref: providerVerified
+        ? {
+            connector_id: connector.id,
+            provider: itemEvidence.provider,
+            snapshot_kind: itemEvidence.snapshot_kind,
+            evidence_source: itemEvidence.evidence_source,
+            resource_ref_hash: itemEvidence.resource_ref,
+            snapshot_id: itemEvidence.snapshot_id,
+            observed_at: itemEvidence.observed_at,
+            poll_generation: itemEvidence.poll_generation,
+          }
+        : connector ? { connector_id: connector.id } : { declared_source: source },
       transitioned_at: target.created_at,
       transitioned_by: ctx.userId ?? 'system',
       audit_entry_id: auditEntry.id,
@@ -710,7 +822,13 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
   }
 
   if (imported.length) {
-    group.ownership_status = 'unverified';
+    const activeTargets = store.targets.filter(
+      (target) => target.tenant_id === ctx.tenantId && target.target_group_id === groupId && !target.deleted_at,
+    );
+    const latest = latestTargetVerifications(ctx.tenantId);
+    group.ownership_status = ownershipSummaryFromTargetStates(
+      activeTargets.map((target) => latest.get(target.id)?.state ?? 'unverified'),
+    );
     persistStore();
   }
   return { imported, skipped, count: imported.length };

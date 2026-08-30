@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { signAwsJsonRequest } from './awsSigV4.mjs';
 import {
   buildNormalizedSnapshot,
@@ -9,14 +10,104 @@ import {
 } from './common.mjs';
 
 const AWS_WAF_SERVICE = 'wafv2';
+const AWS_REGION_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+export const AWS_WAF_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+function providerRequestError(message, { code = 'provider_poll_failed', status, cause } = {}) {
+  const error = new Error(message);
+  error.code = code;
+  if (status !== undefined) error.status = status;
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
 
 function resolveRegion(config = {}, credentials = {}) {
-  return String(
+  const region = String(
     config.region_summary
     ?? config.regionSummary
     ?? credentials.region
     ?? 'us-east-1',
-  ).trim() || 'us-east-1';
+  ).trim().toLowerCase() || 'us-east-1';
+  if (!AWS_REGION_LABEL.test(region)) {
+    throw providerRequestError('AWS WAF region must be one safe AWS region label.', {
+      code: 'credentials_invalid',
+    });
+  }
+  return region;
+}
+
+function buildAwsWafEndpoint(region) {
+  const hostname = `${AWS_WAF_SERVICE}.${region}.amazonaws.com`;
+  const endpoint = new URL(`https://${hostname}/`);
+  if (endpoint.protocol !== 'https:'
+    || endpoint.hostname !== hostname
+    || !endpoint.hostname.endsWith('.amazonaws.com')) {
+    throw providerRequestError('AWS WAF endpoint must remain under amazonaws.com.', {
+      code: 'credentials_invalid',
+    });
+  }
+  return endpoint;
+}
+
+function responseTooLarge() {
+  return providerRequestError(
+    `AWS WAF API response exceeded the ${AWS_WAF_RESPONSE_MAX_BYTES}-byte limit.`,
+    { code: 'provider_response_too_large' },
+  );
+}
+
+function appendBoundedChunk(chunks, chunk, total) {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  const nextTotal = total + buffer.byteLength;
+  if (nextTotal > AWS_WAF_RESPONSE_MAX_BYTES) throw responseTooLarge();
+  chunks.push(buffer);
+  return nextTotal;
+}
+
+async function readAwsWafResponse(response) {
+  const contentLength = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > AWS_WAF_RESPONSE_MAX_BYTES) {
+    throw responseTooLarge();
+  }
+
+  const chunks = [];
+  let total = 0;
+  if (typeof response.body?.getReader === 'function') {
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total = appendBoundedChunk(chunks, value, total);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return JSON.parse(Buffer.concat(chunks, total).toString('utf8') || '{}');
+  }
+
+  if (response.body && typeof response.body[Symbol.asyncIterator] === 'function') {
+    for await (const chunk of response.body) {
+      total = appendBoundedChunk(chunks, chunk, total);
+    }
+    return JSON.parse(Buffer.concat(chunks, total).toString('utf8') || '{}');
+  }
+
+  if (typeof response.text === 'function') {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > AWS_WAF_RESPONSE_MAX_BYTES) throw responseTooLarge();
+    return JSON.parse(text || '{}');
+  }
+
+  // Test doubles may expose json() without a body stream. Real fetch responses use the
+  // streaming branches above, so production consumption is capped before allocation.
+  if (typeof response.json === 'function') {
+    const parsed = await response.json();
+    const serialized = JSON.stringify(parsed ?? {});
+    if (Buffer.byteLength(serialized, 'utf8') > AWS_WAF_RESPONSE_MAX_BYTES) throw responseTooLarge();
+    return parsed ?? {};
+  }
+  return {};
 }
 
 function webAclMatchesConfig(webAcl, config = {}) {
@@ -47,7 +138,8 @@ async function awsWafJsonRequest({
   fetchFn,
   timeoutMs,
 }) {
-  const host = `${AWS_WAF_SERVICE}.${region}.amazonaws.com`;
+  const endpoint = buildAwsWafEndpoint(region);
+  const host = endpoint.hostname;
   const payload = JSON.stringify(body ?? {});
   const signedHeaders = signAwsJsonRequest({
     host,
@@ -57,37 +149,65 @@ async function awsWafJsonRequest({
     credentials,
     amzTarget: target,
   });
-  const boundedTimeoutMs = Number.isFinite(timeoutMs)
+  const boundedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs
     : resolveConnectorPollFetchTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), boundedTimeoutMs);
-  let res;
-  try {
-    res = await fetchFn(`https://${host}/`, {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = providerRequestError(
+        'Failed to fetch and consume AWS WAF API response within the bounded timeout.',
+      );
+      controller.abort(error);
+      reject(error);
+    }, boundedTimeoutMs);
+  });
+
+  const request = async () => {
+    const response = await fetchFn(endpoint.href, {
       method: 'POST',
       headers: signedHeaders,
       body: payload,
+      redirect: 'manual',
       signal: controller.signal,
     });
+    if (response.status >= 300 && response.status < 400) {
+      throw providerRequestError('AWS WAF API redirects are not followed.', {
+        code: 'provider_redirect_not_allowed',
+        status: response.status,
+      });
+    }
+
+    let parsed = {};
+    try {
+      parsed = await readAwsWafResponse(response);
+    } catch (cause) {
+      if (cause?.code === 'provider_response_too_large') throw cause;
+      parsed = {};
+    }
+    if (!response.ok) {
+      const code = response.status === 429
+        ? 'rate_limited'
+        : response.status === 401 || response.status === 403
+          ? 'auth_failed'
+          : 'provider_poll_failed';
+      throw providerRequestError(parsed?.message ?? `AWS WAF API error (${response.status})`, {
+        code,
+        status: response.status,
+      });
+    }
+    return parsed;
+  };
+
+  try {
+    return await Promise.race([request(), deadline]);
   } catch (cause) {
-    const err = new Error('Failed to fetch AWS WAF API within the bounded timeout.');
-    err.code = 'provider_poll_failed';
-    err.cause = cause;
-    throw err;
+    if (cause?.code || cause?.status !== undefined) throw cause;
+    throw providerRequestError('Failed to fetch AWS WAF API within the bounded timeout.', { cause });
   } finally {
     clearTimeout(timer);
   }
-  const parsed = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(parsed?.message ?? `AWS WAF API error (${res.status})`);
-    err.status = res.status;
-    if (res.status === 429) err.code = 'rate_limited';
-    else if (res.status === 401 || res.status === 403) err.code = 'auth_failed';
-    else err.code = 'provider_poll_failed';
-    throw err;
-  }
-  return parsed;
 }
 
 async function listWebAclSummaries({
@@ -247,6 +367,8 @@ export async function pollAwsWaf({
     snapshots,
     health: permissionGaps.length > 0 ? 'degraded' : 'active',
     permission_gaps: permissionGaps,
+    inventory_complete: !truncated,
+    inventory_truncated: truncated,
   };
 }
 
