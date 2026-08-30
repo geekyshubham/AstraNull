@@ -8,7 +8,7 @@
 --
 -- Loading it directly yields a database that is missing every object added after the
 -- migrations it covers — as of migration 0041 that is 6 tables/views and 21 indexes,
--- including the RLS policies on dns_challenges, target_verifications, loa_signatures,
+-- including the RLS policies on dns_challenges, target_verifications,
 -- finding_remediations, and signup_queue_events. A tenant-isolation control that is
 -- absent because the wrong file was loaded fails open silently.
 --
@@ -68,7 +68,39 @@ CREATE TABLE user_credentials (
   failed_attempts INT NOT NULL DEFAULT 0,
   locked_until TIMESTAMPTZ,
   last_login_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  session_generation BIGINT NOT NULL DEFAULT 1,
+  mfa_secret_envelope JSONB,
+  mfa_enrollment_id TEXT,
+  mfa_enrolled_at TIMESTAMPTZ,
+  mfa_last_step BIGINT,
+  mfa_pending_at TIMESTAMPTZ,
+  mfa_disabled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT user_credentials_session_generation_positive CHECK (session_generation > 0),
+  CONSTRAINT user_credentials_mfa_state_consistent CHECK (
+    (
+      mfa_secret_envelope IS NULL
+      AND mfa_enrollment_id IS NULL
+      AND mfa_enrolled_at IS NULL
+      AND mfa_pending_at IS NULL
+      AND mfa_last_step IS NULL
+    )
+    OR
+    (
+      jsonb_typeof(mfa_secret_envelope) = 'object'
+      AND mfa_enrollment_id IS NOT NULL
+      AND (
+        (mfa_enrolled_at IS NULL AND mfa_pending_at IS NOT NULL AND mfa_last_step IS NULL)
+        OR
+        (
+          mfa_enrolled_at IS NOT NULL
+          AND mfa_pending_at IS NULL
+          AND mfa_last_step IS NOT NULL
+          AND mfa_last_step >= 0
+        )
+      )
+    )
+  )
 );
 
 CREATE TABLE user_password_invites (
@@ -81,6 +113,76 @@ CREATE TABLE user_password_invites (
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE user_password_resets (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Password recovery delivery outbox. Recipient and reset token exist only inside envelope.
+CREATE TABLE password_recovery_delivery_outbox (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  user_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'password_reset',
+  envelope JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  next_attempt_at TIMESTAMPTZ DEFAULT NOW(),
+  lease_expires_at TIMESTAMPTZ,
+  last_error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at TIMESTAMPTZ,
+  CONSTRAINT password_recovery_delivery_outbox_user_fk
+    FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+  CONSTRAINT password_recovery_delivery_outbox_idempotency
+    UNIQUE (tenant_id, kind, idempotency_key),
+  CONSTRAINT password_recovery_delivery_outbox_kind_check CHECK (kind = 'password_reset'),
+  CONSTRAINT password_recovery_delivery_outbox_envelope_check CHECK (
+    jsonb_typeof(envelope) = 'object'
+    AND envelope ->> 'algorithm' = 'AES-256-GCM'
+    AND envelope ->> 'version' = '1'
+    AND jsonb_typeof(envelope -> 'iv') = 'string'
+    AND jsonb_typeof(envelope -> 'ciphertext') = 'string'
+    AND jsonb_typeof(envelope -> 'auth_tag') = 'string'
+    AND NOT (envelope ? 'email')
+    AND NOT (envelope ? 'reset_token')
+  ),
+  CONSTRAINT password_recovery_delivery_outbox_status_check
+    CHECK (status IN ('queued', 'leased', 'retry', 'delivered', 'dead')),
+  CONSTRAINT password_recovery_delivery_outbox_attempts_check
+    CHECK (attempt_count >= 0 AND max_attempts BETWEEN 1 AND 10 AND attempt_count <= max_attempts),
+  CONSTRAINT password_recovery_delivery_outbox_error_code_check
+    CHECK (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 128),
+  CONSTRAINT password_recovery_delivery_outbox_state_check CHECK (
+    (status IN ('queued', 'retry') AND next_attempt_at IS NOT NULL
+      AND lease_expires_at IS NULL AND delivered_at IS NULL)
+    OR (status = 'leased' AND lease_expires_at IS NOT NULL AND delivered_at IS NULL)
+    OR (status = 'delivered' AND next_attempt_at IS NULL
+      AND lease_expires_at IS NULL AND delivered_at IS NOT NULL)
+    OR (status = 'dead' AND next_attempt_at IS NULL
+      AND lease_expires_at IS NULL AND delivered_at IS NULL)
+  )
+);
+CREATE INDEX idx_password_recovery_delivery_outbox_due
+  ON password_recovery_delivery_outbox(tenant_id, next_attempt_at, created_at)
+  WHERE status IN ('queued', 'retry');
+CREATE INDEX idx_password_recovery_delivery_outbox_expired_lease
+  ON password_recovery_delivery_outbox(tenant_id, lease_expires_at)
+  WHERE status = 'leased';
+ALTER TABLE password_recovery_delivery_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_recovery_delivery_outbox FORCE ROW LEVEL SECURITY;
+CREATE POLICY password_recovery_delivery_outbox_tenant_isolation
+  ON password_recovery_delivery_outbox
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
 CREATE TABLE signup_requests (
   id TEXT PRIMARY KEY,
@@ -208,6 +310,8 @@ CREATE TABLE target_groups (
   safety_policy JSONB DEFAULT '{}',
   settings_json JSONB DEFAULT '{}',
   archived_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  deleted_by TEXT,
   validation_mode TEXT DEFAULT 'agent_assisted',
   ownership_status TEXT DEFAULT 'unverified',
   dns_ownership JSONB,
@@ -220,12 +324,113 @@ CREATE TABLE targets (
   target_group_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
+  normalized_value TEXT NOT NULL,
   expected_behavior TEXT,
   protocol TEXT,
   port INT,
   metadata_json JSONB DEFAULT '{}',
+  deleted_at TIMESTAMPTZ,
+  deleted_by TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Expand/backfill compatibility retained by migration 0044 while the previous release
+-- remains a rollback candidate. Current writers supply application-canonical values;
+-- previous writers omit normalized_value and receive this conservative fallback.
+CREATE OR REPLACE FUNCTION astranull_target_compat_normalized_value(
+  target_kind TEXT,
+  target_value TEXT
+) RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+AS $$
+DECLARE
+  normalized_kind TEXT := lower(btrim(target_kind));
+  trimmed_value TEXT := btrim(target_value);
+BEGIN
+  IF normalized_kind IN ('domain', 'hostname', 'fqdn', 'dns_zone') THEN
+    RETURN lower(regexp_replace(trimmed_value, '\.+$', ''));
+  END IF;
+  IF normalized_kind = 'ip' THEN
+    BEGIN
+      RETURN host(trimmed_value::inet);
+    EXCEPTION WHEN invalid_text_representation THEN
+      RETURN trimmed_value;
+    END;
+  END IF;
+  RETURN trimmed_value;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION astranull_targets_normalized_value_compat_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  writer_omitted_normalized_value BOOLEAN;
+BEGIN
+  NEW.kind := CASE
+    WHEN lower(btrim(NEW.kind)) IN ('domain', 'hostname') THEN 'fqdn'
+    ELSE lower(btrim(NEW.kind))
+  END;
+  writer_omitted_normalized_value := NEW.normalized_value IS NULL;
+  IF TG_OP = 'UPDATE' THEN
+    writer_omitted_normalized_value :=
+      writer_omitted_normalized_value
+      OR (
+        (NEW.kind IS DISTINCT FROM OLD.kind OR NEW.value IS DISTINCT FROM OLD.value)
+        AND NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value
+      );
+  END IF;
+  IF writer_omitted_normalized_value THEN
+    NEW.normalized_value := astranull_target_compat_normalized_value(NEW.kind, NEW.value);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER targets_normalized_value_compat
+BEFORE INSERT OR UPDATE OF kind, value, normalized_value ON targets
+FOR EACH ROW EXECUTE FUNCTION astranull_targets_normalized_value_compat_trigger();
+
+CREATE TABLE dns_challenges (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_group_id TEXT NOT NULL,
+  target_id TEXT,
+  record_name TEXT NOT NULL,
+  record_value TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL DEFAULT 60,
+  state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (state IN ('pending', 'resolved', 'expired', 'revoked')),
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ,
+  last_checked_at TIMESTAMPTZ,
+  last_check_result JSONB,
+  expires_at TIMESTAMPTZ NOT NULL,
+  audit_entry_id TEXT
+);
+
+CREATE TABLE target_verifications (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_id TEXT NOT NULL,
+  state TEXT NOT NULL
+    CHECK (state IN ('unverified', 'pending', 'dns_verified', 'agent_verified', 'user_confirmed')),
+  source_kind TEXT NOT NULL
+    CHECK (source_kind IN ('dns_txt', 'agent_observation', 'user_attestation', 'manual_override')),
+  source_ref JSONB NOT NULL,
+  transitioned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  transitioned_by TEXT NOT NULL,
+  audit_entry_id TEXT NOT NULL
+);
+
+CREATE OR REPLACE VIEW target_verification_current AS
+  SELECT DISTINCT ON (target_id)
+    target_id, tenant_id, state, source_kind, source_ref, transitioned_at
+  FROM target_verifications
+  ORDER BY target_id, transitioned_at DESC;
 
 CREATE TABLE bootstrap_tokens (
   id TEXT PRIMARY KEY,
@@ -277,6 +482,8 @@ CREATE TABLE test_runs (
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   target_group_id TEXT NOT NULL,
   target_id TEXT,
+  policy_id TEXT,
+  policy_dispatch_id TEXT,
   check_id TEXT NOT NULL,
   created_by TEXT,
   initiated_by TEXT,
@@ -342,15 +549,139 @@ CREATE TABLE test_policies (
   target_group_id TEXT NOT NULL,
   check_id TEXT NOT NULL,
   cadence TEXT NOT NULL DEFAULT 'manual'
+    CONSTRAINT test_policies_cadence_check
     CHECK (cadence IN ('manual', 'daily', 'weekly', 'monthly', 'event_driven')),
   expected_verdict TEXT NOT NULL DEFAULT 'pass'
     CHECK (expected_verdict IN ('pass', 'warn', 'fail', 'manual_review')),
   safe_windows JSONB NOT NULL DEFAULT '[]',
-  state TEXT NOT NULL DEFAULT 'active',
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  event_trigger JSONB,
+  state TEXT NOT NULL DEFAULT 'active'
+    CHECK (state IN ('active', 'paused', 'archived')),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  max_concurrent_runs INTEGER NOT NULL DEFAULT 1 CHECK (max_concurrent_runs = 1),
+  next_run_at TIMESTAMPTZ,
+  last_scheduled_at TIMESTAMPTZ,
+  last_dispatched_at TIMESTAMPTZ,
+  last_run_id TEXT,
+  lease_token TEXT,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  schedule_revision BIGINT NOT NULL DEFAULT 1,
   safety_policy_snapshot JSONB NOT NULL DEFAULT '{}',
   archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT test_policies_event_trigger_disabled_check CHECK (
+    (cadence = 'event_driven'
+      AND event_trigger IS NOT NULL
+      AND jsonb_typeof(event_trigger) = 'object'
+      AND event_trigger @> '{"migrated_disabled":true}'::jsonb)
+    OR (cadence <> 'event_driven' AND event_trigger IS NULL)
+  ),
+  CONSTRAINT test_policies_event_driven_inert_check CHECK (
+    cadence <> 'event_driven'
+    OR (
+      state = 'paused'
+      AND enabled = FALSE
+      AND next_run_at IS NULL
+      AND lease_token IS NULL
+      AND lease_owner IS NULL
+      AND lease_expires_at IS NULL
+    )
+  ),
+  CONSTRAINT test_policies_lease_check CHECK (
+    (lease_token IS NULL AND lease_owner IS NULL AND lease_expires_at IS NULL)
+    OR (lease_token IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+  )
+);
+
+-- Rollback-window compatibility for the previous release. Current application contracts
+-- do not expose event-driven cadence, while this trigger and the independent CHECK above
+-- accept old writes only as paused, disabled, non-dispatchable records.
+CREATE OR REPLACE FUNCTION astranull_test_policies_event_driven_compat_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE'
+     AND OLD.cadence = 'event_driven'
+     AND NEW.cadence <> 'event_driven' THEN
+    -- Previous-release cadence updates did not clear event_trigger. Discard only that
+    -- obsolete compatibility payload so the row can satisfy the current contract.
+    NEW.event_trigger := NULL;
+  ELSIF NEW.cadence = 'event_driven' THEN
+    NEW.event_trigger := CASE
+      WHEN jsonb_typeof(NEW.event_trigger) = 'object'
+        THEN NEW.event_trigger || '{"migrated_disabled":true}'::jsonb
+      ELSE '{"migrated_disabled":true}'::jsonb
+    END;
+    NEW.state := 'paused';
+    NEW.enabled := FALSE;
+    NEW.next_run_at := NULL;
+    NEW.lease_token := NULL;
+    NEW.lease_owner := NULL;
+    NEW.lease_expires_at := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER test_policies_event_driven_compat
+BEFORE INSERT OR UPDATE ON test_policies
+FOR EACH ROW EXECUTE FUNCTION astranull_test_policies_event_driven_compat_trigger();
+
+CREATE TABLE test_policy_dispatches (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  policy_id TEXT NOT NULL,
+  scheduled_for TIMESTAMPTZ NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('leased', 'dispatched', 'skipped', 'failed')),
+  lease_token TEXT,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  start_claimed_at TIMESTAMPTZ,
+  run_id TEXT,
+  error_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE (tenant_id, idempotency_key),
+  UNIQUE (tenant_id, policy_id, scheduled_for),
+  UNIQUE (tenant_id, id),
+  CHECK (
+    (state = 'leased' AND lease_token IS NOT NULL AND lease_owner IS NOT NULL
+      AND lease_expires_at IS NOT NULL AND completed_at IS NULL)
+    OR (state <> 'leased' AND lease_token IS NULL AND lease_owner IS NULL
+      AND lease_expires_at IS NULL AND completed_at IS NOT NULL
+      AND start_claimed_at IS NOT NULL)
+  ),
+  CHECK (
+    (state = 'dispatched' AND run_id IS NOT NULL)
+    OR (state <> 'dispatched' AND run_id IS NULL)
+  )
+);
+
+CREATE TABLE loa_signatures (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_group_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'signed'
+    CHECK (state IN ('signed', 'revoked', 'expired', 'superseded')),
+  signer_name TEXT NOT NULL,
+  signer_title TEXT NOT NULL,
+  signer_email TEXT NOT NULL,
+  signed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,
+  emergency_contact JSONB NOT NULL,
+  attested BOOLEAN NOT NULL,
+  scope_snapshot JSONB NOT NULL,
+  custody_artifact_id TEXT NOT NULL,
+  custody_digest_sha256 TEXT NOT NULL,
+  soc_countersign_id TEXT,
+  soc_countersigned_at TIMESTAMPTZ,
+  audit_entry_id TEXT NOT NULL
 );
 
 CREATE TABLE agent_jobs (
@@ -1064,11 +1395,16 @@ ALTER TABLE user_credentials ADD CONSTRAINT fk_user_credentials_user_tenant
   FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE user_password_invites ADD CONSTRAINT fk_user_password_invites_user_tenant
   FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
+ALTER TABLE user_password_resets ADD CONSTRAINT fk_user_password_resets_user_tenant
+  FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE target_groups ADD CONSTRAINT target_groups_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE targets ADD CONSTRAINT targets_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE dns_challenges ADD CONSTRAINT dns_challenges_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE target_verifications ADD CONSTRAINT target_verifications_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT bootstrap_tokens_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE agents ADD CONSTRAINT agents_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE test_policies ADD CONSTRAINT test_policies_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE verdicts ADD CONSTRAINT verdicts_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE events ADD CONSTRAINT events_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE high_scale_requests ADD CONSTRAINT high_scale_requests_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1107,6 +1443,12 @@ ALTER TABLE target_groups ADD CONSTRAINT fk_target_groups_owner_user_tenant
   FOREIGN KEY (tenant_id, owner_user_id) REFERENCES users (tenant_id, id);
 ALTER TABLE targets ADD CONSTRAINT fk_targets_target_group_tenant
   FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
+ALTER TABLE dns_challenges ADD CONSTRAINT fk_dns_challenges_target_group_tenant
+  FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id) ON DELETE CASCADE;
+ALTER TABLE dns_challenges ADD CONSTRAINT fk_dns_challenges_target_tenant
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id) ON DELETE CASCADE;
+ALTER TABLE target_verifications ADD CONSTRAINT fk_target_verifications_target_tenant
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT fk_bootstrap_tokens_environment_tenant
   FOREIGN KEY (tenant_id, environment_id) REFERENCES environments (tenant_id, id);
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT fk_bootstrap_tokens_target_group_tenant
@@ -1121,6 +1463,17 @@ ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_target_group_tenant
   FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_target_tenant
   FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id);
+ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_policy_tenant
+  FOREIGN KEY (tenant_id, policy_id) REFERENCES test_policies (tenant_id, id);
+ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_policy_dispatch_tenant
+  FOREIGN KEY (tenant_id, policy_dispatch_id) REFERENCES test_policy_dispatches (tenant_id, id);
+ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_policy_tenant
+  FOREIGN KEY (tenant_id, policy_id) REFERENCES test_policies (tenant_id, id);
+ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_run_tenant
+  FOREIGN KEY (tenant_id, run_id) REFERENCES test_runs (tenant_id, id);
+ALTER TABLE loa_signatures ADD CONSTRAINT fk_loa_signatures_target_group_tenant
+  FOREIGN KEY (tenant_id, target_group_id)
+  REFERENCES target_groups (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE probe_jobs ADD CONSTRAINT fk_probe_jobs_test_run_tenant
   FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
 ALTER TABLE probe_jobs ADD CONSTRAINT fk_probe_jobs_target_tenant
@@ -1250,12 +1603,48 @@ CREATE INDEX idx_break_glass_activations_activated_at ON break_glass_activations
 CREATE UNIQUE INDEX idx_break_glass_activations_single_active ON break_glass_activations(status)
   WHERE status = 'active';
 CREATE INDEX idx_target_groups_tenant ON target_groups(tenant_id);
+CREATE UNIQUE INDEX uniq_target_groups_active_name
+  ON target_groups(tenant_id, COALESCE(environment_id, ''), lower(name))
+  WHERE deleted_at IS NULL AND archived_at IS NULL;
 CREATE INDEX idx_ownership_verifications_tenant_target ON ownership_verifications(tenant_id, target_group_id);
 CREATE INDEX idx_test_policies_tenant_active ON test_policies(tenant_id, target_group_id) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX uniq_test_policies_active_group_check
+  ON test_policies(tenant_id, target_group_id, check_id) WHERE archived_at IS NULL;
+CREATE INDEX idx_test_policies_due ON test_policies(tenant_id, next_run_at, id)
+  WHERE archived_at IS NULL AND state = 'active' AND enabled = TRUE AND next_run_at IS NOT NULL;
+CREATE INDEX idx_test_policies_expired_lease ON test_policies(tenant_id, lease_expires_at)
+  WHERE lease_expires_at IS NOT NULL;
+CREATE INDEX idx_test_policy_dispatches_policy
+  ON test_policy_dispatches(tenant_id, policy_id, scheduled_for DESC);
+CREATE INDEX idx_test_policy_dispatches_expired_lease
+  ON test_policy_dispatches(tenant_id, lease_expires_at) WHERE state = 'leased';
+CREATE UNIQUE INDEX uniq_test_policy_dispatches_run
+  ON test_policy_dispatches(tenant_id, run_id) WHERE run_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_test_runs_policy_dispatch
+  ON test_runs(tenant_id, policy_dispatch_id) WHERE policy_dispatch_id IS NOT NULL;
+CREATE UNIQUE INDEX loa_signatures_active_tenant_group
+  ON loa_signatures(tenant_id, target_group_id) WHERE state = 'signed';
+CREATE INDEX loa_signatures_expiring
+  ON loa_signatures(expires_at) WHERE state = 'signed' AND expires_at IS NOT NULL;
+CREATE INDEX dns_challenges_by_group
+  ON dns_challenges(tenant_id, target_group_id, state);
+CREATE INDEX dns_challenges_by_target
+  ON dns_challenges(tenant_id, target_id) WHERE target_id IS NOT NULL;
+CREATE INDEX dns_challenges_expiring
+  ON dns_challenges(state, expires_at) WHERE state = 'pending';
+CREATE INDEX target_verifications_latest
+  ON target_verifications(target_id, transitioned_at DESC);
+CREATE INDEX target_verifications_tenant
+  ON target_verifications(tenant_id, state);
 CREATE INDEX idx_targets_tenant_group ON targets(tenant_id, target_group_id);
+CREATE UNIQUE INDEX uniq_targets_active_canonical
+  ON targets(tenant_id, target_group_id, kind, normalized_value) WHERE deleted_at IS NULL;
+CREATE INDEX idx_targets_tenant_group_active
+  ON targets(tenant_id, target_group_id, created_at) WHERE deleted_at IS NULL;
 CREATE INDEX idx_agents_tenant_heartbeat ON agents(tenant_id, last_heartbeat_at);
 CREATE INDEX idx_agents_tenant_group ON agents(tenant_id, target_group_id);
 CREATE INDEX idx_test_runs_tenant ON test_runs(tenant_id, target_group_id);
+CREATE INDEX idx_test_runs_tenant_policy ON test_runs(tenant_id, policy_id) WHERE policy_id IS NOT NULL;
 CREATE INDEX idx_agent_jobs ON agent_jobs(tenant_id, agent_id, status, created_at);
 CREATE INDEX idx_probe_jobs_status_leased ON probe_jobs(status, leased_at, created_at);
 CREATE INDEX idx_probe_jobs_tenant_run ON probe_jobs(tenant_id, test_run_id);
@@ -1286,6 +1675,7 @@ CREATE INDEX idx_evidence_vault_tenant_run_created ON evidence_vault(tenant_id, 
 CREATE INDEX idx_evidence_vault_tenant_related_event ON evidence_vault(tenant_id, related_event_id);
 CREATE UNIQUE INDEX uniq_findings_open_target_check ON findings(tenant_id, target_group_id, target_id, check_id) WHERE status = 'open';
 CREATE INDEX idx_user_password_invites_token_hash ON user_password_invites(token_hash);
+CREATE UNIQUE INDEX idx_user_password_resets_token_hash ON user_password_resets(token_hash);
 -- Target-detail findings keyset page: (tenant_id, target_id) equality then the
 -- (created_at DESC, id DESC) sort tuple. See db/migrations/0040_findings_created_at_index.sql.
 CREATE INDEX idx_findings_tenant_target_created ON findings(tenant_id, target_id, created_at DESC, id DESC);
@@ -1329,6 +1719,8 @@ ALTER TABLE user_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_credentials FORCE ROW LEVEL SECURITY;
 ALTER TABLE user_password_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_password_invites FORCE ROW LEVEL SECURITY;
+ALTER TABLE user_password_resets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_password_resets FORCE ROW LEVEL SECURITY;
 ALTER TABLE tenant_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE tenant_subscriptions ENABLE ROW LEVEL SECURITY;
@@ -1343,6 +1735,10 @@ ALTER TABLE target_groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE target_groups FORCE ROW LEVEL SECURITY;
 ALTER TABLE targets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE targets FORCE ROW LEVEL SECURITY;
+ALTER TABLE dns_challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dns_challenges FORCE ROW LEVEL SECURITY;
+ALTER TABLE target_verifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE target_verifications FORCE ROW LEVEL SECURITY;
 ALTER TABLE bootstrap_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bootstrap_tokens FORCE ROW LEVEL SECURITY;
 ALTER TABLE agents ENABLE ROW LEVEL SECURITY;
@@ -1355,6 +1751,10 @@ ALTER TABLE ownership_verifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ownership_verifications FORCE ROW LEVEL SECURITY;
 ALTER TABLE test_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE test_policies FORCE ROW LEVEL SECURITY;
+ALTER TABLE test_policy_dispatches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE test_policy_dispatches FORCE ROW LEVEL SECURITY;
+ALTER TABLE loa_signatures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loa_signatures FORCE ROW LEVEL SECURITY;
 ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_jobs FORCE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
@@ -1465,10 +1865,25 @@ CREATE POLICY user_password_invites_token_lookup ON user_password_invites
     coalesce(current_setting('app.tenant_id', true), '') = ''
     AND token_hash = current_setting('app.password_invite_token_hash', true)
   );
+CREATE POLICY user_password_resets_tenant_isolation ON user_password_resets
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY user_password_resets_token_lookup ON user_password_resets
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.tenant_id', true), '') = ''
+    AND token_hash = current_setting('app.password_reset_token_hash', true)
+  );
 CREATE POLICY tenant_isolation_target_groups ON target_groups
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_targets ON targets
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY dns_challenges_tenant_isolation ON dns_challenges
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY target_verifications_tenant_isolation ON target_verifications
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_bootstrap_tokens ON bootstrap_tokens
@@ -1487,6 +1902,12 @@ CREATE POLICY tenant_isolation_ownership_verifications ON ownership_verification
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_test_policies ON test_policies
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_test_policy_dispatches ON test_policy_dispatches
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY loa_signatures_tenant_isolation ON loa_signatures
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_agent_jobs ON agent_jobs

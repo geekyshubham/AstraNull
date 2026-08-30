@@ -19,10 +19,71 @@ describe('db schema contract', () => {
     const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
       .filter((n) => n.endsWith('.sql'))
       .sort()
-      .map((n) => readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8'));
+      .map((n) => ({ name: n, sql: readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8') }));
 
     const result = validateDbSchema({ schemaSql, migrationSqls });
     assert.equal(result.ok, true, result.errors.join('; '));
+  });
+
+  it('fails closed when a required hardening migration file is absent', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
+      .filter((name) => name.endsWith('.sql') && name !== '0045_ownership_and_policy_dispatch_hardening.sql')
+      .sort()
+      .map((name) => ({ name, sql: readFileSync(path.join(ROOT, 'db', 'migrations', name), 'utf8') }));
+    const result = validateDbSchema({ schemaSql, migrationSqls });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => /missing required file 0045_ownership/.test(error)));
+  });
+
+  it('hardens LOA tenancy and scheduled dispatches in schema and forward migration', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migrationSql = readFileSync(
+      path.join(ROOT, 'db', 'migrations', '0045_ownership_and_policy_dispatch_hardening.sql'),
+      'utf8',
+    );
+
+    for (const sql of [schemaSql, migrationSql]) {
+      assert.match(sql, /fk_loa_signatures_target_group_tenant[\s\S]*?FOREIGN KEY \(tenant_id, target_group_id\)[\s\S]*?REFERENCES target_groups \(tenant_id, id\)/m);
+      assert.match(sql, /CREATE UNIQUE INDEX loa_signatures_active_tenant_group[\s\S]*?\(tenant_id, target_group_id\)[\s\S]*?WHERE state = 'signed'/m);
+      assert.match(sql, /start_claimed_at TIMESTAMPTZ/);
+      assert.match(sql, /state = 'dispatched' AND run_id IS NOT NULL/);
+      assert.match(sql, /CREATE UNIQUE INDEX uniq_test_policy_dispatches_run[\s\S]*?\(tenant_id, run_id\)[\s\S]*?WHERE run_id IS NOT NULL/m);
+      assert.match(sql, /CREATE TRIGGER test_policies_event_driven_compat/);
+      assert.match(sql, /test_policies_event_driven_inert_check/);
+    }
+
+    const policiesTable = schemaSql.match(/CREATE TABLE test_policies \([\s\S]*?\n\);/)[0];
+    const policyContract = readFileSync(
+      path.join(ROOT, 'src', 'contracts', 'testPolicyManagement.mjs'),
+      'utf8',
+    );
+    assert.match(policiesTable, /cadence IN \('manual', 'daily', 'weekly', 'monthly', 'event_driven'\)/);
+    assert.match(policiesTable, /event_trigger @> '\{"migrated_disabled":true\}'::jsonb/);
+    assert.match(policiesTable, /cadence <> 'event_driven'[\s\S]*?state = 'paused'[\s\S]*?enabled = FALSE/m);
+    assert.match(migrationSql, /CREATE TRIGGER test_policies_event_driven_compat/);
+    assert.match(migrationSql, /BEFORE INSERT OR UPDATE ON test_policies/);
+    for (const sql of [schemaSql, migrationSql]) {
+      assert.match(sql, /OLD\.cadence = 'event_driven'[\s\S]*?NEW\.cadence <> 'event_driven'[\s\S]*?NEW\.event_trigger := NULL/m);
+      assert.match(sql, /ELSIF NEW\.cadence = 'event_driven'[\s\S]*?NEW\.state := 'paused'[\s\S]*?NEW\.enabled := FALSE/m);
+    }
+    assert.match(migrationSql, /test_policies_event_driven_inert_check CHECK/);
+    assert.match(migrationSql, /WHERE cadence = 'event_driven'/);
+    assert.match(migrationSql, /CHECK \(cadence IN \('manual', 'daily', 'weekly', 'monthly', 'event_driven'\)\)/);
+    assert.match(policyContract, /POLICY_CADENCES = Object\.freeze\(\['manual', 'daily', 'weekly', 'monthly'\]\)/);
+    assert.doesNotMatch(policyContract.match(/POLICY_CADENCES[^;]+;/)[0], /event_driven/);
+    assert.match(migrationSql, /SET state = 'expired'[\s\S]*?WHERE state = 'signed' AND expires_at IS NOT NULL AND expires_at <= now\(\)/m);
+    assert.match(migrationSql, /WHERE state IN \('skipped', 'failed'\) AND run_id IS NOT NULL/);
+    assert.match(migrationSql, /NOT VALID/);
+    assert.match(migrationSql, /VALIDATE CONSTRAINT fk_loa_signatures_target_group_tenant/);
+    assert.ok(
+      migrationSql.indexOf('VALIDATE CONSTRAINT fk_loa_signatures_target_group_tenant')
+        < migrationSql.indexOf('DROP CONSTRAINT loa_signatures_target_group_id_fkey'),
+    );
+    assert.ok(
+      migrationSql.indexOf('CREATE UNIQUE INDEX loa_signatures_active_tenant_group')
+        < migrationSql.indexOf('DROP INDEX loa_signatures_active;'),
+    );
   });
 
   it('keeps password credentials and invites tenant-scoped with no plaintext columns', () => {
@@ -136,8 +197,8 @@ describe('db schema contract', () => {
     const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
       .filter((n) => n.endsWith('.sql'))
       .sort()
-      .map((n) => readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8'));
-    const combinedMigration = migrationSqls.join('\n');
+      .map((n) => ({ name: n, sql: readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8') }));
+    const combinedMigration = migrationSqls.map((migration) => migration.sql).join('\n');
 
     assert.match(schemaSql, /CREATE TABLE findings[\s\S]*?verdict_id TEXT/m);
     assert.match(schemaSql, /CREATE TABLE findings[\s\S]*?last_verdict_id TEXT/m);
@@ -162,8 +223,8 @@ describe('db schema contract', () => {
     const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
       .filter((n) => n.endsWith('.sql'))
       .sort()
-      .map((n) => readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8'));
-    const combinedMigration = migrationSqls.join('\n');
+      .map((n) => ({ name: n, sql: readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8') }));
+    const combinedMigration = migrationSqls.map((migration) => migration.sql).join('\n');
 
     const indexPatterns = [
       /CREATE INDEX idx_test_runs_tenant_created ON test_runs\(tenant_id, created_at DESC\)/,
@@ -286,7 +347,7 @@ describe('db schema contract comment handling', () => {
     migrationSqls: readdirSync(path.join(ROOT, 'db', 'migrations'))
       .filter((n) => n.endsWith('.sql'))
       .sort()
-      .map((n) => readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8')),
+      .map((n) => ({ name: n, sql: readFileSync(path.join(ROOT, 'db', 'migrations', n), 'utf8') })),
   });
 
   it('strips line comments without disturbing DDL on the same line', () => {

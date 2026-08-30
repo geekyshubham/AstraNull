@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-import { spawnSync as defaultSpawnSync } from 'node:child_process';
+import { spawn as defaultSpawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
-  existsSync,
+  createReadStream,
+  createWriteStream,
   mkdirSync,
-  readFileSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
@@ -18,13 +21,21 @@ const ROOT = path.resolve(__dirname, '..');
 export const MANIFEST_VERSION = 1;
 export const ARTIFACT_TYPE = 'postgres_backup_manifest';
 export const BACKUP_ENCRYPTION_ALGORITHM = 'AES-256-GCM';
-export const BACKUP_ENVELOPE_VERSION = 1;
+export const LEGACY_BACKUP_ENVELOPE_VERSION = 1;
+export const BACKUP_ENVELOPE_VERSION = 2;
+export const BACKUP_STREAM_MAGIC = Buffer.from('ANPGBAK2', 'ascii');
+export const BACKUP_STREAM_HEADER_BYTES = BACKUP_STREAM_MAGIC.length + 12;
+export const BACKUP_AUTH_TAG_BYTES = 16;
 
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
 const SAFE_LABEL = /^[a-zA-Z0-9._-]{1,64}$/;
+const SAFE_HOST = /^[A-Za-z0-9.-]{1,253}$/;
+const SAFE_DATABASE = /^[A-Za-z0-9_-]{1,63}$/;
 const SHA256_HEX_RE = /^[a-fA-F0-9]{64}$/;
 const PG_CUSTOM_DUMP_MAGIC = Buffer.from('PGDMP', 'ascii');
+const DEFAULT_STREAM_HIGH_WATER_MARK = 64 * 1024;
+const MAX_PG_DUMP_STDERR_BYTES = 16 * 1024;
 
 const MANIFEST_FORBIDDEN_KEYS = new Set([
   'auth_tag',
@@ -51,33 +62,26 @@ export function sha256Hex(bytes) {
 }
 
 function stableStringify(value) {
-  if (value === undefined) {
-    return 'null';
-  }
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value);
-  }
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) {
-    return `[${value.map((v) => (v === undefined ? 'null' : stableStringify(v))).join(',')}]`;
+    return `[${value.map((entry) => (entry === undefined ? 'null' : stableStringify(entry))).join(',')}]`;
   }
-  const keys = Object.keys(value).sort().filter((k) => value[k] !== undefined);
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  const keys = Object.keys(value).sort().filter((key) => value[key] !== undefined);
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
 }
 
-function serializeAad(aadObject) {
+export function serializeBackupAad(aadObject) {
   return Buffer.from(stableStringify(aadObject ?? {}), 'utf8');
 }
 
-/**
- * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
- */
+/** @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env */
 export function resolveDatabaseUrl(env = process.env) {
   const databaseUrl = String(env.ASTRANULL_DATABASE_URL ?? env.DATABASE_URL ?? '').trim();
   if (!databaseUrl) {
     return {
       ok: false,
-      message:
-        'postgres-backup: DATABASE_URL or ASTRANULL_DATABASE_URL must be set.',
+      message: 'postgres-backup: DATABASE_URL or ASTRANULL_DATABASE_URL must be set.',
     };
   }
   return { ok: true, databaseUrl };
@@ -98,13 +102,7 @@ export function loadBackupEncryptionKey(env = process.env, { required = true } =
     return null;
   }
 
-  let key;
-  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
-    key = Buffer.from(raw, 'hex');
-  } else {
-    key = Buffer.from(raw, 'base64');
-  }
-
+  const key = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
   if (key.length !== KEY_BYTES) {
     throw new Error(
       'postgres-backup: ASTRANULL_BACKUP_ENCRYPTION_KEY must be a 32-byte key encoded as base64 or 64-character hex.',
@@ -113,9 +111,7 @@ export function loadBackupEncryptionKey(env = process.env, { required = true } =
   return key;
 }
 
-/**
- * @param {string} databaseUrl
- */
+/** @param {string} databaseUrl */
 export function parseDatabaseReference(databaseUrl) {
   let parsed;
   try {
@@ -123,14 +119,13 @@ export function parseDatabaseReference(databaseUrl) {
   } catch {
     throw new Error('postgres-backup: database URL is not a valid connection URI.');
   }
-  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+  if (!['postgresql:', 'postgres:'].includes(parsed.protocol)) {
     throw new Error('postgres-backup: database URL must use the postgresql:// scheme.');
   }
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, '') || 'postgres');
   return {
     host: parsed.hostname || 'localhost',
     port: parsed.port ? Number(parsed.port) : 5432,
-    database,
+    database: decodeURIComponent(parsed.pathname.replace(/^\//, '') || 'postgres'),
   };
 }
 
@@ -142,14 +137,9 @@ function normalizeManifestKey(key) {
     .toLowerCase();
 }
 
-/**
- * @param {unknown} value
- * @param {string} [fieldPath]
- */
+/** @param {unknown} value @param {string} [fieldPath] */
 export function collectManifestForbiddenFields(value, fieldPath = '') {
-  if (value === null || value === undefined || typeof value !== 'object') {
-    return [];
-  }
+  if (value === null || value === undefined || typeof value !== 'object') return [];
   const findings = [];
   if (Array.isArray(value)) {
     value.forEach((entry, index) => {
@@ -173,28 +163,15 @@ export function collectManifestForbiddenFields(value, fieldPath = '') {
   return findings;
 }
 
-/**
- * @param {unknown} name
- */
+/** @param {unknown} name */
 export function isSimpleBackupFilename(name) {
-  if (typeof name !== 'string' || name.length === 0) {
-    return false;
-  }
-  if (name.includes('..')) {
-    return false;
-  }
-  if (name.includes('/') || name.includes('\\')) {
-    return false;
-  }
-  if (path.isAbsolute(name)) {
-    return false;
-  }
+  if (typeof name !== 'string' || name.length === 0) return false;
+  if (name.includes('..') || name.includes('/') || name.includes('\\')) return false;
+  if (path.isAbsolute(name)) return false;
   return path.basename(name) === name;
 }
 
-/**
- * @param {Record<string, unknown>} manifest
- */
+/** @param {Record<string, unknown>} manifest */
 export function validatePostgresBackupManifestFields(manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('postgres-backup: manifest must be a JSON object');
@@ -247,18 +224,19 @@ export function validatePostgresBackupManifestFields(manifest) {
       'postgres-backup: manifest encryption.key_reference must be env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
     );
   }
+  const envelopeVersion = manifest.encryption.envelope_version ?? LEGACY_BACKUP_ENVELOPE_VERSION;
+  if (![LEGACY_BACKUP_ENVELOPE_VERSION, BACKUP_ENVELOPE_VERSION].includes(envelopeVersion)) {
+    throw new Error('postgres-backup: manifest encryption.envelope_version is unsupported');
+  }
   const forbidden = [...new Set(collectManifestForbiddenFields(manifest))].sort();
   if (forbidden.length > 0) {
-    throw new Error(
-      `postgres-backup: manifest contains forbidden fields: ${forbidden.join(', ')}`,
-    );
+    throw new Error(`postgres-backup: manifest contains forbidden fields: ${forbidden.join(', ')}`);
   }
 }
 
 /**
- * @param {Buffer} plaintext
- * @param {Buffer} key
- * @param {Record<string, unknown>} aadObject
+ * Legacy v1 compatibility helper. The production writer below never uses this
+ * whole-buffer JSON/base64 representation.
  */
 export function encryptBackupPayload(plaintext, key, aadObject) {
   if (!key || key.length !== KEY_BYTES) {
@@ -266,28 +244,23 @@ export function encryptBackupPayload(plaintext, key, aadObject) {
   }
   const iv = crypto.randomBytes(IV_BYTES);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  cipher.setAAD(serializeAad(aadObject));
+  cipher.setAAD(serializeBackupAad(aadObject));
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const authTag = cipher.getAuthTag();
   return {
-    version: BACKUP_ENVELOPE_VERSION,
+    version: LEGACY_BACKUP_ENVELOPE_VERSION,
     algorithm: BACKUP_ENCRYPTION_ALGORITHM,
     iv: iv.toString('base64'),
     ciphertext: ciphertext.toString('base64'),
-    auth_tag: authTag.toString('base64'),
+    auth_tag: cipher.getAuthTag().toString('base64'),
     created_at: new Date().toISOString(),
   };
 }
 
-/**
- * @param {{ version: number, algorithm: string, iv: string, ciphertext: string, auth_tag: string }} envelope
- * @param {Buffer} key
- * @param {Record<string, unknown>} aadObject
- */
+/** Legacy v1 compatibility helper; production restore uses bounded streaming. */
 export function decryptBackupPayload(envelope, key, aadObject) {
   if (
     !envelope
-    || envelope.version !== BACKUP_ENVELOPE_VERSION
+    || envelope.version !== LEGACY_BACKUP_ENVELOPE_VERSION
     || envelope.algorithm !== BACKUP_ENCRYPTION_ALGORITHM
   ) {
     throw new Error('postgres-backup: unsupported or invalid backup envelope.');
@@ -295,12 +268,8 @@ export function decryptBackupPayload(envelope, key, aadObject) {
   if (!key || key.length !== KEY_BYTES) {
     throw new Error('postgres-backup: backup encryption key must be 32 bytes.');
   }
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    key,
-    Buffer.from(envelope.iv, 'base64'),
-  );
-  decipher.setAAD(serializeAad(aadObject));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
+  decipher.setAAD(serializeBackupAad(aadObject));
   decipher.setAuthTag(Buffer.from(envelope.auth_tag, 'base64'));
   return Buffer.concat([
     decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
@@ -311,36 +280,50 @@ export function decryptBackupPayload(envelope, key, aadObject) {
 export function parsePostgresBackupCliArgs(argv) {
   let out = path.join(ROOT, '.data', 'backups', 'postgres');
   let label = null;
+  let input = null;
+  let databaseHost = null;
+  let databasePort = null;
+  let databaseName = null;
 
-  for (let i = 2; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--out') {
-      out = argv[i + 1] ?? '';
-      i += 1;
-    } else if (arg === '--label') {
-      label = argv[i + 1] ?? '';
-      i += 1;
-    } else if (arg === '-h' || arg === '--help') {
-      console.log(`Usage: node scripts/postgres-backup.mjs [--out <dir>] [--label <safe-label>]
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = () => {
+      index += 1;
+      if (index >= argv.length || String(argv[index]).startsWith('--')) {
+        throw new Error(`postgres-backup: ${arg} requires a value`);
+      }
+      return argv[index];
+    };
+    if (arg === '--out') out = next();
+    else if (arg === '--label') label = next();
+    else if (arg === '--input') input = next();
+    else if (arg === '--database-host') databaseHost = next();
+    else if (arg === '--database-port') databasePort = Number(next());
+    else if (arg === '--database-name') databaseName = next();
+    else if (arg === '-h' || arg === '--help') {
+      console.log(`Usage: node scripts/postgres-backup.mjs [--out <dir>] [--label <safe-label>] [--input <custom-dump> --database-host <host> --database-port <port> --database-name <name>]
 
-Creates an encrypted pg_dump custom-format backup and a metadata-only integrity manifest.
-Requires DATABASE_URL or ASTRANULL_DATABASE_URL and ASTRANULL_BACKUP_ENCRYPTION_KEY.`);
+Creates a streamed encrypted pg_dump custom-format backup and metadata-only integrity manifest.
+Input mode receives no database credential; all three non-secret database-reference flags are required.
+Direct pg_dump mode requires DATABASE_URL or ASTRANULL_DATABASE_URL and uses astranull_backup in production.
+Both modes require ASTRANULL_BACKUP_ENCRYPTION_KEY.`);
       process.exit(0);
     } else {
       throw new Error(`postgres-backup: unknown argument ${arg}`);
     }
   }
 
-  if (!out) {
-    throw new Error('postgres-backup: --out requires a value');
-  }
+  if (!out) throw new Error('postgres-backup: --out requires a value');
   if (label !== null && !SAFE_LABEL.test(label)) {
     throw new Error('postgres-backup: --label must match [a-zA-Z0-9._-] (max 64 chars)');
   }
-
   return {
     out: path.resolve(out),
     label,
+    input: input === null ? null : path.resolve(input),
+    databaseHost,
+    databasePort,
+    databaseName,
   };
 }
 
@@ -348,86 +331,237 @@ function timestampForFilename(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, '-');
 }
 
+function databaseReferenceFromInputCli(cli) {
+  if (!SAFE_HOST.test(String(cli.databaseHost ?? ''))) {
+    throw new Error('postgres-backup: --database-host is required and must be a safe hostname in input mode.');
+  }
+  if (!Number.isInteger(cli.databasePort) || cli.databasePort < 1 || cli.databasePort > 65535) {
+    throw new Error('postgres-backup: --database-port must be an integer between 1 and 65535 in input mode.');
+  }
+  if (!SAFE_DATABASE.test(String(cli.databaseName ?? ''))) {
+    throw new Error('postgres-backup: --database-name is required and must be a safe database name in input mode.');
+  }
+  return { host: cli.databaseHost, port: cli.databasePort, database: cli.databaseName };
+}
+
+export function assertProductionBackupDatabaseRole(databaseUrl, env = process.env) {
+  if (String(env.NODE_ENV ?? '').trim() !== 'production') return;
+  let username;
+  try {
+    username = decodeURIComponent(new URL(databaseUrl).username);
+  } catch {
+    throw new Error('postgres-backup: database URL is not a valid connection URI.');
+  }
+  if (username !== 'astranull_backup') {
+    throw new Error('postgres-backup: production pg_dump must authenticate as astranull_backup.');
+  }
+}
+
 /**
- * @param {string} databaseUrl
- * @param {{ spawnFn?: typeof defaultSpawnSync }} [options]
+ * Streams pg_dump stdout and keeps credentials out of argv by moving only the password
+ * into the child environment. stderr is capped so a failing child cannot grow memory.
  */
-export function runPgDump(databaseUrl, options = {}) {
-  const spawnFn = options.spawnFn ?? defaultSpawnSync;
-  const result = spawnFn(
+export function createPgDumpSource(databaseUrl, options = {}) {
+  const spawnFn = options.spawnFn ?? defaultSpawn;
+  let parsed;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw new Error('postgres-backup: database URL is not a valid connection URI.');
+  }
+  if (!['postgresql:', 'postgres:'].includes(parsed.protocol)) {
+    throw new Error('postgres-backup: database URL must use the postgresql:// scheme.');
+  }
+  const password = decodeURIComponent(parsed.password);
+  parsed.password = '';
+  const child = spawnFn(
     'pg_dump',
-    ['--format=custom', '--no-owner', '--no-acl', `--dbname=${databaseUrl}`],
-    { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 },
+    ['--format=custom', '--no-owner', '--no-acl', `--dbname=${parsed.toString()}`],
+    {
+      env: { ...(options.env ?? process.env), PGPASSWORD: password },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
   );
-  if (result.error) {
-    const err = new Error(`postgres-backup: pg_dump failed: ${result.error.message}`);
-    err.code = 'PG_DUMP_FAILED';
-    throw err;
+  if (!child?.stdout) throw new Error('postgres-backup: pg_dump did not expose stdout.');
+  let stderr = '';
+  child.stderr?.on('data', (chunk) => {
+    if (stderr.length >= MAX_PG_DUMP_STDERR_BYTES) return;
+    stderr += Buffer.from(chunk).toString('utf8').slice(0, MAX_PG_DUMP_STDERR_BYTES - stderr.length);
+  });
+  const completion = new Promise((resolve) => {
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled) return;
+      settled = true;
+      resolve(outcome);
+    };
+    child.once('error', (error) => settle({ error }));
+    child.once('close', (code, signal) => settle({ code, signal }));
+  });
+  const stream = Readable.from((async function* pgDumpChunks() {
+    for await (const chunk of child.stdout) yield chunk;
+    const outcome = await completion;
+    if (outcome.error) throw outcome.error;
+    if (outcome.code !== 0) {
+      throw new Error(
+        `postgres-backup: pg_dump exited ${outcome.code ?? `signal ${outcome.signal ?? 'unknown'}`}: ${stderr.trim()}`,
+      );
+    }
+  })());
+  return { stream, cancel: () => child.kill('SIGTERM') };
+}
+
+async function sourceForBackup(options) {
+  if (options.inputStream) {
+    return {
+      stream: typeof options.inputStream.pipe === 'function'
+        ? options.inputStream
+        : Readable.from(options.inputStream),
+      cancel() {},
+    };
   }
-  if (result.status !== 0) {
-    const stderr = Buffer.isBuffer(result.stderr)
-      ? result.stderr.toString('utf8')
-      : String(result.stderr ?? '');
-    const err = new Error(`postgres-backup: pg_dump exited ${result.status}: ${stderr.trim()}`);
-    err.code = 'PG_DUMP_FAILED';
-    throw err;
+  if (options.inputPath) {
+    return {
+      stream: createReadStream(options.inputPath, {
+        highWaterMark: options.highWaterMark ?? DEFAULT_STREAM_HIGH_WATER_MARK,
+      }),
+      cancel() {},
+    };
   }
-  const stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? '');
-  if (stdout.length === 0) {
-    throw new Error('postgres-backup: pg_dump produced empty output');
+  if (options.dumpFn) {
+    const value = await options.dumpFn(options.databaseUrl);
+    return {
+      stream: Buffer.isBuffer(value) ? Readable.from([value]) : Readable.from(value),
+      cancel() {},
+    };
   }
-  return stdout;
+  return createPgDumpSource(options.databaseUrl, {
+    spawnFn: options.spawnFn,
+    env: options.env,
+  });
+}
+
+async function encryptSourceToFile({ source, destinationPath, encryptionKey, aad }) {
+  if (!encryptionKey || encryptionKey.length !== KEY_BYTES) {
+    throw new Error('postgres-backup: backup encryption key must be 32 bytes.');
+  }
+  const iv = crypto.randomBytes(IV_BYTES);
+  const header = Buffer.concat([BACKUP_STREAM_MAGIC, iv]);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
+  cipher.setAAD(serializeBackupAad(aad));
+  const plaintextHash = crypto.createHash('sha256');
+  const encryptedHash = crypto.createHash('sha256');
+  let plaintextBytes = 0;
+  let encryptedBytes = 0;
+  let sourceChunks = 0;
+  let prefix = Buffer.alloc(0);
+
+  const trackedEncryptedChunk = (chunk) => {
+    if (chunk.length === 0) return null;
+    encryptedHash.update(chunk);
+    encryptedBytes += chunk.length;
+    return chunk;
+  };
+
+  const encrypted = Readable.from((async function* encryptedChunks() {
+    yield trackedEncryptedChunk(header);
+    for await (const rawChunk of source) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      if (chunk.length === 0) continue;
+      sourceChunks += 1;
+      plaintextBytes += chunk.length;
+      plaintextHash.update(chunk);
+      if (prefix.length < PG_CUSTOM_DUMP_MAGIC.length) {
+        const needed = PG_CUSTOM_DUMP_MAGIC.length - prefix.length;
+        prefix = Buffer.concat([prefix, chunk.subarray(0, needed)]);
+      }
+      const ciphertext = cipher.update(chunk);
+      if (ciphertext.length > 0) yield trackedEncryptedChunk(ciphertext);
+    }
+    if (!prefix.equals(PG_CUSTOM_DUMP_MAGIC)) {
+      throw new Error('postgres-backup: pg_dump output is not PostgreSQL custom format');
+    }
+    const finalCiphertext = cipher.final();
+    if (finalCiphertext.length > 0) yield trackedEncryptedChunk(finalCiphertext);
+    yield trackedEncryptedChunk(cipher.getAuthTag());
+  })());
+
+  await pipeline(
+    encrypted,
+    createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }),
+  );
+  return {
+    plaintextSha256: plaintextHash.digest('hex'),
+    plaintextBytes,
+    encryptedSha256: encryptedHash.digest('hex'),
+    encryptedBytes,
+    sourceChunks,
+  };
 }
 
 /**
  * @param {{
- *   databaseUrl: string,
+ *   databaseUrl?: string | null,
+ *   databaseReference?: {host: string, port: number, database: string},
  *   encryptionKey: Buffer,
  *   out: string,
  *   label: string | null,
  *   now?: Date,
- *   spawnFn?: typeof defaultSpawnSync,
- *   dumpFn?: (databaseUrl: string) => Buffer,
+ *   inputPath?: string | null,
+ *   inputStream?: NodeJS.ReadableStream | AsyncIterable<Buffer>,
+ *   highWaterMark?: number,
+ *   spawnFn?: typeof defaultSpawn,
+ *   dumpFn?: (databaseUrl?: string | null) => Buffer | AsyncIterable<Buffer> | Promise<Buffer | AsyncIterable<Buffer>>,
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
  * }} options
  */
-export function backupPostgres(options) {
+export async function backupPostgres(options) {
   const {
-    databaseUrl,
+    databaseUrl = null,
     encryptionKey,
     out,
     label,
     now = new Date(),
-    spawnFn,
-    dumpFn,
   } = options;
+  const databaseReference = options.databaseReference
+    ?? (databaseUrl ? parseDatabaseReference(databaseUrl) : null);
+  if (!databaseReference) {
+    throw new Error('postgres-backup: a non-secret database reference is required.');
+  }
 
-  const databaseReference = parseDatabaseReference(databaseUrl);
-  const plaintext = dumpFn ? dumpFn(databaseUrl) : runPgDump(databaseUrl, { spawnFn });
-  const plaintextSha256 = sha256Hex(plaintext);
-
-  mkdirSync(out, { recursive: true });
-
+  mkdirSync(out, { recursive: true, mode: 0o700 });
   const backupName = `postgres-${timestampForFilename(now)}.dump.enc`;
   const backupPath = path.join(out, backupName);
+  const manifestPath = `${backupPath}.manifest.json`;
   const aad = {
     artifact_type: ARTIFACT_TYPE,
     backup_file: backupName,
     created_at: now.toISOString(),
     database_reference: databaseReference,
   };
-  const envelope = encryptBackupPayload(plaintext, encryptionKey, aad);
-  const backupBytes = Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8');
-  writeFileSync(backupPath, backupBytes);
+  const sourceControl = await sourceForBackup({ ...options, databaseUrl });
+  let streamed;
+  try {
+    streamed = await encryptSourceToFile({
+      source: sourceControl.stream,
+      destinationPath: backupPath,
+      encryptionKey,
+      aad,
+    });
+  } catch (error) {
+    sourceControl.cancel();
+    try { unlinkSync(backupPath); } catch {}
+    throw error;
+  }
 
-  const checksum = sha256Hex(backupBytes);
   const manifest = {
     version: MANIFEST_VERSION,
     artifact_type: ARTIFACT_TYPE,
     created_at: now.toISOString(),
     backup_file: backupName,
-    sha256: checksum,
-    plaintext_sha256: plaintextSha256,
-    bytes: backupBytes.length,
+    sha256: streamed.encryptedSha256,
+    plaintext_sha256: streamed.plaintextSha256,
+    bytes: streamed.encryptedBytes,
     label,
     database_reference: databaseReference,
     dump_format: 'pg_custom',
@@ -435,40 +569,73 @@ export function backupPostgres(options) {
       algorithm: BACKUP_ENCRYPTION_ALGORITHM,
       key_reference: 'env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
       envelope_version: BACKUP_ENVELOPE_VERSION,
+      encoding: 'binary_stream',
     },
   };
   validatePostgresBackupManifestFields(manifest);
-
-  const manifestPath = `${backupPath}.manifest.json`;
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-
-  return { backupPath, manifestPath, manifest, plaintextBytes: plaintext.length };
+  try {
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch (error) {
+    try { unlinkSync(backupPath); } catch {}
+    throw error;
+  }
+  return {
+    backupPath,
+    manifestPath,
+    manifest,
+    plaintextBytes: streamed.plaintextBytes,
+    sourceChunks: streamed.sourceChunks,
+  };
 }
 
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
- * @param {{ out: string, label: string | null }} cli
+ * @param {ReturnType<typeof parsePostgresBackupCliArgs>} cli
  */
 export function resolvePostgresBackupConfig(env, cli) {
-  const database = resolveDatabaseUrl(env);
-  if (!database.ok) {
-    return database;
-  }
   try {
     loadBackupEncryptionKey(env, { required: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, message };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
-  return {
-    ok: true,
-    databaseUrl: database.databaseUrl,
-    out: cli.out,
-    label: cli.label,
-  };
+
+  if (cli.input) {
+    try {
+      return {
+        ok: true,
+        databaseUrl: null,
+        databaseReference: databaseReferenceFromInputCli(cli),
+        inputPath: cli.input,
+        out: cli.out,
+        label: cli.label,
+      };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  const database = resolveDatabaseUrl(env);
+  if (!database.ok) return database;
+  try {
+    assertProductionBackupDatabaseRole(database.databaseUrl, env);
+    return {
+      ok: true,
+      databaseUrl: database.databaseUrl,
+      databaseReference: parseDatabaseReference(database.databaseUrl),
+      inputPath: null,
+      out: cli.out,
+      label: cli.label,
+    };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
-function main() {
+async function main() {
   try {
     const cli = parsePostgresBackupCliArgs(process.argv);
     const config = resolvePostgresBackupConfig(process.env, cli);
@@ -477,13 +644,15 @@ function main() {
       process.exitCode = 1;
       return;
     }
-
     const encryptionKey = loadBackupEncryptionKey(process.env, { required: true });
-    const { backupPath, manifestPath, manifest } = backupPostgres({
+    const { backupPath, manifestPath, manifest } = await backupPostgres({
       databaseUrl: config.databaseUrl,
+      databaseReference: config.databaseReference,
+      inputPath: config.inputPath,
       encryptionKey,
       out: config.out,
       label: config.label,
+      env: process.env,
     });
 
     console.log('postgres-backup: ok');
@@ -493,15 +662,11 @@ function main() {
     console.log(`  plaintext_sha256: ${manifest.plaintext_sha256}`);
     console.log(`  bytes: ${manifest.bytes}`);
     console.log(`  database: ${manifest.database_reference.host}/${manifest.database_reference.database}`);
-  } catch (err) {
-    const message = redactDatabaseUrlInMessage(err, process.env);
-    console.error(message);
+  } catch (error) {
+    console.error(redactDatabaseUrlInMessage(error, process.env));
     process.exitCode = 1;
   }
 }
 
-const isMain =
-  process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-  main();
-}
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMain) main();

@@ -1,8 +1,8 @@
 # Hosted stack on the AstraNull AWS VM. Run from the repo root:
-#   docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --build
+#   docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     restart: unless-stopped
     environment:
       POSTGRES_USER: astranull
@@ -17,27 +17,199 @@ services:
       retries: 20
       start_period: 10s
 
+  # Deploy-only owner boundaries. Profiles prevent either process from becoming
+  # a long-lived member of the runtime stack.
+  migrate:
+    profiles: ["ops"]
+    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    environment:
+      NODE_ENV: production
+      ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
+      ASTRANULL_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_ADMIN_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_DATABASE_APP_PASSWORD: ${ASTRANULL_DATABASE_APP_PASSWORD}
+      ASTRANULL_DATABASE_BACKUP_PASSWORD: ${ASTRANULL_DATABASE_BACKUP_PASSWORD}
+      ASTRANULL_MIGRATION_LOCK_TIMEOUT_MS: "15000"
+      ASTRANULL_MIGRATION_STATEMENT_TIMEOUT_MS: "120000"
+    command: ["/bin/sh", "-c", "node scripts/migrate-postgres.mjs && node scripts/postgres-grant-app-role.mjs"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # This one-shot service is the only pg_dump boundary. The purpose-built role has
+  # SELECT-only object ACLs plus BYPASSRLS so FORCE-RLS tables are backed up completely.
+  backup-dump:
+    profiles: ["ops"]
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      ASTRANULL_BACKUP_DATABASE_URL: postgresql://astranull_backup:${ASTRANULL_DATABASE_BACKUP_PASSWORD}@postgres:5432/astranull
+    command: ["pg_dump", "--version"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Encryption/decryption never receives a database credential. Operators pass only a
+  # mounted custom dump plus non-secret database-reference CLI fields to the writer.
+  backup:
+    profiles: ["ops"]
+    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    environment:
+      NODE_ENV: production
+      ASTRANULL_BACKUP_ENCRYPTION_KEY: ${ASTRANULL_BACKUP_ENCRYPTION_KEY}
+    command: ["node", "--version"]
+    restart: "no"
+
   control-plane:
+    image: astranull-control-plane:${ASTRANULL_CONTROL_PLANE_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
     build:
       context: ../..
       dockerfile: ops/aws/Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
-      ASTRANULL_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+      NODE_ENV: production
+      PORT: ${PORT:-8080}
+      ASTRANULL_DEPLOYMENT_PROFILE: ${ASTRANULL_DEPLOYMENT_PROFILE}
+      ASTRANULL_PUBLIC_BASE_URL: ${ASTRANULL_PUBLIC_BASE_URL}
+      ASTRANULL_AUTH_MODE: ${ASTRANULL_AUTH_MODE}
+      ASTRANULL_PUBLIC_LOGIN_URL: ${ASTRANULL_PUBLIC_LOGIN_URL:-/login}
+      ASTRANULL_OIDC_ISSUER: ${ASTRANULL_OIDC_ISSUER}
+      ASTRANULL_OIDC_AUDIENCE: ${ASTRANULL_OIDC_AUDIENCE}
+      ASTRANULL_OIDC_JWKS_URL: ${ASTRANULL_OIDC_JWKS_URL}
+      ASTRANULL_OIDC_ROLE_MAP: ${ASTRANULL_OIDC_ROLE_MAP}
+      ASTRANULL_OIDC_TENANT_CLAIM: ${ASTRANULL_OIDC_TENANT_CLAIM:-tenant_id}
+      ASTRANULL_OIDC_ROLE_CLAIM: ${ASTRANULL_OIDC_ROLE_CLAIM:-role}
+      ASTRANULL_OIDC_USER_CLAIM: ${ASTRANULL_OIDC_USER_CLAIM:-sub}
+      ASTRANULL_BUNDLED_STAGING_OIDC: ${ASTRANULL_BUNDLED_STAGING_OIDC}
+      ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON: ${ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON}
+      ASTRANULL_PERSISTENCE_MODE: ${ASTRANULL_PERSISTENCE_MODE}
+      ASTRANULL_PROBE_MODE: ${ASTRANULL_PROBE_MODE}
+      ASTRANULL_PROBE_WORKER_SECRET: ${ASTRANULL_PROBE_WORKER_SECRET}
+      ASTRANULL_DATABASE_URL: postgresql://astranull_app:${ASTRANULL_DATABASE_APP_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
+      ASTRANULL_SECRET_ENCRYPTION_KEY: ${ASTRANULL_SECRET_ENCRYPTION_KEY}
+      ASTRANULL_ALLOWED_ORIGINS: ${ASTRANULL_ALLOWED_ORIGINS}
+      ASTRANULL_HIGH_SCALE_ADAPTER_MODE: ${ASTRANULL_HIGH_SCALE_ADAPTER_MODE}
+      ASTRANULL_AGENT_IDENTITY_MODE: ${ASTRANULL_AGENT_IDENTITY_MODE:-bearer}
+      ASTRANULL_WAF_POSTURE_ENABLED: ${ASTRANULL_WAF_POSTURE_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED: ${ASTRANULL_CONNECTORS_ENABLED:-0}
+      ASTRANULL_SIGNUP_MODE: ${ASTRANULL_SIGNUP_MODE:-disabled}
+      ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION: ${ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION:-1}
+      ASTRANULL_RATE_LIMIT_STORE: ${ASTRANULL_RATE_LIMIT_STORE:-memory}
+    command: ["node", "src/index.mjs"]
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/ready',{signal:AbortSignal.timeout(10000)}).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
-      timeout: 5s
+      timeout: 12s
       retries: 10
       start_period: 90s
 
+  probe-worker:
+    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
+      ASTRANULL_API_URL: http://control-plane:8080
+      ASTRANULL_PROBE_TENANT_ID: ${ASTRANULL_PROBE_TENANT_ID}
+      ASTRANULL_PROBE_WORKER_ID: ${ASTRANULL_PROBE_WORKER_ID:-aws-probe-worker}
+      ASTRANULL_PROBE_WORKER_SECRET: ${ASTRANULL_PROBE_WORKER_SECRET}
+      ASTRANULL_PROBE_POLL_INTERVAL_MS: ${ASTRANULL_PROBE_POLL_INTERVAL_MS:-5000}
+      ASTRANULL_WORKER_HEARTBEAT_FILE: /tmp/probe-worker.heartbeat
+    command: ["node", "workers/probe-worker.mjs"]
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/probe-worker.heartbeat", "120"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+  password-recovery-worker:
+    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_DATABASE_URL: postgresql://astranull_app:${ASTRANULL_DATABASE_APP_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
+      ASTRANULL_SECRET_ENCRYPTION_KEY: ${ASTRANULL_SECRET_ENCRYPTION_KEY}
+      ASTRANULL_PUBLIC_BASE_URL: ${ASTRANULL_PUBLIC_BASE_URL}
+      ASTRANULL_PASSWORD_RECOVERY_TENANT_IDS: ${ASTRANULL_PASSWORD_RECOVERY_TENANT_IDS}
+      ASTRANULL_SMTP_HOST: ${ASTRANULL_SMTP_HOST}
+      ASTRANULL_SMTP_PORT: ${ASTRANULL_SMTP_PORT:-587}
+      ASTRANULL_SMTP_STARTTLS: ${ASTRANULL_SMTP_STARTTLS:-true}
+      ASTRANULL_SMTP_FROM: ${ASTRANULL_SMTP_FROM}
+      ASTRANULL_SMTP_USERNAME: ${ASTRANULL_SMTP_USERNAME:-}
+      ASTRANULL_SMTP_PASSWORD: ${ASTRANULL_SMTP_PASSWORD:-}
+      ASTRANULL_PASSWORD_RECOVERY_INTERVAL_MS: ${ASTRANULL_PASSWORD_RECOVERY_INTERVAL_MS:-5000}
+      ASTRANULL_PASSWORD_RECOVERY_LEASE_MS: ${ASTRANULL_PASSWORD_RECOVERY_LEASE_MS:-30000}
+      ASTRANULL_PASSWORD_RECOVERY_MAX_ATTEMPTS: ${ASTRANULL_PASSWORD_RECOVERY_MAX_ATTEMPTS:-5}
+      ASTRANULL_PASSWORD_RECOVERY_RETRY_BASE_MS: ${ASTRANULL_PASSWORD_RECOVERY_RETRY_BASE_MS:-60000}
+      ASTRANULL_PASSWORD_RECOVERY_RETRY_MAX_MS: ${ASTRANULL_PASSWORD_RECOVERY_RETRY_MAX_MS:-3600000}
+      ASTRANULL_WORKER_HEARTBEAT_FILE: /tmp/password-recovery-worker.heartbeat
+    command: ["node", "scripts/password-recovery-runner.mjs"]
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/password-recovery-worker.heartbeat", "120"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
+  test-policy-runner:
+    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_DATABASE_URL: postgresql://astranull_app:${ASTRANULL_DATABASE_APP_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
+      ASTRANULL_PERSISTENCE_MODE: postgres
+      ASTRANULL_PROBE_MODE: signed-worker
+      ASTRANULL_PROBE_WORKER_SECRET: ${ASTRANULL_PROBE_WORKER_SECRET}
+      ASTRANULL_TEST_POLICY_TENANT_IDS: ${ASTRANULL_TEST_POLICY_TENANT_IDS}
+      ASTRANULL_TEST_POLICY_RUNNER_ID: ${ASTRANULL_TEST_POLICY_RUNNER_ID:-aws-policy-runner}
+      ASTRANULL_TEST_POLICY_LEASE_MS: ${ASTRANULL_TEST_POLICY_LEASE_MS:-60000}
+      ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: ${ASTRANULL_TEST_POLICY_INTERVAL_SECONDS:-30}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        interval=$${ASTRANULL_TEST_POLICY_INTERVAL_SECONDS:-30};
+        case "$$interval" in
+          ''|*[!0-9]*) echo 'test-policy-runner: interval must be an integer from 5 to 3600 seconds' >&2; exit 64 ;;
+        esac;
+        if [ "$$interval" -lt 5 ] || [ "$$interval" -gt 3600 ]; then
+          echo 'test-policy-runner: interval must be an integer from 5 to 3600 seconds' >&2;
+          exit 64;
+        fi;
+        while true; do
+          if timeout -k 10 120 node scripts/test-policy-runner.mjs; then
+            date -u +%FT%TZ > /tmp/test-policy-runner.heartbeat;
+          else
+            echo 'test-policy-runner: bounded invocation failed; retrying after interval' >&2;
+          fi;
+          sleep "$$interval";
+        done
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/test-policy-runner.heartbeat", "180"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
+
   caddy:
-    image: caddy:2.8-alpine
+    image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
     restart: unless-stopped
     ports:
       - "80:80"

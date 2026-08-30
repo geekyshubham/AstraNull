@@ -220,7 +220,9 @@ describe('AWS release path hardening', () => {
     const envelopeEncryption = 'e'.repeat(64);
     const model = {
       services: {
+        postgres: { environment: { POSTGRES_PASSWORD: owner } },
         migrate: { environment: {
+          ASTRANULL_DATABASE_URL: `postgresql://astranull:${owner}@postgres/astranull`,
           ASTRANULL_ADMIN_DATABASE_URL: `postgresql://astranull:${owner}@postgres/astranull`,
           ASTRANULL_DATABASE_APP_PASSWORD: app,
           ASTRANULL_DATABASE_BACKUP_PASSWORD: backupDb,
@@ -244,6 +246,10 @@ describe('AWS release path hardening', () => {
       },
     };
     assert.equal(validateAwsComposeSecretModel(model), true);
+
+    model.services.postgres.environment.POSTGRES_PASSWORD = 'f'.repeat(64);
+    assert.throws(() => validateAwsComposeSecretModel(model), /owner passwords must match/);
+    model.services.postgres.environment.POSTGRES_PASSWORD = owner;
 
     model.services.migrate.environment.ASTRANULL_DATABASE_BACKUP_PASSWORD = app;
     model.services['backup-dump'].environment.ASTRANULL_BACKUP_DATABASE_URL = `postgresql://astranull_backup:${app}@postgres/astranull`;
