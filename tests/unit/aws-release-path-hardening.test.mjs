@@ -84,6 +84,29 @@ describe('AWS release path hardening', () => {
     assert.match(deploy, /--wait --wait-timeout 240/);
   });
 
+  it('runs release JSON parsing only in an isolated immutable control-plane image', () => {
+    const restore = read('ops/aws/restore.sh');
+    const logicalCommands = (source) => source.replace(/\\\n\s*/g, ' ');
+    const hostNodeCommand = /(?:^|[|;&]\s*)(?:(?:exec\s+)|(?:timeout(?:\s+-k\s+\S+)?\s+\S+\s+))?node\b/m;
+
+    for (const [name, source] of [['deploy', deploy], ['restore', restore]]) {
+      const runner = source.match(/^run_control_plane_node\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+      const validator = source.match(/^validate_compose\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+      assert.match(runner, /\[\[ "\$image_id" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/, `${name} must require an immutable image ID`);
+      assert.match(runner, /docker run --network none --read-only --user 10001:10001 --rm -i \\/);
+      assert.match(runner, /"\$image_id" node "\$@"/);
+      assert.doesNotMatch(runner, /--env(?:-file)?|--mount|(?:^|\s)-v(?:\s|$)/m);
+      assert.match(validator, /config --format json \\[\s\S]*\| run_control_plane_node "\$image_id" scripts\/validate-aws-compose-secrets\.mjs/m);
+      assert.doesNotMatch(validator, /mktemp|tee|--env(?:-file)?|--mount|(?:^|\s)-v(?:\s|$)/m);
+      assert.doesNotMatch(logicalCommands(source), hostNodeCommand, `${name} must not execute host-side node`);
+      assert.doesNotMatch(source, /\$\(\s*node\b/, `${name} must not execute host-side node in command substitution`);
+    }
+
+    const volumeParser = deploy.match(/^postgres_volume_name\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    assert.match(volumeParser, /config --format json \\[\s\S]*\| run_control_plane_node "\$image_id" -e/m);
+    assert.doesNotMatch(volumeParser, /mktemp|tee|--env(?:-file)?|--mount|(?:^|\s)-v(?:\s|$)/m);
+  });
+
   it('uses target-SHA Compose for normal release phases and keeps current orchestration for rollback', () => {
     assert.match(deploy, /previous_compose=\$\(mktemp/);
     assert.match(deploy, /target_compose=\$\(mktemp/);
@@ -99,12 +122,13 @@ describe('AWS release path hardening', () => {
 
     assert.match(rollbackPath, /ACTIVE_COMPOSE_FILE="\$previous_compose"/);
     assert.doesNotMatch(rollbackPath, /ACTIVE_COMPOSE_FILE="\$target_compose"/);
+    assert.match(rollbackPath, /validator_image_id=\$\(image_id_for_ref "astranull-control-plane:\$previous"\)[\s\S]*validate_compose "\$validator_image_id"[\s\S]*backup_database[\s\S]*build_control_plane_from_commit "\$SHA"/m);
     assert.match(rollbackPath, /build_control_plane_from_commit "\$SHA"/);
     assert.doesNotMatch(rollbackPath, /git checkout[^\n]*"\$SHA"/);
     assert.match(rollbackPath, /ASTRANULL_WORKER_IMAGE_TAG="\$previous"/);
     assert.match(rollbackPath, /persist_control_plane_image_state "\$SHA" "\$active_control_plane_image_id"/);
 
-    assert.match(targetPath, /ACTIVE_COMPOSE_FILE="\$target_compose"[\s\S]*validate_compose[\s\S]*build_control_plane_from_commit "\$SHA"[\s\S]*ensure_postgres_ready_for_backup[\s\S]*backup_database[\s\S]*migrate[\s\S]*up -d/m);
+    assert.match(targetPath, /ACTIVE_COMPOSE_FILE="\$target_compose"[\s\S]*build_control_plane_from_commit "\$SHA"[\s\S]*validator_image_id=\$\(image_id_for_ref "astranull-control-plane:\$SHA"\)[\s\S]*validate_compose "\$validator_image_id"[\s\S]*ensure_postgres_ready_for_backup "\$validator_image_id"[\s\S]*backup_database[\s\S]*migrate[\s\S]*up -d/m);
     assert.doesNotMatch(targetPath, /docker build[^\n]*\s\.(?:\s|$)/m);
     assert.doesNotMatch(targetPath, /ACTIVE_COMPOSE_FILE="\$previous_compose"/);
 
@@ -260,6 +284,7 @@ describe('AWS release path hardening', () => {
     assert.match(restoreScript, /ASTRANULL_WORKER_IMAGE_TAG="\$orchestration_tag"/);
     assert.match(restoreScript, /verify_running_control_plane_state[\s\S]*stop caddy/m);
     assert.match(restoreScript, /verify_restored_image_identity/);
+    assert.match(restoreScript, /load_restore_image_identity[\s\S]*validate_compose "\$control_plane_image_id"[\s\S]*verify_running_control_plane_state/m);
     const loadIdentity = restoreScript.slice(
       restoreScript.indexOf('load_restore_image_identity()'),
       restoreScript.indexOf('verify_service_image_tag()'),
@@ -284,12 +309,17 @@ describe('AWS release path hardening', () => {
     assert.match(cleanupPath, /if \(\( ! succeeded \)\); then[\s\S]*compose_timeout 120 stop caddy probe-worker password-recovery-worker test-policy-runner control-plane/m);
     assert.match(cleanupPath, /runtime services remain stopped for operator investigation/);
 
-    const stop = restoreScript.indexOf('stop caddy');
-    const verify = restoreScript.indexOf('postgres-restore-drill.mjs');
-    const drop = restoreScript.indexOf('DROP DATABASE IF EXISTS');
-    const restoreArchive = restoreScript.indexOf('pg_restore -U astranull');
-    const migrate = restoreScript.indexOf('--profile ops run --rm --no-deps migrate');
-    const activate = restoreScript.indexOf('up -d --remove-orphans');
+    const restoreMain = restoreScript.slice(restoreScript.indexOf('main()'));
+    const loadIdentityIndex = restoreMain.indexOf('load_restore_image_identity');
+    const validate = restoreMain.indexOf('validate_compose "$control_plane_image_id"');
+    const verifyRunning = restoreMain.indexOf('verify_running_control_plane_state');
+    const stop = restoreMain.indexOf('stop caddy');
+    const verify = restoreMain.indexOf('postgres-restore-drill.mjs');
+    const drop = restoreMain.indexOf('DROP DATABASE IF EXISTS');
+    const restoreArchive = restoreMain.indexOf('pg_restore -U astranull');
+    const migrate = restoreMain.indexOf('--profile ops run --rm --no-deps migrate');
+    const activate = restoreMain.indexOf('up -d --remove-orphans');
+    assert.ok(loadIdentityIndex < validate && validate < verifyRunning && verifyRunning < stop);
     assert.ok(stop < verify && verify < drop && drop < restoreArchive && restoreArchive < migrate && migrate < activate);
   });
 

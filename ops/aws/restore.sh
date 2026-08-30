@@ -24,6 +24,23 @@ compose_timeout() {
     -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
+run_control_plane_node() {
+  local image_id=$1
+  shift
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'restore: release Node runner requires an immutable local image ID' >&2
+    return 1
+  }
+  timeout -k 5 30 docker run --network none --read-only --user 10001:10001 --rm -i \
+    "$image_id" node "$@"
+}
+
+validate_compose() {
+  local image_id=$1
+  compose_timeout 30 --profile ops config --format json \
+    | run_control_plane_node "$image_id" scripts/validate-aws-compose-secrets.mjs
+}
+
 read_control_plane_image_tag() {
   local tag
   [[ -f "$CONTROL_PLANE_IMAGE_TAG_FILE" && ! -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]] || {
@@ -210,8 +227,7 @@ main() {
   trap cleanup EXIT
   trap 'exit 130' HUP INT TERM
 
-  compose_timeout 30 --profile ops config --format json \
-    | timeout -k 5 30 node scripts/validate-aws-compose-secrets.mjs
+  validate_compose "$control_plane_image_id"
   # A running stack must agree with persisted state before any destructive operation.
   # A fully stopped stack is allowed because the persisted immutable ID was resolved and
   # rebound to the control-plane tag above; a mutable tag alone is never trusted.

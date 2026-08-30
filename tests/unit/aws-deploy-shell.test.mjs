@@ -65,11 +65,81 @@ exec "$@"
   chmodSync(executable, 0o755);
 }
 
+function writeFakeContainerNodeRunner(directory) {
+  const fakeDocker = path.join(directory, 'docker');
+  const fakeNode = path.join(directory, 'node');
+  const dockerLog = path.join(directory, 'docker.log');
+  const hostNodeLog = path.join(directory, 'host-node.log');
+  writeFakeTimeout(directory);
+  writeFileSync(fakeDocker, `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == run && "$2" == --network && "$3" == none && "$4" == --read-only \\
+  && "$5" == --user && "$6" == 10001:10001 && "$7" == --rm && "$8" == -i \\
+  && "\${9}" == "$EXPECTED_IMAGE_ID" && "\${10}" == node ]] || exit 90
+payload=$(cat)
+[[ "$payload" == "$EXPECTED_COMPOSE_JSON" ]] || exit 91
+printf '%s|%s|%s\n' "\${9}" "\${10}" "\${11}" >> "$FAKE_DOCKER_LOG"
+case "\${11}" in
+  scripts/validate-aws-compose-secrets.mjs)
+    [[ $# == 11 ]] || exit 92
+    printf 'aws-compose-secrets: ok\n'
+    ;;
+  -e)
+    [[ $# == 12 ]] || exit 93
+    printf 'aws_pgdata'
+    ;;
+  *) exit 94 ;;
+esac
+`);
+  writeFileSync(fakeNode, `#!/usr/bin/env bash
+printf 'host node invoked: %s\n' "$*" >> "$HOST_NODE_LOG"
+exit 99
+`);
+  chmodSync(fakeDocker, 0o755);
+  chmodSync(fakeNode, 0o755);
+  return { dockerLog, hostNodeLog };
+}
+
 describe('AWS deploy shell lifecycle', () => {
   it('is sourceable without running deployment main', () => {
     const result = runBash('source "$1"; declare -F main ensure_postgres_ready_for_backup install_failure_traps >/dev/null; printf source-ok');
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, 'source-ok');
+  });
+
+  it('parses Compose JSON through a locked-down exact-image runner, never host node', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-release-node-'));
+    const imageId = `sha256:${'7'.repeat(64)}`;
+    const composeJson = '{"volumes":{"pgdata":{"name":"aws_pgdata"}}}';
+    const { dockerLog, hostNodeLog } = writeFakeContainerNodeRunner(temp);
+    try {
+      const result = runBash(`
+        source "$1"
+        compose_timeout() {
+          case "$*" in
+            '30 --profile ops config --format json'|'30 config --format json') printf '%s' "$EXPECTED_COMPOSE_JSON" ;;
+            *) return 88 ;;
+          esac
+        }
+        validate_compose "$EXPECTED_IMAGE_ID"
+        printf 'volume=%s' "$(postgres_volume_name "$EXPECTED_IMAGE_ID")"
+      `, {
+        EXPECTED_COMPOSE_JSON: composeJson,
+        EXPECTED_IMAGE_ID: imageId,
+        FAKE_DOCKER_LOG: dockerLog,
+        HOST_NODE_LOG: hostNodeLog,
+        PATH: `${temp}:${process.env.PATH}`,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'aws-compose-secrets: ok\nvolume=aws_pgdata');
+      assert.deepEqual(readFileSync(dockerLog, 'utf8').trim().split('\n'), [
+        `${imageId}|node|scripts/validate-aws-compose-secrets.mjs`,
+        `${imageId}|node|-e`,
+      ]);
+      assert.equal(existsSync(hostNodeLog), false);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it('preserves status 130 through signal and EXIT rollback traps', () => {
@@ -137,7 +207,7 @@ describe('AWS deploy shell lifecycle', () => {
         }
         postgres_volume_name() { printf aws_pgdata; }
         docker_volume_exists() { [[ "$SCENARIO" == stale-volume ]]; }
-        ensure_postgres_ready_for_backup
+        ensure_postgres_ready_for_backup "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       `, { CALL_LOG: freshLog, SCENARIO: 'fresh' });
       assert.equal(fresh.status, 0, fresh.stderr);
       const freshCalls = readFileSync(freshLog, 'utf8').trim().split('\n');
@@ -157,7 +227,7 @@ describe('AWS deploy shell lifecycle', () => {
         }
         postgres_volume_name() { return 99; }
         docker_volume_exists() { return 99; }
-        ensure_postgres_ready_for_backup
+        ensure_postgres_ready_for_backup "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       `, { CALL_LOG: existingLog });
       assert.equal(existing.status, 0, existing.stderr);
       assert.deepEqual(readFileSync(existingLog, 'utf8').trim().split('\n'), [
@@ -172,7 +242,7 @@ describe('AWS deploy shell lifecycle', () => {
         }
         postgres_volume_name() { printf aws_pgdata; }
         docker_volume_exists() { return 0; }
-        ensure_postgres_ready_for_backup
+        ensure_postgres_ready_for_backup "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       `);
       assert.equal(staleVolume.status, 1);
       assert.match(staleVolume.stderr, /exists without a service container/);
@@ -184,7 +254,7 @@ describe('AWS deploy shell lifecycle', () => {
         }
         postgres_volume_name() { printf aws_pgdata; }
         docker_volume_exists() { return 2; }
-        ensure_postgres_ready_for_backup
+        ensure_postgres_ready_for_backup "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       `);
       assert.equal(unknownVolumeState.status, 1);
       assert.match(unknownVolumeState.stderr, /could not verify whether postgres data volume/);
@@ -510,6 +580,39 @@ tar -tf - > "$FAKE_DOCKER_TAR_LIST"
 });
 
 describe('AWS restore image identity', () => {
+  it('validates Compose with the persisted exact image runner, never host node', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-restore-node-'));
+    const imageId = `sha256:${'8'.repeat(64)}`;
+    const composeJson = '{"services":{"control-plane":{}}}';
+    const { dockerLog, hostNodeLog } = writeFakeContainerNodeRunner(temp);
+    try {
+      const result = runBash(`
+        source "$1"
+        control_plane_image_id="$EXPECTED_IMAGE_ID"
+        compose_timeout() {
+          [[ "$*" == '30 --profile ops config --format json' ]] || return 88
+          printf '%s' "$EXPECTED_COMPOSE_JSON"
+        }
+        validate_compose "$control_plane_image_id"
+      `, {
+        EXPECTED_COMPOSE_JSON: composeJson,
+        EXPECTED_IMAGE_ID: imageId,
+        FAKE_DOCKER_LOG: dockerLog,
+        HOST_NODE_LOG: hostNodeLog,
+        PATH: `${temp}:${process.env.PATH}`,
+      }, RESTORE);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'aws-compose-secrets: ok\n');
+      assert.equal(
+        readFileSync(dockerLog, 'utf8').trim(),
+        `${imageId}|node|scripts/validate-aws-compose-secrets.mjs`,
+      );
+      assert.equal(existsSync(hostNodeLog), false);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   it('loads persisted control-plane state, keeps current workers, and verifies the hybrid runtime', () => {
     const temp = mkdtempSync(path.join(tmpdir(), 'astranull-restore-identity-'));
     const persistedTag = 'd'.repeat(40);

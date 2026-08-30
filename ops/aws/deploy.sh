@@ -34,15 +34,28 @@ compose_timeout() {
     -f "$ACTIVE_COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
 }
 
+run_control_plane_node() {
+  local image_id=$1
+  shift
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'deploy: release Node runner requires an immutable local image ID' >&2
+    return 1
+  }
+  timeout -k 5 30 docker run --network none --read-only --user 10001:10001 --rm -i \
+    "$image_id" node "$@"
+}
+
 validate_compose() {
+  local image_id=$1
   # Render once and reject missing/reused credentials without printing them.
   compose_timeout 30 --profile ops config --format json \
-    | timeout -k 5 30 node scripts/validate-aws-compose-secrets.mjs
+    | run_control_plane_node "$image_id" scripts/validate-aws-compose-secrets.mjs
 }
 
 postgres_volume_name() {
+  local image_id=$1
   compose_timeout 30 config --format json \
-    | timeout -k 5 30 node -e '
+    | run_control_plane_node "$image_id" -e '
       let input = "";
       process.stdin.setEncoding("utf8");
       process.stdin.on("data", (chunk) => { input += chunk; });
@@ -68,10 +81,10 @@ check_postgres() {
 }
 
 ensure_postgres_ready_for_backup() {
-  local postgres_cid volume_name volume_status
+  local image_id=$1 postgres_cid volume_name volume_status
   postgres_cid=$(compose_timeout 30 ps --all -q postgres)
   if [[ -z "$postgres_cid" ]]; then
-    volume_name=$(postgres_volume_name)
+    volume_name=$(postgres_volume_name "$image_id")
     if docker_volume_exists "$volume_name"; then
       echo "deploy: postgres data volume $volume_name exists without a service container; refusing target-compose bootstrap before backup" >&2
       return 1
@@ -448,7 +461,7 @@ main() {
   flock -n 9 || { echo 'deploy: another deployment or restore is active' >&2; exit 1; }
   cd "$ROOT"
   [[ -f "$ENV_FILE" ]] || { echo "deploy: missing $ENV_FILE" >&2; exit 1; }
-  local env_mode env_owner remote_main stamp active_control_plane_image_id
+  local env_mode env_owner remote_main stamp active_control_plane_image_id validator_image_id
   env_mode=$(stat -c '%a' "$ENV_FILE")
   env_owner=$(stat -c '%u' "$ENV_FILE")
   [[ "$env_mode" =~ ^[46]00$ ]] || { echo "deploy: $ENV_FILE must have mode 400 or 600" >&2; exit 1; }
@@ -497,7 +510,13 @@ main() {
     export ASTRANULL_IMAGE_TAG="$previous"
     export ASTRANULL_CONTROL_PLANE_IMAGE_TAG="$previous_control_plane_tag"
     export ASTRANULL_WORKER_IMAGE_TAG="$previous"
-    validate_compose
+    # Current orchestration and workers already use this exact local image. Resolve
+    # its immutable identity so validation cannot pull or follow a mutable tag.
+    validator_image_id=$(image_id_for_ref "astranull-control-plane:$previous") || {
+      echo "deploy: current orchestration image astranull-control-plane:$previous is unavailable" >&2
+      return 1
+    }
+    validate_compose "$validator_image_id"
     backup_database
     build_control_plane_from_commit "$SHA"
     export ASTRANULL_CONTROL_PLANE_IMAGE_TAG="$SHA"
@@ -516,9 +535,12 @@ main() {
     export ASTRANULL_IMAGE_TAG="$SHA"
     export ASTRANULL_CONTROL_PLANE_IMAGE_TAG="$SHA"
     export ASTRANULL_WORKER_IMAGE_TAG="$SHA"
-    validate_compose
+    # The exact-SHA build consumes no release secrets or data and supplies the
+    # target-version validator before any database or runtime operation.
     build_control_plane_from_commit "$SHA"
-    ensure_postgres_ready_for_backup
+    validator_image_id=$(image_id_for_ref "astranull-control-plane:$SHA")
+    validate_compose "$validator_image_id"
+    ensure_postgres_ready_for_backup "$validator_image_id"
     backup_database
     migration_started=1
     compose_timeout 180 --profile ops run --rm --no-deps migrate
