@@ -15,6 +15,7 @@ import {
   createPostgresStateServices,
 } from '../../src/persistence/postgres/stateServiceAdapters.mjs';
 import { ARTIFACT_PROOF_FIELDS, REQUIRED_ARTIFACT_TYPES } from '../../src/lib/highScalePolicy.mjs';
+import { computeTargetGroupScopeHash } from '../../src/lib/scopeHash.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -107,7 +108,28 @@ function stubRepositories(overrides = {}) {
   return { coreCatalog, agentControl, validationEvidence, highScale, killSwitch };
 }
 
-function acceptedAuthorizationArtifacts() {
+const GOVERNED_REQUEST = Object.freeze({
+  tenant_id: 'ten_demo',
+  target_group_id: 'tg_1',
+  scope_hash: computeTargetGroupScopeHash('ten_demo', 'tg_1'),
+  requested_scenario_families: ['udp_flood'],
+  delivery_patterns: ['direct'],
+  requested_limits: { max_gbps: 0.5, max_duration_minutes: 30 },
+  requested_window: {
+    window_start: '2026-06-10T00:00:00.000Z',
+    window_end: '2026-06-20T00:00:00.000Z',
+  },
+});
+
+function acceptedAuthorizationArtifacts(request = GOVERNED_REQUEST) {
+  const authorizationBinding = {
+    tenant_id: request.tenant_id,
+    target_group_id: request.target_group_id,
+    scope_hash: request.scope_hash,
+    requested_window: request.requested_window,
+    approved_schedule_window: request.requested_window,
+    delivery_patterns: request.delivery_patterns,
+  };
   return REQUIRED_ARTIFACT_TYPES.map((type) => ({
     id: `art_${type}`,
     type,
@@ -116,15 +138,18 @@ function acceptedAuthorizationArtifacts() {
     approver: 'Security Owner',
     valid_window: {
       window_start: '2026-06-01T00:00:00.000Z',
-      // Far future so accepted fixtures stay valid past calendar boundaries (prod uses Date.now()).
       window_end: '2099-12-31T23:59:59.999Z',
     },
+    approved_targets: [request.target_group_id],
     emergency_contacts: [{ name: 'SOC Lead', phone: '+15555550100' }],
     abort_criteria: {
       stop_on_customer_request: true,
       stop_on_service_health_degradation: true,
     },
-    approved_scenario_families: ['governed_readiness'],
+    approved_scenario_families: request.requested_scenario_families,
+    approved_delivery_patterns: request.delivery_patterns,
+    approved_limits: request.requested_limits,
+    authorization_binding: authorizationBinding,
     max_rate: 'bounded-by-soc-plan',
     max_duration_minutes: 30,
     proof_fields: ARTIFACT_PROOF_FIELDS[type] ?? [],
@@ -293,8 +318,8 @@ describe('postgres state service adapter', () => {
     const repositories = stubRepositories({
       highScaleRequests: [
         {
+          ...GOVERNED_REQUEST,
           id: 'hs_ready',
-          tenant_id: 'ten_demo',
           state: 'approved',
           artifacts: acceptedAuthorizationArtifacts(),
           soc_approvals: [

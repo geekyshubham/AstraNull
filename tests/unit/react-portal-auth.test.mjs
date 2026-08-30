@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.mjs';
 // Every helper below is imported from the REAL module that api.ts uses — never a local copy.
@@ -19,6 +20,11 @@ import {
   resolveOidcLoginRedirect,
   sessionFromLoginResponse,
 } from '../../apps/web/react/src/lib/portal-auth-policy.mjs';
+
+const APP_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/App.tsx', import.meta.url),
+  'utf8',
+);
 
 describe('portal auth mode resolution (shipped module)', () => {
   it('prefers the /ready auth mode over public site config', () => {
@@ -353,5 +359,23 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('admin', 'release-evidence'), false);
     assert.equal(canAccessRoute('owner', 'release-evidence'), false);
     assert.equal(canAccessRoute('soc', 'release-evidence'), false);
+  });
+
+  it('authorizes a cold hash route before route-specific hydration or first render', () => {
+    const bootStart = APP_SOURCE.indexOf('async function boot()');
+    const bootEnd = APP_SOURCE.indexOf("boot().catch", bootStart);
+    const boot = APP_SOURCE.slice(bootStart, bootEnd);
+    const authorize = boot.indexOf('canAccessRoute(nextSession.role, requestedBootRoute');
+    const redirect = boot.indexOf('window.history.replaceState');
+    const route = boot.indexOf('setRoute(bootRoute)');
+    const hydrate = boot.indexOf('await refresh(nextConfig, nextSession, bootRoute)');
+    const reveal = boot.indexOf('setLoading(false)');
+
+    assert.ok(authorize >= 0, 'boot must authorize the requested hash route');
+    assert.ok(authorize < redirect, 'authorization must decide whether the hash is replaced');
+    assert.ok(redirect < route, 'an unauthorized deep-link must point at dashboard before route state changes');
+    assert.ok(route < hydrate, 'dashboard route state must be selected before any route fetch');
+    assert.ok(hydrate < reveal, 'the authorized route must hydrate before route-specific rendering is revealed');
+    assert.doesNotMatch(boot, /refresh\(nextConfig, nextSession, requestedBootRoute\)/);
   });
 });

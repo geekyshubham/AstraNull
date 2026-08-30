@@ -16,6 +16,13 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function isActiveSignedLoa(row, atMs = Date.now()) {
+  if (row?.state !== 'signed') return false;
+  if (!row.expires_at) return true;
+  const expiresAt = Date.parse(row.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt > atMs;
+}
+
 function findGroup(ctx, groupId) {
   return (
     getStore().targetGroups.find(
@@ -24,8 +31,10 @@ function findGroup(ctx, groupId) {
   );
 }
 
-function getLatestVerificationState(targetId) {
-  const rows = (getStore().targetVerifications ?? []).filter((row) => row.target_id === targetId);
+function getLatestVerificationState(ctx, targetId) {
+  const rows = (getStore().targetVerifications ?? []).filter(
+    (row) => row.tenant_id === ctx.tenantId && row.target_id === targetId,
+  );
   if (!rows.length) return 'unverified';
   const latest = rows.reduce((best, row) => {
     const bestAt = String(best.transitioned_at);
@@ -41,21 +50,35 @@ function isEligibleForLoaScope(state) {
   return (VERIFICATION_RANK[state] ?? 0) >= VERIFICATION_RANK.agent_verified;
 }
 
-function buildScopeSnapshot(ctx, groupId, scopeAck = []) {
-  const ackSet = new Set(scopeAck ?? []);
+function buildScopeSnapshot(ctx, groupId, scopeAck) {
+  if (!Array.isArray(scopeAck) || scopeAck.length === 0) {
+    return { error: 'invalid_scope_ack', status: 400 };
+  }
+  const acknowledged = scopeAck.map((targetId) => String(targetId ?? '').trim());
+  if (acknowledged.some((targetId) => !targetId)) {
+    return { error: 'invalid_scope_ack', status: 400 };
+  }
+  const ackSet = new Set(acknowledged);
   const targets = getStore().targets.filter(
-    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === groupId,
+    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === groupId && !t.deleted_at,
   );
+  const targetIds = new Set(targets.map((target) => target.id));
+  if ([...ackSet].some((targetId) => !targetIds.has(targetId))) {
+    return { error: 'scope_target_not_found', status: 400 };
+  }
   const targetsInScope = [];
   const excluded = [];
   for (const target of targets) {
-    const state = getLatestVerificationState(target.id);
+    const state = getLatestVerificationState(ctx, target.id);
     const eligible = isEligibleForLoaScope(state);
-    if (eligible && (ackSet.size === 0 || ackSet.has(target.id))) {
+    if (eligible && ackSet.has(target.id)) {
       targetsInScope.push(target.id);
     } else {
       excluded.push({ target_id: target.id, reason: eligible ? 'not_acknowledged' : 'unverified' });
     }
+  }
+  if (targetsInScope.length === 0) {
+    return { error: 'invalid_scope_ack', status: 400 };
   }
   return { targets: targetsInScope, excluded };
 }
@@ -94,16 +117,39 @@ export function sign(ctx, groupId, payload) {
   const group = findGroup(ctx, groupId);
   if (!group) return { error: 'target_group_not_found', status: 404 };
 
+  const scope_snapshot = buildScopeSnapshot(ctx, groupId, payload.scope_ack);
+  if (scope_snapshot.error) return scope_snapshot;
+
+  const signed_at = nowIso();
+  const signedAtMs = Date.parse(signed_at);
   const active = (getStore().loaSignatures ?? []).find(
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && row.state === 'signed',
+      && isActiveSignedLoa(row, signedAtMs),
   );
   if (active) return { error: 'loa_active', status: 409 };
 
-  const signed_at = nowIso();
-  const scope_snapshot = buildScopeSnapshot(ctx, groupId, payload.scope_ack);
+  const expiredLoas = (getStore().loaSignatures ?? []).filter((row) => {
+    if (row.tenant_id !== ctx.tenantId || row.target_group_id !== groupId || row.state !== 'signed' || !row.expires_at) {
+      return false;
+    }
+    const expiresAt = Date.parse(row.expires_at);
+    return Number.isFinite(expiresAt) && expiresAt <= signedAtMs;
+  });
+  for (const expiredLoa of expiredLoas) {
+    const expirationAudit = audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'loa.expired',
+      resource_type: 'loa_signature',
+      resource_id: expiredLoa.id,
+      metadata: { target_group_id: groupId },
+    });
+    expiredLoa.state = 'expired';
+    expiredLoa.audit_entry_id = expirationAudit.id;
+  }
   const loaId = newId('loa');
   const custody_artifact_id = newId('art');
   const loaDraft = {
@@ -190,7 +236,7 @@ export function getActive(ctx, groupId) {
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && row.state === 'signed',
+      && isActiveSignedLoa(row),
   ) ?? null;
   return {
     loa: formatLoa(loa),

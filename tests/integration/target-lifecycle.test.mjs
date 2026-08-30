@@ -73,6 +73,16 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
     assert.equal(detail.status, 200);
     assert.equal(detail.json.verification.state, 'dns_verified');
 
+    const eligible = await request(baseUrl, 'POST', `/v1/target-groups/${groupId}/targets`, {
+      headers,
+      body: { kind: 'fqdn', value: 'eligible.lifecycle.example.test' },
+    });
+    assert.equal(eligible.status, 201);
+    getStore().targetVerifications.push({
+      id: 'tv_lifecycle_agent', tenant_id: 'ten_demo', target_id: eligible.json.id,
+      state: 'agent_verified', transitioned_at: new Date().toISOString(),
+    });
+
     const loaBefore = await request(baseUrl, 'POST', `/v1/target-groups/${groupId}/loa`, {
       headers,
       body: {
@@ -80,10 +90,12 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
         signer_title: 'Eng',
         signer_email: 'signer@lifecycle.example',
         attested: true,
+        scope_ack: [targetId, eligible.json.id],
         emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@lifecycle.example' },
       },
     });
     assert.equal(loaBefore.status, 201);
+    assert.ok(loaBefore.json.loa.scope_snapshot.targets.includes(eligible.json.id));
     assert.ok(
       loaBefore.json.loa.scope_snapshot.excluded.some((row) => row.target_id === targetId),
     );
@@ -96,13 +108,22 @@ describe('target lifecycle (FT-CRUD-TGT-01)', () => {
     const targetsAfter = getStore().targets.filter(
       (row) => row.target_group_id === groupId && row.tenant_id === 'ten_demo',
     );
-    assert.equal(targetsAfter.some((row) => row.id === targetId), false);
+    const archivedTarget = targetsAfter.find((row) => row.id === targetId);
+    assert.ok(archivedTarget, 'soft-deleted target history must remain stored');
+    assert.ok(archivedTarget.deleted_at);
+
+    const activeInventory = await request(baseUrl, 'GET', '/v1/targets', { headers });
+    assert.equal(activeInventory.status, 200);
+    assert.equal(activeInventory.json.items.some((row) => row.id === targetId), false);
+
+    const detailAfter = await request(baseUrl, 'GET', `/v1/targets/${targetId}`, { headers });
+    assert.equal(detailAfter.status, 404);
 
     const audits = getStore().auditLog
       .filter((entry) => entry.resource_id === targetId || entry.metadata?.target_group_id === groupId)
       .map((entry) => entry.action);
     assert.ok(audits.includes('target.added'));
     assert.ok(audits.includes('dns_ownership.challenge_issued'));
-    assert.ok(audits.includes('target.deleted'));
+    assert.ok(audits.includes('target.archived'));
   });
 });

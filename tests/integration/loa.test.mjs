@@ -78,6 +78,26 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
     assert.equal(res.json.error, 'attestation_required');
   });
 
+  it('rejects omitted and empty scope_ack without defaulting to eligible targets', async () => {
+    const before = getStore().loaSignatures.length;
+    for (const scopeAck of [undefined, []]) {
+      const body = {
+        signer_name: 'A', signer_title: 'B', signer_email: 'a@b.com', attested: true,
+        emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
+        ...(scopeAck === undefined ? {} : { scope_ack: scopeAck }),
+      };
+      const res = await request(
+        baseUrl,
+        'POST',
+        `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa`,
+        { headers: ownerHeaders(), body },
+      );
+      assert.equal(res.status, 400);
+      assert.equal(res.json.error, 'invalid_scope_ack');
+      assert.equal(getStore().loaSignatures.length, before);
+    }
+  });
+
   it('FT-LOA-03 active LOA returns 409 loa_active', async () => {
     const res = await request(
       baseUrl,
@@ -86,6 +106,7 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
       { headers: ownerHeaders(), body: {
         signer_name: 'A', signer_title: 'B', signer_email: 'a@b.com', attested: true,
         emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
+        scope_ack: ['tgt_checkout_1'],
       } },
     );
     assert.equal(res.status, 409);
@@ -99,6 +120,19 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
       `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa/${PORTAL_BASELINE_IDS.loaId}/revoke`,
       { headers: ownerHeaders(), body: { reason: 'reset' } },
     );
+    const ineligibleOnly = await request(
+      baseUrl,
+      'POST',
+      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa`,
+      { headers: ownerHeaders(), body: {
+        signer_name: 'A', signer_title: 'B', signer_email: 'a@b.com', attested: true,
+        emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
+        scope_ack: ['tgt_checkout_3'],
+      } },
+    );
+    assert.equal(ineligibleOnly.status, 400);
+    assert.equal(ineligibleOnly.json.error, 'invalid_scope_ack');
+
     const res = await request(
       baseUrl,
       'POST',
@@ -112,6 +146,81 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
     assert.equal(res.status, 201);
     assert.ok(res.json.loa.scope_snapshot.targets.includes('tgt_checkout_1'));
     assert.ok(res.json.loa.scope_snapshot.excluded.some((row) => row.target_id === 'tgt_checkout_3'));
+  });
+
+  it('rejects foreign scope acknowledgements and ignores a caller-provided scope snapshot', async () => {
+    await request(
+      baseUrl,
+      'POST',
+      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa/${PORTAL_BASELINE_IDS.loaId}/revoke`,
+      { headers: ownerHeaders(), body: { reason: 'scope regression' } },
+    );
+    getStore().targets.push(
+      {
+        id: 'tgt_other_group', tenant_id: ctx.tenantId, target_group_id: 'tg_other',
+        kind: 'fqdn', value: 'other.example.test', created_at: new Date().toISOString(),
+      },
+      {
+        id: 'tgt_other_tenant', tenant_id: 'ten_other', target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
+        kind: 'fqdn', value: 'foreign.example.test', created_at: new Date().toISOString(),
+      },
+    );
+    const baseBody = {
+      signer_name: 'Owner', signer_title: 'CISO', signer_email: 'owner@example.test',
+      attested: true,
+      emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@example.test' },
+    };
+    for (const foreignTarget of ['tgt_other_group', 'tgt_other_tenant']) {
+      const rejected = await request(
+        baseUrl,
+        'POST',
+        `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa`,
+        { headers: ownerHeaders(), body: { ...baseBody, scope_ack: [foreignTarget] } },
+      );
+      assert.equal(rejected.status, 400);
+      assert.equal(rejected.json.error, 'scope_target_not_found');
+    }
+
+    const signed = await request(
+      baseUrl,
+      'POST',
+      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa`,
+      {
+        headers: ownerHeaders(),
+        body: {
+          ...baseBody,
+          scope_ack: ['tgt_checkout_1'],
+          scope_snapshot: { targets: ['tgt_other_tenant'] },
+        },
+      },
+    );
+    assert.equal(signed.status, 201);
+    assert.deepEqual(signed.json.loa.scope_snapshot.targets, ['tgt_checkout_1']);
+    assert.equal(JSON.stringify(signed.json.loa.scope_snapshot).includes('tgt_other_tenant'), false);
+  });
+
+  it('transitions and audits an expired signed LOA before replacement', async () => {
+    const predecessor = getStore().loaSignatures.find(
+      (row) => row.id === PORTAL_BASELINE_IDS.loaId,
+    );
+    predecessor.expires_at = '2000-01-01T00:00:00.000Z';
+
+    const replacement = await request(
+      baseUrl,
+      'POST',
+      `/v1/target-groups/${PORTAL_BASELINE_IDS.targetGroupId}/loa`,
+      { headers: ownerHeaders(), body: {
+        signer_name: 'Replacement', signer_title: 'CISO', signer_email: 'replacement@acme.com',
+        attested: true,
+        emergency_contact: { name: 'Ops', role: 'SRE', phone: '+1', email: 'ops@acme.com' },
+        scope_ack: ['tgt_checkout_1'],
+      } },
+    );
+    assert.equal(replacement.status, 201);
+    assert.equal(predecessor.state, 'expired');
+    assert.ok(getStore().auditLog.some(
+      (entry) => entry.action === 'loa.expired' && entry.resource_id === predecessor.id,
+    ));
   });
 
   it('FT-LOA-05 revoke frees active index and allows resign', async () => {
@@ -147,5 +256,20 @@ describe('LOA portal integration (FT-LOA-01..06)', () => {
     const blocked = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
     assert.equal(blocked.error, 'loa_missing');
     assert.equal(blocked.status, 409);
+  });
+
+  it('rejects expired and partial-scope LOAs at high-scale start', () => {
+    const loa = getStore().loaSignatures.find(
+      (row) => row.id === PORTAL_BASELINE_IDS.loaId,
+    );
+    loa.expires_at = '2000-01-01T00:00:00.000Z';
+    const expired = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
+    assert.equal(expired.error, 'loa_expired');
+
+    loa.expires_at = new Date(Date.now() + 86_400_000).toISOString();
+    loa.scope_snapshot = { targets: [] };
+    const partial = transitionHighScale(ctx, 'hsr_checkout_scheduled', 'start', { adapter_mode: 'dry-run' });
+    assert.equal(partial.error, 'loa_scope_mismatch');
+    assert.equal(partial.status, 409);
   });
 });

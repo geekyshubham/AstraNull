@@ -9,7 +9,10 @@ import {
 import { newId } from '../../lib/ids.mjs';
 import { verdictWasInserted } from './validationEvidenceRepository.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
-import { buildSignedProbeJobRecord } from '../../lib/probeJobs.mjs';
+import {
+  buildSignedProbeJobRecord,
+  validateHostSniTargetBinding,
+} from '../../lib/probeJobs.mjs';
 import { redactObject } from '../../lib/redact.mjs';
 import {
   countCustomerRunnableRunsLastHour,
@@ -35,6 +38,7 @@ import {
 } from '../../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
+import { isWithinPolicySafeWindow } from '../../contracts/testPolicyManagement.mjs';
 
 /** @type {readonly string[]} */
 export const VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
@@ -335,10 +339,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
   const probeJobs = repositories.probeJobs;
   const killSwitch = repositories.killSwitch;
   const productionReleaseEvidence = repositories.productionReleaseEvidence;
-  // Read by the ownership gate in startTestRun only. Deliberately not in
-  // assertValidationServiceDependencies: createPostgresRuntime always constructs it, and the gate
-  // fails closed if it is missing, so requiring it here would break narrower callers for no gain.
-  const portalRevamp = repositories.portalRevamp;
+  // Read by live-egress ownership gates only. Deliberately optional here so narrow service
+  // callers still construct; every egress path fails closed when the repository is absent.
+  const ownershipVerifications = repositories.ownershipVerifications;
+  const testPolicies = repositories.testPolicies;
   const nowFn = options.now ?? (() => new Date());
 
   /**
@@ -393,6 +397,75 @@ export function createPostgresValidationServices(repositories, options = {}) {
   async function denySafeStart(ctx, action, resourceId, metadata, error, status = 429) {
     await appendAudit(ctx, action, 'test_run', resourceId, metadata);
     return { error, status };
+  }
+
+  async function validatePolicyBinding(ctx, body, group, check, dispatchOptions = {}) {
+    const policyId = String(body.policy_id ?? '').trim();
+    if (!policyId) return { policy: null };
+    if (typeof testPolicies?.getActiveTestPolicy !== 'function') {
+      return { error: 'policy_repository_unavailable', status: 503 };
+    }
+    const policy = await testPolicies.getActiveTestPolicy(ctx, policyId);
+    if (!policy) return { error: 'test_policy_not_found', status: 404 };
+    if (policy.state !== 'active' || policy.enabled !== true || policy.archived_at) {
+      return { error: 'test_policy_disabled', status: 409 };
+    }
+    if (policy.target_group_id !== group.id || policy.check_id !== check.check_id) {
+      return { error: 'test_policy_binding_mismatch', status: 409 };
+    }
+    if (Number(policy.max_concurrent_runs) !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
+    if (policy.safe_windows?.length && !isWithinPolicySafeWindow(policy, nowFn())) {
+      return { error: 'policy_safe_window_closed', status: 429 };
+    }
+
+    const trustedDispatch = dispatchOptions.policyDispatch;
+    if (policy.cadence !== 'manual' && !trustedDispatch && !dispatchOptions.policyEvent) {
+      return { error: 'trusted_policy_dispatch_required', status: 409 };
+    }
+    if (trustedDispatch && (
+      policy.lease_token !== trustedDispatch.lease_token
+      || !policy.lease_expires_at
+      || new Date(policy.lease_expires_at) <= nowFn()
+    )) {
+      return { error: 'policy_lease_invalid', status: 409 };
+    }
+    return { policy };
+  }
+
+  async function authoritativeOwnership(ctx, group, target) {
+    if (typeof ownershipVerifications?.getCurrentTargetVerification !== 'function') {
+      return { verified: false, state: 'unverified', unavailable: true };
+    }
+    const current = await ownershipVerifications.getCurrentTargetVerification(
+      ctx,
+      group.id,
+      target.id,
+    );
+    if (current && String(current.target_id) !== String(target.id)) {
+      return { verified: false, state: 'unverified', reason: 'verification_target_mismatch' };
+    }
+    return ownershipProofFromStates({ targetState: current?.state ?? null });
+  }
+
+  async function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThisHost, dispatchOptions = {}) {
+    const group = await coreCatalog.getTargetGroup(ctx, body.target_group_id, LEAN_GROUP_LOOKUP);
+    if (!group) return { error: 'target_group_not_found', status: 404 };
+    const target = (group.targets ?? []).find((candidate) => candidate.id === targetId);
+    if (!target) return { error: 'target_not_found', status: 404 };
+    const binding = await validatePolicyBinding(ctx, body, group, check, dispatchOptions);
+    if (binding.error) return binding;
+    if (probeWillLeaveThisHost) {
+      const ownership = await authoritativeOwnership(ctx, group, target);
+      if (!ownership.verified) {
+        return {
+          error: 'ownership_not_verified', status: 409, ownership_state: ownership.state,
+          reason: ownership.unavailable
+            ? 'verification_repository_unavailable'
+            : ownership.reason,
+        };
+      }
+    }
+    return { group, target, policy: binding.policy };
   }
 
   async function rejectObservation(ctx, tenantId, agentId, reason, error, status, resourceId, extra = {}) {
@@ -762,7 +835,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       if (!run) return null;
       return validationEvidence.listRunEvents(ctx, id);
     },
-    async startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }) {
+    async startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, dispatchOptions = {}) {
       const check = getCheckById(body.check_id);
       if (!check) return { error: 'unknown_check', status: 400 };
       if (!isCustomerRunnable(check)) {
@@ -789,12 +862,17 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
+      const policyDispatchId = dispatchOptions.policyDispatch?.dispatch_id ?? null;
+      const existingPolicyRun = policyDispatchId
+        && typeof validationEvidence.getTestRunByPolicyDispatchId === 'function'
+        ? await validationEvidence.getTestRunByPolicyDispatchId(ctx, policyDispatchId)
+        : null;
       const activeRuns = await validationEvidence.listTestRuns(ctx, {
         targetGroupId,
         statuses: [...ACTIVE_RUN_STATUSES],
         limit: 1,
       });
-      if (activeRuns.length > 0) {
+      if (activeRuns.length > 0 && !existingPolicyRun) {
         return { error: 'concurrent_run_blocked', status: 409 };
       }
 
@@ -803,42 +881,146 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const target = targets.find((t) => t.id === targetId);
       if (!target) return { error: 'target_not_found', status: 404 };
 
-      // Ownership gate — the last check before this run can put packets on the wire. The shared
-      // threshold lives in lib/ownershipPolicy.mjs, which the developer-validation path also
-      // uses. Scoped to the egress path only (the same condition as `inlineProbe` below), so
-      // in-process simulation and ops-readiness probes are unaffected. Runs before any write, so
-      // a denial cannot leave a partial run behind.
-      if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker' && !isOpsReadinessProbeKind(check)) {
-        // The group's status alone can prove ownership (agent challenge, or the Postgres DNS
-        // flow which records `dns_verified` on the group). Only when it does not do we need the
-        // per-target row, so the common path costs no extra query.
-        let targetState = null;
-        if (!ownershipProofFromStates({ groupState: group.ownership_status }).verified) {
-          if (typeof portalRevamp?.getTargetVerificationCurrent !== 'function') {
-            // Fail closed: without this read there is no way to prove ownership, and guessing
-            // "verified" would aim live traffic at an unverified host. `portalRevamp` is always
-            // constructed by createPostgresRuntime, so this is unreachable in production.
-            return denySafeStart(
-              ctx,
-              'test_run.ownership_denied',
-              targetGroupId,
-              {
-                check_id: check.check_id,
-                target_group_id: targetGroupId,
-                target_id: target.id,
-                ownership_state: String(group.ownership_status ?? 'unverified'),
-                reason: 'verification_repository_unavailable',
-              },
-              'ownership_not_verified',
-              409,
-            );
-          }
-          targetState = (await portalRevamp.getTargetVerificationCurrent(ctx, target.id))?.state ?? null;
+      if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
+        const targetBindingError = validateHostSniTargetBinding(check, target);
+        if (targetBindingError) {
+          const denied = await denySafeStart(
+            ctx,
+            'test_run.destination_binding_denied',
+            targetGroupId,
+            {
+              check_id: check.check_id,
+              target_group_id: targetGroupId,
+              target_id: target.id,
+              reason: targetBindingError.error,
+            },
+            targetBindingError.error,
+            targetBindingError.status,
+          );
+          return { ...denied, check_id: targetBindingError.check_id, message: targetBindingError.message };
         }
-        const ownership = ownershipProofFromStates({
-          groupState: group.ownership_status,
-          targetState,
-        });
+      }
+
+      const policyBinding = await validatePolicyBinding(ctx, body, group, check, dispatchOptions);
+      if (policyBinding.error) return policyBinding;
+
+      const probeMode = runtimeConfig.probeMode ?? 'simulation';
+      const inlineProbe = isOpsReadinessProbeKind(check) || probeMode !== 'signed-worker';
+      const probeWillLeaveThisHost = !inlineProbe;
+
+      if (existingPolicyRun) {
+        if (inlineProbe) return { run: existingPolicyRun, idempotent_replay: true };
+        if (existingPolicyRun.status === 'cancelled') {
+          return { error: 'policy_dispatch_run_cancelled', status: 409 };
+        }
+
+        const finalValidation = await revalidateBeforeDispatch(
+          ctx,
+          { ...body, target_group_id: targetGroupId },
+          check,
+          target.id,
+          probeWillLeaveThisHost,
+          dispatchOptions,
+        );
+        if (finalValidation.error) {
+          return denySafeStart(
+            ctx,
+            finalValidation.error === 'ownership_not_verified'
+              ? 'test_run.ownership_denied'
+              : 'test_run.policy_dispatch_denied',
+            existingPolicyRun.id,
+            {
+              check_id: check.check_id,
+              policy_id: existingPolicyRun.policy_id,
+              target_group_id: targetGroupId,
+              target_id: target.id,
+              ownership_state: finalValidation.ownership_state,
+              reason: finalValidation.reason,
+              phase: 'policy_dispatch_recovery',
+            },
+            finalValidation.error,
+            finalValidation.status,
+          );
+        }
+        if (typeof probeJobs.getProbeJobByTestRun !== 'function') {
+          return {
+            error: 'probe_dispatch_recovery_unavailable',
+            status: 503,
+            retryable: true,
+          };
+        }
+
+        let probeJob = await probeJobs.getProbeJobByTestRun(ctx, existingPolicyRun.id);
+        const recoveredMissingJob = !probeJob;
+        if (!probeJob) {
+          const recoveryNow = nowFn();
+          const builtJob = buildSignedProbeJobRecord({
+            run: existingPolicyRun,
+            check,
+            target,
+            probeProfile: body.probe_profile,
+            probeWorkerSecret: runtimeConfig.probeWorkerSecret,
+            now: recoveryNow,
+            newId: () => newId('pjob'),
+          });
+          // createProbeJob serializes by tenant/run and returns an already-committed row if
+          // another retry won the race, so this repair never creates duplicate outbound work.
+          probeJob = await probeJobs.createProbeJob(ctx, builtJob);
+        }
+
+        const probeBindingValid = probeJob?.id
+          && probeJob.test_run_id === existingPolicyRun.id
+          && probeJob.check_id === existingPolicyRun.check_id
+          && (probeJob.target_id ?? null) === (existingPolicyRun.target_id ?? null);
+        const persistedNonceHash = existingPolicyRun.correlation?.nonce_hash ?? null;
+        if (!probeBindingValid || (persistedNonceHash && persistedNonceHash !== probeJob.nonce_hash)) {
+          return {
+            error: 'probe_dispatch_binding_conflict',
+            status: 503,
+            retryable: true,
+          };
+        }
+
+        const repairPatch = {};
+        if (!persistedNonceHash) {
+          repairPatch.correlation = { nonce_hash: probeJob.nonce_hash, window_ms: 120000 };
+        }
+        if (['pending', 'leased'].includes(probeJob.status) && existingPolicyRun.awaiting_external_probe !== true) {
+          repairPatch.awaiting_external_probe = true;
+        }
+        const dispatchStateRepaired = Object.keys(repairPatch).length > 0;
+        const replayRun = dispatchStateRepaired
+          ? await validationEvidence.updateTestRun(ctx, existingPolicyRun.id, repairPatch)
+          : existingPolicyRun;
+
+        if (recoveredMissingJob || dispatchStateRepaired) {
+          await appendAudit(ctx, 'probe_job.dispatch_recovered', 'probe_job', probeJob.id, {
+            test_run_id: existingPolicyRun.id,
+            check_id: check.check_id,
+            probe_job_recreated: recoveredMissingJob,
+            run_state_repaired: dispatchStateRepaired,
+          });
+        }
+
+        return {
+          run: replayRun,
+          jobs_dispatched: 0,
+          probe_job: {
+            id: probeJob.id,
+            status: probeJob.status,
+            job_signature: probeJob.job_signature,
+            nonce_hash: probeJob.nonce_hash,
+          },
+          idempotent_replay: true,
+          dispatch_repaired: recoveredMissingJob || dispatchStateRepaired,
+        };
+      }
+
+      // First live-egress gate. Group ownership is summary-only; authorization always reads the
+      // current verification bound to this exact tenant/group/target. This runs before any write,
+      // and revalidateBeforeDispatch repeats the same check at the final dispatch boundary.
+      if (probeWillLeaveThisHost) {
+        const ownership = await authoritativeOwnership(ctx, group, target);
         if (!ownership.verified) {
           return denySafeStart(
             ctx,
@@ -849,6 +1031,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
               target_group_id: targetGroupId,
               target_id: target.id,
               ownership_state: ownership.state,
+              reason: ownership.unavailable
+                ? 'verification_repository_unavailable'
+                : ownership.reason,
             },
             'ownership_not_verified',
             409,
@@ -923,6 +1108,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         tenant_id: ctx.tenantId,
         target_group_id: targetGroupId,
         target_id: target.id,
+        policy_id: policyBinding.policy?.id ?? null,
+        policy_dispatch_id: dispatchOptions.policyDispatch?.dispatch_id ?? null,
         check_id: check.check_id,
         vector_family: check.vector_family,
         safety_class: check.safety_class ?? check.risk_class,
@@ -936,14 +1123,48 @@ export function createPostgresValidationServices(repositories, options = {}) {
       };
       let run = await validationEvidence.createTestRun(ctx, runRecord);
 
-      await appendAudit(ctx, 'test_run.started', 'test_run', runId, { check_id: check.check_id });
+      await appendAudit(ctx, 'test_run.started', 'test_run', runId, {
+        check_id: check.check_id,
+        policy_id: runRecord.policy_id,
+      });
 
-      const probeMode = runtimeConfig.probeMode ?? 'simulation';
       let probe;
       let probeEvent = null;
       let probeJob = null;
 
-      const inlineProbe = isOpsReadinessProbeKind(check) || probeMode !== 'signed-worker';
+      const finalValidation = await revalidateBeforeDispatch(
+        ctx,
+        { ...body, target_group_id: targetGroupId },
+        check,
+        target.id,
+        probeWillLeaveThisHost,
+        dispatchOptions,
+      );
+      if (finalValidation.error) {
+        await validationEvidence.updateTestRun(ctx, runId, {
+          status: 'cancelled',
+          completed_at: nowFn().toISOString(),
+          summary: { dispatch_blocked: true, reason: finalValidation.error },
+        });
+        return denySafeStart(
+          ctx,
+          finalValidation.error === 'ownership_not_verified'
+            ? 'test_run.ownership_denied'
+            : 'test_run.policy_dispatch_denied',
+          runId,
+          {
+            check_id: check.check_id,
+            policy_id: runRecord.policy_id,
+            target_group_id: targetGroupId,
+            target_id: target.id,
+            ownership_state: finalValidation.ownership_state,
+            reason: finalValidation.reason,
+            phase: 'pre_dispatch_revalidation',
+          },
+          finalValidation.error,
+          finalValidation.status,
+        );
+      }
 
       if (!inlineProbe) {
         if (wouldExceedEventCap(run, 0, 1)) {

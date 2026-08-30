@@ -19,8 +19,8 @@ DDoS is broader than “send lots of traffic.” AstraNull classifies attacks by
 | **Exploit-based DoS** | Protocol/software bug | varies | Ping of Death, HTTP/2 flaws |
 | **Delivery pattern** | How the attack is deployed | n/a | Carpet bombing, multi-vector |
 
-Machine-readable registry: `src/contracts/resourceExhaustionTaxonomy.mjs`  
-Validation: `npm run vector:taxonomy:validate`  
+Machine-readable registry: `src/contracts/resourceExhaustionTaxonomy.mjs`<br>
+Validation: `npm run vector:taxonomy:validate`<br>
 **Full build spec (all 12 families + gaps):** [Resource-Exhaustion Family Build Spec](21-resource-exhaustion-family-build-spec.md)
 
 ## Relationship to vector families

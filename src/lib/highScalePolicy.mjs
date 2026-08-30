@@ -5,6 +5,15 @@ import {
   buildProviderApprovalMetadata,
   providerApprovalMissingFields,
 } from '../contracts/providerApprovalPaths.mjs';
+import {
+  GOVERNED_SCENARIO_FAMILIES,
+  buildGovernedScenarioReview,
+  deliveryPatternsCoverScenarioFamilies,
+  normalizeGovernedDeliveryPatterns,
+  normalizeGovernedLimits,
+  normalizeGovernedScenarioFamilies,
+  scenarioFamiliesCoverRequested,
+} from '../contracts/governedScenarios.mjs';
 
 export const STATES = [
   'draft',
@@ -30,15 +39,34 @@ export const REQUIRED_ARTIFACT_TYPES = [
   'abort_criteria',
 ];
 
+/** Only these accepted artifacts can authorize governed execution scope. */
+export const AUTHORITATIVE_GOVERNED_ARTIFACT_TYPES = Object.freeze([
+  'test_plan',
+  'scope_and_rate_plan',
+]);
+const AUTHORITATIVE_GOVERNED_ARTIFACT_TYPE_SET = new Set(AUTHORITATIVE_GOVERNED_ARTIFACT_TYPES);
+
 export const ARTIFACT_PROOF_FIELDS = {
   customer_authorization_letter: ['approval_reference', 'approver', 'valid_window'],
   target_ownership_confirmation: ['approval_reference', 'approver'],
   emergency_contacts: ['emergency_contacts'],
   stop_criteria: ['abort_criteria'],
-  test_plan: ['approved_scenario_families', 'valid_window'],
+  test_plan: [
+    'approved_scenario_families',
+    'approved_delivery_patterns',
+    'approved_limits',
+    'authorization_binding',
+    'valid_window',
+  ],
   business_approval: ['approval_reference', 'approver'],
   legal_approval: ['approval_reference', 'approver'],
-  scope_and_rate_plan: ['max_rate', 'max_duration_minutes', 'approved_scenario_families', 'valid_window'],
+  scope_and_rate_plan: [
+    'approved_scenario_families',
+    'approved_delivery_patterns',
+    'approved_limits',
+    'authorization_binding',
+    'valid_window',
+  ],
   abort_criteria: ['abort_criteria'],
 };
 
@@ -249,12 +277,12 @@ export function bodySummaryFields(body, existingReport = null) {
   return out;
 }
 
-export function isWithinScheduledWindow(window) {
-  if (!window?.window_start || !window?.window_end) return false;
-  const now = Date.now();
-  const start = new Date(window.window_start).getTime();
-  const end = new Date(window.window_end).getTime();
-  return now >= start && now <= end;
+export function isWithinScheduledWindow(window, nowMs = Date.now()) {
+  const normalized = normalizeRequestedWindow(window);
+  if (!normalized.ok) return false;
+  const start = new Date(normalized.value.window_start).getTime();
+  const end = new Date(normalized.value.window_end).getTime();
+  return nowMs >= start && nowMs <= end;
 }
 
 function acceptedArtifacts(req) {
@@ -664,22 +692,22 @@ function normalizeEmergencyContacts(raw) {
   return { ok: true, value };
 }
 
-function normalizeRequestedLimits(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false };
-  const max_rate =
-    raw.max_rate != null && String(raw.max_rate).trim() !== '' ? redactString(String(raw.max_rate).trim()) : null;
-  const max_duration_minutes = Number(raw.max_duration_minutes);
-  const hasDuration = Number.isFinite(max_duration_minutes) && max_duration_minutes > 0;
-  if (!max_rate && !hasDuration) return { ok: false };
-  const value = {};
-  if (max_rate) value.max_rate = max_rate;
-  if (hasDuration) value.max_duration_minutes = max_duration_minutes;
-  return { ok: true, value };
+function normalizeRequestedLimits(raw, scenarioFamilies) {
+  return normalizeGovernedLimits(raw, scenarioFamilies);
 }
 
 function normalizeScenarioFamilies(raw) {
-  if (!Array.isArray(raw) || raw.length === 0) return { ok: false };
-  return { ok: true, value: raw.map((f) => redactString(String(f))) };
+  // SOC-011: requested scenario families must come from the governed taxonomy.
+  const parsed = normalizeGovernedScenarioFamilies(raw);
+  if (!parsed.ok) return { ok: false, unknown: parsed.unknown ?? [] };
+  return { ok: true, value: parsed.value, unknown: parsed.unknown ?? [] };
+}
+
+function normalizeDeliveryPatterns(raw) {
+  // DET-022: optional declared delivery-pattern metadata bound to the governed labels.
+  const parsed = normalizeGovernedDeliveryPatterns(raw);
+  if (!parsed.ok) return { ok: false, unknown: parsed.unknown ?? [] };
+  return { ok: true, value: parsed.value, unknown: parsed.unknown ?? [] };
 }
 
 function normalizeStopCriteria(raw) {
@@ -696,35 +724,73 @@ export function validateHighScaleIntakeFields(body) {
 
   const windowParsed = normalizeRequestedWindow(body?.requested_window);
   if (!windowParsed.ok && windowParsed.kind === 'missing') missing.push('requested_window');
-
   if (!normalizeEmergencyContacts(body?.emergency_contacts).ok) missing.push('emergency_contacts');
-
   if (!providerContextPresent(body?.provider_context)) missing.push('provider_context');
-
   if (body?.scope_confirmation !== true) missing.push('scope_confirmation');
-
   if (body?.environment == null || String(body.environment).trim() === '') missing.push('environment');
   if (body?.business_criticality == null || String(body.business_criticality).trim() === '') {
     missing.push('business_criticality');
   }
-  if (!normalizeScenarioFamilies(body?.requested_scenario_families).ok) {
+  if (!Array.isArray(body?.requested_scenario_families) || body.requested_scenario_families.length === 0) {
     missing.push('requested_scenario_families');
   }
-  if (!normalizeRequestedLimits(body?.requested_limits).ok) missing.push('requested_limits');
+  if (!Array.isArray(body?.delivery_patterns) || body.delivery_patterns.length === 0) {
+    missing.push('delivery_patterns');
+  }
+  if (!body?.requested_limits || typeof body.requested_limits !== 'object' || Array.isArray(body.requested_limits)) {
+    missing.push('requested_limits');
+  }
   if (!normalizeStopCriteria(body?.stop_criteria).ok) missing.push('stop_criteria');
   if (!normalizeStopCriteria(body?.abort_criteria).ok) missing.push('abort_criteria');
 
-  if (missing.length > 0) {
-    return { error: 'missing_high_scale_request_fields', status: 400, missing };
+  if (missing.length > 0) return { error: 'missing_high_scale_request_fields', status: 400, missing };
+  if (!windowParsed.ok) return { error: 'invalid_requested_window', status: 400 };
+
+  const scenarioFamilies = normalizeScenarioFamilies(body.requested_scenario_families);
+  if (!scenarioFamilies.ok) {
+    return {
+      error: scenarioFamilies.unknown.length > 0 ? 'unknown_scenario_families' : 'invalid_scenario_families',
+      status: 400,
+      message: 'Requested scenario families must come from the governed scenario taxonomy.',
+      unknown: scenarioFamilies.unknown,
+      governed_families: GOVERNED_SCENARIO_FAMILIES.map((family) => family.id),
+    };
   }
 
-  if (!windowParsed.ok) {
-    return { error: 'invalid_requested_window', status: 400 };
+  const deliveryPatterns = normalizeDeliveryPatterns(body.delivery_patterns);
+  if (!deliveryPatterns.ok) {
+    return {
+      error: deliveryPatterns.unknown.length > 0 ? 'unknown_delivery_patterns' : 'invalid_delivery_patterns',
+      status: 400,
+      message: 'Delivery patterns must come from the governed delivery-pattern taxonomy.',
+      unknown: deliveryPatterns.unknown,
+    };
+  }
+  const compatibility = deliveryPatternsCoverScenarioFamilies(
+    scenarioFamilies.value,
+    deliveryPatterns.value,
+  );
+  if (!compatibility.ok) {
+    return {
+      error: 'incompatible_delivery_patterns',
+      status: 400,
+      unsupported: compatibility.unsupported,
+      families_without_compatible_pattern: compatibility.families_without_compatible_pattern,
+    };
+  }
+
+  const requestedLimits = normalizeRequestedLimits(body.requested_limits, scenarioFamilies.value);
+  if (!requestedLimits.ok) {
+    return {
+      error: 'invalid_requested_limits',
+      status: 400,
+      missing: requestedLimits.missing,
+      unknown: requestedLimits.unknown,
+      invalid: requestedLimits.invalid,
+    };
   }
 
   const contacts = normalizeEmergencyContacts(body.emergency_contacts);
-  const scenarioFamilies = normalizeScenarioFamilies(body.requested_scenario_families);
-  const requestedLimits = normalizeRequestedLimits(body.requested_limits);
   const stopCriteria = normalizeStopCriteria(body.stop_criteria);
   const abortCriteria = normalizeStopCriteria(body.abort_criteria);
   return {
@@ -735,6 +801,7 @@ export function validateHighScaleIntakeFields(body) {
     environment: redactString(String(body.environment).trim()),
     business_criticality: redactString(String(body.business_criticality).trim()),
     requested_scenario_families: scenarioFamilies.value,
+    delivery_patterns: deliveryPatterns.value,
     requested_limits: requestedLimits.value,
     stop_criteria: stopCriteria.value,
     abort_criteria: abortCriteria.value,
@@ -749,8 +816,12 @@ export function storeOptionalHighScaleFields(body) {
   if (body.business_criticality != null && String(body.business_criticality).trim() !== '') {
     optional.business_criticality = redactString(String(body.business_criticality).trim());
   }
-  if (body.requested_limits != null && typeof body.requested_limits === 'object') {
-    const limits = normalizeRequestedLimits(body.requested_limits);
+  if (
+    body.requested_limits != null
+    && typeof body.requested_limits === 'object'
+    && Array.isArray(body.requested_scenario_families)
+  ) {
+    const limits = normalizeRequestedLimits(body.requested_limits, body.requested_scenario_families);
     if (limits.ok) optional.requested_limits = limits.value;
   }
   if (body.maintenance_approval != null && typeof body.maintenance_approval === 'object') {
@@ -798,6 +869,12 @@ export function persistArtifactProofMetadata(body) {
   if (body.retained_artifact_metadata != null && typeof body.retained_artifact_metadata === 'object') {
     proof.retained_artifact_metadata = redactObject(body.retained_artifact_metadata);
   }
+  if (body.authorization_binding != null && typeof body.authorization_binding === 'object') {
+    proof.authorization_binding = redactObject(body.authorization_binding);
+  }
+  if (Array.isArray(body.approved_delivery_patterns)) {
+    proof.approved_delivery_patterns = body.approved_delivery_patterns.map((pattern) => redactString(String(pattern)));
+  }
   if (body.approved_limits != null && typeof body.approved_limits === 'object') {
     proof.approved_limits = redactObject(body.approved_limits);
   }
@@ -814,6 +891,19 @@ export function buildArtifactFromUpload(ctx, body, options = {}) {
   const proof = persistArtifactProofMetadata(body);
   const custodyId = newId('cust');
   const contentSha256 = normalizeContentSha256(body.content_sha256);
+  const request = options.request ?? null;
+  const authorizationBinding = proof.authorization_binding ?? (request ? {
+    tenant_id: ctx.tenantId,
+    target_group_id: request.target_group_id,
+    scope_hash: request.scope_hash,
+    requested_window: request.requested_window,
+    approved_schedule_window: request.requested_window,
+    delivery_patterns: proof.approved_delivery_patterns ?? request.delivery_patterns ?? [],
+  } : null);
+  const retainedArtifactMetadata = {
+    ...(proof.retained_artifact_metadata ?? {}),
+    ...(authorizationBinding ? { authorization_binding: authorizationBinding } : {}),
+  };
   return {
     id: newId('art'),
     type: body.type,
@@ -838,6 +928,8 @@ export function buildArtifactFromUpload(ctx, body, options = {}) {
     valid_window: proof.valid_window ?? body.valid_window ?? null,
     approved_targets: proof.approved_targets ?? body.approved_targets ?? [],
     approved_scenario_families: proof.approved_scenario_families ?? body.approved_scenario_families ?? [],
+    approved_delivery_patterns: proof.approved_delivery_patterns ?? body.approved_delivery_patterns ?? [],
+    authorization_binding: authorizationBinding,
     contact_path: body.contact_path != null ? redactString(String(body.contact_path)) : null,
     approval_reference: proof.approval_reference ?? null,
     approver: proof.approver ?? null,
@@ -846,7 +938,7 @@ export function buildArtifactFromUpload(ctx, body, options = {}) {
     emergency_contacts: proof.emergency_contacts ?? null,
     abort_criteria: proof.abort_criteria ?? null,
     retention_policy: proof.retention_policy ?? null,
-    retained_artifact_metadata: proof.retained_artifact_metadata ?? null,
+    retained_artifact_metadata: Object.keys(retainedArtifactMetadata).length > 0 ? retainedArtifactMetadata : null,
     approved_limits: proof.approved_limits ?? null,
     provider_specific_evidence: proof.provider_specific_evidence ?? null,
     emergency_stop_path: proof.emergency_stop_path ?? null,
@@ -887,10 +979,220 @@ export function buildIntakeRiskReviewJson(intake, body, optionalFields) {
     environment: intake.environment,
     business_criticality: intake.business_criticality,
     requested_scenario_families: intake.requested_scenario_families,
+    delivery_patterns: intake.delivery_patterns,
     requested_limits: intake.requested_limits,
     stop_criteria: intake.stop_criteria,
     abort_criteria: intake.abort_criteria,
     ...optionalFields,
+  };
+}
+
+/**
+ * Exact governed authorization binding. Non-authoritative artifacts are deliberately
+ * ignored: acceptance of a letter, contact list, or unrelated provider record can never
+ * expand executable scenarios.
+ */
+function normalizedStringSet(value) {
+  if (!Array.isArray(value)) return null;
+  const normalized = value.map((entry) => String(entry ?? '').trim());
+  if (normalized.some((entry) => !entry)) return null;
+  return [...new Set(normalized)].sort();
+}
+
+function sameStringSet(left, right) {
+  const a = normalizedStringSet(left);
+  const b = normalizedStringSet(right);
+  return a != null && b != null && a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function sameGovernedLimits(left, right, families) {
+  const a = normalizeGovernedLimits(left, families);
+  const b = normalizeGovernedLimits(right, families);
+  if (!a.ok || !b.ok) return false;
+  const keys = Object.keys(a.value).sort();
+  const otherKeys = Object.keys(b.value).sort();
+  return keys.length === otherKeys.length
+    && keys.every((key, index) => key === otherKeys[index] && a.value[key] === b.value[key]);
+}
+
+function normalizedWindowOrNull(value) {
+  const parsed = normalizeRequestedWindow(value);
+  return parsed.ok ? parsed.value : null;
+}
+
+function sameWindow(left, right) {
+  const a = normalizedWindowOrNull(left);
+  const b = normalizedWindowOrNull(right);
+  return a != null
+    && b != null
+    && a.window_start === b.window_start
+    && a.window_end === b.window_end;
+}
+
+function windowContains(container, child) {
+  const normalizedContainer = container?.window_start
+    ? container
+    : {
+        window_start: container?.valid_from,
+        window_end: container?.valid_to,
+        timezone: container?.timezone ?? 'UTC',
+      };
+  const outer = normalizedWindowOrNull(normalizedContainer);
+  const inner = normalizedWindowOrNull(child);
+  if (!outer || !inner) return false;
+  return new Date(outer.window_start).getTime() <= new Date(inner.window_start).getTime()
+    && new Date(outer.window_end).getTime() >= new Date(inner.window_end).getTime();
+}
+
+function authorizationBindingFromArtifact(artifact) {
+  const retained = artifact?.retained_artifact_metadata;
+  return artifact?.authorization_binding
+    ?? (retained && typeof retained === 'object' ? retained.authorization_binding : null)
+    ?? null;
+}
+
+function artifactBindingErrors(req, artifact, context = {}) {
+  const errors = [];
+  const binding = authorizationBindingFromArtifact(artifact);
+  const expectedTenantId = context.tenantId ?? req?.tenant_id ?? null;
+  const expectedScopeHash = context.currentScopeHash ?? req?.scope_hash ?? null;
+
+  if (!sameStringSet(artifact?.approved_targets, [req?.target_group_id])) errors.push('approved_targets');
+  if (!sameStringSet(artifact?.approved_scenario_families, req?.requested_scenario_families)) {
+    errors.push('approved_scenario_families');
+  }
+  const approvedPatterns = artifact?.approved_delivery_patterns ?? binding?.delivery_patterns;
+  if (!sameStringSet(approvedPatterns, req?.delivery_patterns)) errors.push('approved_delivery_patterns');
+  if (!sameGovernedLimits(artifact?.approved_limits, req?.requested_limits, req?.requested_scenario_families)) {
+    errors.push('approved_limits');
+  }
+
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+    errors.push('authorization_binding');
+  } else {
+    if (!expectedTenantId || binding.tenant_id !== expectedTenantId) errors.push('authorization_binding.tenant_id');
+    if (binding.target_group_id !== req?.target_group_id) errors.push('authorization_binding.target_group_id');
+    if (!expectedScopeHash || binding.scope_hash !== expectedScopeHash) errors.push('authorization_binding.scope_hash');
+    if (!sameWindow(binding.requested_window, req?.requested_window)) {
+      errors.push('authorization_binding.requested_window');
+    }
+    if (!sameWindow(binding.approved_schedule_window, req?.requested_window)) {
+      errors.push('authorization_binding.approved_schedule_window');
+    }
+    if (!sameStringSet(binding.delivery_patterns, req?.delivery_patterns)) {
+      errors.push('authorization_binding.delivery_patterns');
+    }
+  }
+
+  if (!windowContains(artifact?.valid_window, req?.requested_window)) errors.push('valid_window.requested_window');
+  if (context.scheduledWindow && !windowContains(artifact?.valid_window, context.scheduledWindow)) {
+    errors.push('valid_window.scheduled_window');
+  }
+  return [...new Set(errors)];
+}
+
+function scheduleBindingErrors(req, scheduledWindow) {
+  if (!scheduledWindow) return [];
+  const errors = [];
+  if (!normalizedWindowOrNull(scheduledWindow)) errors.push('scheduled_window');
+  else if (!windowContains(req?.requested_window, scheduledWindow)) errors.push('scheduled_window.outside_requested_window');
+  if (scheduledWindow.scope_hash !== req?.scope_hash) errors.push('scheduled_window.scope_hash');
+  return errors;
+}
+
+export function validateGovernedAuthorization(req, context = {}) {
+  const requestFamilies = normalizeGovernedScenarioFamilies(req?.requested_scenario_families);
+  const requestPatterns = normalizeGovernedDeliveryPatterns(req?.delivery_patterns);
+  const requestLimits = normalizeGovernedLimits(req?.requested_limits, req?.requested_scenario_families);
+  const compatibility = deliveryPatternsCoverScenarioFamilies(
+    req?.requested_scenario_families,
+    req?.delivery_patterns,
+  );
+  const invalid_fields = [];
+  if (!requestFamilies.ok) invalid_fields.push('requested_scenario_families');
+  if (!requestPatterns.ok || !compatibility.ok) invalid_fields.push('delivery_patterns');
+  if (!requestLimits.ok) invalid_fields.push('requested_limits');
+  if (!normalizedWindowOrNull(req?.requested_window)) invalid_fields.push('requested_window');
+
+  const currentScopeHash = context.currentScopeHash ?? req?.scope_hash ?? null;
+  if (!req?.scope_hash || currentScopeHash !== req.scope_hash) invalid_fields.push('scope_hash');
+
+  const scheduledWindow = context.scheduledWindow ?? req?.scheduled_window ?? null;
+  invalid_fields.push(...scheduleBindingErrors(req, scheduledWindow));
+
+  const artifactsByType = new Map();
+  for (const type of AUTHORITATIVE_GOVERNED_ARTIFACT_TYPES) artifactsByType.set(type, []);
+  for (const artifact of req?.artifacts ?? []) {
+    if (
+      artifact?.status === 'accepted'
+      && AUTHORITATIVE_GOVERNED_ARTIFACT_TYPE_SET.has(artifact.type)
+      && !artifactProofExpired(artifact, context.nowMs ?? Date.now())
+    ) {
+      artifactsByType.get(artifact.type).push(artifact);
+    }
+  }
+
+  const authoritative_artifact_ids = [];
+  for (const type of AUTHORITATIVE_GOVERNED_ARTIFACT_TYPES) {
+    const artifacts = artifactsByType.get(type);
+    if (artifacts.length === 0) {
+      invalid_fields.push(`artifacts.${type}`);
+      continue;
+    }
+    for (const artifact of artifacts) {
+      authoritative_artifact_ids.push(artifact.id);
+      for (const field of artifactBindingErrors(req, artifact, {
+        ...context,
+        currentScopeHash,
+        scheduledWindow,
+      })) {
+        invalid_fields.push(`artifacts.${type}.${artifact.id}.${field}`);
+      }
+    }
+  }
+
+  const fields = [...new Set(invalid_fields)];
+  return {
+    ok: fields.length === 0,
+    invalid_fields: fields,
+    authoritative_artifact_ids,
+  };
+}
+
+/** Backward-compatible scenario coverage summary, restricted to authoritative types. */
+export function validateScenarioFamilyAuthorization(req) {
+  const requested = Array.isArray(req?.requested_scenario_families) ? req.requested_scenario_families : [];
+  const approved = [];
+  for (const artifact of req?.artifacts ?? []) {
+    if (
+      artifact?.status === 'accepted'
+      && AUTHORITATIVE_GOVERNED_ARTIFACT_TYPE_SET.has(artifact.type)
+      && Array.isArray(artifact.approved_scenario_families)
+    ) {
+      approved.push(...artifact.approved_scenario_families.map((family) => String(family).trim()));
+    }
+  }
+  const coverage = scenarioFamiliesCoverRequested(requested, approved);
+  return { ...coverage, approved };
+}
+
+export function governedAuthorizationFailure(req, validation) {
+  return {
+    error: 'governed_authorization_mismatch',
+    status: 409,
+    requested_scenario_families: req?.requested_scenario_families ?? [],
+    delivery_patterns: req?.delivery_patterns ?? [],
+    invalid_fields: validation?.invalid_fields ?? [],
+  };
+}
+
+export function buildHighScaleScenarioReview(req) {
+  return {
+    requested_scenario_families: req?.requested_scenario_families ?? [],
+    delivery_patterns: req?.delivery_patterns ?? [],
+    requested_limits: req?.requested_limits ?? {},
+    scenarios: buildGovernedScenarioReview(req?.requested_scenario_families ?? []).scenarios,
+    authorization: validateScenarioFamilyAuthorization(req),
   };
 }
 
@@ -899,6 +1201,7 @@ export function mergeRiskReviewOntoRequest(mapped, riskReview) {
   if (risk.environment != null) mapped.environment = risk.environment;
   if (risk.business_criticality != null) mapped.business_criticality = risk.business_criticality;
   if (risk.requested_scenario_families != null) mapped.requested_scenario_families = risk.requested_scenario_families;
+  if (risk.delivery_patterns != null) mapped.delivery_patterns = risk.delivery_patterns;
   if (risk.requested_limits != null) mapped.requested_limits = risk.requested_limits;
   if (risk.stop_criteria != null) mapped.stop_criteria = risk.stop_criteria;
   if (risk.abort_criteria != null) mapped.abort_criteria = risk.abort_criteria;
@@ -906,4 +1209,27 @@ export function mergeRiskReviewOntoRequest(mapped, riskReview) {
   if (risk.provider_contacts != null) mapped.provider_contacts = risk.provider_contacts;
   if (risk.authorization_pack_status != null) mapped.authorization_pack_status = risk.authorization_pack_status;
   return mapped;
+}
+
+/**
+ * Require a currently signed LOA whose immutable scope snapshot covers every
+ * target in the exact high-scale scope. Extra historical snapshot entries are
+ * harmless; a missing current target is a hard authorization failure.
+ */
+export function validateActiveLoaAuthorization(loa, targetIds, nowMs = Date.now()) {
+  if (!loa || loa.state !== 'signed') return { ok: false, error: 'loa_missing' };
+  if (loa.expires_at && new Date(loa.expires_at).getTime() <= nowMs) {
+    return { ok: false, error: 'loa_expired' };
+  }
+  const covered = new Set(
+    (Array.isArray(loa.scope_snapshot?.targets) ? loa.scope_snapshot.targets : [])
+      .map((entry) => (entry && typeof entry === 'object' ? entry.target_id : entry))
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean),
+  );
+  const missing = [...new Set((targetIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean))]
+    .filter((id) => !covered.has(id));
+  return missing.length === 0
+    ? { ok: true }
+    : { ok: false, error: 'loa_scope_mismatch', missing_target_ids: missing };
 }

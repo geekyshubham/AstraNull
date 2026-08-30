@@ -14,6 +14,30 @@ describe('AWS release path hardening', () => {
   const deploy = read('ops/aws/deploy.sh');
   const compose = read('ops/aws/docker-compose.yml');
 
+  it('makes docker compose up image-only so it cannot build from the AWS worktree', () => {
+    const servicesStart = compose.indexOf('services:\n') + 'services:\n'.length;
+    const servicesEnd = compose.indexOf('\nvolumes:', servicesStart);
+    const servicesSource = compose.slice(servicesStart, servicesEnd);
+    const declarations = [...servicesSource.matchAll(/^  ([a-z0-9-]+):\n/gm)];
+
+    assert.ok(servicesStart >= 'services:\n'.length, 'expected a services block');
+    assert.ok(servicesEnd > servicesStart, 'expected the services block to end before volumes');
+    assert.ok(declarations.length > 0, 'expected at least one AWS Compose service');
+    assert.doesNotMatch(compose, /^\s+(?:build|context|dockerfile):/m);
+
+    for (const [index, declaration] of declarations.entries()) {
+      const next = declarations[index + 1];
+      const block = servicesSource.slice(declaration.index, next?.index ?? servicesSource.length);
+      assert.match(block, /^    image:\s+\S+/m, `${declaration[1]} must use a prebuilt image`);
+    }
+
+    const helper = deploy.match(/^build_control_plane_from_commit\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    assert.match(helper, /git archive "\$commit"/);
+    assert.match(helper, /docker build -f ops\/aws\/Dockerfile/);
+    assert.match(helper, /-t "astranull-control-plane:\$commit" -/);
+    assert.equal((deploy.match(/\bdocker build\b/g) ?? []).length, 1);
+  });
+
   it('fetches, verifies, transfers, and executes deploy logic from the exact successful CI SHA', () => {
     assert.match(workflow, /workflow_run:[\s\S]*workflows: \["CI"\][\s\S]*branches: \["main"\]/m);
     assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
@@ -49,11 +73,14 @@ describe('AWS release path hardening', () => {
     assert.match(deploy, /remote_main=\$\(git rev-parse origin\/main\)/);
     assert.match(deploy, /\[\[ "\$SHA" == "\$remote_main" \]\]/);
     assert.match(deploy, /timeout -k 10 60 git fetch/);
-    assert.match(deploy, /compose_timeout 180 exec[\s\S]*pg_dump/m);
-    assert.match(deploy, /postgres_cid=\$\(compose_timeout 30 ps -q postgres\)/);
+    assert.match(deploy, /compose_timeout 90 --profile ops run --rm --no-deps backup-role-bootstrap/);
+    assert.match(deploy, /compose_timeout 180 --profile ops run --rm --no-deps[\s\S]*backup-dump[\s\S]*pg_dump/m);
+    const backupFunction = deploy.slice(deploy.indexOf('backup_database()'), deploy.indexOf('rollback_on_error()'));
+    assert.doesNotMatch(backupFunction, /postgres_cid=|docker cp/);
     assert.doesNotMatch(deploy, /\$\(compose ps -q/);
-    assert.match(deploy, /compose_timeout 90[\s\S]*postgres-backup\.mjs/m);
+    assert.match(deploy, /compose_timeout 180[\s\S]*postgres-backup\.mjs/m);
     assert.match(deploy, /timeout -k 30 480 docker build/);
+    assert.match(deploy, /git archive "\$commit" \\[\s\S]*docker build -f ops\/aws\/Dockerfile[\s\S]*-t "astranull-control-plane:\$commit" -/m);
     assert.match(deploy, /--wait --wait-timeout 240/);
   });
 
@@ -75,9 +102,10 @@ describe('AWS release path hardening', () => {
     assert.match(rollbackPath, /build_control_plane_from_commit "\$SHA"/);
     assert.doesNotMatch(rollbackPath, /git checkout[^\n]*"\$SHA"/);
     assert.match(rollbackPath, /ASTRANULL_WORKER_IMAGE_TAG="\$previous"/);
-    assert.match(rollbackPath, /persist_control_plane_image_tag "\$SHA"/);
+    assert.match(rollbackPath, /persist_control_plane_image_state "\$SHA" "\$active_control_plane_image_id"/);
 
-    assert.match(targetPath, /ACTIVE_COMPOSE_FILE="\$target_compose"[\s\S]*validate_compose[\s\S]*docker build[\s\S]*ensure_postgres_ready_for_backup[\s\S]*backup_database[\s\S]*migrate[\s\S]*up -d/m);
+    assert.match(targetPath, /ACTIVE_COMPOSE_FILE="\$target_compose"[\s\S]*validate_compose[\s\S]*build_control_plane_from_commit "\$SHA"[\s\S]*ensure_postgres_ready_for_backup[\s\S]*backup_database[\s\S]*migrate[\s\S]*up -d/m);
+    assert.doesNotMatch(targetPath, /docker build[^\n]*\s\.(?:\s|$)/m);
     assert.doesNotMatch(targetPath, /ACTIVE_COMPOSE_FILE="\$previous_compose"/);
 
     const failureRollback = deploy.slice(
@@ -86,16 +114,25 @@ describe('AWS release path hardening', () => {
     );
     assert.match(failureRollback, /if \[\[ "\$MODE" == rollback \]\][\s\S]*rollback_compose=\$previous_compose[\s\S]*rollback_orchestration_tag=\$previous[\s\S]*else[\s\S]*rollback_compose=\$target_compose[\s\S]*rollback_orchestration_tag=\$SHA/m);
     assert.match(failureRollback, /ASTRANULL_CONTROL_PLANE_IMAGE_TAG="\$previous_control_plane_tag"/);
+    assert.match(failureRollback, /rebind_control_plane_image_tag "\$previous_control_plane_tag" "\$previous_control_plane_image_id"/);
     assert.match(failureRollback, /verify_control_plane_image_tag "\$previous_control_plane_tag" "\$previous_control_plane_image_id"/);
     assert.match(failureRollback, /verify_workers_image_tag "\$rollback_orchestration_tag"/);
+    assert.match(failureRollback, /persist_control_plane_image_state "\$previous_control_plane_tag" "\$previous_control_plane_image_id"/);
+    assert.ok(
+      failureRollback.indexOf('rebind_control_plane_image_tag') < failureRollback.indexOf('compose_timeout 300 up'),
+      'automatic rollback must rebind the preserved ID before activation',
+    );
     assert.match(deploy, /prepare_previous_control_plane_image[\s\S]*docker image tag "\$actual_image_id" "\$ref"/m);
     assert.match(deploy, /cleanup_compose_snapshots/);
     assert.match(deploy, /CONTROL_PLANE_IMAGE_TAG_FILE="\$DEPLOY_STATE_DIR\/control-plane-image-tag"/);
+    assert.match(deploy, /printf '%s\\n%s\\n' "\$tag" "\$image_id"/);
+    assert.match(deploy, /read_control_plane_image_id/);
   });
 
   it('creates encrypted backups and health-checks API, edge, workers, and rollback', () => {
-    assert.match(deploy, /pg_dump[\s\S]*--format=custom/m);
-    assert.match(deploy, /scripts\/postgres-backup\.mjs --input/);
+    assert.match(deploy, /--profile ops run --rm --no-deps[\s\\]*[\s\S]*backup-dump[\s\S]*pg_dump[\s\S]*ASTRANULL_BACKUP_DATABASE_URL/m);
+    assert.doesNotMatch(deploy, /exec -T postgres pg_dump|pg_dump -U astranull/);
+    assert.match(deploy, /scripts\/postgres-backup\.mjs[\s\S]*--input[\s\S]*--database-host postgres --database-port 5432 --database-name astranull/m);
     assert.match(deploy, /\.dump\.enc/);
     assert.match(deploy, /tail -n \+11/);
     assert.match(deploy, /https:\/\/astranull\.site\/health/);
@@ -108,11 +145,12 @@ describe('AWS release path hardening', () => {
     const runbook = read('ops/aws/README.md');
     assert.match(runbook, /backup-dump[\s\S]*?ASTRANULL_BACKUP_DATABASE_URL[\s\S]*?postgres-backup\.mjs --input/m);
     assert.match(runbook, /--database-host postgres --database-port 5432 --database-name astranull/);
-    assert.match(runbook, /Until `deploy\.sh` uses this handoff, hosted promotion remains blocked/);
+    assert.match(runbook, /`deploy\.sh` implements this exact handoff/);
   });
 
   it('separates owner migrations, backup reads, encryption, and enforced runtime roles', () => {
-    const migration = compose.split('  migrate:')[1].split('\n  backup-dump:')[0];
+    const migration = compose.split('  migrate:')[1].split('\n  backup-role-bootstrap:')[0];
+    const bootstrap = compose.split('  backup-role-bootstrap:')[1].split('\n  backup-dump:')[0];
     const dump = compose.split('  backup-dump:')[1].split('\n  backup:')[0];
     const encryption = compose.split('  backup:')[1].split('\n  control-plane:')[0];
     const control = compose.split('  control-plane:')[1].split('\n  probe-worker:')[0];
@@ -123,6 +161,12 @@ describe('AWS release path hardening', () => {
     assert.match(migration, /ASTRANULL_DATABASE_BACKUP_PASSWORD: \$\{ASTRANULL_DATABASE_BACKUP_PASSWORD\}/);
     assert.match(migration, /migrate-postgres\.mjs && node scripts\/postgres-grant-app-role\.mjs/);
     assert.match(deploy, /--profile ops run --rm --no-deps migrate/);
+
+    assert.match(bootstrap, /ASTRANULL_ADMIN_DATABASE_URL: postgresql:\/\/astranull:\$\{POSTGRES_PASSWORD\}/);
+    assert.match(bootstrap, /ASTRANULL_DATABASE_BACKUP_PASSWORD: \$\{ASTRANULL_DATABASE_BACKUP_PASSWORD\}/);
+    assert.match(bootstrap, /postgres-grant-app-role\.mjs", "--backup-only"/);
+    assert.doesNotMatch(bootstrap, /DATABASE_APP_PASSWORD|BACKUP_ENCRYPTION_KEY|SECRET_ENCRYPTION_KEY/);
+    assert.match(deploy, /--profile ops run --rm --no-deps backup-role-bootstrap/);
 
     assert.match(dump, /postgresql:\/\/astranull_backup:\$\{ASTRANULL_DATABASE_BACKUP_PASSWORD\}/);
     assert.doesNotMatch(dump, /POSTGRES_PASSWORD|DATABASE_APP_PASSWORD|BACKUP_ENCRYPTION_KEY|SECRET_ENCRYPTION_KEY/);
@@ -155,15 +199,42 @@ describe('AWS release path hardening', () => {
     assert.doesNotMatch(probe, /DATABASE_URL|OIDC|SMTP|SECRET_ENCRYPTION/);
     assert.doesNotMatch(recovery, /OIDC|PROBE_WORKER_SECRET/);
     assert.doesNotMatch(scheduler, /OIDC|SMTP|SECRET_ENCRYPTION/);
+    const runner = read('scripts/test-policy-runner.mjs');
+    const envExample = read('ops/aws/env.example');
     assert.match(scheduler, /test-policy-runner\.heartbeat/);
     assert.match(scheduler, /worker-heartbeat-health\.mjs/);
+    assert.match(scheduler, /restart: unless-stopped/);
     const intervalAssignment = scheduler.indexOf('interval=$${ASTRANULL_TEST_POLICY_INTERVAL_SECONDS:-30}');
     const intervalGuard = scheduler.indexOf("*[!0-9]*");
     const loop = scheduler.indexOf('while true');
     const sleep = scheduler.indexOf('sleep "$$interval"');
     assert.ok(intervalAssignment >= 0 && intervalGuard > intervalAssignment && loop > intervalGuard && sleep > loop);
-    assert.match(scheduler, /"\$\$interval" -lt 5[\s\S]*?"\$\$interval" -gt 3600/);
+    assert.match(scheduler, /"\$\$interval" -lt 5[\s\S]*?"\$\$interval" -gt 30/);
     assert.doesNotMatch(scheduler, /sleep \$\$\{ASTRANULL_TEST_POLICY_INTERVAL_SECONDS/);
+
+    const boundedTick = scheduler.match(
+      /if timeout -k 10 (\d+) node scripts\/test-policy-runner\.mjs; then([\s\S]*?)else([\s\S]*?)fi;/,
+    );
+    assert.ok(boundedTick, 'expected a bounded policy tick with explicit success and failure branches');
+    const tickLimitSeconds = Number(boundedTick[1]);
+    const maxSleepSeconds = Number(scheduler.match(/"\$\$interval" -gt (\d+)/)?.[1]);
+    const freshnessSeconds = Number(scheduler.match(
+      /worker-heartbeat-health\.mjs", "\/tmp\/test-policy-runner\.heartbeat", "(\d+)"/,
+    )?.[1]);
+    assert.equal(tickLimitSeconds, 120);
+    assert.equal(maxSleepSeconds, 30);
+    assert.equal(freshnessSeconds, 180);
+    assert.ok(
+      freshnessSeconds - tickLimitSeconds - maxSleepSeconds >= 30,
+      'successful max-duration tick plus max sleep must retain at least 30s freshness margin',
+    );
+    assert.match(boundedTick[2], /date -u \+%FT%TZ > \/tmp\/test-policy-runner\.heartbeat/);
+    assert.doesNotMatch(boundedTick[3], /heartbeat|date -u/);
+    assert.match(boundedTick[3], /bounded invocation failed/);
+
+    assert.match(runner, /TEST_POLICY_SCHEDULER_MAX_INTERVAL_SECONDS = 30/);
+    assert.match(runner, /ASTRANULL_TEST_POLICY_INTERVAL_SECONDS \(optional; 5-30, default 30\)/);
+    assert.match(envExample, /valid range 5-30[\s\S]*ASTRANULL_TEST_POLICY_INTERVAL_SECONDS=30/);
     assert.match(probe, /worker-heartbeat-health\.mjs/);
     assert.match(recovery, /worker-heartbeat-health\.mjs/);
     assert.match(compose, /postgres:16-alpine@sha256:[0-9a-f]{64}/);
@@ -183,10 +254,20 @@ describe('AWS release path hardening', () => {
     assert.match(restoreScript, /trap cleanup EXIT/);
     assert.match(restoreScript, /trap 'exit 130' HUP INT TERM/);
     assert.match(restoreScript, /control_plane_tag=\$\(read_control_plane_image_tag\)/);
+    assert.match(restoreScript, /control_plane_image_id=\$\(read_control_plane_image_id\)/);
+    assert.match(restoreScript, /rebind_control_plane_image_tag/);
     assert.match(restoreScript, /ASTRANULL_CONTROL_PLANE_IMAGE_TAG="\$control_plane_tag"/);
     assert.match(restoreScript, /ASTRANULL_WORKER_IMAGE_TAG="\$orchestration_tag"/);
     assert.match(restoreScript, /verify_running_control_plane_state[\s\S]*stop caddy/m);
     assert.match(restoreScript, /verify_restored_image_identity/);
+    const loadIdentity = restoreScript.slice(
+      restoreScript.indexOf('load_restore_image_identity()'),
+      restoreScript.indexOf('verify_service_image_tag()'),
+    );
+    assert.ok(
+      loadIdentity.indexOf('rebind_control_plane_image_tag') < loadIdentity.indexOf('worker_image_id=$(image_id_for_ref'),
+      'restore must rebind persisted control-plane identity before same-tag worker resolution',
+    );
     assert.match(restoreScript, /restore: ok[^"]*control_plane=astranull-control-plane:\$control_plane_tag@\$control_plane_image_id[^"]*orchestration_workers=\$orchestration_tag/);
     assert.match(restoreScript, /psql -U astranull -d postgres -v ON_ERROR_STOP=1/);
     assert.match(restoreScript, /pg_terminate_backend/);
@@ -227,6 +308,11 @@ describe('AWS release path hardening', () => {
           ASTRANULL_DATABASE_APP_PASSWORD: app,
           ASTRANULL_DATABASE_BACKUP_PASSWORD: backupDb,
         } },
+        'backup-role-bootstrap': { environment: {
+          NODE_ENV: 'production',
+          ASTRANULL_ADMIN_DATABASE_URL: `postgresql://astranull:${owner}@postgres/astranull`,
+          ASTRANULL_DATABASE_BACKUP_PASSWORD: backupDb,
+        } },
         'backup-dump': { environment: {
           ASTRANULL_BACKUP_DATABASE_URL: `postgresql://astranull_backup:${backupDb}@postgres/astranull`,
         } },
@@ -252,9 +338,11 @@ describe('AWS release path hardening', () => {
     model.services.postgres.environment.POSTGRES_PASSWORD = owner;
 
     model.services.migrate.environment.ASTRANULL_DATABASE_BACKUP_PASSWORD = app;
+    model.services['backup-role-bootstrap'].environment.ASTRANULL_DATABASE_BACKUP_PASSWORD = app;
     model.services['backup-dump'].environment.ASTRANULL_BACKUP_DATABASE_URL = `postgresql://astranull_backup:${app}@postgres/astranull`;
     assert.throws(() => validateAwsComposeSecretModel(model), /must all be distinct/);
     model.services.migrate.environment.ASTRANULL_DATABASE_BACKUP_PASSWORD = backupDb;
+    model.services['backup-role-bootstrap'].environment.ASTRANULL_DATABASE_BACKUP_PASSWORD = backupDb;
     model.services['backup-dump'].environment.ASTRANULL_BACKUP_DATABASE_URL = `postgresql://astranull_backup:${backupDb}@postgres/astranull`;
 
     model.services.backup.environment.ASTRANULL_DATABASE_URL = `postgresql://astranull_backup:${backupDb}@postgres/astranull`;

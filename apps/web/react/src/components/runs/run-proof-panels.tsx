@@ -123,7 +123,7 @@ export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
   const current = normalizeVerdictKey(getNestedString(detail, ['verdict', 'verdict'], ''));
 
   return (
-    <section className="truth-table-viz" aria-labelledby="truth-table-heading">
+    <section className="truth-table-viz" tabIndex={0} role="region" aria-labelledby="truth-table-heading">
       <h4 id="truth-table-heading">Verdict truth table</h4>
       <table className="truth-table data-table text-sm">
         <thead>

@@ -1,40 +1,62 @@
 name: Deploy AWS
-
-# Push to main rebuilds the VM. CI still runs separately; this job only SSHes
-# and runs ops/aws/deploy.sh (git pull + compose up --build).
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: ["main"]
-  workflow_dispatch:
-
 concurrency:
   group: deploy-aws
   cancel-in-progress: false
-
 permissions:
   contents: read
-
 jobs:
   deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to EC2
+      - name: Check out the exact CI-tested revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Deploy exact verified revision to EC2
         env:
           SSH_KEY: ${{ secrets.ASTRANULL_AWS_SSH_KEY }}
           HOST: ${{ secrets.ASTRANULL_AWS_HOST }}
           SSH_USER: ${{ secrets.ASTRANULL_AWS_USER }}
+          KNOWN_HOSTS: ${{ secrets.ASTRANULL_AWS_KNOWN_HOSTS }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          : "${SSH_KEY:?ASTRANULL_AWS_SSH_KEY is not set}"
-          : "${HOST:?ASTRANULL_AWS_HOST is not set}"
+          : "${SSH_KEY:?missing SSH key}"; : "${HOST:?missing host}"; : "${KNOWN_HOSTS:?missing pinned host key}"
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$DEPLOY_SHA" ]]
+          [[ -x ops/aws/deploy.sh ]]
+          git diff --exit-code -- ops/aws/deploy.sh
+          script_sha256=$(sha256sum ops/aws/deploy.sh | awk '{print $1}')
+          [[ "$script_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+
           user="${SSH_USER:-ubuntu}"
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          install -m 600 /dev/null "$HOME/.ssh/astranull-deploy"
-          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-deploy"
-          ssh -i "$HOME/.ssh/astranull-deploy" \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=20 \
-            "${user}@${HOST}" \
-            'bash /opt/astranull/ops/aws/deploy.sh'
+          remote_script="/tmp/astranull-deploy-${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-deploy"; chmod 600 "$HOME/.ssh/astranull-deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; chmod 600 "$HOME/.ssh/known_hosts"
+          uploaded=0
+          cleanup() {
+            if ((uploaded)); then
+              timeout -k 5 30 ssh -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "${user}@${HOST}" "rm -f -- '$remote_script'" >/dev/null 2>&1 || true
+            fi
+            rm -f "$HOME/.ssh/astranull-deploy"
+          }
+          trap cleanup EXIT
+
+          uploaded=1
+          timeout -k 5 60 scp -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 ops/aws/deploy.sh "${user}@${HOST}:${remote_script}"
+          timeout 1800 ssh -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${user}@${HOST}" \
+            "set -euo pipefail; trap 'rm -f -- \"$remote_script\"' EXIT; chmod 700 '$remote_script'; printf '%s  %s\n' '$script_sha256' '$remote_script' | sha256sum -c -; bash '$remote_script' '$DEPLOY_SHA'"

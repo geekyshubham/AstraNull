@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { buildAuditRecord } from '../../audit.mjs';
 import { encodeBase32 } from '../../lib/base32.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
 import {
@@ -53,11 +52,16 @@ export const PORTAL_REVAMP_REPOSITORY_METHODS = Object.freeze([
   'insertDnsChallenge',
   'findDnsChallenge',
   'updateDnsChallenge',
+  'finalizeDnsOwnershipCheck',
   'resolveFqdnDomain',
+  'resolveFqdnTarget',
+  'getActiveTarget',
+  'getLoaScopeTargets',
   'getTargetVerificationCurrent',
   'listTargetVerifications',
   'insertTargetVerification',
   'getActiveLoaByGroup',
+  'confirmTargetWithLoa',
   'insertLoaSignature',
   'updateLoaSignature',
   'getFindingRemediationByFinding',
@@ -71,6 +75,22 @@ export const PORTAL_REVAMP_REPOSITORY_METHODS = Object.freeze([
   'restoreTargetGroup',
   'getVerificationLadderCounts',
 ]);
+
+async function withAuditedPortalMutation(pool, ctx, auditRepo, event, mutate) {
+  if (typeof auditRepo?.appendAuditEvent !== 'function') {
+    throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+  }
+  return withTenantContext(pool, ctx.tenantId, async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+    const auditEntry = await auditRepo.appendAuditEvent({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      ...event,
+    }, { client });
+    return mutate(client, auditEntry);
+  });
+}
 
 /**
  * @param {import('pg').Pool} pool
@@ -100,17 +120,12 @@ export function createPortalRevampRepository(pool) {
     },
 
     async insertDnsChallenge(ctx, record, auditRepo) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-        const auditEntry = buildAuditRecord({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId,
-          actor_role: ctx.role,
-          action: 'dns_ownership.challenge_issued',
-          resource_type: 'dns_challenge',
-          resource_id: record.id,
-        }, prior);
-        await auditRepo.appendAuditEntry(auditEntry);
+      return withAuditedPortalMutation(pool, ctx, auditRepo, {
+        action: 'dns_ownership.challenge_issued',
+        resource_type: 'dns_challenge',
+        resource_id: record.id,
+        metadata: { target_group_id: record.target_group_id, target_id: record.target_id },
+      }, async (client, auditEntry) => {
         const { rows } = await client.query(
           `INSERT INTO dns_challenges (
              id, tenant_id, target_group_id, target_id, record_name, record_value,
@@ -135,15 +150,24 @@ export function createPortalRevampRepository(pool) {
       });
     },
 
-    async updateDnsChallenge(ctx, id, patch, auditRepo) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async updateDnsChallenge(ctx, id, patch, auditRepo, auditEvent = {}) {
+      return withAuditedPortalMutation(pool, ctx, auditRepo, {
+        action: auditEvent.action ?? (patch.state === 'resolved'
+          ? 'dns_ownership.verified'
+          : patch.state === 'expired'
+            ? 'dns_ownership.challenge_expired'
+            : 'dns_ownership.verify_checked'),
+        resource_type: 'dns_challenge',
+        resource_id: id,
+        metadata: auditEvent.metadata,
+      }, async (client, auditEntry) => {
         const { rows } = await client.query(
           `UPDATE dns_challenges
            SET state = COALESCE($3, state),
                resolved_at = COALESCE($4::timestamptz, resolved_at),
                last_checked_at = COALESCE($5::timestamptz, last_checked_at),
                last_check_result = COALESCE($6::jsonb, last_check_result),
-               audit_entry_id = COALESCE($7, audit_entry_id)
+               audit_entry_id = $7
            WHERE tenant_id = $1 AND id = $2
            RETURNING *`,
           [
@@ -153,10 +177,227 @@ export function createPortalRevampRepository(pool) {
             patch.resolved_at ?? null,
             patch.last_checked_at ?? null,
             patch.last_check_result ? JSON.stringify(patch.last_check_result) : null,
-            patch.audit_entry_id ?? null,
+            auditEntry.id,
           ],
         );
-        return mapDnsRow(rows[0] ?? null);
+        if (!rows[0]) throw new Error('dns challenge disappeared during audited mutation.');
+        return mapDnsRow(rows[0]);
+      });
+    },
+
+    async finalizeDnsOwnershipCheck(ctx, input, auditRepo) {
+      if (typeof auditRepo?.appendAuditEvent !== 'function') {
+        throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+      }
+      const requestedFinalizedAt = new Date(input.finalized_at);
+      if (!Number.isFinite(requestedFinalizedAt.getTime())) {
+        throw new Error('DNS ownership finalization requires a valid finalized_at timestamp.');
+      }
+
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+
+        const challengeResult = await client.query(
+          `SELECT * FROM dns_challenges
+           WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
+           FOR UPDATE`,
+          [ctx.tenantId, input.challenge_id, input.target_group_id],
+        );
+        let challenge = mapDnsRow(challengeResult.rows[0] ?? null);
+        if (!challenge) return { error: 'challenge_not_found', status: 404 };
+        if (!challenge.target_id) return { error: 'challenge_target_not_bound', status: 409 };
+
+        const activeTargetResult = await client.query(
+          `SELECT t.*
+           FROM target_groups tg
+           JOIN targets t
+             ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
+           WHERE tg.tenant_id = $1 AND tg.id = $2
+             AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+             AND t.id = $3 AND t.deleted_at IS NULL
+           FOR UPDATE OF tg, t`,
+          [ctx.tenantId, input.target_group_id, challenge.target_id],
+        );
+        const target = activeTargetResult.rows[0] ?? null;
+        if (!target) return { error: 'target_not_found', status: 404 };
+
+        if (challenge.state !== 'pending') {
+          return {
+            challenge,
+            target,
+            verified: challenge.state === 'resolved',
+            audit_entry_id: challenge.audit_entry_id,
+          };
+        }
+
+        const finalizationClock = await client.query(
+          `SELECT GREATEST(clock_timestamp(), $1::timestamptz) AS finalized_at`,
+          [requestedFinalizedAt.toISOString()],
+        );
+        const finalizedAt = new Date(
+          finalizationClock.rows[0]?.finalized_at ?? requestedFinalizedAt,
+        );
+        const expiresAt = new Date(challenge.expires_at);
+        if (!Number.isFinite(expiresAt.getTime())) {
+          throw new Error('DNS challenge has an invalid expires_at timestamp.');
+        }
+        const expired = expiresAt.getTime() <= finalizedAt.getTime();
+        const lastCheckResult = {
+          ...(input.last_check_result && typeof input.last_check_result === 'object'
+            ? input.last_check_result
+            : {}),
+          matched: expired ? false : input.matched === true,
+          ...(expired ? { expired: true } : {}),
+        };
+        const auditOptions = { client, now: finalizedAt };
+
+        if (expired) {
+          const auditEntry = await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'dns_ownership.challenge_expired',
+            resource_type: 'dns_challenge',
+            resource_id: challenge.id,
+            metadata: {
+              target_group_id: input.target_group_id,
+              target_id: challenge.target_id,
+            },
+          }, auditOptions);
+          const { rows } = await client.query(
+            `UPDATE dns_challenges
+             SET state = 'expired', resolved_at = NULL,
+                 last_checked_at = $4::timestamptz,
+                 last_check_result = $5::jsonb,
+                 audit_entry_id = $6
+             WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
+               AND state = 'pending' AND expires_at <= $4::timestamptz
+             RETURNING *`,
+            [
+              ctx.tenantId,
+              challenge.id,
+              input.target_group_id,
+              finalizedAt.toISOString(),
+              JSON.stringify(lastCheckResult),
+              auditEntry.id,
+            ],
+          );
+          if (!rows[0]) throw new Error('DNS challenge expiration CAS failed.');
+          challenge = mapDnsRow(rows[0]);
+          return { error: 'challenge_expired', status: 409, challenge };
+        }
+
+        if (input.matched === true) {
+          const challengeAudit = await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'dns_ownership.verified',
+            resource_type: 'dns_challenge',
+            resource_id: challenge.id,
+            metadata: {
+              target_group_id: input.target_group_id,
+              target_id: challenge.target_id,
+            },
+          }, auditOptions);
+          const resolved = await client.query(
+            `UPDATE dns_challenges
+             SET state = 'resolved', resolved_at = $4::timestamptz,
+                 last_checked_at = $4::timestamptz,
+                 last_check_result = $5::jsonb,
+                 audit_entry_id = $6
+             WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
+               AND state = 'pending' AND expires_at > $4::timestamptz
+             RETURNING *`,
+            [
+              ctx.tenantId,
+              challenge.id,
+              input.target_group_id,
+              finalizedAt.toISOString(),
+              JSON.stringify(lastCheckResult),
+              challengeAudit.id,
+            ],
+          );
+          if (!resolved.rows[0]) throw new Error('DNS challenge resolution CAS failed.');
+
+          const verificationAudit = await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'target_verification.transitioned',
+            resource_type: 'target_verification',
+            resource_id: input.verification_id,
+            metadata: {
+              target_id: challenge.target_id,
+              state: 'dns_verified',
+              source_kind: 'dns_txt',
+            },
+          }, auditOptions);
+          const verificationResult = await client.query(
+            `INSERT INTO target_verifications (
+               id, tenant_id, target_id, state, source_kind, source_ref,
+               transitioned_at, transitioned_by, audit_entry_id
+             ) VALUES ($1,$2,$3,'dns_verified','dns_txt',$4::jsonb,$5::timestamptz,$6,$7)
+             RETURNING *`,
+            [
+              input.verification_id,
+              ctx.tenantId,
+              challenge.target_id,
+              JSON.stringify({ dns_challenge_id: challenge.id }),
+              finalizedAt.toISOString(),
+              input.transitioned_by,
+              verificationAudit.id,
+            ],
+          );
+          challenge = mapDnsRow(resolved.rows[0]);
+          return {
+            challenge,
+            target,
+            verification: verificationResult.rows[0],
+            verified: true,
+            audit_entry_id: challenge.audit_entry_id,
+          };
+        }
+
+        const auditEntry = await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'dns_ownership.verify_checked',
+          resource_type: 'dns_challenge',
+          resource_id: challenge.id,
+          metadata: {
+            target_group_id: input.target_group_id,
+            target_id: challenge.target_id,
+            matched: false,
+            timed_out: input.last_check_result?.timed_out === true,
+          },
+        }, auditOptions);
+        const { rows } = await client.query(
+          `UPDATE dns_challenges
+           SET last_checked_at = $4::timestamptz,
+               last_check_result = $5::jsonb,
+               audit_entry_id = $6
+           WHERE tenant_id = $1 AND id = $2 AND target_group_id = $3
+             AND state = 'pending' AND expires_at > $4::timestamptz
+           RETURNING *`,
+          [
+            ctx.tenantId,
+            challenge.id,
+            input.target_group_id,
+            finalizedAt.toISOString(),
+            JSON.stringify(lastCheckResult),
+            auditEntry.id,
+          ],
+        );
+        if (!rows[0]) throw new Error('DNS challenge check CAS failed.');
+        challenge = mapDnsRow(rows[0]);
+        return {
+          challenge,
+          target,
+          verified: false,
+          audit_entry_id: challenge.audit_entry_id,
+        };
       });
     },
 
@@ -165,7 +406,8 @@ export function createPortalRevampRepository(pool) {
         if (targetId) {
           const { rows } = await client.query(
             `SELECT value FROM targets
-             WHERE tenant_id = $1 AND target_group_id = $2 AND id = $3 AND kind = 'fqdn'
+             WHERE tenant_id = $1 AND target_group_id = $2 AND id = $3
+               AND kind = 'fqdn' AND deleted_at IS NULL
              LIMIT 1`,
             [ctx.tenantId, groupId, targetId],
           );
@@ -174,6 +416,7 @@ export function createPortalRevampRepository(pool) {
         const { rows } = await client.query(
           `SELECT value FROM targets
            WHERE tenant_id = $1 AND target_group_id = $2 AND kind = 'fqdn'
+             AND deleted_at IS NULL
            ORDER BY created_at ASC LIMIT 1`,
           [ctx.tenantId, groupId],
         );
@@ -181,10 +424,75 @@ export function createPortalRevampRepository(pool) {
       });
     },
 
+    async resolveFqdnTarget(ctx, groupId, targetId) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const params = [ctx.tenantId, groupId];
+        let targetPredicate = '';
+        if (targetId) {
+          params.push(targetId);
+          targetPredicate = ' AND t.id = $3';
+        }
+        const { rows } = await client.query(
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.created_at
+           FROM targets t
+           JOIN target_groups tg
+             ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+           WHERE t.tenant_id = $1 AND t.target_group_id = $2
+             AND t.kind = 'fqdn' AND t.deleted_at IS NULL
+             AND tg.archived_at IS NULL AND tg.deleted_at IS NULL${targetPredicate}
+           ORDER BY t.created_at, t.id
+           LIMIT 1`,
+          params,
+        );
+        return rows[0] ?? null;
+      });
+    },
+
+    async getActiveTarget(ctx, groupId, targetId) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT t.*
+           FROM targets t
+           JOIN target_groups tg
+             ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+           WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.id = $3
+             AND t.deleted_at IS NULL AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+           LIMIT 1`,
+          [ctx.tenantId, groupId, targetId],
+        );
+        return rows[0] ?? null;
+      });
+    },
+
+    async getLoaScopeTargets(ctx, groupId) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const groupResult = await client.query(
+          `SELECT id, tenant_id
+           FROM target_groups
+           WHERE tenant_id = $1 AND id = $2
+             AND archived_at IS NULL AND deleted_at IS NULL`,
+          [ctx.tenantId, groupId],
+        );
+        if (!groupResult.rows[0]) return null;
+        const { rows } = await client.query(
+          `SELECT t.id, t.kind, t.value,
+                  COALESCE(tvc.state, 'unverified') AS verification_state
+           FROM targets t
+           LEFT JOIN target_verification_current tvc
+             ON tvc.tenant_id = t.tenant_id AND tvc.target_id = t.id
+           WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.deleted_at IS NULL
+           ORDER BY t.created_at, t.id`,
+          [ctx.tenantId, groupId],
+        );
+        return { target_group: groupResult.rows[0], targets: rows };
+      });
+    },
+
     async getVerificationLadderCounts(ctx, groupId) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows: targets } = await client.query(
-          `SELECT id FROM targets WHERE tenant_id = $1 AND target_group_id = $2`,
+          `SELECT id FROM targets
+           WHERE tenant_id = $1 AND target_group_id = $2 AND deleted_at IS NULL`,
           [ctx.tenantId, groupId],
         );
         const total = targets.length;
@@ -196,7 +504,7 @@ export function createPortalRevampRepository(pool) {
            FROM targets t
            JOIN target_verification_current tvc
              ON tvc.target_id = t.id AND tvc.tenant_id = t.tenant_id
-           WHERE t.tenant_id = $1 AND t.target_group_id = $2
+           WHERE t.tenant_id = $1 AND t.target_group_id = $2 AND t.deleted_at IS NULL
            GROUP BY tvc.state`,
           [ctx.tenantId, groupId],
         );
@@ -208,21 +516,16 @@ export function createPortalRevampRepository(pool) {
     },
 
     async insertTargetVerification(ctx, record, auditRepo) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
-        let auditEntryId = record.audit_entry_id ?? null;
-        if (auditRepo && !auditEntryId) {
-          const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-          const auditEntry = buildAuditRecord({
-            tenant_id: ctx.tenantId,
-            actor_user_id: ctx.userId,
-            actor_role: ctx.role,
-            action: 'target_verification.transitioned',
-            resource_type: 'target_verification',
-            resource_id: record.id,
-          }, prior);
-          await auditRepo.appendAuditEntry(auditEntry);
-          auditEntryId = auditEntry.id;
-        }
+      return withAuditedPortalMutation(pool, ctx, auditRepo, {
+        action: 'target_verification.transitioned',
+        resource_type: 'target_verification',
+        resource_id: record.id,
+        metadata: {
+          target_id: record.target_id,
+          state: record.state,
+          source_kind: record.source_kind,
+        },
+      }, async (client, auditEntry) => {
         const { rows } = await client.query(
           `INSERT INTO target_verifications (
              id, tenant_id, target_id, state, source_kind, source_ref,
@@ -238,7 +541,7 @@ export function createPortalRevampRepository(pool) {
             JSON.stringify(record.source_ref ?? {}),
             record.transitioned_at,
             record.transitioned_by,
-            auditEntryId,
+            auditEntry.id,
           ],
         );
         return rows[0];
@@ -248,9 +551,14 @@ export function createPortalRevampRepository(pool) {
     async getActiveLoaByGroup(ctx, groupId) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
-          `SELECT * FROM loa_signatures
-           WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
-           ORDER BY signed_at DESC LIMIT 1`,
+          `SELECT loa.*
+           FROM loa_signatures loa
+           JOIN target_groups tg
+             ON tg.tenant_id = loa.tenant_id AND tg.id = loa.target_group_id
+           WHERE loa.tenant_id = $1 AND loa.target_group_id = $2 AND loa.state = 'signed'
+             AND (loa.expires_at IS NULL OR loa.expires_at > now())
+             AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+           ORDER BY loa.signed_at DESC LIMIT 1`,
           [ctx.tenantId, groupId],
         );
         const row = rows[0];
@@ -263,18 +571,173 @@ export function createPortalRevampRepository(pool) {
       });
     },
 
-    async insertLoaSignature(ctx, record, auditRepo) {
+    async confirmTargetWithLoa(ctx, input, auditRepo) {
+      if (typeof auditRepo?.appendAuditEvent !== 'function') {
+        throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+      }
+      const requestedTransitionedAt = new Date(input.transitioned_at);
+      if (!Number.isFinite(requestedTransitionedAt.getTime())) {
+        throw new Error('LOA confirmation requires a valid transitioned_at timestamp.');
+      }
+
       return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-        const auditEntry = buildAuditRecord({
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+
+        const targetResult = await client.query(
+          `SELECT t.*
+           FROM target_groups tg
+           JOIN targets t
+             ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
+           WHERE tg.tenant_id = $1 AND tg.id = $2
+             AND tg.archived_at IS NULL AND tg.deleted_at IS NULL
+             AND t.id = $3 AND t.deleted_at IS NULL
+           FOR UPDATE OF tg, t`,
+          [ctx.tenantId, input.target_group_id, input.target_id],
+        );
+        const target = targetResult.rows[0] ?? null;
+        if (!target) return { error: 'target_not_found', status: 404 };
+
+        const confirmationClock = await client.query(
+          `SELECT GREATEST(clock_timestamp(), $1::timestamptz) AS transitioned_at`,
+          [requestedTransitionedAt.toISOString()],
+        );
+        const transitionedAt = new Date(
+          confirmationClock.rows[0]?.transitioned_at ?? requestedTransitionedAt,
+        );
+        const loaResult = await client.query(
+          `SELECT loa.*
+           FROM loa_signatures loa
+           WHERE loa.tenant_id = $1 AND loa.target_group_id = $2
+             AND loa.state = 'signed'
+             AND (loa.expires_at IS NULL OR loa.expires_at > $3::timestamptz)
+           ORDER BY loa.signed_at DESC, loa.id DESC
+           LIMIT 1
+           FOR UPDATE OF loa`,
+          [ctx.tenantId, input.target_group_id, transitionedAt.toISOString()],
+        );
+        const activeLoa = loaResult.rows[0] ?? null;
+        if (!activeLoa) return { error: 'loa_missing', status: 409 };
+
+        const currentResult = await client.query(
+          `SELECT * FROM target_verifications
+           WHERE tenant_id = $1 AND target_id = $2
+           ORDER BY transitioned_at DESC, id DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [ctx.tenantId, input.target_id],
+        );
+        const current = currentResult.rows[0] ?? null;
+        if (!current || !['agent_verified', 'user_confirmed'].includes(current.state)) {
+          return { error: 'verify_prereq_not_met', status: 409 };
+        }
+
+        const scopeIds = new Set(
+          (Array.isArray(activeLoa.scope_snapshot?.targets)
+            ? activeLoa.scope_snapshot.targets
+            : [])
+            .map((entry) => (entry && typeof entry === 'object' ? entry.target_id : entry))
+            .map((id) => String(id ?? '').trim())
+            .filter(Boolean),
+        );
+        if (!scopeIds.has(input.target_id)) {
+          return { error: 'target_not_in_loa_scope', status: 409 };
+        }
+
+        const sourceRef = {
+          signer: ctx.userId ?? 'system',
+          note: input.note ?? null,
+          loa_id: activeLoa.id,
+          loa_custody_digest_sha256: activeLoa.custody_digest_sha256,
+        };
+        const auditEntry = await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'target_verification.transitioned',
+          resource_type: 'target_verification',
+          resource_id: input.verification_id,
+          metadata: {
+            target_id: input.target_id,
+            state: 'user_confirmed',
+            source_kind: 'user_attestation',
+            loa_id: activeLoa.id,
+          },
+        }, { client, now: transitionedAt });
+        const { rows } = await client.query(
+          `INSERT INTO target_verifications (
+             id, tenant_id, target_id, state, source_kind, source_ref,
+             transitioned_at, transitioned_by, audit_entry_id
+           ) VALUES ($1,$2,$3,'user_confirmed','user_attestation',$4::jsonb,$5::timestamptz,$6,$7)
+           RETURNING *`,
+          [
+            input.verification_id,
+            ctx.tenantId,
+            input.target_id,
+            JSON.stringify(sourceRef),
+            transitionedAt.toISOString(),
+            ctx.userId ?? 'system',
+            auditEntry.id,
+          ],
+        );
+        return {
+          target,
+          verification: rows[0],
+          audit_entry_id: auditEntry.id,
+        };
+      });
+    },
+
+    async insertLoaSignature(ctx, record, auditRepo) {
+      if (typeof auditRepo?.appendAuditEvent !== 'function') {
+        throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+      }
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+
+        const expired = await client.query(
+          `SELECT id FROM loa_signatures
+           WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
+             AND expires_at IS NOT NULL AND expires_at <= $3::timestamptz
+           FOR UPDATE`,
+          [ctx.tenantId, record.target_group_id, record.signed_at],
+        );
+        for (const predecessor of expired.rows) {
+          const expirationAudit = await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'loa.expired',
+            resource_type: 'loa_signature',
+            resource_id: predecessor.id,
+            metadata: { target_group_id: record.target_group_id },
+          }, { client });
+          await client.query(
+            `UPDATE loa_signatures SET state = 'expired', audit_entry_id = $3
+             WHERE tenant_id = $1 AND id = $2 AND state = 'signed'`,
+            [ctx.tenantId, predecessor.id, expirationAudit.id],
+          );
+        }
+
+        const active = await client.query(
+          `SELECT id FROM loa_signatures
+           WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
+           LIMIT 1 FOR UPDATE`,
+          [ctx.tenantId, record.target_group_id],
+        );
+        if (active.rows[0]) return { error: 'loa_active', status: 409 };
+
+        const auditEntry = await auditRepo.appendAuditEvent({
           tenant_id: ctx.tenantId,
           actor_user_id: ctx.userId,
           actor_role: ctx.role,
           action: 'loa.signed',
           resource_type: 'loa_signature',
           resource_id: record.id,
-        }, prior);
-        await auditRepo.appendAuditEntry(auditEntry);
+          metadata: {
+            target_group_id: record.target_group_id,
+            custody_digest_sha256: record.custody_digest_sha256,
+          },
+        }, { client });
         const { rows } = await client.query(
           `INSERT INTO loa_signatures (
              id, tenant_id, target_group_id, state, signer_name, signer_title, signer_email,
@@ -306,28 +769,32 @@ export function createPortalRevampRepository(pool) {
 
     async updateLoaSignature(ctx, loaId, patch, auditRepo) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
-        let auditEntryId = null;
-        if (patch.state === 'revoked' && auditRepo) {
-          const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-          const auditEntry = buildAuditRecord({
-            tenant_id: ctx.tenantId,
-            actor_user_id: ctx.userId,
-            actor_role: ctx.role,
-            action: 'loa.revoked',
-            resource_type: 'loa_signature',
-            resource_id: loaId,
-          }, prior);
-          await auditRepo.appendAuditEntry(auditEntry);
-          auditEntryId = auditEntry.id;
-        }
-        const { rows } = await client.query(
-          `UPDATE loa_signatures SET state = COALESCE($3, state)
-           WHERE tenant_id = $1 AND id = $2 RETURNING *`,
-          [ctx.tenantId, loaId, patch.state ?? null],
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+        const existing = await client.query(
+          `SELECT id, target_group_id FROM loa_signatures
+           WHERE tenant_id = $1 AND id = $2 FOR UPDATE`,
+          [ctx.tenantId, loaId],
         );
-        const row = rows[0] ?? null;
-        if (!row) return null;
-        return { ...row, signed_at: toIso(row.signed_at), audit_entry_id: auditEntryId ?? row.audit_entry_id };
+        if (!existing.rows[0]) return null;
+        if (typeof auditRepo?.appendAuditEvent !== 'function') {
+          throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+        }
+        const auditEntry = await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: patch.state === 'revoked' ? 'loa.revoked' : 'loa.updated',
+          resource_type: 'loa_signature',
+          resource_id: loaId,
+          metadata: { target_group_id: existing.rows[0].target_group_id },
+        }, { client });
+        const { rows } = await client.query(
+          `UPDATE loa_signatures SET state = COALESCE($3, state), audit_entry_id = $4
+           WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+          [ctx.tenantId, loaId, patch.state ?? null, auditEntry.id],
+        );
+        const row = rows[0];
+        return { ...row, signed_at: toIso(row.signed_at), audit_entry_id: auditEntry.id };
       });
     },
 
@@ -338,7 +805,7 @@ export function createPortalRevampRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         bump();
         const targetRes = await client.query(
-          `SELECT * FROM targets WHERE tenant_id = $1 AND id = $2`,
+          `SELECT * FROM targets WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL`,
           [ctx.tenantId, targetId],
         );
         const target = targetRes.rows[0];
@@ -452,7 +919,7 @@ export function createPortalRevampRepository(pool) {
             [ctx.tenantId, targetId],
           ),
           client.query(
-            `SELECT id, check_id, status, started_at, created_at
+            `SELECT id, policy_id, check_id, status, started_at, created_at
              FROM test_runs WHERE tenant_id = $1 AND target_id = $2
              ORDER BY COALESCE(started_at, created_at) DESC LIMIT $3`,
             [ctx.tenantId, targetId, Number(query.runs_limit) || 5],
@@ -530,7 +997,7 @@ export function createPortalRevampRepository(pool) {
         const connectorRow = wafConnector.rows[0] ?? null;
         const runsRecent = runs.rows.map((run) => ({
           run_id: run.id,
-          policy_id: run.check_id ?? null,
+          policy_id: run.policy_id ?? null,
           verdict: run.status ?? 'unknown',
           started_at: toIso(run.started_at ?? run.created_at),
           agent_id: null,
@@ -629,26 +1096,31 @@ export function createPortalRevampRepository(pool) {
 
     async restoreTargetGroup(ctx, groupId, auditRepo) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+        const existing = await client.query(
+          `SELECT id FROM target_groups
+           WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NOT NULL FOR UPDATE`,
+          [ctx.tenantId, groupId],
+        );
+        if (!existing.rows[0]) return null;
+        if (typeof auditRepo?.appendAuditEvent !== 'function') {
+          throw new Error('Postgres portal mutation requires audit.appendAuditEvent().');
+        }
+        const auditEntry = await auditRepo.appendAuditEvent({
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: 'target_group.restored',
+          resource_type: 'target_group',
+          resource_id: groupId,
+        }, { client });
         const { rows } = await client.query(
           `UPDATE target_groups SET deleted_at = NULL, deleted_by = NULL
            WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NOT NULL
            RETURNING *`,
           [ctx.tenantId, groupId],
         );
-        const restored = rows[0] ?? null;
-        if (restored && auditRepo) {
-          const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-          const auditEntry = buildAuditRecord({
-            tenant_id: ctx.tenantId,
-            actor_user_id: ctx.userId,
-            actor_role: ctx.role,
-            action: 'target_group.restored',
-            resource_type: 'target_group',
-            resource_id: groupId,
-          }, prior);
-          await auditRepo.appendAuditEntry(auditEntry);
-        }
-        return restored;
+        return rows[0] ? { ...rows[0], audit_entry_id: auditEntry.id } : null;
       });
     },
 

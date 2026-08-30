@@ -9,6 +9,7 @@ import {
   detectGenericWafPresence,
   resolveOutsideInDnsHints,
   resolveOutsideInTlsHints,
+  readBoundedResponseBody,
   runOutsideInWafScan,
 } from '../../src/lib/outsideInWafScanner.mjs';
 import {
@@ -16,10 +17,21 @@ import {
   probeOutsideInWafScan,
 } from '../../src/lib/capabilityProbes.mjs';
 
+function rejectedTlsSocket() {
+  const handlers = {};
+  const socket = {
+    once(event, handler) { handlers[event] = handler; },
+    destroy() {},
+  };
+  queueMicrotask(() => handlers.error?.(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })));
+  return socket;
+}
+
 function mockResponse(status, headers = {}) {
   const normalized = Object.fromEntries(
     Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
   );
+  const bytes = new TextEncoder().encode(normalized.__body ?? '');
   return {
     status,
     headers: {
@@ -30,11 +42,42 @@ function mockResponse(status, headers = {}) {
         }
       },
     },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
     async text() {
-      return normalized.__body ?? '';
+      throw new Error('scanner must use bounded streaming reads');
     },
   };
 }
+
+  it('streams at most the configured response-body byte cap', async () => {
+    let cancelled = false;
+    let textCalled = false;
+    const response = {
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(9_000).fill(65));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      async text() {
+        textCalled = true;
+        throw new Error('unbounded text read');
+      },
+    };
+
+    const body = await readBoundedResponseBody(response, 64);
+    assert.equal(Buffer.byteLength(body, 'utf8'), 64);
+    assert.equal(body, 'A'.repeat(64));
+    assert.equal(cancelled, true);
+    assert.equal(textCalled, false);
+  });
 
 describe('outside-in WAF scanner', () => {
   it('waf.fingerprint.safe maps to outside_in_waf_scan with 10-request budget', () => {
@@ -306,6 +349,9 @@ describe('outside-in WAF scanner', () => {
       probe_profile: { kind: 'outside_in_waf_scan' },
       target: { kind: 'url', value: 'https://edge.example.test/' },
     }, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      tlsConnect: rejectedTlsSocket,
       agentObservations: [{
         nonce_hash: 'sha256:agent-proof',
         metadata: { waf_marker: true, observed_action: 'block', waf_blocked: true },
@@ -330,6 +376,9 @@ describe('outside-in WAF scanner', () => {
       probe_profile: { kind: 'outside_in_waf_scan' },
       target: { kind: 'url', value: 'https://edge.example.test/' },
     }, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      tlsConnect: rejectedTlsSocket,
       fetchFn: async (url) => {
         const blocked = url.includes('OR') || url.includes('%');
         return mockResponse(blocked ? 403 : 200, {
@@ -353,6 +402,9 @@ describe('outside-in WAF scanner', () => {
       probe_profile: { kind: 'outside_in_waf_scan' },
       target: { kind: 'url', value: 'https://edge.example.test/' },
     }, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      tlsConnect: rejectedTlsSocket,
       fetchFn: async () => mockResponse(403, { server: 'akamai', 'x-akamai-request-id': '1', __body: 'Access Denied' }),
     });
     assert.equal(outcome.metadata.probe_kind, 'outside_in_waf_scan');

@@ -155,11 +155,11 @@ describe('GET /v1/targets inventory', () => {
         source_ref: { dns_challenge_id: 'dns_imported' },
         transitioned_at: VERIFIED_AT,
       },
-      eligibility: 'not_eligible',
-      eligibility_reason: 'maintenance_window',
-      source: 'import',
-      import_source: 'hetzner_dns',
-      import_integration: 'hetzner_dns',
+      eligibility: 'eligible',
+      eligibility_reason: null,
+      source: 'manual',
+      import_source: null,
+      import_integration: null,
       created_at: CREATED_AT,
     });
 
@@ -205,10 +205,10 @@ describe('GET /v1/targets inventory', () => {
     assert.equal(items[0].environment_name, 'Production');
     assert.equal(items[0].verification_state, 'dns_verified');
     assert.deepEqual(items[0].verification.source_ref, { dns_challenge_id: 'dns_pg' });
-    assert.equal(items[0].eligibility, 'not_eligible');
-    assert.equal(items[0].eligibility_reason, 'maintenance_window');
-    assert.equal(items[0].source, 'import');
-    assert.equal(items[0].import_integration, 'hetzner_dns');
+    assert.equal(items[0].eligibility, 'eligible');
+    assert.equal(items[0].eligibility_reason, null);
+    assert.equal(items[0].source, 'manual');
+    assert.equal(items[0].import_integration, null);
     assert.equal(items[0].created_at, CREATED_AT);
 
     const inventoryQuery = pool.queries.find((query) => query.text.includes('FROM targets t'));

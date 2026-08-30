@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/lib/highScalePolicy.mjs';
+import { computeScopeHashFromTargets } from '../../src/lib/scopeHash.mjs';
 import {
   DEFAULT_LOCAL_STAGING_ADMIN_ROLE,
   DEFAULT_LOCAL_STAGING_ADMIN_USER_ID,
@@ -21,7 +22,7 @@ function sha256Hex(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function artifactProofBody(type) {
+function artifactProofBody(type, request, scopeHash) {
   const windowStart = new Date().toISOString();
   const windowEnd = new Date(Date.now() + 86400000 * 30).toISOString();
   return {
@@ -31,10 +32,18 @@ function artifactProofBody(type) {
     approval_reference: 'REF-LOCAL-STAGING-001',
     approver: 'Internal SOC Operator',
     valid_window: { valid_from: windowStart, valid_to: windowEnd },
-    approved_targets: [LOCAL_STAGING_DEMO_IDS.targetGroupId],
-    approved_scenario_families: ['volumetric_metadata'],
-    max_rate: '500_rps_metadata',
-    max_duration_minutes: 30,
+    approved_targets: [request.target_group_id],
+    approved_scenario_families: [...request.requested_scenario_families],
+    approved_delivery_patterns: [...request.delivery_patterns],
+    approved_limits: { ...request.requested_limits },
+    authorization_binding: {
+      tenant_id: DEFAULT_LOCAL_STAGING_TENANT_ID,
+      target_group_id: request.target_group_id,
+      scope_hash: scopeHash,
+      requested_window: { ...request.requested_window },
+      approved_schedule_window: { ...request.requested_window },
+      delivery_patterns: [...request.delivery_patterns],
+    },
     emergency_contacts: [{ name: 'On-call', contact: 'soc@demo.astranull.local' }],
     abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
     retention_policy: { retain_days: 90, classification: 'governance' },
@@ -45,17 +54,13 @@ function uniqueE2eLabel(prefix) {
   return `${prefix}-${Date.now().toString(36)}`;
 }
 
-function providerApprovalBody(item) {
+function providerApprovalBody(item, request, scopeHash) {
   return {
-    ...artifactProofBody('provider_approval'),
+    ...artifactProofBody('provider_approval', request, scopeHash),
     type: 'provider_approval',
     provider_name: item.provider_name,
     contact_path: 'soc@demo.astranull.local',
-    approved_limits: {
-      approved_intensity_label: '500_rps_metadata',
-      approved_duration_minutes: 30,
-      declared_scope: LOCAL_STAGING_DEMO_IDS.targetGroupId,
-    },
+    approved_limits: { ...request.requested_limits },
     provider_specific_evidence: {
       approval_path: item.approval_path ?? 'internal_soc_lab',
       provider_key: item.provider_key ?? 'internal',
@@ -72,8 +77,9 @@ function highScaleRequestPayload() {
     objective: uniqueE2eLabel('local-staging-soc-drill'),
     environment: 'local-staging',
     business_criticality: 'medium',
-    requested_scenario_families: ['volumetric_metadata'],
-    requested_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 30 },
+    requested_scenario_families: ['udp_flood'],
+    delivery_patterns: ['direct'],
+    requested_limits: { max_gbps: 0.5, max_duration_minutes: 30 },
     stop_criteria: { abort_on_customer_signal: true, max_error_rate_pct: 5 },
     abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
     requested_window: { window_start: windowStart, window_end: windowEnd, timezone: 'UTC' },
@@ -184,11 +190,21 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
   const socPrimary = await buildSocHeaders(baseUrl, authMode, LOCAL_STAGING_DEMO_IDS.socUserId);
   const socSecondary = await buildSocHeaders(baseUrl, authMode, 'usr_soc2');
   const checks = [];
+  const requestPayload = highScaleRequestPayload();
+  const targetGroup = await stagingFetch(
+    baseUrl,
+    `/v1/target-groups/${encodeURIComponent(requestPayload.target_group_id)}`,
+    { headers: engineer },
+  );
+  if (targetGroup.status !== 200 || !Array.isArray(targetGroup.json?.targets) || targetGroup.json.targets.length === 0) {
+    throw new Error(`SOC drill target-group detail expected 200 with targets (got ${targetGroup.status})`);
+  }
+  const scopeHash = computeScopeHashFromTargets(requestPayload.target_group_id, targetGroup.json.targets);
 
   const created = await stagingFetch(baseUrl, '/v1/high-scale-requests', {
     method: 'POST',
     headers: engineer,
-    body: highScaleRequestPayload(),
+    body: requestPayload,
   });
   if (created.status !== 201 || !created.json?.id) {
     const err = created.json?.error ? ` (${created.json.error})` : '';
@@ -201,7 +217,7 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
     const uploaded = await stagingFetch(baseUrl, `/v1/high-scale-requests/${hsId}/artifacts`, {
       method: 'POST',
       headers: engineer,
-      body: artifactProofBody(type),
+      body: artifactProofBody(type, requestPayload, scopeHash),
     });
     if (uploaded.status !== 201 || !uploaded.json?.id) {
       throw new Error(`artifact upload ${type} expected 201 (got ${uploaded.status})`);
@@ -222,7 +238,7 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
     const uploaded = await stagingFetch(baseUrl, `/v1/high-scale-requests/${hsId}/artifacts`, {
       method: 'POST',
       headers: engineer,
-      body: providerApprovalBody(item),
+      body: providerApprovalBody(item, requestPayload, scopeHash),
     });
     if (uploaded.status !== 201) {
       throw new Error(`provider approval upload expected 201 (got ${uploaded.status})`);

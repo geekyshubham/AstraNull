@@ -25,12 +25,13 @@ function databaseCredential(value, label, expectedUser) {
 export function validateAwsComposeSecretModel(model) {
   const services = model?.services ?? {};
   const environment = (name) => services[name]?.environment ?? {};
-  for (const required of ['postgres', 'migrate', 'backup-dump', 'backup', 'control-plane']) {
+  for (const required of ['postgres', 'migrate', 'backup-role-bootstrap', 'backup-dump', 'backup', 'control-plane']) {
     if (!services[required]) throw new Error(`aws-compose-secrets: missing ${required} service.`);
   }
 
   const postgres = environment('postgres');
   const migrate = environment('migrate');
+  const bootstrap = environment('backup-role-bootstrap');
   const dump = environment('backup-dump');
   const encryption = environment('backup');
   const control = environment('control-plane');
@@ -52,6 +53,11 @@ export function validateAwsComposeSecretModel(model) {
     control.ASTRANULL_DATABASE_URL,
     'runtime URL',
     'astranull_app',
+  );
+  const bootstrapOwner = databaseCredential(
+    bootstrap.ASTRANULL_ADMIN_DATABASE_URL,
+    'backup bootstrap admin URL',
+    'astranull',
   );
   const backupDump = databaseCredential(
     dump.ASTRANULL_BACKUP_DATABASE_URL,
@@ -83,6 +89,20 @@ export function validateAwsComposeSecretModel(model) {
   }
   if (backupDump.password !== backupDbPassword) {
     throw new Error('aws-compose-secrets: backup dump URL does not use the configured backup password.');
+  }
+  if (
+    bootstrapOwner.password !== owner.password
+    || bootstrap.ASTRANULL_DATABASE_BACKUP_PASSWORD !== backupDbPassword
+  ) {
+    throw new Error('aws-compose-secrets: backup role bootstrap credentials do not match owner and backup role secrets.');
+  }
+  const allowedBootstrapKeys = new Set([
+    'NODE_ENV',
+    'ASTRANULL_ADMIN_DATABASE_URL',
+    'ASTRANULL_DATABASE_BACKUP_PASSWORD',
+  ]);
+  if (Object.keys(bootstrap).some((key) => !allowedBootstrapKeys.has(key))) {
+    throw new Error('aws-compose-secrets: backup role bootstrap has an unexpected environment field.');
   }
   if (new Set(Object.values(fiveSecrets)).size !== 5) {
     throw new Error(

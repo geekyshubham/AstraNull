@@ -19,7 +19,12 @@ async function main() {
   try {
     const files = listMigrationFiles(MIGRATIONS_DIR);
     const latest = getLatestMigrationVersion(files);
-    const { results } = await runMigrations(pool, { migrationsDir: MIGRATIONS_DIR, files });
+    const { results } = await runMigrations(pool, {
+      migrationsDir: MIGRATIONS_DIR,
+      files,
+      lockTimeoutMs: Number(process.env.ASTRANULL_MIGRATION_LOCK_TIMEOUT_MS || 15000),
+      statementTimeoutMs: Number(process.env.ASTRANULL_MIGRATION_STATEMENT_TIMEOUT_MS || 120000),
+    });
     await assertLatestMigrationApplied(pool, latest);
 
     const applied = results.filter((r) => r.status === 'applied').map((r) => r.version);

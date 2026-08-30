@@ -40,6 +40,52 @@ describe('dns ownership', () => {
     assert.equal(verification?.state, 'dns_verified');
   });
 
+  it('rejects wrong-route and expired challenges before DNS resolution', async () => {
+    freshStore();
+    const issued = issueChallenge(ctx, 'tg_1', 'tgt_1');
+    const wrongRoute = await verifyChallenge(ctx, issued.challenge.id, {
+      targetGroupId: 'tg_other',
+      resolveTxt: async () => [[issued.challenge.record_value]],
+    });
+    assert.equal(wrongRoute.error, 'challenge_not_found');
+
+    const stored = getStore().dnsChallenges.find((row) => row.id === issued.challenge.id);
+    stored.expires_at = '2000-01-01T00:00:00.000Z';
+    let resolverCalls = 0;
+    const expired = await verifyChallenge(ctx, issued.challenge.id, {
+      targetGroupId: 'tg_1',
+      resolveTxt: async () => { resolverCalls += 1; return [[issued.challenge.record_value]]; },
+    });
+    assert.equal(expired.error, 'challenge_expired');
+    assert.equal(expired.status, 409);
+    assert.equal(expired.challenge.state, 'expired');
+    assert.equal(resolverCalls, 0);
+  });
+
+  it('requires a bound active target and never falls back from an invalid explicit target', async () => {
+    freshStore();
+    const missing = issueChallenge(ctx, 'tg_1', 'tgt_missing');
+    assert.deepEqual(missing, { error: 'target_not_found', status: 404 });
+
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    const originalKind = target.kind;
+    target.kind = 'ip';
+    const notFqdn = issueChallenge(ctx, 'tg_1', 'tgt_1');
+    assert.deepEqual(notFqdn, { error: 'no_fqdn_target', status: 409 });
+    target.kind = originalKind;
+
+    const issued = issueChallenge(ctx, 'tg_1', 'tgt_1');
+    const stored = getStore().dnsChallenges.find((row) => row.id === issued.challenge.id);
+    stored.target_id = null;
+    const unbound = await verifyChallenge(ctx, issued.challenge.id, { targetGroupId: 'tg_1' });
+    assert.equal(unbound.error, 'challenge_target_not_bound');
+
+    stored.target_id = 'tgt_1';
+    target.deleted_at = new Date().toISOString();
+    const deleted = await verifyChallenge(ctx, issued.challenge.id, { targetGroupId: 'tg_1' });
+    assert.equal(deleted.error, 'target_not_found');
+  });
+
   it('verify fails when TXT does not match', async () => {
     freshStore();
     const issued = issueChallenge(ctx, 'tg_1', 'tgt_1');

@@ -5,13 +5,13 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type HTMLAttributes,
-  type KeyboardEvent,
   type ReactNode
 } from 'react';
-import { Activity, Bot, CalendarClock, Check, Globe, Plus, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
+import { Activity, Bot, CalendarClock, Check, Globe, Plus, Search, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
+// @ts-ignore Plain ESM keeps these UI decisions directly executable by node:test.
+import { apiErrorCode, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate } from '../lib/utils';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
@@ -35,6 +35,10 @@ const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
 const RUN_ENABLED_STATES = new Set(['dns_verified', 'agent_verified', 'user_confirmed']);
 const DNS_POLL_INTERVAL_MS = 30_000;
 const DNS_POLL_MAX_MS = 15 * 60 * 1000;
+const EDGE_DETECTION_POLL_INTERVAL_MS = 2_000;
+const EDGE_DETECTION_POLL_MAX_MS = 2 * 60 * 1000;
+const EDGE_DETECTION_CHECK_ID = 'waf.fingerprint.safe';
+const EDGE_ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 'collecting']);
 
 const DETAIL_MODAL_STYLES_ID = 'detail-modal-primitive-styles';
 const detailModalStyles = `
@@ -80,6 +84,7 @@ const TG_DETAIL_STYLES_ID = 'tg-detail-view-styles';
 // Token-only styling for the prototype's DNS/link-button primitives, scoped to this page so it
 // cannot collide with styles injected by sibling detail pages. No literal colors (tokens only).
 const tgDetailStyles = `
+.tg-detail-view { gap: var(--space-6); }
 .tg-detail-view .vl-num svg { display: block; color: var(--success); }
 .tg-detail-view .dns-field { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .tg-detail-view .dns-key { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-2); }
@@ -88,6 +93,10 @@ const tgDetailStyles = `
 .tg-detail-view .dns-head .spacer { flex: 1 1 auto; }
 .tg-detail-view .dns-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .tg-detail-view .dns-footer .btn-loading { display: inline-flex; align-items: center; gap: 8px; }
+.tg-detail-view .dns-target-actions { display: flex; align-items: flex-end; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.tg-detail-view .dns-target-picker { display: flex; min-width: min(320px, 100%); flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
+.tg-detail-view .dns-target-picker select { min-width: 0; }
+.tg-detail-view .dns-selected-target { margin-top: var(--space-2); color: var(--fg-2); font-size: var(--text-xs); }
 .tg-detail-view .dns-fields { align-items: start; }
 .tg-detail-view .dns-history { margin-top: 16px; }
 .tg-detail-view .dns-history-title { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--fg-2); margin: 0 0 8px; }
@@ -101,8 +110,9 @@ const tgDetailStyles = `
 :root[data-theme="light"] .tg-detail-view .link-btn:hover { color: var(--fg); }
 /* A signed LOA is a success state: realize the documented "green when signed" intent so the
    callout no longer wears the unsigned warn border. Border + icon tone only, token-driven. */
-.tg-detail-view .callout-loa[data-loa-state="signed"] { border-color: color-mix(in oklab, var(--success), transparent 55%); }
-.tg-detail-view .callout-loa[data-loa-state="signed"] .callout-icon { color: var(--success); border-color: color-mix(in oklab, var(--success), transparent 55%); }
+.tg-detail-view .callout-loa[data-loa-state="signed"] { border-color: color-mix(in oklab, var(--success), transparent 48%); background: color-mix(in oklab, var(--surface), var(--success) 8%); }
+.tg-detail-view .callout-loa[data-loa-state="signed"] .callout-icon { color: var(--success); border-color: color-mix(in oklab, var(--success), transparent 48%); background: color-mix(in oklab, var(--surface), var(--success) 12%); }
+.tg-detail-view .callout-loa[data-loa-state="signed"] .callout-title { color: var(--success); }
 .tg-detail-view .tg-page-head { align-items: flex-start; gap: var(--space-4); }
 .tg-detail-view .tg-page-copy { min-width: 0; }
 .tg-detail-view .tg-page-summary { margin: var(--space-2) 0 0; color: var(--fg-2); }
@@ -118,13 +128,27 @@ const tgDetailStyles = `
 .tg-detail-view .target-status-note { color: var(--muted); font-size: var(--text-xs); }
 .tg-detail-view .target-actions { justify-content: flex-end; flex-wrap: wrap; gap: var(--space-1); }
 .tg-detail-view .target-actions .btn { display: inline-flex; align-items: center; gap: var(--space-1); }
-.tg-detail-view .tg-target-row { cursor: pointer; }
 .tg-detail-view .safety-boundary { display: flex; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--accent) 4%); color: var(--fg-2); }
 .tg-detail-view .safety-boundary svg { flex: 0 0 auto; color: var(--accent); margin-top: var(--space-1); }
+.tg-detail-view .edge-detection-result { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-4); }
+.tg-detail-view .edge-detection-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.tg-detail-view .edge-detection-result p { margin: 0; }
+.tg-detail-view .edge-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.tg-detail-view .edge-evidence-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface); }
+.tg-detail-view .edge-evidence-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.tg-detail-view .edge-evidence-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; }
+.tg-detail-view .edge-evidence-card dt { color: var(--muted); }
+.tg-detail-view .edge-evidence-card dd { min-width: 0; margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+.tg-detail-view .edge-evidence-meta { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; color: var(--muted); font-size: var(--text-xs); }
 .tg-detail-view .safety-boundary strong { display: block; margin-bottom: var(--space-1); color: var(--fg); }
 .tg-detail-view .safety-boundary p { margin: 0; }
-.tg-detail-view .check-choice { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.tg-detail-view .check-choice { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; cursor: pointer; }
 .tg-detail-view .check-choice input { accent-color: var(--accent); cursor: pointer; }
+.tg-detail-view .rule-discovery { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.tg-detail-view .rule-search { display: flex; min-width: min(100%, 320px); flex: 1 1 280px; align-items: center; gap: var(--space-2); min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); padding: 0 var(--space-3); }
+.tg-detail-view .rule-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }
+.tg-detail-view .rule-results { color: var(--muted); font-size: var(--text-xs); }
+.tg-detail-view .rule-more { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-3); }
 .tg-detail-view .check-primary { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .tg-detail-view .check-primary strong { color: var(--fg); font-size: var(--text-sm); }
 .tg-detail-view .check-primary .check-description { color: var(--fg-2); font-size: var(--text-xs); text-wrap: pretty; }
@@ -140,13 +164,24 @@ const tgDetailStyles = `
 .tg-detail-view .schedule-selected { margin: 0; color: var(--fg-2); }
 .tg-detail-view .schedule-role-note { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-soft); color: var(--fg-2); }
 .tg-detail-view .schedule-role-note strong { color: var(--fg); }
+.tg-detail-view .target-run-selection { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 2%); color: var(--fg-2); }
+.tg-detail-view .target-run-selection strong { color: var(--fg); }
+.tg-detail-view .loa-scope-list { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.tg-detail-view .loa-scope-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.tg-detail-view .loa-scope-row[data-eligible="false"] { color: var(--muted); background: color-mix(in oklab, var(--surface), var(--fg) 2%); }
+.tg-detail-view .loa-contact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.tg-detail-view .custody-note { margin: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--fg-2); font-size: var(--text-xs); }
 @media (max-width: 900px) {
   .tg-detail-view .schedule-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
+  .tg-detail-view .btn { min-height: 44px; }
   .tg-detail-view .tg-page-head, .tg-detail-view .schedule-builder-head { flex-direction: column; }
-  .tg-detail-view .tg-head-actions { width: 100%; justify-content: flex-start; }
-  .tg-detail-view .schedule-fields { grid-template-columns: minmax(0, 1fr); }
+  .tg-detail-view .tg-head-actions, .tg-detail-view .dns-target-actions { width: 100%; justify-content: flex-start; }
+  .tg-detail-view .dns-target-picker { width: 100%; }
+  .tg-detail-view .schedule-fields, .tg-detail-view .edge-evidence-grid, .tg-detail-view .loa-contact-grid { grid-template-columns: minmax(0, 1fr); }
+  .tg-detail-view .loa-scope-row { grid-template-columns: auto minmax(0, 1fr); }
+  .tg-detail-view .loa-scope-row .badge { grid-column: 2; }
 }
 `;
 
@@ -176,6 +211,217 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function asDataItem(value: unknown): DataItem | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as DataItem : null;
+}
+
+function boundedEdgeString(value: unknown, maxLength = 160) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
+
+function finiteEdgeNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstDataItem(value: unknown) {
+  return Array.isArray(value) ? value.map(asDataItem).find(Boolean) ?? null : null;
+}
+
+function explicitEdgeBoolean(values: unknown[]) {
+  const observed = values.filter((value): value is boolean => typeof value === 'boolean');
+  return {
+    observed: observed.length > 0,
+    value: observed.includes(true),
+    conflict: observed.includes(true) && observed.includes(false)
+  };
+}
+
+function findEdgeProviderMatch(edgeSignature: DataItem, family: 'waf' | 'cdn') {
+  const collections = [
+    { values: edgeSignature.address_matches, discriminator: 'family', type: 'address_range' },
+    { values: edgeSignature.cname_matches, discriminator: 'type', type: 'cname_suffix' }
+  ];
+  for (const collection of collections) {
+    const values = Array.isArray(collection.values) ? collection.values : [];
+    for (const value of values) {
+      const match = asDataItem(value);
+      if (!match || getString(match, [collection.discriminator], '').toLowerCase() !== family) continue;
+      const provider = boundedEdgeString(match.provider);
+      if (provider) return { provider, type: collection.type };
+    }
+  }
+  return null;
+}
+
+function findTrustedEdgeProbeEvent(events: DataItem[], run: DataItem) {
+  const correlation = asDataItem(run.correlation);
+  const runNonce = getString(correlation, ['nonce_hash'], '');
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = asDataItem(events[index]);
+    if (!event || getString(event, ['signal_type'], '') !== 'probe_result') continue;
+    if (getString(event, ['check_id'], '') !== EDGE_DETECTION_CHECK_ID) continue;
+    const source = getString(event, ['source'], '');
+    if (source !== 'probe_worker' && source !== 'probe_simulation_stub') continue;
+    if (runNonce && getString(event, ['nonce_hash'], '') !== runNonce) continue;
+    return event;
+  }
+  return null;
+}
+
+function edgeSignalProjection(
+  signal: { observed: boolean; value: boolean; conflict: boolean },
+  details: { provider?: string; type?: string } = {}
+): DataItem {
+  const status = signal.conflict
+    ? 'inconclusive'
+    : signal.observed
+      ? signal.value ? 'detected' : 'not_detected'
+      : 'inconclusive';
+  return {
+    status,
+    ...(status === 'detected' && details.provider ? { provider: details.provider } : {}),
+    ...(status === 'detected' && details.type ? { type: details.type } : {}),
+    ...(signal.conflict ? { reason: 'conflicting_edge_signals' } : {}),
+    ...(!signal.observed ? { reason: 'signal_not_reported' } : {})
+  };
+}
+
+/** Build a display-only projection from the canonical tenant-scoped run and event APIs. */
+export function projectEdgeDetectionResult(requestState: DataItem, runValue: unknown, eventEnvelopeValue: unknown): DataItem {
+  const run = asDataItem(runValue);
+  const eventEnvelope = asDataItem(eventEnvelopeValue);
+  const events = Array.isArray(eventEnvelope?.items) ? eventEnvelope.items as DataItem[] : [];
+  const expectedRunId = getString(requestState, ['test_run_id'], '');
+  if (
+    !run
+    || getString(run, ['id'], '') !== expectedRunId
+    || getString(run, ['check_id'], '') !== EDGE_DETECTION_CHECK_ID
+    || getString(run, ['target_group_id'], '') !== getString(requestState, ['target_group_id'], '')
+    || getString(run, ['target_id'], '') !== getString(requestState, ['target_id'], '')
+  ) {
+    return { ...requestState, status: 'error', reason: 'unexpected_test_run' };
+  }
+
+  const runStatus = getString(run, ['status'], 'unknown');
+  const base = { ...requestState, run_status: runStatus };
+  const event = findTrustedEdgeProbeEvent(events, run);
+  if (!event) {
+    if (EDGE_ACTIVE_RUN_STATUSES.has(runStatus.toLowerCase())) {
+      return { ...base, status: 'pending', reason: 'worker_result_pending', detection: null };
+    }
+    if (runStatus.toLowerCase() === 'failed' || runStatus.toLowerCase() === 'error') {
+      return { ...base, status: 'error', reason: 'test_run_failed', detection: null };
+    }
+    return { ...base, status: 'not_observed', reason: 'worker_result_not_observed', detection: null };
+  }
+
+  const metadata = asDataItem(event.metadata) ?? {};
+  const source = getString(event, ['source'], '');
+  if (source === 'probe_simulation_stub' || metadata.simulation === 'SAFE_PROBE_SIMULATION') {
+    return { ...base, status: 'inconclusive', reason: 'simulation_not_detection', detection: null };
+  }
+  if (getString(metadata, ['probe_kind'], '') !== 'outside_in_waf_scan') {
+    return { ...base, status: 'inconclusive', reason: 'unexpected_worker_result', detection: null };
+  }
+
+  const externalResult = getString(metadata, ['external_result'], '').toLowerCase();
+  const errorClass = boundedEdgeString(metadata.error_class);
+  if (externalResult === 'error' || externalResult === 'timeout' || errorClass) {
+    return {
+      ...base,
+      status: 'error',
+      reason: 'worker_result_error',
+      detection: null,
+      ...(errorClass ? { error_class: errorClass } : {})
+    };
+  }
+  if (externalResult !== 'blocked' && externalResult !== 'connected') {
+    return { ...base, status: 'inconclusive', reason: 'worker_result_incomplete', detection: null };
+  }
+
+  const edgeSignature = asDataItem(metadata.edge_signature) ?? {};
+  const bestVendor = asDataItem(edgeSignature.best_vendor);
+  const candidate = firstDataItem(metadata.vendor_candidates);
+  const conflictingVendorSignals = edgeSignature.conflicting_vendor_signals === true;
+  // The nested classifier result is authoritative. Legacy posture summaries can be recomputed
+  // without the nested CDN/WAF input during ingestion, so use them only when it is absent.
+  const wafSignal = explicitEdgeBoolean(typeof edgeSignature.waf_present === 'boolean'
+    ? [edgeSignature.waf_present]
+    : [metadata.waf_fingerprint_detected, metadata.waf_detected]);
+  const cdnSignal = explicitEdgeBoolean(typeof edgeSignature.cdn_detected === 'boolean'
+    ? [edgeSignature.cdn_detected]
+    : [metadata.cdn_detected]);
+  const wafMatch = findEdgeProviderMatch(edgeSignature, 'waf');
+  const cdnMatch = findEdgeProviderMatch(edgeSignature, 'cdn');
+  const responseProvider = boundedEdgeString(metadata.detected_vendor)
+    || boundedEdgeString(candidate?.vendor)
+    || boundedEdgeString(bestVendor?.vendor);
+  const responseType = boundedEdgeString(metadata.detected_product)
+    || boundedEdgeString(candidate?.product);
+  const wafDetails = conflictingVendorSignals ? {} : {
+    provider: responseProvider || wafMatch?.provider,
+    type: responseType || (responseProvider ? 'response_fingerprint' : wafMatch?.type)
+  };
+  const cdnDetails = {
+    provider: cdnMatch?.provider,
+    type: cdnMatch?.type
+  };
+  const waf = edgeSignalProjection(wafSignal, wafDetails);
+  const cdn = edgeSignalProjection(cdnSignal, cdnDetails);
+  const trustedPositive = (wafSignal.value && !wafSignal.conflict) || (cdnSignal.value && !cdnSignal.conflict);
+  const completeNoMatch = wafSignal.observed
+    && cdnSignal.observed
+    && !wafSignal.conflict
+    && !cdnSignal.conflict
+    && !wafSignal.value
+    && !cdnSignal.value;
+  const status = trustedPositive ? 'detected' : completeNoMatch ? 'not_detected' : 'inconclusive';
+  const reason = status === 'inconclusive'
+    ? (wafSignal.conflict || cdnSignal.conflict ? 'conflicting_edge_signals' : 'edge_signature_incomplete')
+    : null;
+  const corpusVersion = boundedEdgeString(metadata.edge_signature_corpus_version);
+  const requestsSent = finiteEdgeNumber(metadata.requests_sent);
+
+  return {
+    ...base,
+    status,
+    reason,
+    detection: {
+      waf,
+      cdn,
+      ...(conflictingVendorSignals ? { conflicting_vendor_signals: true } : {}),
+      ...(corpusVersion ? { corpus_version: corpusVersion } : {}),
+      ...(requestsSent !== null ? { requests_sent: requestsSent } : {}),
+      observed_at: boundedEdgeString(event.timestamp ?? event.created_at)
+    }
+  };
+}
+
+function edgeStatusTone(status: string): 'success' | 'warn' | 'danger' | 'info' | 'muted' {
+  if (status === 'detected') return 'success';
+  if (status === 'not_detected') return 'muted';
+  if (status === 'error') return 'danger';
+  if (status === 'inconclusive') return 'warn';
+  if (status === 'pending' || status === 'queued') return 'info';
+  return 'muted';
+}
+
+function edgeStatusSummary(state: DataItem) {
+  const status = getString(state, ['status'], 'inconclusive');
+  if (status === 'pending' || status === 'queued') return 'The governed test run is pending signed-worker evidence.';
+  if (status === 'not_observed') return 'No trusted worker result was observed during the bounded wait. The test-run page remains authoritative.';
+  if (status === 'error') {
+    const errorClass = getString(state, ['error_class'], '');
+    return errorClass ? `The worker reported ${humanizeLabel(errorClass).toLowerCase()}.` : 'The edge detection run could not produce a usable result.';
+  }
+  if (status === 'not_detected') return 'The signed worker completed successfully and explicitly reported no WAF or CDN fingerprint.';
+  if (status === 'detected') return 'The signed worker observed one or more positive edge fingerprints.';
+  return `${humanizeLabel(getString(state, ['reason'], 'edge_signature_incomplete'))}. The available evidence cannot support a detection or no-match result.`;
+}
+
 /** Nested verification envelope (Postgres target payload) when present. */
 function targetVerificationEnvelope(item: DataItem): DataItem | null {
   const nested = item.verification;
@@ -201,18 +447,6 @@ function humanizeLabel(value: string, fallback = '—') {
   if (!normalized) return fallback;
   const label = normalized.replace(/[_-]+/g, ' ');
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
-}
-
-function targetSourceLabel(item: DataItem) {
-  const metadata = item.metadata && typeof item.metadata === 'object' && !Array.isArray(item.metadata)
-    ? item.metadata as DataItem
-    : null;
-  const source = getString(
-    item,
-    ['source', 'declaration_source', 'source_kind'],
-    getString(metadata, ['source', 'connector_id', 'declared_via'], '')
-  );
-  return source ? humanizeLabel(source) : 'Manual declaration';
 }
 
 function isCustomerRunnableCheck(check: DataItem) {
@@ -254,21 +488,20 @@ function formatPolicySafeWindow(policy: DataItem) {
 
 /** Map a DNS challenge record onto a §7.1 verification-chip state. */
 function challengeChipState(challenge: DataItem | null, verified?: boolean) {
-  if (!challenge) return 'unverified';
+  if (!challenge) return verified === true ? 'dns_verified' : 'unverified';
   const state = getString(challenge, ['state'], '').toLowerCase();
-  if (verified === true || state === 'resolved') return 'dns_verified';
-  if (state === 'pending') return 'pending';
+  if (state === 'pending') return isActiveDnsChallenge(challenge) ? 'pending' : 'expired';
+  if (state === 'resolved' || verified === true) return 'dns_verified';
   if (state === 'expired' || state === '—' || !state) return 'unverified';
   return state;
 }
 
 function pickActiveChallenge(list: DataItem[]): DataItem | null {
   if (list.length === 0) return null;
-  const pending = list.find((row) => getString(row, ['state'], '').toLowerCase() === 'pending');
-  if (pending) return pending;
-  return [...list].sort((a, b) =>
+  const newestFirst = [...list].sort((a, b) =>
     String(getString(b, ['issued_at'], '')).localeCompare(String(getString(a, ['issued_at'], '')))
-  )[0] ?? null;
+  );
+  return newestFirst.find((row) => isActiveDnsChallenge(row)) ?? newestFirst[0] ?? null;
 }
 
 function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
@@ -299,13 +532,18 @@ function DetailModal({
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const invokerRef = useRef<HTMLElement | null>(null);
   ensureDetailModalStyles();
 
   useEffect(() => {
+    const activeElement = document.activeElement;
+    invokerRef.current = activeElement instanceof HTMLElement ? activeElement : null;
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
     return () => {
       if (dialog?.open) dialog.close();
+      const invoker = invokerRef.current;
+      if (invoker?.isConnected) invoker.focus({ preventScroll: true });
     };
   }, []);
 
@@ -360,12 +598,17 @@ export function TargetGroupDetailView({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [dnsError, setDnsError] = useState('');
+  const [selectedDnsTargetId, setSelectedDnsTargetId] = useState('');
   const [dnsChallenge, setDnsChallenge] = useState<DataItem | null>(null);
   const [dnsVerifyResult, setDnsVerifyResult] = useState<DataItem | null>(null);
   const [dnsChallenges, setDnsChallenges] = useState<DataItem[]>([]);
+  const dnsChallengesRef = useRef<DataItem[]>([]);
+  const dnsIssueInFlightTargetRef = useRef('');
   const [copiedField, setCopiedField] = useState('');
   const [ladder, setLadder] = useState<DataItem | null>(null);
   const [ladderLoading, setLadderLoading] = useState(true);
+  const [ladderError, setLadderError] = useState('');
   const [connectors, setConnectors] = useState<DataItem[]>([]);
   const [connectorsMeta, setConnectorsMeta] = useState<DataItem | null>(null);
   const [inventoryProvider, setInventoryProvider] = useState<string | null>(null);
@@ -377,11 +620,15 @@ export function TargetGroupDetailView({
   const [showOnboardModal, setShowOnboardModal] = useState(false);
   const [onboardTab, setOnboardTab] = useState<OnboardTab>('fqdn');
   const [selectedPolicyCheckId, setSelectedPolicyCheckId] = useState('');
+  const [ruleQuery, setRuleQuery] = useState('');
+  const [ruleLimit, setRuleLimit] = useState(12);
 
   const onRefreshRef = useRef(onRefresh);
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
 
   const targets = Array.isArray(entity.targets) ? entity.targets as DataItem[] : [];
+  const fqdnTargets = targets.filter((target) => getString(target, ['kind'], '').toLowerCase() === 'fqdn');
+  const selectedDnsTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === selectedDnsTargetId) ?? null;
   const agents = Array.isArray(data.agents) ? data.agents as DataItem[] : [];
   const checks = Array.isArray(data.checks) ? data.checks as DataItem[] : [];
   const policyItems = Array.isArray(data.testPolicies) ? data.testPolicies as DataItem[] : [];
@@ -390,7 +637,7 @@ export function TargetGroupDetailView({
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
   const targetCount = String(entity.target_count ?? targets.length);
   const loaState = getString(entity, ['loa_state', 'loa_status'], getString(entity.loa as DataItem | undefined, ['state'], 'required'));
-  const loaSigned = loaState.toLowerCase() === 'signed';
+  const loaSigned = isSignedLoaState(loaState);
   // KPI row (matches prototype screen-target-group-detail): ownership + validation mode read
   // straight off the target-group API entity (both fields exist in the dev store and Postgres,
   // defaulting to 'unverified'/'agent_assisted').
@@ -403,6 +650,16 @@ export function TargetGroupDetailView({
   const validationMode = getString(entity, ['validation_mode'], 'agent_assisted');
   const ladderSteps = Array.isArray(ladder?.steps) ? ladder.steps as DataItem[] : [];
   const customerRunnableChecks = checks.filter(isCustomerRunnableCheck);
+  const normalizedRuleQuery = ruleQuery.trim().toLowerCase();
+  const filteredRuleChecks = normalizedRuleQuery
+    ? customerRunnableChecks.filter((check) => [
+      getString(check, ['name'], ''),
+      getString(check, ['check_id', 'id'], ''),
+      getString(check, ['description', 'summary'], ''),
+      getString(check, ['vector_family'], '')
+    ].some((value) => value.toLowerCase().includes(normalizedRuleQuery)))
+    : customerRunnableChecks;
+  const visibleRuleChecks = filteredRuleChecks.slice(0, ruleLimit);
   const relatedPolicies = policyItems.filter(
     (policy) => getString(policy, ['target_group_id'], '') === entityId
   );
@@ -412,49 +669,108 @@ export function TargetGroupDetailView({
     if (!checkId) continue;
     policiesByCheckId.set(checkId, [...(policiesByCheckId.get(checkId) ?? []), policy]);
   }
-  const firstRunnableCheckId = getString(customerRunnableChecks[0], ['check_id', 'id'], '');
   const effectiveSelectedPolicyCheckId = customerRunnableChecks.some(
     (check) => getString(check, ['check_id', 'id'], '') === selectedPolicyCheckId
-  ) ? selectedPolicyCheckId : firstRunnableCheckId;
+  ) ? selectedPolicyCheckId : '';
   const selectedPolicyCheck = customerRunnableChecks.find(
     (check) => getString(check, ['check_id', 'id'], '') === effectiveSelectedPolicyCheckId
   ) ?? null;
   const canCreateScheduledPolicy = ['owner', 'admin', 'engineer'].includes(
     String(session.role ?? '').trim().toLowerCase()
   );
+  const wafEdgeDetectionEnabled = data.deploymentFeatures?.waf_posture === true;
 
-  // First customer-runnable check — the concrete check a Run test executes.
-  const safeCheck = customerRunnableChecks[0] ?? null;
-  const safeCheckId = getString(safeCheck, ['check_id', 'id'], '');
   const verifiedTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
+  const loaScopeTargetCount = targets.filter((target) => isLoaScopeEligible(targetVerificationState(target))).length;
 
-  // Active DNS challenge shown in the panel: freshest verify result, then freshly issued, then list.
-  const activeChallenge = (dnsVerifyResult?.challenge as DataItem | undefined) ?? dnsChallenge ?? pickActiveChallenge(dnsChallenges);
-  const dnsVerified = dnsVerifyResult?.verified === true || getString(activeChallenge, ['state'], '').toLowerCase() === 'resolved';
-  const dnsChipState = challengeChipState(activeChallenge, dnsVerified);
+  // Every displayed challenge is bound to the domain the operator explicitly selected.
+  const selectedChallengeHistory = selectedDnsTargetId
+    ? dnsChallenges.filter((challenge) => getString(challenge, ['target_id'], '') === selectedDnsTargetId)
+    : [];
+  const verifiedChallenge = asDataItem(dnsVerifyResult?.challenge);
+  const selectedVerifiedChallenge = verifiedChallenge
+    && getString(verifiedChallenge, ['target_id'], '') === selectedDnsTargetId
+    ? verifiedChallenge
+    : null;
+  const selectedChallengeCandidates = [
+    ...(selectedVerifiedChallenge ? [selectedVerifiedChallenge] : []),
+    ...(dnsChallenge && getString(dnsChallenge, ['target_id'], '') === selectedDnsTargetId ? [dnsChallenge] : []),
+    ...selectedChallengeHistory
+  ];
+  const activeChallenge = selectedDnsTargetId ? pickActiveChallenge(selectedChallengeCandidates) : null;
+  const selectedTargetOwnershipState = selectedDnsTarget
+    ? targetVerificationState(selectedDnsTarget).trim().toLowerCase()
+    : 'unverified';
+  const targetOwnershipDnsVerified = selectedTargetOwnershipState === 'dns_verified';
   const activeChallengeId = getString(activeChallenge, ['id', 'challenge_id'], '');
   const activeChallengeState = getString(activeChallenge, ['state'], '').toLowerCase();
+  const activeChallengeVerifiedByResponse = selectedVerifiedChallenge !== null
+    && getString(selectedVerifiedChallenge, ['id', 'challenge_id'], '') === activeChallengeId
+    && dnsVerifyResult?.verified === true;
+  const challengeResolved = activeChallengeState === 'resolved' || activeChallengeVerifiedByResponse;
+  const dnsOwnershipConfirmed = targetOwnershipDnsVerified || challengeResolved;
+  const dnsChipState = challengeChipState(activeChallenge, challengeResolved);
+  const activeChallengeIsPending = isActiveDnsChallenge(activeChallenge);
+  const dnsIssueBlocked = !selectedDnsTargetId
+    || activeChallengeIsPending
+    || dnsOwnershipConfirmed
+    || busy.startsWith('dns-');
   // §7.2 cycle: surface the transient "checking…" chip while a verify request is in flight.
   const displayedDnsChipState = busy === `dns-verify-${entityId}` && dnsChipState === 'pending' ? 'checking' : dnsChipState;
 
-  const loadDnsChallenges = useCallback(() => {
-    return requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership`)
-      .then((payload) => {
-        const envelope = payload as DataItem;
-        setDnsChallenges(Array.isArray(envelope.items) ? envelope.items as DataItem[] : []);
-      })
-      .catch(() => setDnsChallenges([]));
+  const loadDnsChallenges = useCallback(async (surfaceError = true): Promise<DataItem[]> => {
+    try {
+      const payload = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership`) as DataItem;
+      const items = Array.isArray(payload.items) ? payload.items as DataItem[] : [];
+      dnsChallengesRef.current = items;
+      setDnsChallenges(items);
+      if (surfaceError) setDnsError('');
+      return items;
+    } catch (err) {
+      if (surfaceError) {
+        setDnsError(err instanceof Error ? `Could not refresh DNS challenges — ${err.message}. Previously confirmed challenge state is retained.` : 'Could not refresh DNS challenges. Previously confirmed challenge state is retained.');
+      }
+      return dnsChallengesRef.current;
+    }
   }, [config, session, entityId]);
 
   useEffect(() => {
     let cancelled = false;
     setLadderLoading(true);
+    setLadderError('');
     requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/verification-ladder`)
-      .then((payload) => { if (!cancelled) setLadder(payload as DataItem); })
-      .catch(() => { if (!cancelled) setLadder(null); })
-      .finally(() => { if (!cancelled) setLadderLoading(false); });
+      .then((payload) => {
+        if (!cancelled) setLadder(payload as DataItem);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLadder(null);
+        setLadderError(err instanceof Error
+          ? `Could not load ownership ladder — ${err.message}`
+          : 'Could not load ownership ladder.');
+      })
+      .finally(() => {
+        if (!cancelled) setLadderLoading(false);
+      });
     return () => { cancelled = true; };
-  }, [config, session, entityId]);
+  }, [config, session, entityId, entity.updated_at]);
+
+  useEffect(() => {
+    setSelectedDnsTargetId('');
+    setDnsChallenge(null);
+    setDnsVerifyResult(null);
+    dnsChallengesRef.current = [];
+    setDnsChallenges([]);
+    setDnsError('');
+  }, [entityId]);
+
+  useEffect(() => {
+    if (selectedDnsTargetId && !fqdnTargets.some((target) => getString(target, ['id'], '') === selectedDnsTargetId)) {
+      setSelectedDnsTargetId('');
+      setDnsChallenge(null);
+      setDnsVerifyResult(null);
+    }
+  }, [selectedDnsTargetId, entity.targets]);
 
   useEffect(() => { void loadDnsChallenges(); }, [loadDnsChallenges]);
 
@@ -469,7 +785,7 @@ export function TargetGroupDetailView({
   // §7.2 optional background polling: re-check a pending challenge every 30s until resolved.
   // Disabled under prefers-reduced-motion and capped at 15 minutes.
   useEffect(() => {
-    if (activeChallengeState !== 'pending' || !activeChallengeId) return undefined;
+    if (!activeChallengeIsPending || !activeChallengeId) return undefined;
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
 
@@ -485,18 +801,96 @@ export function TargetGroupDetailView({
       })
         .then(async (payload) => {
           const result = payload as DataItem;
+          const challenge = asDataItem(result.challenge);
+          if (
+            !challenge
+            || getString(challenge, ['id', 'challenge_id'], '') !== activeChallengeId
+            || getString(challenge, ['target_id'], '') !== selectedDnsTargetId
+          ) {
+            window.clearInterval(timer);
+            setDnsError('Automatic DNS recheck returned a challenge for a different target. Polling stopped; use Check now after reviewing the selected domain.');
+            return;
+          }
           setDnsVerifyResult(result);
+          setDnsError('');
           if (result.verified === true) {
             window.clearInterval(timer);
             await loadDnsChallenges();
-            await onRefreshRef.current();
+            try {
+              await onRefreshRef.current();
+            } catch (refreshError) {
+              setDnsError(refreshError instanceof Error
+                ? `DNS ownership is confirmed, but the automatic target-group refresh failed — ${refreshError.message}. The confirmed state is retained.`
+                : 'DNS ownership is confirmed, but the automatic target-group refresh failed. The confirmed state is retained.');
+            }
           }
         })
-        .catch(() => undefined);
+        .catch((err) => {
+          setDnsError(err instanceof Error
+            ? `Automatic DNS recheck failed — ${err.message}`
+            : 'Automatic DNS recheck failed. Use Check now to retry.');
+        });
     }, DNS_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [config, session, entityId, activeChallengeId, activeChallengeState, loadDnsChallenges]);
+  }, [config, session, entityId, selectedDnsTargetId, activeChallengeId, activeChallengeIsPending, loadDnsChallenges]);
+
+  useEffect(() => { setEdgeDetection(null); }, [entityId]);
+
+  // A detection request is a signed-worker test run, not an inline control-plane scan.
+  // Poll the canonical run and event APIs; this page keeps only a display projection.
+  useEffect(() => {
+    if (!['pending', 'queued'].includes(getString(edgeDetection, ['status'], ''))) return undefined;
+    const requestState = edgeDetection as DataItem;
+    const runId = getString(requestState, ['test_run_id'], '');
+    if (!runId) return undefined;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const startedAt = Date.now();
+    const poll = async () => {
+      try {
+        const [run, eventEnvelope] = await Promise.all([
+          requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}`),
+          requestJson(config, session, `/v1/test-runs/${encodeURIComponent(runId)}/events`)
+        ]);
+        if (cancelled) return;
+        const projected = projectEdgeDetectionResult(requestState, run, eventEnvelope);
+        if (!['pending', 'queued'].includes(getString(projected, ['status'], ''))) {
+          setMessage('');
+          setEdgeDetection(projected);
+          return;
+        }
+        if (Date.now() - startedAt >= EDGE_DETECTION_POLL_MAX_MS) {
+          setMessage('');
+          setEdgeDetection({
+            ...projected,
+            status: 'not_observed',
+            reason: 'worker_result_not_observed_before_poll_timeout'
+          });
+          return;
+        }
+      } catch {
+        if (cancelled) return;
+        if (Date.now() - startedAt >= EDGE_DETECTION_POLL_MAX_MS) {
+          setMessage('');
+          setEdgeDetection({
+            ...requestState,
+            status: 'error',
+            reason: 'result_read_failed'
+          });
+          return;
+        }
+      }
+      timer = window.setTimeout(() => { void poll(); }, EDGE_DETECTION_POLL_INTERVAL_MS);
+    };
+
+    timer = window.setTimeout(() => { void poll(); }, 500);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [config, session, edgeDetection]);
 
   async function runAction(label: string, action: () => Promise<void>, success: string) {
     setBusy(label);
@@ -524,24 +918,25 @@ export function TargetGroupDetailView({
     kind: string,
     value: string,
     expectedBehavior: string,
-    metadata?: Record<string, string>
-  ) {
+    metadata?: Record<string, string>,
+    options: { closeModal?: boolean; successMessage?: string } = {}
+  ): Promise<DataItem | null> {
     const trimmed = value.trim();
     if (!trimmed) {
       setError('A target value is required.');
       setMessage('');
-      return;
+      return null;
     }
     // Only send metadata keys that carry a value — keeps the persisted
-    // metadata_json clean (no empty agent_id / notes entries).
+    // metadata_json clean (no empty agent_id / notes / port entries).
     const cleanedMetadata = metadata
-      ? Object.fromEntries(Object.entries(metadata).filter(([, v]) => v && v.trim()))
+      ? Object.fromEntries(Object.entries(metadata).filter(([, entry]) => entry && entry.trim()))
       : undefined;
     setBusy(`add-target-${kind}`);
     setError('');
     setMessage('');
     try {
-      await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
+      const created = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
         method: 'POST',
         body: {
           kind,
@@ -549,12 +944,17 @@ export function TargetGroupDetailView({
           expected_behavior: expectedBehavior || null,
           ...(cleanedMetadata && Object.keys(cleanedMetadata).length > 0 ? { metadata: cleanedMetadata } : {})
         }
-      });
-      setMessage('Target declared.');
-      setShowOnboardModal(false);
+      }) as DataItem;
+      if (!getString(created, ['id'], '')) {
+        throw new Error('The target API did not return the created target ID, so no follow-up action was attempted.');
+      }
+      setMessage(options.successMessage ?? 'Target declared.');
+      if (options.closeModal !== false) setShowOnboardModal(false);
       await onRefresh();
+      return created;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to declare target.');
+      return null;
     } finally {
       setBusy('');
     }
@@ -578,55 +978,171 @@ export function TargetGroupDetailView({
     }, `Target ${targetLabel} removed from the declared scope.`);
   }
 
-  function submitFqdnTarget(event: FormEvent<HTMLFormElement>) {
+  async function submitFqdnTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    void addTarget(
+    const created = await addTarget(
       'fqdn',
       String(form.get('value') ?? ''),
       String(form.get('expected_behavior') ?? ''),
-      { agent_id: String(form.get('agent_id') ?? '') }
+      { agent_id: String(form.get('agent_id') ?? '') },
+      { closeModal: false, successMessage: 'Domain declared. Issuing its target-bound DNS challenge…' }
     );
+    const targetId = getString(created, ['id'], '');
+    if (!targetId) return;
+    setSelectedDnsTargetId(targetId);
+    await issueDnsChallenge(targetId, getString(created, ['value'], targetId));
   }
 
   function submitIpTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const ip = String(form.get('value') ?? '').trim();
-    const port = String(form.get('port') ?? '').trim();
+    const parsedPort = parseOptionalPort(form.get('port'));
+    if (parsedPort.error) {
+      setError(parsedPort.error);
+      setMessage('');
+      return;
+    }
     void addTarget(
       'ip',
-      port ? `${ip}:${port}` : ip,
+      ip,
       String(form.get('expected_behavior') ?? ''),
-      { notes: String(form.get('notes') ?? '') }
+      { port: parsedPort.port, notes: String(form.get('notes') ?? '') }
     );
   }
 
-  async function issueDnsChallenge(targetId?: string) {
-    await runAction(`dns-issue-${entityId}`, async () => {
+  async function issueDnsChallenge(targetId: string, createdTargetLabel = '') {
+    const selectedTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === targetId);
+    const targetLabel = getString(selectedTarget, ['value'], createdTargetLabel || targetId);
+    // The just-created target may not be present in parent props until refresh completes. Its
+    // create response supplies both the ID and label, so chaining remains explicit and safe.
+    if (!targetId || (!selectedTarget && !createdTargetLabel)) {
+      setDnsError('Select a declared domain target before issuing a DNS challenge.');
+      setMessage('');
+      return;
+    }
+
+    const locallyVerifiedChallenge = asDataItem(dnsVerifyResult?.challenge);
+    const knownChallenge = pickActiveChallenge([
+      ...(dnsChallenge && getString(dnsChallenge, ['target_id'], '') === targetId ? [dnsChallenge] : []),
+      ...(locallyVerifiedChallenge && getString(locallyVerifiedChallenge, ['target_id'], '') === targetId ? [locallyVerifiedChallenge] : []),
+      ...dnsChallengesRef.current.filter((challenge) => getString(challenge, ['target_id'], '') === targetId)
+    ]);
+    const targetAlreadyDnsVerified = targetVerificationState(selectedTarget ?? {}).trim().toLowerCase() === 'dns_verified'
+      || getString(knownChallenge, ['state'], '').toLowerCase() === 'resolved'
+      || (dnsVerifyResult?.verified === true && getString(locallyVerifiedChallenge, ['target_id'], '') === targetId);
+
+    setSelectedDnsTargetId(targetId);
+    if (targetAlreadyDnsVerified) {
+      if (knownChallenge) setDnsChallenge(knownChallenge);
+      setDnsError('');
+      setMessage(`DNS ownership is already confirmed for ${targetLabel}. No new challenge was issued.`);
+      return;
+    }
+    if (isActiveDnsChallenge(knownChallenge)) {
+      setDnsChallenge(knownChallenge);
+      setDnsError('');
+      setMessage(`An active challenge already exists for ${targetLabel}. Reuse it or wait until it expires; no replacement was issued.`);
+      return;
+    }
+    if (busy.startsWith('dns-') || dnsIssueInFlightTargetRef.current) return;
+    dnsIssueInFlightTargetRef.current = targetId;
+
+    setBusy(`dns-issue-${entityId}`);
+    setDnsError('');
+    setError('');
+    setMessage('');
+    try {
       const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/issue`, {
         method: 'POST',
-        body: targetId ? { target_id: targetId } : {}
+        body: { target_id: targetId }
       }) as DataItem;
-      const challenge = result.challenge && typeof result.challenge === 'object' ? result.challenge as DataItem : result;
+      const challenge = asDataItem(result.challenge) ?? result;
+      if (getString(challenge, ['target_id'], '') !== targetId) {
+        throw new Error('The DNS service did not bind the challenge to the selected target. Nothing was displayed; contact an operator.');
+      }
       setDnsChallenge(challenge);
       setDnsVerifyResult(null);
       await loadDnsChallenges();
-    }, 'DNS TXT challenge issued. Publish the record, then run Check now.');
+      setMessage(`DNS TXT challenge issued for ${targetLabel}.`);
+      try {
+        await onRefresh();
+      } catch (refreshError) {
+        setDnsError(refreshError instanceof Error
+          ? `The challenge was issued, but the target-group refresh failed — ${refreshError.message}. Keep using the displayed challenge; do not reissue it.`
+          : 'The challenge was issued, but the target-group refresh failed. Keep using the displayed challenge; do not reissue it.');
+      }
+    } catch (err) {
+      if (apiErrorCode(err) === 'challenge_active') {
+        const items = await loadDnsChallenges();
+        const pending = items
+          .filter((challenge) => getString(challenge, ['target_id'], '') === targetId)
+          .find((challenge) => isActiveDnsChallenge(challenge));
+        if (pending) {
+          setDnsChallenge(pending);
+          setDnsVerifyResult(null);
+          setMessage(`An active challenge already exists for ${targetLabel}. Reuse it or wait until it expires; no replacement was issued.`);
+          return;
+        }
+        setDnsError('The DNS service reports an active challenge, but the target-bound challenge could not be loaded. No replacement was issued.');
+      } else {
+        setDnsError(err instanceof Error ? `Could not issue DNS challenge — ${err.message}` : 'Could not issue DNS challenge.');
+      }
+    } finally {
+      if (dnsIssueInFlightTargetRef.current === targetId) dnsIssueInFlightTargetRef.current = '';
+      setBusy('');
+    }
   }
 
-  async function verifyDnsChallenge(explicitChallengeId?: string) {
-    await runAction(`dns-verify-${entityId}`, async () => {
-      const challengeId = explicitChallengeId
-        || getString(activeChallenge, ['id', 'challenge_id'], '')
-        || getString(dnsChallenge, ['id', 'challenge_id'], '');
+  async function verifyDnsChallenge(explicitChallengeId: string, explicitTargetId = selectedDnsTargetId) {
+    const challengeId = explicitChallengeId.trim();
+    const targetId = explicitTargetId.trim();
+    if (!challengeId || !targetId) {
+      setDnsError('Select a domain with an issued challenge before checking DNS.');
+      setMessage('');
+      return;
+    }
+
+    setBusy(`dns-verify-${entityId}`);
+    setDnsError('');
+    setError('');
+    setMessage('');
+    try {
       const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/dns-ownership/verify`, {
         method: 'POST',
-        body: challengeId ? { challenge_id: challengeId } : {}
+        body: { challenge_id: challengeId }
       }) as DataItem;
+      const challenge = asDataItem(result.challenge);
+      if (!challenge || getString(challenge, ['id', 'challenge_id'], '') !== challengeId) {
+        throw new Error('The DNS service returned a different challenge than the one checked.');
+      }
+      if (getString(challenge, ['target_id'], '') !== targetId) {
+        throw new Error('The DNS service returned a challenge for a different target.');
+      }
       setDnsVerifyResult(result);
+      setDnsChallenge(challenge);
       await loadDnsChallenges();
-    }, 'DNS ownership verification checked.');
+      if (result.verified === true) {
+        const verifiedTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === targetId);
+        setMessage(`DNS ownership verified for ${getString(verifiedTarget, ['value'], targetId)}.`);
+        try {
+          await onRefresh();
+        } catch (refreshError) {
+          setDnsError(refreshError instanceof Error
+            ? `DNS ownership is confirmed, but the target-group refresh failed — ${refreshError.message}. The confirmed state is retained.`
+            : 'DNS ownership is confirmed, but the target-group refresh failed. The confirmed state is retained.');
+        }
+      } else if (asDataItem(result.meta)?.timeout === true) {
+        setDnsError('The DNS lookup timed out. The challenge remains pending; retry Check now.');
+      } else {
+        setMessage('The expected TXT value was not observed. The challenge remains pending.');
+      }
+    } catch (err) {
+      setDnsError(err instanceof Error ? `Could not check DNS ownership — ${err.message}` : 'Could not check DNS ownership.');
+    } finally {
+      setBusy('');
+    }
   }
 
   function copyField(field: string, value: string) {
@@ -656,11 +1172,24 @@ export function TargetGroupDetailView({
       window.location.hash = `target-detail?id=${encodeURIComponent(id)}`;
       return;
     }
-    const existing = dnsChallenges.find(
-      (row) => getString(row, ['target_id'], '') === id && getString(row, ['state'], '').toLowerCase() === 'pending'
+    setSelectedDnsTargetId(id);
+    setDnsError('');
+    const existing = pickActiveChallenge(
+      dnsChallengesRef.current.filter((row) => getString(row, ['target_id'], '') === id)
     );
-    if (existing) {
-      void verifyDnsChallenge(getString(existing, ['id'], ''));
+    const alreadyVerified = targetVerificationState(item).trim().toLowerCase() === 'dns_verified'
+      || getString(existing, ['state'], '').toLowerCase() === 'resolved';
+    if (alreadyVerified) {
+      if (existing) {
+        setDnsChallenge(existing);
+        setDnsVerifyResult(getString(existing, ['state'], '').toLowerCase() === 'resolved'
+          ? { verified: true, challenge: existing }
+          : null);
+      }
+      setMessage(`DNS ownership is already confirmed for ${getString(item, ['value'], id)}. No new challenge was issued.`);
+    } else if (isActiveDnsChallenge(existing)) {
+      setDnsChallenge(existing);
+      void verifyDnsChallenge(getString(existing, ['id', 'challenge_id'], ''), id);
     } else {
       void issueDnsChallenge(id);
     }
@@ -689,12 +1218,21 @@ export function TargetGroupDetailView({
       for (const rowId of selectedInventory) {
         const row = inventoryRows.find((item) => getString(item, ['id', 'value'], '') === rowId);
         if (!row) continue;
+        const connector = connectors.find((item) => getString(item, ['id'], '') === inventoryProvider);
+        const importIntegration = getString(connector, ['provider', 'type', 'name'], 'connector_inventory');
+        const resourceRef = getString(row, ['resource_ref', 'id'], rowId);
         await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
           method: 'POST',
           body: {
             kind: getString(row, ['kind'], 'fqdn'),
             value: getString(row, ['value', 'name'], rowId),
-            source: inventoryProvider
+            expected_behavior: getString(row, ['expected_behavior'], '') || null,
+            metadata: {
+              import_source: importIntegration,
+              import_integration: importIntegration,
+              connector_id: inventoryProvider,
+              resource_ref: resourceRef
+            }
           }
         });
       }
@@ -705,42 +1243,78 @@ export function TargetGroupDetailView({
   }
 
   async function runBoundedTest(targetId: string) {
-    if (!safeCheckId) {
-      setError('No customer-runnable check is available to run.');
+    if (!effectiveSelectedPolicyCheckId || !selectedPolicyCheck) {
+      setError('Select a customer-runnable rule in Rules & schedule before starting a bounded run.');
       setMessage('');
       return;
     }
+    const checkName = getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId);
     await runAction(`run-test-${targetId}`, async () => {
       await requestJson(config, session, '/v1/test-runs', {
         method: 'POST',
-        body: { check_id: safeCheckId, target_group_id: entityId, target_id: targetId }
+        body: { check_id: effectiveSelectedPolicyCheckId, target_group_id: entityId, target_id: targetId }
       });
-    }, 'Test run started.');
+    }, `${checkName} run started for the selected target.`);
   }
 
-  // Passive-only edge detection: one bounded GET + DNS metadata through the governed
-  // /v1/waf/edge-detection route. Metadata-only — no validation verdict is implied.
+  // Queue the fixed safe scanner for an already-declared target. The API resolves the
+  // tenant-owned binding inside startTestRun; target values never leave this page as input.
   async function runEdgeDetection(item: DataItem) {
-    const hostname = getString(item, ['value'], '');
     const targetId = getString(item, ['id'], '');
-    if (!hostname) {
-      setError('This target has no declared hostname to detect.');
+    if (!targetId) {
+      setError('This target does not have a valid identifier.');
+      setMessage('');
+      return;
+    }
+    if (!canRunTest(targetVerificationState(item))) {
+      setError('Verify target ownership before starting WAF/CDN detection.');
       setMessage('');
       return;
     }
     setBusy(`edge-detect-${targetId}`);
     setError('');
     setMessage('');
+    setEdgeDetection(null);
     try {
       const payload = await requestJson(config, session, '/v1/waf/edge-detection', {
         method: 'POST',
-        body: { hostname }
+        body: { target_group_id: entityId, target_id: targetId }
       }) as DataItem;
-      setEdgeDetection(payload.detection as DataItem | null);
-      setMessage('');
+      const requestState = asDataItem(payload.detection_request);
+      const runId = getString(requestState, ['test_run_id'], '');
+      if (
+        !requestState
+        || !['pending', 'queued'].includes(getString(requestState, ['status'], ''))
+        || getString(requestState, ['check_id'], '') !== EDGE_DETECTION_CHECK_ID
+        || getString(requestState, ['target_group_id'], '') !== entityId
+        || getString(requestState, ['target_id'], '') !== targetId
+        || !runId
+      ) {
+        throw new Error('Detection was not queued. Try again.');
+      }
+      setEdgeDetection({
+        status: 'pending',
+        reason: 'worker_result_pending',
+        test_run_id: runId,
+        target_group_id: entityId,
+        target_id: targetId,
+        check_id: EDGE_DETECTION_CHECK_ID,
+        run_status: getString(requestState, ['run_status'], 'running'),
+        test_run_url: `/v1/test-runs/${encodeURIComponent(runId)}`,
+        events_url: `/v1/test-runs/${encodeURIComponent(runId)}/events`,
+        detection: null
+      });
+      setMessage('WAF/CDN detection accepted. Signed-worker evidence is pending.');
+      await onRefresh().catch(() => undefined);
     } catch (err) {
-      setEdgeDetection(null);
-      setError(err instanceof Error ? err.message : 'Edge detection failed.');
+      setEdgeDetection({
+        status: 'error',
+        reason: 'request_failed',
+        target_group_id: entityId,
+        target_id: targetId,
+        check_id: EDGE_DETECTION_CHECK_ID
+      });
+      setError(err instanceof Error ? err.message : 'Edge detection could not be queued.');
     } finally {
       setBusy('');
     }
@@ -808,41 +1382,60 @@ export function TargetGroupDetailView({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     if (form.get('attested') !== 'on') {
-      setError('Attestation is required before signing LOA.');
+      setError('Attestation is required before signing the LOA.');
       return;
     }
-    await runAction(`loa-${entityId}`, async () => {
-      await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/loa`, {
+    const requestedScope = form.getAll('scope_ack').map(String).filter(Boolean);
+    const eligibleScopeIds = new Set(
+      targets
+        .filter((target) => isLoaScopeEligible(targetVerificationState(target)))
+        .map((target) => getString(target, ['id'], ''))
+        .filter(Boolean)
+    );
+    const scopeAck = requestedScope.filter((targetId) => eligibleScopeIds.has(targetId));
+    if (scopeAck.length !== requestedScope.length) {
+      setError('The submitted LOA scope includes a target that is no longer eligible. Refresh and review the scope.');
+      return;
+    }
+    if (scopeAck.length === 0) {
+      setError('Select at least one agent-verified target for the authorization scope.');
+      return;
+    }
+
+    setBusy(`loa-${entityId}`);
+    setError('');
+    setMessage('');
+    try {
+      const result = await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/loa`, {
         method: 'POST',
         body: {
           attested: true,
           signer_name: String(form.get('signer_name') ?? '').trim(),
           signer_title: String(form.get('signer_title') ?? '').trim(),
-          signed_date: String(form.get('signed_date') ?? '').trim()
+          signer_email: String(form.get('signer_email') ?? '').trim(),
+          scope_ack: scopeAck,
+          emergency_contact: {
+            name: String(form.get('emergency_name') ?? '').trim(),
+            role: String(form.get('emergency_role') ?? '').trim(),
+            phone: String(form.get('emergency_phone') ?? '').trim(),
+            email: String(form.get('emergency_email') ?? '').trim()
+          }
         }
-      });
-      setShowLoaModal(false);
-    }, 'LOA signed and recorded in custody ledger.');
-  }
-
-  function targetRowNavProps(item: DataItem): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
-    const id = getString(item, ['id'], '');
-    if (!id) return {};
-    const go = () => { window.location.hash = `target-detail?id=${encodeURIComponent(id)}`; };
-    return {
-      role: 'link',
-      tabIndex: 0,
-      className: 'tg-target-row',
-      'aria-label': `Open target ${getString(item, ['value'], id)}`,
-      onClick: go,
-      onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
-        if ((event.target as HTMLElement).closest('button, a, input, select, textarea')) return;
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          go();
-        }
+      }) as DataItem;
+      const signedLoa = asDataItem(result.loa);
+      const custodyArtifactId = getString(result, ['custody_artifact_id'], getString(signedLoa, ['custody_artifact_id'], ''));
+      const custodyDigest = getString(result, ['custody_digest_sha256'], getString(signedLoa, ['custody_digest_sha256'], ''));
+      if (!signedLoa || !isSignedLoaState(getString(signedLoa, ['state'], '')) || !custodyArtifactId || !custodyDigest) {
+        throw new Error('The LOA response did not include a signed state and custody receipt.');
       }
-    };
+      setShowLoaModal(false);
+      setMessage(`LOA signed for ${scopeAck.length} target${scopeAck.length === 1 ? '' : 's'} and sealed as ${custodyArtifactId}.`);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sign the LOA.');
+    } finally {
+      setBusy('');
+    }
   }
 
   const targetColumns: TableColumn<DataItem>[] = [
@@ -853,7 +1446,7 @@ export function TargetGroupDetailView({
         <div className="target-primary">
           <Badge tone="muted" mono>{getString(item, ['kind'], 'target')}</Badge>
           <span className="target-primary-copy">
-            <strong className="mono">{getString(item, ['value'], '—')}</strong>
+            <strong className="mono">{targetDisplayValue(item)}</strong>
             <span className="target-id mono">{getString(item, ['id'], '—')}</span>
           </span>
         </div>
@@ -862,7 +1455,7 @@ export function TargetGroupDetailView({
     {
       key: 'source',
       label: 'Source',
-      render: (item) => <Badge tone="muted" title="Declaration source from target metadata">{targetSourceLabel(item)}</Badge>
+      render: (item) => <Badge tone="muted" title="Declaration provenance from target API metadata">{targetDeclarationProvenanceLabel(item)}</Badge>
     },
     {
       key: 'expected',
@@ -902,31 +1495,46 @@ export function TargetGroupDetailView({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const runnable = canRunTest(targetVerificationState(item));
-        const runReady = runnable && Boolean(safeCheckId);
+        const runReady = runnable && Boolean(effectiveSelectedPolicyCheckId);
         const removing = busy === `remove-target-${id}`;
-        const runTitle = runnable
-          ? (safeCheckId ? 'Run test' : 'No customer-runnable check available')
-          : 'Verify to enable testing';
+        const runTitle = !runnable
+          ? 'Verify ownership to enable testing'
+          : effectiveSelectedPolicyCheckId
+            ? `Run selected rule ${effectiveSelectedPolicyCheckId}`
+            : 'Select a rule in Rules & schedule before running';
         return (
-          <div className="row-end-actions target-actions" onClick={(event) => event.stopPropagation()}>
+          <div className="row-end-actions target-actions">
+            <AnchorButton
+              size="sm"
+              variant="ghost"
+              href={buildDetailHref('target-detail', id)}
+              aria-label={`Open target ${getString(item, ['value'], id)}`}
+            >
+              Open target
+            </AnchorButton>
             <Button
               size="sm"
               variant="ghost"
-              disabled={!id || removing}
-              onClick={(event) => { event.stopPropagation(); verifyTarget(item); }}
+              disabled={!id || removing || busy.startsWith('dns-')}
+              onClick={() => verifyTarget(item)}
             >
               Verify
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!id || busy === `edge-detect-${id}` || removing}
-              title="Detect WAF/CDN edge for this hostname (one passive request, metadata-only)"
-              loading={busy === `edge-detect-${id}`}
-              onClick={(event) => { event.stopPropagation(); void runEdgeDetection(item); }}
-            >
-              Detect edge
-            </Button>
+            {wafEdgeDetectionEnabled ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className={runnable ? undefined : 'is-locked'}
+                disabled={!id || !runnable || busy === `edge-detect-${id}` || removing}
+                title={runnable
+                  ? 'Queue bounded WAF/CDN detection through the signed probe-worker path'
+                  : 'Verify ownership before detecting the edge'}
+                loading={busy === `edge-detect-${id}`}
+                onClick={() => void runEdgeDetection(item)}
+              >
+                Detect edge
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -934,7 +1542,7 @@ export function TargetGroupDetailView({
               disabled={!runReady || busy === `run-test-${id}` || removing}
               title={runTitle}
               loading={busy === `run-test-${id}`}
-              onClick={(event) => { event.stopPropagation(); void runBoundedTest(id); }}
+              onClick={() => void runBoundedTest(id)}
             >
               Run test
             </Button>
@@ -944,7 +1552,7 @@ export function TargetGroupDetailView({
               disabled={!id || busy === `run-test-${id}`}
               loading={removing}
               aria-label={`Remove target ${getString(item, ['value'], id)}`}
-              onClick={(event) => { event.stopPropagation(); void removeTarget(item); }}
+              onClick={() => void removeTarget(item)}
             >
               <Trash2 size={13} /> Remove
             </Button>
@@ -969,7 +1577,7 @@ export function TargetGroupDetailView({
               value={checkId}
               checked={effectiveSelectedPolicyCheckId === checkId}
               onChange={() => setSelectedPolicyCheckId(checkId)}
-              aria-label={`Select ${checkName} for the scheduled policy`}
+              aria-label={`Select ${checkName} for bounded runs and the scheduled policy`}
             />
           </label>
         );
@@ -1055,6 +1663,7 @@ export function TargetGroupDetailView({
   ];
 
   const dnsHistoryColumns: TableColumn<DataItem>[] = [
+    { key: 'target', label: 'Target', render: (item) => <span className="mono">{getString(fqdnTargets.find((target) => getString(target, ['id'], '') === getString(item, ['target_id'], '')), ['value'], getString(item, ['target_id'], '—'))}</span> },
     { key: 'record', label: 'Record name', render: (item) => <span className="mono">{getString(item, ['record_name', 'name'], '—')}</span> },
     {
       key: 'state',
@@ -1065,12 +1674,23 @@ export function TargetGroupDetailView({
     { key: 'checked', label: 'Last checked', render: (item) => (item.last_checked_at ? formatDate(item.last_checked_at) : '—') }
   ];
 
-  const dnsProvenance = dnsVerified
-    ? `TXT record resolved for ${getString(activeChallenge, ['record_name'], 'this domain')} per DNS ownership API`
-    : `DNS ownership challenge ${activeChallengeId || 'pending'} awaiting TXT resolution`;
+  const dnsProvenance = dnsChipState === 'dns_verified'
+    ? `TXT record resolved for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} via challenge ${activeChallengeId}`
+    : activeChallengeId
+      ? `Challenge ${activeChallengeId} is ${humanizeLabel(dnsChipState).toLowerCase()} for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}.${targetOwnershipDnsVerified ? ' Target ownership remains DNS verified from prior target evidence.' : ''}`
+      : targetOwnershipDnsVerified
+        ? `${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} is DNS verified by the target API; challenge details are unavailable`
+        : selectedDnsTargetId
+          ? `No DNS challenge is active for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}`
+          : 'Select a domain target to inspect its DNS ownership state';
+  const edgeDetectionStatus = getString(edgeDetection, ['status'], '');
+  const edgeDetectionRunId = getString(edgeDetection, ['test_run_id'], '');
+  const edgeDetectionEvidence = asDataItem(edgeDetection?.detection);
+  const edgeWaf = asDataItem(edgeDetectionEvidence?.waf);
+  const edgeCdn = asDataItem(edgeDetectionEvidence?.cdn);
 
   return (
-    <div className="content stack-tight tg-detail-view">
+    <div className="content tg-detail-view" aria-busy={loading || undefined}>
       <div className="page-head tg-page-head">
         <div className="tg-page-copy">
           <p className="eyebrow">Declared business service</p>
@@ -1091,6 +1711,7 @@ export function TargetGroupDetailView({
       <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
       {/* (1) Ownership ladder — Declared → DNS verified → Agent verified → User confirmed. */}
+      {ladderError ? <div className="form-banner error" role="alert">{ladderError}</div> : null}
       {ladderLoading ? <PortalLoadingSkeleton rows={1} /> : null}
       {!ladderLoading && ladderSteps.length === 0 ? (
         emptyStateFromApi({
@@ -1150,39 +1771,79 @@ export function TargetGroupDetailView({
           <p className="callout-desc">
             {loaSigned
               ? `${getString(entity.loa as DataItem | undefined, ['signer_name'], getString(entity, ['loa_signer'], '—'))} · ${getString(entity.loa as DataItem | undefined, ['custody_digest_sha256', 'digest'], getString(entity, ['loa_digest'], '—'))} · ${formatDate((entity.loa as DataItem | undefined)?.signed_at ?? entity.loa_signed_at)}`
-              : 'AstraNull will not run checks against these targets until a scoped LOA is signed by an owner. Sign the authorization artifact before SOC-gated checks can execute on this group.'}
+              : 'A scoped LOA records authorization and custody for governed workflows. Bounded safe checks still require verified ownership; SOC-gated execution additionally requires an active LOA.'}
           </p>
         </div>
         <div className="callout-actions">
           {!loaSigned ? (
             <>
               <Button size="sm" onClick={() => setShowLoaModal(true)}>Open target group &amp; sign LOA</Button>
-              <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId}>Review DNS status</Button>
+              <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge(activeChallengeId)} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId}>Review DNS status</Button>
             </>
           ) : null}
         </div>
       </div>
 
-      {/* (4) DNS TXT verification panel — §7.2 issue → publish → check now → dns_verified. */}
+      {/* (4) DNS TXT verification panel — every challenge is explicitly target-bound. */}
       <Card>
         <CardHeader>
           <div>
             <CardTitle>DNS TXT verification</CardTitle>
-            <CardDescription>Prove domain ownership by publishing a one-time <span className="mono">_astranull-challenge</span> TXT record. Required before external-only checks run.</CardDescription>
+            <CardDescription>Select the exact declared FQDN, then publish its one-time <span className="mono">_astranull-challenge</span> TXT record. No first-domain fallback is used.</CardDescription>
+            {selectedDnsTarget ? (
+              <p className="dns-selected-target">Selected target: <strong className="mono">{getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}</strong> · <span className="mono">{selectedDnsTargetId}</span> · Target ownership: <strong>{humanizeLabel(selectedTargetOwnershipState)}</strong></p>
+            ) : null}
           </div>
-          <Button size="sm" onClick={() => void issueDnsChallenge()} loading={busy === `dns-issue-${entityId}`}>
-            {activeChallenge ? 'Re-issue challenge' : 'Issue DNS challenge'}
-          </Button>
+          <div className="dns-target-actions">
+            <label className="dns-target-picker">
+              <span>Domain target</span>
+              <select
+                value={selectedDnsTargetId}
+                disabled={fqdnTargets.length === 0 || busy.startsWith('dns-')}
+                onChange={(event) => {
+                  setSelectedDnsTargetId(event.target.value);
+                  setMessage('');
+                }}
+              >
+                <option value="">Select a declared FQDN</option>
+                {fqdnTargets.map((target) => {
+                  const id = getString(target, ['id'], '');
+                  return <option key={id} value={id}>{getString(target, ['value'], id)}</option>;
+                })}
+              </select>
+            </label>
+            <Button
+              size="sm"
+              onClick={() => void issueDnsChallenge(selectedDnsTargetId)}
+              loading={busy === `dns-issue-${entityId}`}
+              disabled={dnsIssueBlocked}
+              title={activeChallengeIsPending
+                ? 'This target already has an unexpired pending challenge'
+                : dnsOwnershipConfirmed
+                  ? 'DNS ownership is already confirmed for this target'
+                  : busy.startsWith('dns-')
+                    ? 'Wait for the current DNS action to finish'
+                    : 'Issue a challenge for the selected target'}
+            >
+              {activeChallengeIsPending ? 'Challenge active' : dnsOwnershipConfirmed ? 'Ownership confirmed' : activeChallenge ? 'Issue new challenge' : 'Issue DNS challenge'}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
+          {dnsError ? <div className="form-banner error" role="alert">{dnsError}</div> : null}
           {activeChallenge ? (
             <div className="dns-challenge" data-state={dnsChipState}>
               <div className="dns-head">
-                <span className="eyebrow">Publish this TXT record</span>
+                <span className="eyebrow">Publish this target-bound TXT record</span>
                 <span className="spacer" />
                 <VerifyChip state={displayedDnsChipState} provenance={dnsProvenance} />
               </div>
               <div className="dns-fields">
+                <div className="dns-field">
+                  <span className="dns-key">Selected target</span>
+                  <span className="dns-val mono">{getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}</span>
+                  <span className="muted small mono">{selectedDnsTargetId}</span>
+                </div>
                 <div className="dns-field">
                   <span className="dns-key">Record type</span>
                   <span className="dns-val mono">TXT</span>
@@ -1205,9 +1866,13 @@ export function TargetGroupDetailView({
                   <span className="dns-key">TTL</span>
                   <span className="dns-val mono">{getString(activeChallenge, ['ttl_seconds', 'ttl'], '—')} seconds</span>
                 </div>
+                <div className="dns-field">
+                  <span className="dns-key">Expires</span>
+                  <span className="dns-val">{formatDate(activeChallenge.expires_at)}</span>
+                </div>
               </div>
               <div className="dns-footer">
-                <Button size="sm" onClick={() => void verifyDnsChallenge()} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId || dnsChipState === 'dns_verified'}>
+                <Button size="sm" onClick={() => void verifyDnsChallenge(activeChallengeId)} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId || dnsChipState === 'dns_verified'}>
                   Check now
                 </Button>
                 <span className="muted small">
@@ -1217,26 +1882,46 @@ export function TargetGroupDetailView({
                       ? `Last checked ${formatDate(activeChallenge?.last_checked_at)}`
                       : 'Last checked: not yet'}
                 </span>
-                {dnsChipState === 'pending' ? <span className="muted small">Auto-rechecks every 30s until resolved.</span> : null}
+                {activeChallengeIsPending ? <span className="muted small">Auto-rechecks every 30s until resolved or expired.</span> : null}
               </div>
             </div>
+          ) : selectedDnsTarget && dnsOwnershipConfirmed ? (
+            <EmptyState
+              icon={ShieldHalf}
+              title="DNS ownership confirmed"
+              body={`The target API reports ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} as DNS verified. Challenge details are unavailable, so AstraNull will not issue a replacement.`}
+            />
+          ) : selectedDnsTarget ? (
+            <EmptyState
+              icon={Globe}
+              title="No challenge for the selected domain"
+              body={`Issue a challenge for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}. AstraNull will send that exact target ID to the ownership API.`}
+              actionLabel={busy.startsWith('dns-') ? undefined : 'Issue DNS challenge'}
+              onAction={busy.startsWith('dns-') ? undefined : () => void issueDnsChallenge(selectedDnsTargetId)}
+            />
+          ) : fqdnTargets.length > 0 ? (
+            <EmptyState
+              icon={Globe}
+              title="Select a domain target"
+              body="Choose the exact declared FQDN above. AstraNull will not choose the first domain in the group."
+            />
           ) : (
             <EmptyState
               icon={Globe}
-              title="No DNS challenge issued yet"
-              body="Issue a challenge to generate the TXT record for this group's domain target, publish it at your DNS provider, then run Check now to prove ownership."
-              actionLabel="Issue DNS challenge"
-              onAction={() => void issueDnsChallenge()}
+              title="No domain targets declared"
+              body="Add a domain first. Its create response will supply the target ID used to issue the DNS challenge."
+              actionLabel="Add domain"
+              onAction={() => openOnboardModal('fqdn')}
             />
           )}
-          {dnsChallenges.length > 0 ? (
+          {selectedChallengeHistory.length > 0 ? (
             <div className="dns-history">
-              <p className="dns-history-title">Challenge history</p>
+              <p className="dns-history-title">Challenge history for selected target</p>
               <DataTable
                 columns={dnsHistoryColumns}
-                items={dnsChallenges}
+                items={selectedChallengeHistory}
                 getRowId={(item, index) => getString(item, ['id'], String(index))}
-                empty={<span className="muted small">No challenges recorded.</span>}
+                empty={<span className="muted small">No challenges recorded for this target.</span>}
               />
             </div>
           ) : null}
@@ -1255,26 +1940,77 @@ export function TargetGroupDetailView({
         <CardContent>
           {edgeDetection ? (
             <div
-              className="form-banner info"
-              role="status"
-              title={`Edge fingerprint from wafw00f + cdncheck signature corpus v${getString(edgeDetection, ['corpus_version'], '?')} · passive tier · ${getString(edgeDetection, ['requests_sent'], '1')} bounded request(s)`}
+              className={`form-banner ${edgeDetectionStatus === 'error' ? 'error' : 'info'} edge-detection-result`}
+              role={edgeDetectionStatus === 'error' ? 'alert' : 'status'}
             >
-              Edge detection for <strong>{getString(edgeDetection, ['hostname'], '')}</strong>:{' '}
-              {edgeDetection.waf_present === true
-                ? `WAF detected — ${getString(edgeDetection, ['best_vendor', 'name'], getString(edgeDetection, ['best_vendor', 'vendor'], 'unknown vendor'))}`
-                : 'no WAF signature matched'}
-              {' · '}
-              {edgeDetection.cdn_detected === true ? 'CDN detected' : 'no CDN detected'}
-              {edgeDetection.conflicting_vendor_signals === true ? ' · conflicting vendor signals — treat vendor as inconclusive' : ''}
-              . Metadata-only passive scan; this is not a validation verdict.
+              <div className="edge-detection-head">
+                <strong>WAF/CDN detection</strong>
+                <Badge
+                  tone={edgeStatusTone(edgeDetectionStatus)}
+                  title={`${humanizeLabel(edgeDetectionStatus)} from governed test run ${edgeDetectionRunId || 'not created'}`}
+                >
+                  {humanizeLabel(edgeDetectionStatus)}
+                </Badge>
+              </div>
+              <p>{edgeStatusSummary(edgeDetection)}</p>
+              {edgeDetectionEvidence && edgeWaf && edgeCdn ? (
+                <div className="edge-evidence-grid" aria-label="Independent WAF and CDN evidence">
+                  <section className="edge-evidence-card" aria-labelledby="edge-waf-evidence-title">
+                    <div className="edge-evidence-card-head">
+                      <strong id="edge-waf-evidence-title">WAF</strong>
+                      <Badge
+                        tone={edgeStatusTone(getString(edgeWaf, ['status'], 'inconclusive'))}
+                        title={`WAF fingerprint status from signed-worker event for ${edgeDetectionRunId}`}
+                      >
+                        {humanizeLabel(getString(edgeWaf, ['status'], 'inconclusive'))}
+                      </Badge>
+                    </div>
+                    <dl>
+                      {getString(edgeWaf, ['provider'], '') ? <><dt>Provider</dt><dd>{getString(edgeWaf, ['provider'], '')}</dd></> : null}
+                      {getString(edgeWaf, ['type'], '') ? <><dt>Type</dt><dd>{humanizeLabel(getString(edgeWaf, ['type'], ''))}</dd></> : null}
+                    </dl>
+                  </section>
+                  <section className="edge-evidence-card" aria-labelledby="edge-cdn-evidence-title">
+                    <div className="edge-evidence-card-head">
+                      <strong id="edge-cdn-evidence-title">CDN</strong>
+                      <Badge
+                        tone={edgeStatusTone(getString(edgeCdn, ['status'], 'inconclusive'))}
+                        title={`CDN fingerprint status from signed-worker event for ${edgeDetectionRunId}`}
+                      >
+                        {humanizeLabel(getString(edgeCdn, ['status'], 'inconclusive'))}
+                      </Badge>
+                    </div>
+                    <dl>
+                      {getString(edgeCdn, ['provider'], '') ? <><dt>Provider</dt><dd>{getString(edgeCdn, ['provider'], '')}</dd></> : null}
+                      {getString(edgeCdn, ['type'], '') ? <><dt>Type</dt><dd>{humanizeLabel(getString(edgeCdn, ['type'], ''))}</dd></> : null}
+                    </dl>
+                  </section>
+                </div>
+              ) : null}
+              {edgeDetectionEvidence ? (
+                <div className="edge-evidence-meta">
+                  {getString(edgeDetectionEvidence, ['corpus_version'], '') ? <span>Corpus v{getString(edgeDetectionEvidence, ['corpus_version'], '')}</span> : null}
+                  {getString(edgeDetectionEvidence, ['requests_sent'], '') ? <span>{getString(edgeDetectionEvidence, ['requests_sent'], '')} bounded requests</span> : null}
+                  {getString(edgeDetectionEvidence, ['observed_at'], '') ? <span>Observed {formatDate(edgeDetectionEvidence.observed_at)}</span> : null}
+                  {edgeDetectionEvidence.conflicting_vendor_signals === true ? <span>Provider signals conflict; no WAF provider is asserted.</span> : null}
+                </div>
+              ) : null}
+              <p className="muted small">Fingerprint detection is not a protection verdict. A successful no-match does not prove that no edge control exists.</p>
+              {edgeDetectionRunId ? (
+                <p><a href={buildDetailHref('run-detail', edgeDetectionRunId)}>Open test run {edgeDetectionRunId}</a></p>
+              ) : null}
             </div>
           ) : null}
+          <div className="target-run-selection" role="note">
+            <span>Bounded run rule:</span>
+            <strong>{getString(selectedPolicyCheck, ['name', 'check_id'], 'None selected')}</strong>
+            {effectiveSelectedPolicyCheckId ? <span className="mono muted small">{effectiveSelectedPolicyCheckId}</span> : <a href="#target-group-rules">Choose a rule below</a>}
+          </div>
           <DataTable
             columns={targetColumns}
             items={targets}
             className="tg-targets-table"
             getRowId={(item, index) => getString(item, ['id'], String(index))}
-            getRowProps={(item) => targetRowNavProps(item)}
             empty={
               <EmptyState
                 icon={Target}
@@ -1289,11 +2025,12 @@ export function TargetGroupDetailView({
       </Card>
 
       {/* (6) Customer-runnable checks and schedule creation. */}
+      <div id="target-group-rules">
       <Card>
         <CardHeader>
           <div>
             <CardTitle>Rules &amp; schedule</CardTitle>
-            <CardDescription>Select a catalog customer-runnable check, review any hydrated policy binding, and define when it may run.</CardDescription>
+            <CardDescription>Select the exact customer-runnable rule used by per-target bounded runs and any new schedule. Nothing is selected implicitly.</CardDescription>
           </div>
           <Badge tone="info">{customerRunnableChecks.length} customer-runnable {customerRunnableChecks.length === 1 ? 'check' : 'checks'}</Badge>
         </CardHeader>
@@ -1308,9 +2045,23 @@ export function TargetGroupDetailView({
           {data.loadErrors.testPolicies ? (
             <div className="form-banner error" role="alert">Scheduled policy data could not be hydrated — {data.loadErrors.testPolicies}</div>
           ) : null}
+          <div className="rule-discovery">
+            <label className="rule-search">
+              <Search size={16} aria-hidden="true" />
+              <span className="sr-only">Search customer-runnable rules</span>
+              <input
+                value={ruleQuery}
+                onChange={(event) => { setRuleQuery(event.target.value); setRuleLimit(12); }}
+                placeholder="Search rule name, family, or check ID"
+              />
+            </label>
+            <span className="rule-results" role="status">
+              Showing {Math.min(visibleRuleChecks.length, filteredRuleChecks.length)} of {filteredRuleChecks.length} matching rules
+            </span>
+          </div>
           <DataTable
             columns={checkColumns}
-            items={customerRunnableChecks}
+            items={visibleRuleChecks}
             className="rules-table"
             selectedId={effectiveSelectedPolicyCheckId}
             getRowId={(item, index) => getString(item, ['check_id', 'id'], String(index))}
@@ -1323,6 +2074,14 @@ export function TargetGroupDetailView({
               />
             }
           />
+          {filteredRuleChecks.length > visibleRuleChecks.length ? (
+            <div className="rule-more">
+              <span className="rule-results">{filteredRuleChecks.length - visibleRuleChecks.length} more matching rules are available.</span>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setRuleLimit((current) => current + 12)}>
+                Show 12 more
+              </Button>
+            </div>
+          ) : null}
           {!data.loadErrors.testPolicies && relatedPolicies.length === 0 ? (
             <p className="muted small">No existing schedule is present in hydrated policy data for this target group.</p>
           ) : null}
@@ -1360,7 +2119,8 @@ export function TargetGroupDetailView({
                 </label>
                 <label>
                   <span>Safe window day</span>
-                  <select name="safe_window_day" defaultValue="Mon" required>
+                  <select name="safe_window_day" defaultValue="" required>
+                    <option value="" disabled>Choose day</option>
                     <option value="Mon">Monday</option>
                     <option value="Tue">Tuesday</option>
                     <option value="Wed">Wednesday</option>
@@ -1372,11 +2132,11 @@ export function TargetGroupDetailView({
                 </label>
                 <label>
                   <span>Safe window start</span>
-                  <input name="safe_window_start" type="time" defaultValue="02:00" required />
+                  <input name="safe_window_start" type="time" required />
                 </label>
                 <label>
                   <span>Safe window end</span>
-                  <input name="safe_window_end" type="time" defaultValue="04:00" required />
+                  <input name="safe_window_end" type="time" required />
                 </label>
                 <label>
                   <span>Window timezone</span>
@@ -1409,6 +2169,7 @@ export function TargetGroupDetailView({
           )}
         </CardContent>
       </Card>
+      </div>
 
       {/* (7) Findings on this group — Target column deep-links target detail. */}
       <Card>
@@ -1464,7 +2225,7 @@ export function TargetGroupDetailView({
       ) : null}
 
       {showOnboardModal ? (
-        <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)} error={error}>
+        <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)} error={onboardTab === 'fqdn' ? dnsError || error : error}>
           <Tabs
             value={onboardTab}
             options={ONBOARD_TAB_OPTIONS}
@@ -1474,7 +2235,7 @@ export function TargetGroupDetailView({
           {onboardTab === 'fqdn' ? (
             <div className="stack-tight">
               <p className="muted">Prove you control the domain by publishing a one-time TXT record. Verification is required before any probe runs.</p>
-              <form className="product-form" onSubmit={submitFqdnTarget}>
+              <form className="product-form" onSubmit={(event) => void submitFqdnTarget(event)}>
                 <label className="full"><span>Domain</span><input name="value" className="mono" placeholder="origin.example.com" required /></label>
                 <label>
                   <span>Expected behavior</span>
@@ -1495,8 +2256,7 @@ export function TargetGroupDetailView({
                   </select>
                 </label>
                 <div className="form-actions full">
-                  <Button type="submit" loading={busy === 'add-target-fqdn'}>Add target</Button>
-                  <Button type="button" variant="secondary" loading={busy === `dns-issue-${entityId}`} onClick={() => void issueDnsChallenge()}>Issue DNS challenge</Button>
+                  <Button type="submit" loading={busy === 'add-target-fqdn' || busy === `dns-issue-${entityId}`}>Add &amp; issue target-bound challenge</Button>
                 </div>
               </form>
               <div className="dns-challenge">
@@ -1509,12 +2269,13 @@ export function TargetGroupDetailView({
                   />
                 </div>
                 <div className="dns-fields">
+                  <div className="dns-field"><span className="dns-key">Target</span><span className="dns-val mono">{getString(selectedDnsTarget, ['value'], selectedDnsTargetId || '—')}</span></div>
                   <div className="dns-field"><span className="dns-key">Name</span><span className="dns-val mono">{getString(activeChallenge, ['record_name', 'name'], '—')}</span></div>
                   <div className="dns-field"><span className="dns-key">Value</span><span className="dns-val mono">{getString(activeChallenge, ['record_value', 'value'], '—')}</span></div>
                   <div className="dns-field"><span className="dns-key">TTL</span><span className="dns-val mono">{getString(activeChallenge, ['ttl_seconds', 'ttl'], '—')}</span></div>
                 </div>
                 <div className="dns-footer row-actions">
-                  <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId} onClick={() => void verifyDnsChallenge()}>Check now</Button>
+                  <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId} onClick={() => void verifyDnsChallenge(activeChallengeId)}>Check now</Button>
                   {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
                 </div>
               </div>
@@ -1525,7 +2286,7 @@ export function TargetGroupDetailView({
               <p className="muted">You cannot prove control of an IP with DNS. Install an agent inside that instance. When the agent registers, its outbound call reveals the public IP and binds the target to a verified agent.</p>
               <form className="product-form" onSubmit={submitIpTarget}>
                 <label><span>IP address</span><input name="value" className="mono" placeholder="203.0.113.10" required /></label>
-                <label><span>Protocol / port</span><input name="port" className="mono" placeholder="443" /></label>
+                <label><span>Port (optional)</span><input name="port" className="mono" inputMode="numeric" pattern="[0-9]*" placeholder="443" aria-describedby="ip-port-storage-note" /></label>
                 <label>
                   <span>Expected behavior</span>
                   <select name="expected_behavior" defaultValue="absorb_at_origin">
@@ -1535,6 +2296,7 @@ export function TargetGroupDetailView({
                   </select>
                 </label>
                 <label className="full"><span>Notes (optional)</span><input name="notes" placeholder="Origin behind CDN · single-AZ · IPv4 only" /></label>
+                <p id="ip-port-storage-note" className="muted small full">The target remains a canonical bare IP. Port is retained separately as target metadata.</p>
                 <div className="form-actions full">
                   <Button type="submit" loading={busy === 'add-target-ip'}>Register &amp; wait for agent</Button>
                   <AnchorButton size="sm" variant="secondary" href="#agents">Open agent install</AnchorButton>
@@ -1557,7 +2319,7 @@ export function TargetGroupDetailView({
           ) : null}
           {onboardTab === 'cloud' ? (
             <div className="stack-tight">
-              <p className="muted">Connect a provider once, then pick which zones or instances belong in this target group. AstraNull normalizes the inventory and files a DNS or agent challenge for each selection.</p>
+              <p className="muted">Connect a provider once, then pick which zones or instances belong in this target group. AstraNull records connector provenance for each import; ownership verification remains a separate explicit step.</p>
               {connectors.length === 0 ? emptyStateFromApi({ icon: Bot, meta: connectorsMeta }) : null}
               <div className="provider-grid">
                 {connectors.map((connector) => {
@@ -1593,16 +2355,50 @@ export function TargetGroupDetailView({
                   <dt>Customer</dt><dd>{getString(data.tenant, ['name', 'display_name'], session.tenant_id ?? '—')}</dd>
                   <dt>Tenant</dt><dd className="mono">{session.tenant_id ?? getString(data.state, ['tenant_id'], '—')}</dd>
                   <dt>Target group</dt><dd>{getString(entity, ['name'], entityId)}</dd>
+                  <dt>Eligible scope</dt><dd>{loaScopeTargetCount} agent-verified target{loaScopeTargetCount === 1 ? '' : 's'}</dd>
                 </dl>
               </div>
-              <label className="checkrow full"><input type="checkbox" name="attested" /><span>I attest that declared targets in scope are authorized for validation.</span></label>
-              <label><span>Signer name</span><input name="signer_name" required /></label>
+
+              <div className="full">
+                <strong>Authorized target scope</strong>
+                <p className="muted small">Select every target you intend to authorize; none are selected automatically. Only agent-verified or user-confirmed targets are eligible. The server records the submitted IDs as the custody-bound scope snapshot.</p>
+                <div className="loa-scope-list">
+                  {targets.map((target) => {
+                    const id = getString(target, ['id'], '');
+                    const state = targetVerificationState(target);
+                    const eligible = isLoaScopeEligible(state);
+                    return (
+                      <label className="loa-scope-row" data-eligible={String(eligible)} key={id}>
+                        <input type="checkbox" name="scope_ack" value={id} disabled={!eligible} />
+                        <span><strong className="mono">{targetDisplayValue(target)}</strong><span className="muted small mono"> · {id}</span></span>
+                        <Badge tone={eligible ? 'success' : 'muted'}>{humanizeLabel(state)}</Badge>
+                      </label>
+                    );
+                  })}
+                </div>
+                {loaScopeTargetCount === 0 ? <div className="form-banner error" role="alert">No target is eligible for LOA scope yet. Complete agent verification first.</div> : null}
+              </div>
+
+              <label className="checkrow full"><input type="checkbox" name="attested" required /><span>I attest that every selected target is owned or explicitly authorized for AstraNull validation.</span></label>
+              <label><span>Signer name</span><input name="signer_name" autoComplete="name" required /></label>
               <label><span>Signer title</span><input name="signer_title" required /></label>
-              <label><span>Signed date</span><input name="signed_date" type="date" required /></label>
-              <div className="form-actions"><Button type="submit" loading={busy === `loa-${entityId}`}>Sign LOA</Button></div>
+              <label className="full"><span>Signer email</span><input name="signer_email" type="email" autoComplete="email" required /></label>
+
+              <div className="loa-contact-grid full">
+                <label><span>Emergency contact name</span><input name="emergency_name" required /></label>
+                <label><span>Emergency contact role</span><input name="emergency_role" required /></label>
+                <label><span>Emergency contact phone</span><input name="emergency_phone" type="tel" autoComplete="tel" required /></label>
+                <label><span>Emergency contact email</span><input name="emergency_email" type="email" autoComplete="email" required /></label>
+              </div>
+
+              <p className="custody-note full">Signing time is assigned by the server. The response must include a signed LOA, custody artifact ID, SHA-256 custody digest, and audit entry before this UI reports success.</p>
+              <div className="form-actions full">
+                <Button type="submit" loading={busy === `loa-${entityId}`} disabled={loaScopeTargetCount === 0}>Sign &amp; seal LOA</Button>
+              </div>
             </form>
         </DetailModal>
       ) : null}
+
     </div>
   );
 }

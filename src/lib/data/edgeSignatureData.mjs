@@ -1,3539 +1,11118 @@
 /**
  * Vendored edge-fingerprint corpus. GENERATED — do not edit by hand.
- * Regenerate with `node scripts/generate-edge-signatures.mjs`.
+ * Regenerate with `node scripts/generate-edge-signatures.mjs` from the pinned source commits
+ * recorded in EDGE_SIGNATURE_CORPUS_MANIFEST.
  *
- * WAF/CDN vendor signatures ported from wafw00f (3-clause BSD,
- * Copyright (c) 2009-2026 WAFW00F Developers). CDN/WAF address ranges and CNAME suffixes ported
- * from cdncheck (MIT, Copyright (c) 2021 ProjectDiscovery, Inc.). Both notices are retained in
- * docs/attribution/edge-fingerprint-sources.md.
- *
- * `passive` signatures are decidable from one ordinary GET. `block_page` signatures describe
- * what a WAF returns when it rejects a request; AstraNull evaluates them only against block-page
- * evidence an authorized bounded check already captured, and never sends attack payloads to
- * manufacture them.
+ * wafw00f signature data: BSD-3-Clause, Copyright (c) 2009-2026 WAFW00F Developers.
+ * cdncheck range/CNAME data: MIT, Copyright (c) 2021 ProjectDiscovery, Inc.
+ * Complete notices: THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt and
+ * THIRD_PARTY_NOTICES/cdncheck-MIT.txt.
  */
 
-/** @type {Readonly<Record<string, { name: string, signatures: ReadonlyArray<Record<string, unknown>> }>>} */
-export const WAF_VENDOR_SIGNATURES = Object.freeze({
-  "aesecure": {
-    "name": "aeSecure (aeSecure)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "aesecure-code",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "aesecure_denied\\.png",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "airee": {
-    "name": "AireeCDN (Airee)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Airee",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cache",
-        "pattern": "(\\w+\\.)?airee\\.cloud",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "airee\\.cloud",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "airlock": {
-    "name": "Airlock (Phion/Ergon)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^al[_-]?(sess|lb)=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "server detected a syntax error in your request",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "alertlogic": {
-    "name": "Alert Logic (Alert Logic)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>requested url cannot be found",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "we are sorry.{0,10}?but the page you are looking for cannot be found",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "back to previous page",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "proceed to homepage",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "reference id",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "aliyundun": {
-    "name": "AliYunDun (Alibaba Cloud Computing)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "error(s)?\\.aliyun(dun)?\\.(com|net)?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "alicdn\\.com\\/sd\\-base\\/static\\/\\d{1,2}\\.\\d{1,2}\\.\\d{1,2}\\/image\\/405\\.png",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Sorry, your request has been blocked as it may cause potential threats to the server\\'s security.",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 405,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "anquanbao": {
-    "name": "Anquanbao (Anquanbao)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-powered-by-anquanbao",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "aqb_cc/error/",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "anubis": {
-    "name": "Anubis (Techaro)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "-anubis-auth=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "/\\.within\\.website/x/cmd/anubis/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<script id=\"anubis_version\"",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<script id=\"anubis_challenge\"",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Protected by.*Anubis.*From.*Techaro",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "github\\.com/TecharoHQ/anubis",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "anyu": {
-    "name": "AnYu (AnYu Technologies)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "anyu.{0,10}?the green channel",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "your access has been intercepted by anyu",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "approach": {
-    "name": "Approach (Approach)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "approach.{0,10}?web application (firewall|filtering)",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "approach.{0,10}?infrastructure team",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "armor": {
-    "name": "Armor Defense (Armor)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "blocked by website protection from armor",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "please create an armor support ticket",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "arvancloud": {
-    "name": "ArvanCloud (ArvanCloud)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ArvanCloud",
-        "tier": "passive"
-      }
-    ]
-  },
-  "aspa": {
-    "name": "ASPA Firewall (ASPA Engineering Co.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ASPA[\\-_]?WAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "aspa-cache-status",
-        "pattern": ".+?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "aspnetgen": {
-    "name": "ASP.NET Generic (Microsoft)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "iis (\\d+.)+?detailed error",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "potentially dangerous request querystring",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "application error from being viewed remotely (for security reasons)?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "An application error occurred on the server",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "astra": {
-    "name": "Astra (Czar Securities)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^cz_astra_csrf_cookie",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "astrawebsecurity\\.freshdesk\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.getastra\\.com/assets/images",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "awswaf": {
-    "name": "AWS Elastic Load Balancer (Amazon)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-amz-id",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-amz-request-id",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^aws.?alb=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "aws.?elb",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "x-blocked-by-waf",
-        "pattern": "Blocked_by_custom_response_for_AWSManagedRules.*",
-        "tier": "passive"
-      }
-    ]
-  },
-  "azion": {
-    "name": "Azion Edge Firewall (Azion)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-azion-edge-pop",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-azion-request-id",
-        "pattern": ".+?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "baffinbay": {
-    "name": "Baffin Bay (Mastercard)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "baffin-bay-inlet",
-        "tier": "passive"
-      }
-    ]
-  },
-  "baidu": {
-    "name": "Yunjiasu (Baidu Cloud Computing)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "yunjiasu.*",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "href=\"/.well-known/yunjiasu-cgi/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "document.cookie='yjs_use_ob=0",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "barikode": {
-    "name": "Barikode (Ethic Ninja)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<strong>barikode<.strong>",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "barracuda": {
-    "name": "Barracuda (Barracuda Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^barra_counter_session=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^BNI__BARRACUDA_LB_COOKIE=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^BNI_persistence=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^BN[IE]S_.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Barracuda.Networks",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "bekchy": {
-    "name": "Bekchy (Faydata Technologies Inc.)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Bekchy.{0,10}?Access Denied",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "bekchy\\.com/report",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "beluga": {
-    "name": "Beluga CDN (Beluga)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Beluga",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^beluga_request_trail=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "binarysec": {
-    "name": "BinarySec (BinarySec)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "BinarySec",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-binarysec-via",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-binarysec-nocache",
-        "pattern": ".+",
-        "tier": "passive"
-      }
-    ]
-  },
-  "bitninja": {
-    "name": "BitNinja (BitNinja)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Security check by BitNinja",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Visitor anti-robot validation",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "blockdos": {
-    "name": "BlockDoS (BlockDoS)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "blockdos\\.net",
-        "tier": "passive"
-      }
-    ]
-  },
-  "bluedon": {
-    "name": "Bluedon (Bluedon IST)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "BDWAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "bluedon web application firewall",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "bulletproof": {
-    "name": "BulletProof Security Pro (AITpro Security)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "\\+?bpsMessage",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "403 Forbidden Error Page",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "If you arrived here due to a search",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cachefly": {
-    "name": "CacheFly CDN (CacheFly)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "bestcdn",
-        "pattern": "Cachefly",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^cfly_req.*=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "cachewall": {
-    "name": "CacheWall (Varnish)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Varnish",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-varnish",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cachewall-action",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cachewall-reason",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "security by cachewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "403 naughty.{0,10}?not nice!",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "varnish cache server",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cdnns": {
-    "name": "CdnNS Application Gateway (CdnNs/WdidcNet)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "cdnnswaf application gateway",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cerber": {
-    "name": "WP Cerber Security (Cerber Tech)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "your request looks suspicious or similar to automated",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "our server stopped processing your request",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "We.re sorry.{0,10}?you are not allowed to proceed",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "requests from spam posting software",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>403 Access Forbidden",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "chinacache": {
-    "name": "ChinaCache Load Balancer (ChinaCache)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "powered-by-chinacache",
-        "pattern": ".+",
-        "tier": "passive"
-      }
-    ]
-  },
-  "chuangyu": {
-    "name": "Chuang Yu Shield (Yunaq)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "www\\.365cyd\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "help\\.365cyd\\.com/cyd\\-error\\-help.html\\?code=403",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "ciscoacexml": {
-    "name": "ACE XML Gateway (Cisco)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ACE XML Gateway",
-        "tier": "passive"
-      }
-    ]
-  },
-  "cloudbric": {
-    "name": "Cloudbric (Penta Security)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<title>Cloudbric.{0,5}?ERROR!",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Your request was blocked by Cloudbric",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "please contact Cloudbric Support",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "cloudbric\\.zendesk\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Cloudbric Help Center",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "malformed request syntax.{0,4}?invalid request message framing.{0,4}?or deceptive request routing",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cloudflare": {
-    "name": "Cloudflare (Cloudflare Inc.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "cloudflare",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "cloudflare[-_]nginx",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "cf-ray",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "__cfduid",
-        "tier": "passive"
-      }
-    ]
-  },
-  "cloudfloordns": {
-    "name": "Cloudfloor (Cloudfloor DNS)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "CloudfloorDNS(.WAF)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>CloudfloorDNS.{0,6}?Web Application Firewall Error",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.cloudfloordns\\.com/contact",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cloudfront": {
-    "name": "Cloudfront (Amazon)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Cloudfront",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "via",
-        "pattern": "([0-9\\.]+?)? \\w+?\\.cloudfront\\.net \\(Cloudfront\\)",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-amz-cf-id",
-        "pattern": ".+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "x-cache",
-        "pattern": "Error from Cloudfront",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Generated by cloudfront \\(CloudFront\\)",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "cloudprotector": {
-    "name": "Cloud Protector (Rohde & Schwarz CyberSecurity)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Cloud Protector.*?by Rohde.{3,8}?Schwarz Cybersecurity",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<a href='https?:\\/\\/(?:www\\.)?cloudprotector\\.com\\/'>R.{1,6}?S.Cloud Protector",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "comodo": {
-    "name": "Comodo cWatch (Comodo CyberSecurity)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Protected by COMODO WAF(.+)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "crawlprotect": {
-    "name": "CrawlProtect (Jean-Denis Brun)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^crawlprotecttag=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>crawlprotect",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "this site is protected by crawlprotect",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "ddosguard": {
-    "name": "DDoS-GUARD (DDOS-GUARD CORP.)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^__ddg1.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^__ddg2.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^__ddgid.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^__ddgmark.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ddos-guard",
-        "tier": "passive"
-      }
-    ]
-  },
-  "denyall": {
-    "name": "DenyALL (Rohde & Schwarz CyberSecurity)",
-    "signatures": [
-      {
-        "signal": "status",
-        "status": 200,
-        "tier": "block_page"
-      },
-      {
-        "signal": "reason",
-        "value": "Condition Intercepted",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "distil": {
-    "name": "Distil (Distil Networks)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "cdn\\.distilnetworks\\.com/images/anomaly\\.detected\\.png",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "distilCaptchaForm",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "distilCallbackGuard",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "dosarrest": {
-    "name": "DOSarrest (DOSarrest Internet Security)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-dis-request-id",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "DOSarrest(.*)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "dotdefender": {
-    "name": "DotDefender (Applicure Technologies)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-dotdefender-denied",
-        "pattern": ".+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "dotdefender blocked your request",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Applicure is the leading provider of web application security",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "dynamicweb": {
-    "name": "DynamicWeb Injection Check (DynamicWeb)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-403-status-by",
-        "pattern": "dw.inj.check",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "by dynamic check(.{0,10}?module)?",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "edgecast": {
-    "name": "Edgecast (Verizon Digital Media)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "^ECD(.+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "^ECS(.*)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "eisoo": {
-    "name": "Eisoo Cloud Firewall (Eisoo)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "EisooWAF(\\-AZURE)?/?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<link.{0,10}?href=\\\"/eisoo\\-firewall\\-block\\.css",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.eisoo\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "&copy; \\d{4} Eisoo Inc",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "envoy": {
-    "name": "Envoy (EnvoyProxy)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "envoy",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-upstream-service-time",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-downstream-service-cluster",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-downstream-service-node",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-external-address",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-force-trace",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-internal",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-original-dst-host",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-original-path",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-envoy-local-overloaded",
-        "pattern": ".+",
-        "tier": "passive"
-      }
-    ]
-  },
-  "expressionengine": {
-    "name": "Expression Engine (EllisLab)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^exp_track.+?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^exp_last_.+?=",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "invalid get data",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "f5bigipapm": {
-    "name": "BIG-IP AP Manager (F5 Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^LastMRH_Session",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^MRHSession",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^MRHSession",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Big([-_])?IP",
-        "tier": "block_page"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^F5_fullWT",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^F5_fullWT",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^F5_HT_shrinked",
-        "tier": "passive"
-      }
-    ]
-  },
-  "f5bigipasm": {
-    "name": "BIG-IP AppSec Manager (F5 Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "TS[a-fA-F0-9]{8}=.+",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "TS[a-fA-F0-9]{6}=.+",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "the requested url was rejected",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "please consult with your administrator",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "f5bigipltm": {
-    "name": "BIG-IP Local Traffic Manager (F5 Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^bigipserver",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cnection",
-        "pattern": "close",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "f5firepass": {
-    "name": "FirePass (F5 Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^VHOST",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "location",
-        "pattern": "\\/my\\.logon\\.php3",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^F5_fire.+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^F5_passid_shrinked",
-        "tier": "passive"
-      }
-    ]
-  },
-  "f5trafficshield": {
-    "name": "Trafficshield (F5 Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^ASINFO=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "F5-TrafficShield",
-        "tier": "passive"
-      }
-    ]
-  },
-  "fastly": {
-    "name": "Fastly (Fastly CDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-fastly-request-id",
-        "pattern": "\\w+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-served-by",
-        "pattern": "^cache-[a-z]{3}\\d+-[A-Z]{3}",
-        "tier": "passive"
-      }
-    ]
-  },
-  "fortigate": {
-    "name": "FortiGate (Fortinet)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "//globalurl.fortinet.net",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "FortiGate Application Control",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Web Application Firewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Event ID",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "//globalurl.fortinet.net",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "fortiguard": {
-    "name": "FortiGuard (Fortinet)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "FortiGuard Intrusion Prevention",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "//globalurl.fortinet.net",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "fortiweb": {
-    "name": "FortiWeb (Fortinet)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^FORTIWAFSID=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": ".fgd_icon",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "fgd_icon",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "web.page.blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "url",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "attack.id",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "message.id",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "client.ip",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "frontdoor": {
-    "name": "Azure Front Door (Microsoft)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-azure-ref",
-        "pattern": ".+?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "gcparmor": {
-    "name": "Google Cloud App Armor (Google Cloud)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "via",
-        "pattern": "1.1 google",
-        "tier": "passive"
-      }
-    ]
-  },
-  "godaddy": {
-    "name": "GoDaddy Website Protection (GoDaddy)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "GoDaddy (security|website firewall)",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "greywizard": {
-    "name": "Greywizard (Grey Wizard)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "greywizard",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>Grey Wizard",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "contact the website owner or Grey Wizard",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "We.ve detected attempted attack or non standard traffic from your ip address",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "huaweicloud": {
-    "name": "Huawei Cloud Firewall (Huawei)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^HWWAFSESID=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "HuaweiCloudWAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "hwclouds\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "hws_security@",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "hyperguard": {
-    "name": "HyperGuard (Art of Defense)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^WODSESSION=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "ibmdatapower": {
-    "name": "DataPower (IBM)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-backside-transport",
-        "pattern": "(OK|FAIL)",
-        "tier": "passive"
-      }
-    ]
-  },
-  "imunify360": {
-    "name": "Imunify360 (CloudLinux)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "imunify360.{0,10}?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "protected.by.{0,10}?imunify360",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "powered.by.{0,10}?imunify360",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "imunify360.preloader",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "incapsula": {
-    "name": "Incapsula (Imperva Inc.)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^incap_ses.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^visid_incap.*?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "incapsula incident id",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "powered by incapsula",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/_Incapsula_Resource",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "indusguard": {
-    "name": "IndusGuard (Indusface)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "IF_WAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "This website is secured against online attacks. Your request was blocked",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "instartdx": {
-    "name": "Instart DX (Instart Logic)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-instart-request-id",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-instart-cache",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-instart-wl",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "the requested url was rejected",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "please consult with your administrator",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "your support id is",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "isaserver": {
-    "name": "ISA Server (Microsoft)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "The.{0,10}?(isa.)?server.{0,10}?denied the specified uniform resource locator \\(url\\)",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "janusec": {
-    "name": "Janusec Application Gateway (Janusec)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "janusec application gateway",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "jiasule": {
-    "name": "Jiasule (Jiasule)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "jiasule\\-waf",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^jsl_tracking(.+)?=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "__jsluid=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "notice\\-jiasule",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "static\\.jiasule\\.com",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "keycdn": {
-    "name": "KeyCDN (KeyCDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "KeyCDN",
-        "tier": "passive"
-      }
-    ]
-  },
-  "knownsec": {
-    "name": "KS-WAF (KnownSec)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "/ks[-_]waf[-_]error\\.png",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "kona": {
-    "name": "Kona SiteDefender (Akamai)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "AkamaiGHost",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "AkamaiGHost",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "limelight": {
-    "name": "LimeLight CDN (LimeLight)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^limelight",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^l[mg]_sessid=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "link11": {
-    "name": "Link11 WAAP (Link11)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "rhino-core-shield",
-        "tier": "passive"
-      }
-    ]
-  },
-  "litespeed": {
-    "name": "LiteSpeed (LiteSpeed Technologies)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "LiteSpeed",
-        "tier": "passive"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Proudly powered by litespeed web server",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.litespeedtech\\.com/error\\-page",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "malcare": {
-    "name": "Malcare (Inactiv)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "firewall.{0,15}?powered.by.{0,15}?malcare.{0,15}?pro",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "blocked because of malicious activities",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "maxcdn": {
-    "name": "MaxCDN (MaxCDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-cdn",
-        "pattern": "maxcdn",
-        "tier": "passive"
-      }
-    ]
-  },
-  "missioncontrol": {
-    "name": "Mission Control Shield (Mission Control)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Mission Control Application Shield",
-        "tier": "passive"
-      }
-    ]
-  },
-  "modsecurity": {
-    "name": "ModSecurity (SpiderLabs)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "(mod_security|Mod_Security|NOYB)",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "This error was generated by Mod.?Security",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "rules of the mod.security.module",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "mod.security.rules triggered",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Protected by Mod.?Security",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/modsecurity[\\-_]errorpage/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "modsecurity iis",
-        "tier": "block_page"
-      },
-      {
-        "signal": "reason",
-        "value": "ModSecurity Action",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      },
-      {
-        "signal": "reason",
-        "value": "ModSecurity Action",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 406,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "naxsi": {
-    "name": "NAXSI (NBS Systems)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-data-origin",
-        "pattern": "^naxsi(.+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "naxsi(.+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "blocked by naxsi",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "naxsi blocked information",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "nemesida": {
-    "name": "Nemesida (PentestIt)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "@?nemesida(\\-security)?\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Suspicious activity detected.{0,10}?Access to the site is blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "nwaf@",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 222,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "netcontinuum": {
-    "name": "NetContinuum (Barracuda Networks)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^NCI__SessionId=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "netscaler": {
-    "name": "NetScaler AppFirewall (Citrix Systems)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "via",
-        "pattern": "NS\\-CACHE",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^(ns_af=|citrix_ns_id|NSC_)",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "(NS Transaction|AppFW Session) id",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Violation Category.{0,5}?APPFW_",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Citrix\\|NetScaler",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "cneonction",
-        "pattern": "^(keep alive|close)",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "nncoection",
-        "pattern": "^(keep alive|close)",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "nevisproxy": {
-    "name": "NevisProxy (AdNovum)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^Navajo",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^NP_ID",
-        "tier": "passive"
-      }
-    ]
-  },
-  "newdefend": {
-    "name": "Newdefend (NewDefend)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Newdefend",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.newdefend\\.com/feedback",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/nd\\-block/",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "nexusguard": {
-    "name": "NexusGuard Firewall (NexusGuard)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Powered by Nexusguard",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "nexusguard\\.com/wafpage/.+#\\d{3};",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "ninja": {
-    "name": "NinjaFirewall (NinTechNet)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<title>NinjaFirewall.{0,10}?\\d{3}.forbidden",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "For security reasons?.{0,10}?it was blocked and logged",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "nsfocus": {
-    "name": "NSFocus (NSFocus Global Inc.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "NSFocus",
-        "tier": "passive"
-      }
-    ]
-  },
-  "nullddos": {
-    "name": "NullDDoS Protection (NullDDoS)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "NullDDoS(.System)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "onmessage": {
-    "name": "OnMessage Shield (BlackBaud)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-engine",
-        "pattern": "onMessage Shield",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Blackbaud K\\-12 conducts routine maintenance",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "onMessage SHEILD",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "maintenance\\.blackbaud\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "status\\.blackbaud\\.com",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "openresty": {
-    "name": "Open-Resty Lua Nginx (FLOSS)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "^openresty/[0-9\\.]+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "openresty/[0-9\\.]+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 406,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "oraclecloud": {
-    "name": "Oracle Cloud (Oracle)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<title>fw_error_www",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "src=\\\"/oralogo_small\\.gif\\\"",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.oracleimg\\.com/us/assets/metrics/ora_ocom\\.js",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "paloalto": {
-    "name": "Palo Alto Next Gen Firewall (Palo Alto Networks)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Download of virus.spyware blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Palo Alto Next Generation Security Platform",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "panyun360": {
-    "name": "360PanYun (360 Technologies)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "panyun",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-panyun-request-id",
-        "pattern": ".+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "x-panyun-error-reason",
-        "pattern": ".+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "x-panyun-error-step",
-        "pattern": ".+?",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "pentawaf": {
-    "name": "PentaWAF (Global Network Services)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "PentaWaf(/[0-9\\.]+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Penta.?Waf/[0-9\\.]+?.server",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "perimeterx": {
-    "name": "PerimeterX (PerimeterX)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "www\\.perimeterx\\.(com|net)/whywasiblocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "client\\.perimeterx\\.(net|com)",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "denied because we believe you are using automation tools",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "pksec": {
-    "name": "pkSecurity IDS (pkSec)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "pk.?Security.?Module",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Security.Alert",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "As this could be a potential hack attack",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "A safety critical (call|request) was (detected|discovered) and blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "maximum number of reloads per minute and prevented access",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "powercdn": {
-    "name": "PowerCDN (PowerCDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "via",
-        "pattern": "(.*)?powercdn.com(.*)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cache",
-        "pattern": "(.*)?powercdn.com(.*)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cdn",
-        "pattern": "PowerCDN",
-        "tier": "passive"
-      }
-    ]
-  },
-  "profense": {
-    "name": "Profense (ArmorLogic)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Profense",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^PLBSID=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "ptaf": {
-    "name": "PT Application Firewall (Positive Technologies)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<h1.{0,10}?Forbidden",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<pre>Request.ID:.{0,10}?\\d{4}\\-(\\d{2})+.{0,35}?pre>",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "puhui": {
-    "name": "Puhui (Puhui)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Puhui[\\-_]?WAF",
-        "tier": "passive"
-      }
-    ]
-  },
-  "qcloud": {
-    "name": "Qcloud (Tencent Cloud)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "腾讯云Web应用防火墙",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "qiniu": {
-    "name": "Qiniu (Qiniu CDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-qiniu-cdn",
-        "pattern": "\\d+?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "qrator": {
-    "name": "Qrator (Qrator)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "QRATOR",
-        "tier": "passive"
-      }
-    ]
-  },
-  "radware": {
-    "name": "AppWall (Radware)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "CloudWebSec\\.radware\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "header",
-        "header": "x-sl-compstate",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "because we have detected unauthorized activity",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>Unauthorized Request Blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "if you believe that there has been some mistake",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "\\?Subject=Security Page.{0,10}?Case Number",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "reblaze": {
-    "name": "Reblaze (Reblaze)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^rbzid",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Reblaze Secure Web Gateway",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "current session has been terminated",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "do not hesitate to contact us",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "access denied \\(\\d{3}\\)",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "rsfirewall": {
-    "name": "RSFirewall (RSJoomla!)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "com_rsfirewall_(\\d{3}_forbidden|event)?",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "rvmode": {
-    "name": "RequestValidationMode (Microsoft)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Request Validation has detected a potentially dangerous client input",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "ASP\\.NET has detected data in the request",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "HttpRequestValidationException",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "sabre": {
-    "name": "Sabre Firewall (Sabre)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "dxsupport\\.sabre\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>Application Firewall Error",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "add some important details to the email for us to investigate",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "safe3": {
-    "name": "Safe3 Web Firewall (Safe3)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Safe3 Web Firewall",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-powered-by",
-        "pattern": "Safe3WAF/[\\.0-9]+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Safe3waf/[0-9\\.]+?",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "safedog": {
-    "name": "Safedog (SafeDog)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^safedog\\-flow\\-item=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Safedog",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "safedogsite/broswer_logo\\.jpg",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "404\\.safedog\\.cn/sitedog_stat.html",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "404\\.safedog\\.cn/images/safedogsite/head\\.png",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "safeline": {
-    "name": "Safeline (Chaitin Tech.)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "safeline|<!\\-\\-\\sevent id:",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "scutum": {
-    "name": "Scutum (Secure Sky Technology Inc.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Scutum",
-        "tier": "passive"
-      }
-    ]
-  },
-  "secking": {
-    "name": "SecKing (SecKing)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "secking(.?waf)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "secupress": {
-    "name": "SecuPress WP Security (SecuPress)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>SecuPress",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "secureentry": {
-    "name": "Secure Entry (United Security Providers)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Secure Entry Server",
-        "tier": "passive"
-      }
-    ]
-  },
-  "secureiis": {
-    "name": "eEye SecureIIS (BeyondTrust)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "SecureIIS is an internet security application",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Download SecureIIS Personal Edition",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "https?://www\\.eeye\\.com/Secure\\-?IIS",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "securesphere": {
-    "name": "SecureSphere (Imperva Inc.)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<(title|h2)>Error",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "The incident ID is",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "This page can't be displayed",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Contact support for additional information",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "senginx": {
-    "name": "SEnginx (Neusoft)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "SENGINX\\-ROBOT\\-MITIGATION",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "serverdefender": {
-    "name": "ServerDefender VP (Port80 Software)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-pint",
-        "pattern": "p(ort\\-)?80",
-        "tier": "passive"
-      }
-    ]
-  },
-  "shadowd": {
-    "name": "Shadow Daemon (Zecure)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<h\\d{1}>\\d{3}.forbidden<.h\\d{1}>",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "request forbidden by administrative rules",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "shieldon": {
-    "name": "Shieldon Firewall (Shieldon.io)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "[xx]-[pp]rotected-[bb]y",
-        "pattern": "shieldon.io",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Please solve CAPTCHA",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "shieldon_captcha",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Unusual behavior detected",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "status-user-info",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Access denied",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "The IP address you are using has been blocked.",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "status-user-info",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Please line up",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "This page is limiting the number of people online. Please wait a moment.",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "shieldsecurity": {
-    "name": "Shield Security (One Dollar Plugin)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "You were blocked by the Shield",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "remaining transgression\\(s\\) against this site",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Something in the URL.{0,5}?Form or Cookie data wasn\\'t appropriate",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "siteground": {
-    "name": "SiteGround (SiteGround)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Our system thinks you might be a robot!",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "access is restricted due to a security rule",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "siteguard": {
-    "name": "SiteGuard (EG Secure Solutions Inc.)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Powered by SiteGuard",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "The server refuse to browse the page",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "sitelock": {
-    "name": "Sitelock (TrueShield)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "SiteLock will remember you",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Sitelock is leader in Business Website Security Services",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "sitelock[_\\-]shield([_\\-]logo|[\\-_]badge)?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "SiteLock incident ID",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "sonicwall": {
-    "name": "SonicWall (Dell)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "SonicWALL",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>Web Site Blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "\\+?nsa_banner",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "sophos": {
-    "name": "UTM Web Protection (Sophos)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "www\\.sophos\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Powered by.?(Sophos)? UTM Web Protection",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>Access to the requested URL was blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Access to the requested URL was blocked",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "incident was logged with the following log identifier",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Inbound Anomaly Score exceeded",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Your cache administrator is",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "squarespace": {
-    "name": "Squarespace (Squarespace)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Squarespace",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^SS_ANALYTICS_ID=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^SS_MATTR=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^SS_MID=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "SS_CVT=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "status\\.squarespace\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "BRICK\\-\\d{2}",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "squidproxy": {
-    "name": "SquidProxy IDS (SquidProxy)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "squid(/[0-9\\.]+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Access control configuration prevents your request",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "stackpath": {
-    "name": "StackPath (StackPath)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<title>StackPath[^<]+</title>",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Protected by <a href=\"https?:\\/\\/(?:www\\.)?stackpath\\.com\\/\"[^>]+>StackPath",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "is using a security service for protection against online attacks",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "An action has triggered the service and blocked your request",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "sucuri": {
-    "name": "Sucuri CloudProxy (Sucuri Inc.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-sucuri-id",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-sucuri-cache",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Sucuri(\\-Cloudproxy)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-sucuri-block",
-        "pattern": ".+?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Access Denied.{0,6}?Sucuri Website Firewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<title>Sucuri WebSite Firewall.{0,6}?(CloudProxy)?.{0,6}?Access Denied",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "sucuri\\.net/privacy\\-policy",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "cdn\\.sucuri\\.net/sucuri[-_]firewall[-_]block\\.css",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "cloudproxy@sucuri\\.net",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "tencent": {
-    "name": "Tencent Cloud Firewall (Tencent Technologies)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "waf\\.tencent\\-?cloud\\.com/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "window\\.location\\.href.{1,3}?https?://waf.tencent(?:-?cloud)?.com/(?:403|501)page\\.html",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "teros": {
-    "name": "Teros (Citrix Systems)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^st8id=",
-        "tier": "passive"
-      }
-    ]
-  },
-  "transip": {
-    "name": "TransIP Web Firewall (TransIP)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-transip-backend",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-transip-balancer",
-        "pattern": ".+",
-        "tier": "passive"
-      }
-    ]
-  },
-  "uewaf": {
-    "name": "UEWaf (UCloud)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "uewaf(/[0-9\\.]+)?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "/uewaf_deny_pages/default/img/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "ucloud\\.cn",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "urlmaster": {
-    "name": "URLMaster SecurityCheck (iFinity/DotNetNuke)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-urlmaster-debug",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-urlmaster-ex",
-        "pattern": ".+",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Ur[li]RewriteModule",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "SecurityCheck",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "urlscan": {
-    "name": "URLScan (Microsoft)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Rejected[-_]By[_-]UrlScan",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "A custom filter or module.{0,4}?such as URLScan",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "variti": {
-    "name": "Variti (Variti)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Variti(?:\\/[a-z0-9\\.\\-]+)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "varnish": {
-    "name": "Varnish (OWASP)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Request rejected by xVarnish\\-WAF",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "vercel": {
-    "name": "Vercel WAF (Vercel)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "<title>Vercel Security Checkpoint</title>",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/vercel/security/",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "viettel": {
-    "name": "Viettel (Cloudrity)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "Access Denied.{0,10}?Viettel WAF",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "cloudrity\\.com\\.(vn)?/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Viettel WAF System",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "virusdie": {
-    "name": "VirusDie (VirusDie LLC)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "cdn\\.virusdie\\.ru/splash/firewallstop\\.png",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "copy.{0,10}?Virusdie\\.ru",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "wallarm": {
-    "name": "Wallarm (Wallarm Inc.)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "nginx[\\-_]wallarm",
-        "tier": "passive"
-      }
-    ]
-  },
-  "watchguard": {
-    "name": "WatchGuard (WatchGuard Technologies)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "WatchGuard",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Request denied by WatchGuard Firewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "WatchGuard Technologies Inc\\.",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "webarx": {
-    "name": "WebARX (WebARX Security Solutions)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "WebARX.{0,10}?Web Application Firewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.webarxsecurity\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/wp\\-content/plugins/webarx/includes/",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "webknight": {
-    "name": "WebKnight (AQTRONIX)",
-    "signatures": [
-      {
-        "signal": "status",
-        "status": 999,
-        "tier": "block_page"
-      },
-      {
-        "signal": "reason",
-        "value": "No Hacking",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 404,
-        "tier": "block_page"
-      },
-      {
-        "signal": "reason",
-        "value": "Hack Not Found",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "WebKnight Application Firewall Alert",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "What is webknight\\?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "AQTRONIX WebKnight is an application firewall",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "WebKnight will take over and protect",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "aqtronix\\.com/WebKnight",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "AQTRONIX.{0,10}?WebKnight",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "webland": {
-    "name": "WebLand (WebLand)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "protected by webland",
-        "tier": "passive"
-      }
-    ]
-  },
-  "webray": {
-    "name": "RayWAF (WebRay Solutions)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "WebRay\\-WAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "drivedby",
-        "pattern": "RaySrv.RayEng/[0-9\\.]+?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "webseal": {
-    "name": "WebSEAL (IBM)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "WebSEAL",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "This is a WebSEAL error message template file",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "WebSEAL server received an invalid HTTP request",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "webtotem": {
-    "name": "WebTotem (WebTotem)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "The current request was blocked.{0,8}?>WebTotem",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "west263cdn": {
-    "name": "West263 CDN (West263CDN)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-cache",
-        "pattern": "WS?T263CDN",
-        "tier": "passive"
-      }
-    ]
-  },
-  "wordfence": {
-    "name": "Wordfence (Defiant)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "wf[_\\-]?WAF",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Generated by Wordfence",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "broke one of (the )?Wordfence (advanced )?blocking rules",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "/plugins/wordfence",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "wpmudev": {
-    "name": "wpmudev WAF (Incsub)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "href=\"http(s)?.\\/\\/wpmudev.com\\/.{0,15}?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Click on the Logs tab, then the WAF Log.",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Choose your site from the list",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "<h1>Whoops, this request has been blocked!",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "This request has been deemed suspicious",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "possible attack on our servers.",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 403,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "wts": {
-    "name": "WTS-WAF (WTS)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "wts/[0-9\\.]+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "<(title|h\\d{1})>WTS\\-WAF",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "wzb360": {
-    "name": "360WangZhanBao (360 Technologies)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "qianxin\\-waf",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "wzws-ray",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-powered-by-360wzb",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "wzws\\-waf\\-cgi/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "wangshan\\.360\\.cn",
-        "tier": "block_page"
-      },
-      {
-        "signal": "status",
-        "status": 493,
-        "tier": "block_page"
-      }
-    ]
-  },
-  "xlabssecuritywaf": {
-    "name": "XLabs Security WAF (XLabs)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "x-cdn",
-        "pattern": "XLabs Security",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "secured",
-        "pattern": "^By XLabs Security",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "XLabs[-_]?.?WAF",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "xuanwudun": {
-    "name": "Xuanwudun (Xuanwudun)",
-    "signatures": [
-      {
-        "signal": "content",
-        "pattern": "admin\\.dbappwaf\\.cn/(index\\.php/Admin/ClientMisinform/)?",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "class=.(db[\\-_]?)?waf(.)?([\\-_]?row)?>",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "yundun": {
-    "name": "Yundun (Yundun)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "YUNDUN",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-cache",
-        "pattern": "YUNDUN",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^yd_cookie=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Blocked by YUNDUN Cloud WAF",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "yundun\\.com/yd[-_]http[_-]error/",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "www\\.yundun\\.com/(static/js/fingerprint\\d{1}?\\.js)?",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "yunsuo": {
-    "name": "Yunsuo (Yunsuo)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^yunsuo_session=",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "class=\\\"yunsuologo\\\"",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "yxlink": {
-    "name": "YXLink (YxLink Technologies)",
-    "signatures": [
-      {
-        "signal": "cookie",
-        "pattern": "^yx_ci_session=",
-        "tier": "passive"
-      },
-      {
-        "signal": "cookie",
-        "pattern": "^yx_language=",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "Yxlink([\\-_]?WAF)?",
-        "tier": "passive"
-      }
-    ]
-  },
-  "zenedge": {
-    "name": "Zenedge (Zenedge)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ZENEDGE",
-        "tier": "passive"
-      },
-      {
-        "signal": "header",
-        "header": "x-zen-fury",
-        "pattern": ".+?",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "/__zenedge/",
-        "tier": "block_page"
-      }
-    ]
-  },
-  "zscaler": {
-    "name": "ZScaler (Accenture)",
-    "signatures": [
-      {
-        "signal": "header",
-        "header": "server",
-        "pattern": "ZScaler",
-        "tier": "passive"
-      },
-      {
-        "signal": "content",
-        "pattern": "Access Denied.{0,10}?Accenture Policy",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "policies\\.accenture\\.com",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "login\\.zscloud\\.net/img_logo_new1\\.png",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Zscaler to protect you from internet threats",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Internet Security by ZScaler",
-        "tier": "block_page"
-      },
-      {
-        "signal": "content",
-        "pattern": "Accenture.{0,10}?webfilters indicate that the site likely contains",
-        "tier": "block_page"
-      }
-    ]
+export const EDGE_SIGNATURE_CORPUS_MANIFEST = Object.freeze({
+  "output_version": 2,
+  "format": "astranull-edge-signature-corpus-v2",
+  "generator": "scripts/generate-edge-signatures.mjs",
+  "generator_sha256": "086f72d2f558de45fcdf79f7dd96c03d56e93e6218c43f108d2dc06cf69a83ed",
+  "output_manifest": "src/lib/data/edgeSignatureData.manifest.json",
+  "sources": {
+    "wafw00f": {
+      "repository": "https://github.com/EnableSecurity/wafw00f",
+      "commit": "69fbe3956bba47a172cf87e40e9037535d32a130",
+      "license": "BSD-3-Clause",
+      "license_notice": "THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt",
+      "plugin_tree_sha256": "44f4379d119d7cd688b2b8f68e5a1cd9e5bcf150491f46cb438d8a71f223b002",
+      "plugin_tree_hash_encoding": "sorted-path-length-content-length-v1",
+      "plugin_files": 172,
+      "matcher_calls": 518,
+      "license_sha256": "fdaaf8393afcbab5a0db158ae742e76ec3803a7c72af19489f5bd521d3db08ea"
+    },
+    "cdncheck": {
+      "repository": "https://github.com/projectdiscovery/cdncheck",
+      "commit": "dac12984ef12fa5663c2b7591d0a304ef27c659b",
+      "license": "MIT",
+      "license_notice": "THIRD_PARTY_NOTICES/cdncheck-MIT.txt",
+      "ported_categories": [
+        "cdn",
+        "waf",
+        "common"
+      ],
+      "excluded_categories": [
+        {
+          "category": "cloud",
+          "reason": "general hosting ranges are not edge-protection evidence"
+        }
+      ],
+      "sources_data_sha256": "4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3",
+      "cname_implementation_sha256": "37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a",
+      "license_sha256": "cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb",
+      "cname_item_type": "waf"
+    }
   }
 });
 
-/** CDN provider address ranges (cdncheck `cdn`). */
+/** Strict AST ports of every pinned wafw00f plugin, including its decision tree. */
+export const WAF_VENDOR_SIGNATURES = Object.freeze({
+  "aesecure": {
+    "name": "aeSecure (aeSecure)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "aesecure-code",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "aesecure_denied\\.png"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "airee": {
+    "name": "AireeCDN (Airee)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Airee",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cache",
+        "pattern": "(\\w+\\.)?airee\\.cloud",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "airee\\.cloud"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "airlock": {
+    "name": "Airlock (Phion/Ergon)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^al[_-]?(sess|lb)="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "server detected a syntax error in your request"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "alertlogic": {
+    "name": "Alert Logic (Alert Logic)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>requested url cannot be found"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "we are sorry.{0,10}?but the page you are looking for cannot be found"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "back to previous page"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "proceed to homepage"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "reference id"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "aliyundun": {
+    "name": "AliYunDun (Alibaba Cloud Computing)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "error(s)?\\.aliyun(dun)?\\.(com|net)?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "alicdn\\.com\\/sd\\-base\\/static\\/\\d{1,2}\\.\\d{1,2}\\.\\d{1,2}\\/image\\/405\\.png"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Sorry, your request has been blocked as it may cause potential threats to the server\\'s security."
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 405
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "anquanbao": {
+    "name": "Anquanbao (Anquanbao)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-powered-by-anquanbao",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "aqb_cc/error/"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "anubis": {
+    "name": "Anubis (Techaro)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "-anubis-auth="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/\\.within\\.website/x/cmd/anubis/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<script id=\"anubis_version\""
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<script id=\"anubis_challenge\""
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Protected by.*Anubis.*From.*Techaro"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "github\\.com/TecharoHQ/anubis"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "const",
+                  "value": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "anyu": {
+    "name": "AnYu (AnYu Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "anyu.{0,10}?the green channel"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "your access has been intercepted by anyu"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "applicationgateway": {
+    "name": "Azure Application Gateway (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<center>Microsoft-Azure-Application-Gateway/v2</center>"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<h1>403 Forbidden</h1>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "signal",
+            "id": 0
+          },
+          {
+            "op": "signal",
+            "id": 1
+          }
+        ]
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "approach": {
+    "name": "Approach (Approach)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "approach.{0,10}?web application (firewall|filtering)"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "approach.{0,10}?infrastructure team"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "armor": {
+    "name": "Armor Defense (Armor)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "blocked by website protection from armor"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "please create an armor support ticket"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "arvancloud": {
+    "name": "ArvanCloud (ArvanCloud)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ArvanCloud",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "aspa": {
+    "name": "ASPA Firewall (ASPA Engineering Co.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ASPA[\\-_]?WAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "aspa-cache-status",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "aspnetgen": {
+    "name": "ASP.NET Generic (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "iis (\\d+.)+?detailed error"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "potentially dangerous request querystring"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "application error from being viewed remotely (for security reasons)?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "An application error occurred on the server"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "astra": {
+    "name": "Astra (Czar Securities)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^cz_astra_csrf_cookie"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "astrawebsecurity\\.freshdesk\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.getastra\\.com/assets/images"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "awswaf": {
+    "name": "AWS Elastic Load Balancer (Amazon)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-amz-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-amz-request-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^aws.?alb="
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "server",
+        "pattern": "aws.?elb",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-blocked-by-waf",
+        "pattern": "Blocked_by_custom_response_for_AWSManagedRules.*",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "azion": {
+    "name": "Azion Edge Firewall (Azion)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-azion-edge-pop",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-azion-request-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "baffinbay": {
+    "name": "Baffin Bay (Mastercard)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "baffin-bay-inlet",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "baidu": {
+    "name": "Yunjiasu (Baidu Cloud Computing)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "yunjiasu.*",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "href=\"/.well-known/yunjiasu-cgi/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "document.cookie='yjs_use_ob=0"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "barikode": {
+    "name": "Barikode (Ethic Ninja)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<strong>barikode<.strong>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "barracuda": {
+    "name": "Barracuda (Barracuda Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^barra_counter_session="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^BNI__BARRACUDA_LB_COOKIE="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^BNI_persistence="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^BN[IE]S_.*?="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Barracuda.Networks"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "bekchy": {
+    "name": "Bekchy (Faydata Technologies Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Bekchy.{0,10}?Access Denied"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "bekchy\\.com/report"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "beluga": {
+    "name": "Beluga CDN (Beluga)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Beluga",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^beluga_request_trail="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "binarysec": {
+    "name": "BinarySec (BinarySec)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "BinarySec",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-binarysec-via",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-binarysec-nocache",
+        "pattern": ".+",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "bitninja": {
+    "name": "BitNinja (BitNinja)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Security check by BitNinja"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Visitor anti-robot validation"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "blockdos": {
+    "name": "BlockDoS (BlockDoS)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "blockdos\\.net",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "bluedon": {
+    "name": "Bluedon (Bluedon IST)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "BDWAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "bluedon web application firewall"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "bulletproof": {
+    "name": "BulletProof Security Pro (AITpro Security)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "\\+?bpsMessage"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "403 Forbidden Error Page"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "If you arrived here due to a search"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      }
+    }
+  },
+  "cachefly": {
+    "name": "CacheFly CDN (CacheFly)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "bestcdn",
+        "pattern": "Cachefly",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^cfly_req.*="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "cachewall": {
+    "name": "CacheWall (Varnish)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Varnish",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-varnish",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cachewall-action",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cachewall-reason",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "security by cachewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "403 naughty.{0,10}?not nice!"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "varnish cache server"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "const",
+                    "value": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "cdnns": {
+    "name": "CdnNS Application Gateway (CdnNs/WdidcNet)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cdnnswaf application gateway"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "cerber": {
+    "name": "WP Cerber Security (Cerber Tech)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "your request looks suspicious or similar to automated"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "our server stopped processing your request"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "We.re sorry.{0,10}?you are not allowed to proceed"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "requests from spam posting software"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>403 Access Forbidden"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "chinacache": {
+    "name": "ChinaCache Load Balancer (ChinaCache)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "powered-by-chinacache",
+        "pattern": ".+",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "chuangyu": {
+    "name": "Chuang Yu Shield (Yunaq)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.365cyd\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "help\\.365cyd\\.com/cyd\\-error\\-help.html\\?code=403"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "ciscoacexml": {
+    "name": "ACE XML Gateway (Cisco)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ACE XML Gateway",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "cloudbric": {
+    "name": "Cloudbric (Penta Security)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Cloudbric.{0,5}?ERROR!"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Your request was blocked by Cloudbric"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "please contact Cloudbric Support"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cloudbric\\.zendesk\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Cloudbric Help Center"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "malformed request syntax.{0,4}?invalid request message framing.{0,4}?or deceptive request routing"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "const",
+                  "value": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "cloudflare": {
+    "name": "Cloudflare (Cloudflare Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "cloudflare",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "cloudflare[-_]nginx",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "cf-ray",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "__cfduid"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "cloudfloordns": {
+    "name": "Cloudfloor (Cloudfloor DNS)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "CloudfloorDNS(.WAF)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>CloudfloorDNS.{0,6}?Web Application Firewall Error"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.cloudfloordns\\.com/contact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "cloudfront": {
+    "name": "Cloudfront (Amazon)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Cloudfront",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "via",
+        "pattern": "([0-9\\.]+?)? \\w+?\\.cloudfront\\.net \\(Cloudfront\\)",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-amz-cf-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-cache",
+        "pattern": "Error from Cloudfront",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Generated by cloudfront \\(CloudFront\\)"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "cloudprotector": {
+    "name": "Cloud Protector (Rohde & Schwarz CyberSecurity)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Cloud Protector.*?by Rohde.{3,8}?Schwarz Cybersecurity"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<a href='https?:\\/\\/(?:www\\.)?cloudprotector\\.com\\/'>R.{1,6}?S.Cloud Protector"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "comodo": {
+    "name": "Comodo cWatch (Comodo CyberSecurity)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Protected by COMODO WAF(.+)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "crawlprotect": {
+    "name": "CrawlProtect (Jean-Denis Brun)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^crawlprotecttag="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>crawlprotect"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "this site is protected by crawlprotect"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "ddosguard": {
+    "name": "DDoS-GUARD (DDOS-GUARD CORP.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^__ddg1.*?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^__ddg2.*?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^__ddgid.*?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^__ddgmark.*?="
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ddos-guard",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "denyall": {
+    "name": "DenyALL (Rohde & Schwarz CyberSecurity)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 200
+      },
+      {
+        "signal": "reason",
+        "tier": "block_page",
+        "value": "Condition Intercepted"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "distil": {
+    "name": "Distil (Distil Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cdn\\.distilnetworks\\.com/images/anomaly\\.detected\\.png"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "distilCaptchaForm"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "distilCallbackGuard"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "dosarrest": {
+    "name": "DOSarrest (DOSarrest Internet Security)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-dis-request-id",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "DOSarrest(.*)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "dotdefender": {
+    "name": "DotDefender (Applicure Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-dotdefender-denied",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "dotdefender blocked your request"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Applicure is the leading provider of web application security"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "dynamicweb": {
+    "name": "DynamicWeb Injection Check (DynamicWeb)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-403-status-by",
+        "pattern": "dw.inj.check",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "by dynamic check(.{0,10}?module)?"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "edgecast": {
+    "name": "Edgecast (Verizon Digital Media)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "^ECD(.+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "^ECS(.*)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "eisoo": {
+    "name": "Eisoo Cloud Firewall (Eisoo)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "EisooWAF(\\-AZURE)?/?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<link.{0,10}?href=\\\"/eisoo\\-firewall\\-block\\.css"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.eisoo\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "&copy; \\d{4} Eisoo Inc"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "envoy": {
+    "name": "Envoy (EnvoyProxy)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "envoy",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-upstream-service-time",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-downstream-service-cluster",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-downstream-service-node",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-external-address",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-force-trace",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-internal",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-original-dst-host",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-original-path",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-envoy-local-overloaded",
+        "pattern": ".+",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "if",
+                    "condition": {
+                      "op": "signal",
+                      "id": 7
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": true
+                    },
+                    "else": {
+                      "op": "if",
+                      "condition": {
+                        "op": "signal",
+                        "id": 8
+                      },
+                      "then": {
+                        "op": "const",
+                        "value": true
+                      },
+                      "else": {
+                        "op": "if",
+                        "condition": {
+                          "op": "signal",
+                          "id": 9
+                        },
+                        "then": {
+                          "op": "const",
+                          "value": true
+                        },
+                        "else": {
+                          "op": "const",
+                          "value": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "expressionengine": {
+    "name": "Expression Engine (EllisLab)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^exp_track.+?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "block_page",
+        "pattern": "^exp_last_.+?="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "invalid get data"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "f5bigipapm": {
+    "name": "BIG-IP AP Manager (F5 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^LastMRH_Session"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^MRHSession"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^MRHSession"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "server",
+        "pattern": "Big([-_])?IP",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^F5_fullWT"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^F5_fullWT"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^F5_HT_shrinked"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 4
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 5
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 6
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "const",
+                  "value": false
+                }
+              }
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "f5bigipasm": {
+    "name": "BIG-IP AppSec Manager (F5 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "the requested url was rejected"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "please consult with your administrator"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "TS[a-fA-F0-9]{8}=.+"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "TS[a-fA-F0-9]{6}=.+"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 2
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 3
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "f5bigipltm": {
+    "name": "BIG-IP Local Traffic Manager (F5 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^bigipserver"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-cnection",
+        "pattern": "close",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "f5firepass": {
+    "name": "FirePass (F5 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^VHOST"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "location",
+        "pattern": "\\/my\\.logon\\.php3",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^F5_fire.+?"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^F5_passid_shrinked"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "f5trafficshield": {
+    "name": "Trafficshield (F5 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^ASINFO="
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "F5-TrafficShield",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "fastly": {
+    "name": "Fastly (Fastly CDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-fastly-request-id",
+        "pattern": "\\w+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-served-by",
+        "pattern": "^cache-[a-z]{3}\\d+-[A-Z]{3}",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "fortigate": {
+    "name": "FortiGate (Fortinet)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "//globalurl.fortinet.net"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "FortiGate Application Control"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Web Application Firewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Event ID"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "//globalurl.fortinet.net"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "fortiguard": {
+    "name": "FortiGuard (Fortinet)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "FortiGuard Intrusion Prevention"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "//globalurl.fortinet.net"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "fortiweb": {
+    "name": "FortiWeb (Fortinet)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^FORTIWAFSID="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": ".fgd_icon"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "fgd_icon"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "web.page.blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "url"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "attack.id"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "message.id"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "client.ip"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "not",
+                  "arg": {
+                    "op": "signal",
+                    "id": 5
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": false
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "not",
+                    "arg": {
+                      "op": "signal",
+                      "id": 6
+                    }
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": false
+                  },
+                  "else": {
+                    "op": "if",
+                    "condition": {
+                      "op": "not",
+                      "arg": {
+                        "op": "signal",
+                        "id": 7
+                      }
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": false
+                    },
+                    "else": {
+                      "op": "const",
+                      "value": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "frontdoor": {
+    "name": "Azure Front Door (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-azure-ref",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "gcparmor": {
+    "name": "Google Cloud App Armor (Google Cloud)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "via",
+        "pattern": "1.1 google",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "godaddy": {
+    "name": "GoDaddy Website Protection (GoDaddy)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "GoDaddy (security|website firewall)"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "greywizard": {
+    "name": "Greywizard (Grey Wizard)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "greywizard",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>Grey Wizard"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "contact the website owner or Grey Wizard"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "We.ve detected attempted attack or non standard traffic from your ip address"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "huaweicloud": {
+    "name": "Huawei Cloud Firewall (Huawei)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^HWWAFSESID="
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "HuaweiCloudWAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "hwclouds\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "hws_security@"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "hyperguard": {
+    "name": "HyperGuard (Art of Defense)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^WODSESSION="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "ibmdatapower": {
+    "name": "DataPower (IBM)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-backside-transport",
+        "pattern": "(OK|FAIL)",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "imunify360": {
+    "name": "Imunify360 (CloudLinux)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "imunify360.{0,10}?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "protected.by.{0,10}?imunify360"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "powered.by.{0,10}?imunify360"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "imunify360.preloader"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "incapsula": {
+    "name": "Incapsula (Imperva Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^incap_ses.*?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^visid_incap.*?="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "incapsula incident id"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "powered by incapsula"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/_Incapsula_Resource"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "indusguard": {
+    "name": "IndusGuard (Indusface)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "IF_WAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This website is secured against online attacks. Your request was blocked"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "instartdx": {
+    "name": "Instart DX (Instart Logic)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-instart-request-id",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-instart-cache",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-instart-wl",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "the requested url was rejected"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "please consult with your administrator"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "your support id is"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 2
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 3
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 4
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 5
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "isaserver": {
+    "name": "ISA Server (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "The.{0,10}?(isa.)?server.{0,10}?denied the specified uniform resource locator \\(url\\)"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "janusec": {
+    "name": "Janusec Application Gateway (Janusec)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "janusec application gateway"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "jiasule": {
+    "name": "Jiasule (Jiasule)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "jiasule\\-waf",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^jsl_tracking(.+)?="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "__jsluid="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "notice\\-jiasule"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "static\\.jiasule\\.com"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "kemp": {
+    "name": "Kemp LoadMaster (Progress Software)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-servedby",
+        "pattern": "KEMP-LM",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>403 Forbidden</title>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "signal",
+            "id": 0
+          },
+          {
+            "op": "signal",
+            "id": 1
+          },
+          {
+            "op": "signal",
+            "id": 2
+          }
+        ]
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "keycdn": {
+    "name": "KeyCDN (KeyCDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "KeyCDN",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "knownsec": {
+    "name": "KS-WAF (KnownSec)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/ks[-_]waf[-_]error\\.png"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "kona": {
+    "name": "Kona SiteDefender (Akamai)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "AkamaiGHost",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "server",
+        "pattern": "AkamaiGHost",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "limelight": {
+    "name": "LimeLight CDN (LimeLight)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^limelight"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^l[mg]_sessid="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "link11": {
+    "name": "Link11 WAAP (Link11)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "rhino-core-shield",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "litespeed": {
+    "name": "LiteSpeed (LiteSpeed Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "LiteSpeed",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Proudly powered by litespeed web server"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.litespeedtech\\.com/error\\-page"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "malcare": {
+    "name": "Malcare (Inactiv)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "firewall.{0,15}?powered.by.{0,15}?malcare.{0,15}?pro"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "blocked because of malicious activities"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "maxcdn": {
+    "name": "MaxCDN (MaxCDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cdn",
+        "pattern": "maxcdn",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "missioncontrol": {
+    "name": "Mission Control Shield (Mission Control)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Mission Control Application Shield",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "modsecurity": {
+    "name": "ModSecurity (SpiderLabs)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "(mod_security|Mod_Security|NOYB)",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This error was generated by Mod.?Security"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "rules of the mod.security.module"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "mod.security.rules triggered"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Protected by Mod.?Security"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/modsecurity[\\-_]errorpage/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "modsecurity iis"
+      },
+      {
+        "signal": "reason",
+        "tier": "block_page",
+        "value": "ModSecurity Action"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "reason",
+        "tier": "block_page",
+        "value": "ModSecurity Action"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 406
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 2
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 3
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 4
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 5
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "if",
+                    "condition": {
+                      "op": "signal",
+                      "id": 6
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": true
+                    },
+                    "else": {
+                      "op": "const",
+                      "value": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 7
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 8
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 9
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 10
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "naxsi": {
+    "name": "NAXSI (NBS Systems)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-data-origin",
+        "pattern": "^naxsi(.+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "naxsi(.+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "blocked by naxsi"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "naxsi blocked information"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "nemesida": {
+    "name": "Nemesida (PentestIt)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "@?nemesida(\\-security)?\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Suspicious activity detected.{0,10}?Access to the site is blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "nwaf@"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 222
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "netcontinuum": {
+    "name": "NetContinuum (Barracuda Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^NCI__SessionId="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "netscaler": {
+    "name": "NetScaler AppFirewall (Citrix Systems)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "via",
+        "pattern": "NS\\-CACHE",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^(ns_af=|citrix_ns_id|NSC_)"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "(NS Transaction|AppFW Session) id"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Violation Category.{0,5}?APPFW_"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Citrix\\|NetScaler"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "cneonction",
+        "pattern": "^(keep alive|close)",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "nncoection",
+        "pattern": "^(keep alive|close)",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "const",
+                    "value": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "nevisproxy": {
+    "name": "NevisProxy (AdNovum)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^Navajo"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^NP_ID"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "newdefend": {
+    "name": "Newdefend (NewDefend)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Newdefend",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.newdefend\\.com/feedback"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/nd\\-block/"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "nexusguard": {
+    "name": "NexusGuard Firewall (NexusGuard)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Powered by Nexusguard"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "nexusguard\\.com/wafpage/.+#\\d{3};"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "ninja": {
+    "name": "NinjaFirewall (NinTechNet)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>NinjaFirewall.{0,10}?\\d{3}.forbidden"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "For security reasons?.{0,10}?it was blocked and logged"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "nsfocus": {
+    "name": "NSFocus (NSFocus Global Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "NSFocus",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "nullddos": {
+    "name": "NullDDoS Protection (NullDDoS)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "NullDDoS(.System)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "onmessage": {
+    "name": "OnMessage Shield (BlackBaud)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-engine",
+        "pattern": "onMessage Shield",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Blackbaud K\\-12 conducts routine maintenance"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "onMessage SHEILD"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "maintenance\\.blackbaud\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "status\\.blackbaud\\.com"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "openresty": {
+    "name": "Open-Resty Lua Nginx (FLOSS)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "^openresty/[0-9\\.]+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "openresty/[0-9\\.]+?"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 406
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "oraclecloud": {
+    "name": "Oracle Cloud (Oracle)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>fw_error_www"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "src=\\\"/oralogo_small\\.gif\\\""
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.oracleimg\\.com/us/assets/metrics/ora_ocom\\.js"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "paloalto": {
+    "name": "Palo Alto Next Gen Firewall (Palo Alto Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Download of virus.spyware blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Palo Alto Next Generation Security Platform"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "panyun360": {
+    "name": "360PanYun (360 Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "panyun",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-panyun-request-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-panyun-error-reason",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-panyun-error-step",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "pentawaf": {
+    "name": "PentaWAF (Global Network Services)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "PentaWaf(/[0-9\\.]+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Penta.?Waf/[0-9\\.]+?.server"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "perimeterx": {
+    "name": "PerimeterX (PerimeterX)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.perimeterx\\.(com|net)/whywasiblocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "client\\.perimeterx\\.(net|com)"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "denied because we believe you are using automation tools"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "pksec": {
+    "name": "pkSecurity IDS (pkSec)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "pk.?Security.?Module"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Security.Alert"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "As this could be a potential hack attack"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "A safety critical (call|request) was (detected|discovered) and blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "maximum number of reloads per minute and prevented access"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "powercdn": {
+    "name": "PowerCDN (PowerCDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "via",
+        "pattern": "(.*)?powercdn.com(.*)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cache",
+        "pattern": "(.*)?powercdn.com(.*)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cdn",
+        "pattern": "PowerCDN",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "profense": {
+    "name": "Profense (ArmorLogic)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Profense",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^PLBSID="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "ptaf": {
+    "name": "PT Application Firewall (Positive Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<h1.{0,10}?Forbidden"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<pre>Request.ID:.{0,10}?\\d{4}\\-(\\d{2})+.{0,35}?pre>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "puhui": {
+    "name": "Puhui (Puhui)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Puhui[\\-_]?WAF",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "qcloud": {
+    "name": "Qcloud (Tencent Cloud)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "腾讯云Web应用防火墙"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "qiniu": {
+    "name": "Qiniu (Qiniu CDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-qiniu-cdn",
+        "pattern": "\\d+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "qrator": {
+    "name": "Qrator (Qrator)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "QRATOR",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "radware": {
+    "name": "AppWall (Radware)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "CloudWebSec\\.radware\\.com"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-sl-compstate",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "because we have detected unauthorized activity"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Unauthorized Request Blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "if you believe that there has been some mistake"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "\\?Subject=Security Page.{0,10}?Case Number"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "not",
+                  "arg": {
+                    "op": "signal",
+                    "id": 5
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": false
+                },
+                "else": {
+                  "op": "const",
+                  "value": true
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "reblaze": {
+    "name": "Reblaze (Reblaze)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^rbzid"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Reblaze Secure Web Gateway",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "current session has been terminated"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "do not hesitate to contact us"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "access denied \\(\\d{3}\\)"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "reflected": {
+    "name": "Reflected Networks (Reflected Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<img class=\"logo loader\" src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAbgAAABHCAIAAAD6G8WcAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyRpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "content=\"Request is denied\""
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Forbidden</title>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "signal",
+            "id": 0
+          },
+          {
+            "op": "signal",
+            "id": 1
+          },
+          {
+            "op": "signal",
+            "id": 2
+          },
+          {
+            "op": "signal",
+            "id": 3
+          }
+        ]
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "rsfirewall": {
+    "name": "RSFirewall (RSJoomla!)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "com_rsfirewall_(\\d{3}_forbidden|event)?"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "rvmode": {
+    "name": "RequestValidationMode (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Request Validation has detected a potentially dangerous client input"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "ASP\\.NET has detected data in the request"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "HttpRequestValidationException"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "sabre": {
+    "name": "Sabre Firewall (Sabre)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "dxsupport\\.sabre\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Application Firewall Error"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "add some important details to the email for us to investigate"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 2
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "safe3": {
+    "name": "Safe3 Web Firewall (Safe3)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Safe3 Web Firewall",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-powered-by",
+        "pattern": "Safe3WAF/[\\.0-9]+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Safe3waf/[0-9\\.]+?"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "safedog": {
+    "name": "Safedog (SafeDog)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^safedog\\-flow\\-item="
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Safedog",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "safedogsite/broswer_logo\\.jpg"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "404\\.safedog\\.cn/sitedog_stat.html"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "404\\.safedog\\.cn/images/safedogsite/head\\.png"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "const",
+                "value": false
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "safeline": {
+    "name": "Safeline (Chaitin Tech.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "safeline|<!\\-\\-\\sevent id:"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "scutum": {
+    "name": "Scutum (Secure Sky Technology Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Scutum",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "secking": {
+    "name": "SecKing (SecKing)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "secking(.?waf)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "secupress": {
+    "name": "SecuPress WP Security (SecuPress)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>SecuPress"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "secureentry": {
+    "name": "Secure Entry (United Security Providers)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Secure Entry Server",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "secureiis": {
+    "name": "eEye SecureIIS (BeyondTrust)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "SecureIIS is an internet security application"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Download SecureIIS Personal Edition"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "https?://www\\.eeye\\.com/Secure\\-?IIS"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "securesphere": {
+    "name": "SecureSphere (Imperva Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h2)>Error"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "The incident ID is"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This page can't be displayed"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Contact support for additional information"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "senginx": {
+    "name": "SEnginx (Neusoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "SENGINX\\-ROBOT\\-MITIGATION"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "serverdefender": {
+    "name": "ServerDefender VP (Port80 Software)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-pint",
+        "pattern": "p(ort\\-)?80",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "shadowd": {
+    "name": "Shadow Daemon (Zecure)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<h\\d{1}>\\d{3}.forbidden<.h\\d{1}>"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "request forbidden by administrative rules"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "shieldon": {
+    "name": "Shieldon Firewall (Shieldon.io)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Please solve CAPTCHA"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "shieldon_captcha"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Unusual behavior detected"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "status-user-info"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access denied"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "The IP address you are using has been blocked."
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "status-user-info"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Please line up"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This page is limiting the number of people online. Please wait a moment."
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "[Xx]-[Pp]rotected-[Bb]y",
+        "pattern": "shieldon.io",
+        "header_kind": "regex"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 2
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 3
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 4
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 5
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 6
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 7
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 8
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 9
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "shieldsecurity": {
+    "name": "Shield Security (One Dollar Plugin)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "You were blocked by the Shield"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "remaining transgression\\(s\\) against this site"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Something in the URL.{0,5}?Form or Cookie data wasn\\'t appropriate"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "siteground": {
+    "name": "SiteGround (SiteGround)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Our system thinks you might be a robot!"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "access is restricted due to a security rule"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "siteguard": {
+    "name": "SiteGuard (EG Secure Solutions Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Powered by SiteGuard"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "The server refuse to browse the page"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "sitelock": {
+    "name": "Sitelock (TrueShield)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "SiteLock will remember you"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Sitelock is leader in Business Website Security Services"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "sitelock[_\\-]shield([_\\-]logo|[\\-_]badge)?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "SiteLock incident ID"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "sonicwall": {
+    "name": "SonicWall (Dell)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "SonicWALL",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>Web Site Blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "\\+?nsa_banner"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "sophos": {
+    "name": "UTM Web Protection (Sophos)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.sophos\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Powered by.?(Sophos)? UTM Web Protection"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Access to the requested URL was blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access to the requested URL was blocked"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "incident was logged with the following log identifier"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Inbound Anomaly Score exceeded"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Your cache administrator is"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 4
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "not",
+                  "arg": {
+                    "op": "signal",
+                    "id": 5
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": false
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "not",
+                    "arg": {
+                      "op": "signal",
+                      "id": 6
+                    }
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": false
+                  },
+                  "else": {
+                    "op": "const",
+                    "value": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "squarespace": {
+    "name": "Squarespace (Squarespace)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Squarespace",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^SS_ANALYTICS_ID="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^SS_MATTR="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^SS_MID="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "SS_CVT="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "status\\.squarespace\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "BRICK\\-\\d{2}"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "const",
+                    "value": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "squidproxy": {
+    "name": "SquidProxy IDS (SquidProxy)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "squid(/[0-9\\.]+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access control configuration prevents your request"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "not",
+        "arg": {
+          "op": "signal",
+          "id": 0
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": false
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 1
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "const",
+          "value": true
+        }
+      }
+    }
+  },
+  "stackpath": {
+    "name": "StackPath (StackPath)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>StackPath[^<]+</title>"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Protected by <a href=\"https?:\\/\\/(?:www\\.)?stackpath\\.com\\/\"[^>]+>StackPath"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "is using a security service for protection against online attacks"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "An action has triggered the service and blocked your request"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "sucuri": {
+    "name": "Sucuri CloudProxy (Sucuri Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-sucuri-id",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-sucuri-cache",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Sucuri(\\-Cloudproxy)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "x-sucuri-block",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access Denied.{0,6}?Sucuri Website Firewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Sucuri WebSite Firewall.{0,6}?(CloudProxy)?.{0,6}?Access Denied"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "sucuri\\.net/privacy\\-policy"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cdn\\.sucuri\\.net/sucuri[-_]firewall[-_]block\\.css"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cloudproxy@sucuri\\.net"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "if",
+                    "condition": {
+                      "op": "signal",
+                      "id": 7
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": true
+                    },
+                    "else": {
+                      "op": "if",
+                      "condition": {
+                        "op": "signal",
+                        "id": 8
+                      },
+                      "then": {
+                        "op": "const",
+                        "value": true
+                      },
+                      "else": {
+                        "op": "const",
+                        "value": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tencent": {
+    "name": "Tencent Cloud Firewall (Tencent Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "waf\\.tencent\\-?cloud\\.com/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "window\\.location\\.href.{1,3}?https?://waf.tencent(?:-?cloud)?.com/(?:403|501)page\\.html"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "teros": {
+    "name": "Teros (Citrix Systems)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^st8id="
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "threatx": {
+    "name": "ThreatX (A10 Networks)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-request-id",
+        "pattern": ".*",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "^Forbidden - ID: ([a-fA-F0-9]{32})$"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "signal",
+            "id": 0
+          },
+          {
+            "op": "signal",
+            "id": 1
+          },
+          {
+            "op": "signal",
+            "id": 2
+          }
+        ]
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "transip": {
+    "name": "TransIP Web Firewall (TransIP)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-transip-backend",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-transip-balancer",
+        "pattern": ".+",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "uewaf": {
+    "name": "UEWaf (UCloud)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "uewaf(/[0-9\\.]+)?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/uewaf_deny_pages/default/img/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "ucloud\\.cn"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "urlmaster": {
+    "name": "URLMaster SecurityCheck (iFinity/DotNetNuke)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-urlmaster-debug",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-urlmaster-ex",
+        "pattern": ".+",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Ur[li]RewriteModule"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "SecurityCheck"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 0
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 1
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "urlscan": {
+    "name": "URLScan (Microsoft)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Rejected[-_]By[_-]UrlScan"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "A custom filter or module.{0,4}?such as URLScan"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "variti": {
+    "name": "Variti (Variti)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Variti(?:\\/[a-z0-9\\.\\-]+)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "varnish": {
+    "name": "Varnish (OWASP)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Request rejected by xVarnish\\-WAF"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "vercel": {
+    "name": "Vercel WAF (Vercel)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<title>Vercel Security Checkpoint</title>"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/vercel/security/"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "viettel": {
+    "name": "Viettel (Cloudrity)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access Denied.{0,10}?Viettel WAF"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cloudrity\\.com\\.(vn)?/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Viettel WAF System"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "virusdie": {
+    "name": "VirusDie (VirusDie LLC)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "cdn\\.virusdie\\.ru/splash/firewallstop\\.png"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "copy.{0,10}?Virusdie\\.ru"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "wallarm": {
+    "name": "Wallarm (Wallarm Inc.)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "nginx[\\-_]wallarm",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "watchguard": {
+    "name": "WatchGuard (WatchGuard Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "WatchGuard",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Request denied by WatchGuard Firewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "WatchGuard Technologies Inc\\."
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "webarx": {
+    "name": "WebARX (WebARX Security Solutions)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "WebARX.{0,10}?Web Application Firewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.webarxsecurity\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/wp\\-content/plugins/webarx/includes/"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "webknight": {
+    "name": "WebKnight (AQTRONIX)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 999
+      },
+      {
+        "signal": "reason",
+        "tier": "block_page",
+        "value": "No Hacking"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 404
+      },
+      {
+        "signal": "reason",
+        "tier": "block_page",
+        "value": "Hack Not Found"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "WebKnight Application Firewall Alert"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "What is webknight\\?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "AQTRONIX WebKnight is an application firewall"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "WebKnight will take over and protect"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "aqtronix\\.com/WebKnight"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "AQTRONIX.{0,10}?WebKnight"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "const",
+            "value": true
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 2
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 3
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "const",
+              "value": true
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 4
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 5
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 6
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 7
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "if",
+                    "condition": {
+                      "op": "signal",
+                      "id": 8
+                    },
+                    "then": {
+                      "op": "const",
+                      "value": true
+                    },
+                    "else": {
+                      "op": "if",
+                      "condition": {
+                        "op": "signal",
+                        "id": 9
+                      },
+                      "then": {
+                        "op": "const",
+                        "value": true
+                      },
+                      "else": {
+                        "op": "const",
+                        "value": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "webland": {
+    "name": "WebLand (WebLand)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "protected by webland",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "webray": {
+    "name": "RayWAF (WebRay Solutions)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "WebRay\\-WAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "drivedby",
+        "pattern": "RaySrv.RayEng/[0-9\\.]+?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "webseal": {
+    "name": "WebSEAL (IBM)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "WebSEAL",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This is a WebSEAL error message template file"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "WebSEAL server received an invalid HTTP request"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "webtotem": {
+    "name": "WebTotem (WebTotem)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "The current request was blocked.{0,8}?>WebTotem"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "west263cdn": {
+    "name": "West263 CDN (West263CDN)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cache",
+        "pattern": "WS?T263CDN",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "const",
+        "value": false
+      }
+    }
+  },
+  "wordfence": {
+    "name": "Wordfence (Defiant)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "wf[_\\-]?WAF",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Generated by Wordfence"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "broke one of (the )?Wordfence (advanced )?blocking rules"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/plugins/wordfence"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "const",
+              "value": false
+            }
+          }
+        }
+      }
+    }
+  },
+  "wpmudev": {
+    "name": "wpmudev WAF (Incsub)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "href=\"http(s)?.\\/\\/wpmudev.com\\/.{0,15}?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Click on the Logs tab, then the WAF Log."
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Choose your site from the list"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<h1>Whoops, this request has been blocked!"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "This request has been deemed suspicious"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "possible attack on our servers."
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 403
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "if",
+        "condition": {
+          "op": "not",
+          "arg": {
+            "op": "signal",
+            "id": 0
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": false
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 1
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 2
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 3
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "const",
+                "value": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "if",
+          "condition": {
+            "op": "not",
+            "arg": {
+              "op": "signal",
+              "id": 4
+            }
+          },
+          "then": {
+            "op": "const",
+            "value": false
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "not",
+              "arg": {
+                "op": "signal",
+                "id": 5
+              }
+            },
+            "then": {
+              "op": "const",
+              "value": false
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "not",
+                "arg": {
+                  "op": "signal",
+                  "id": 6
+                }
+              },
+              "then": {
+                "op": "const",
+                "value": false
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "not",
+                  "arg": {
+                    "op": "signal",
+                    "id": 7
+                  }
+                },
+                "then": {
+                  "op": "const",
+                  "value": false
+                },
+                "else": {
+                  "op": "const",
+                  "value": true
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "wts": {
+    "name": "WTS-WAF (WTS)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "wts/[0-9\\.]+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "<(title|h\\d{1})>WTS\\-WAF"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "wzb360": {
+    "name": "360WangZhanBao (360 Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "qianxin\\-waf",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "wzws-ray",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-powered-by-360wzb",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "wzws\\-waf\\-cgi/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "wangshan\\.360\\.cn"
+      },
+      {
+        "signal": "status",
+        "tier": "block_page",
+        "status": 493
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "const",
+                  "value": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "xlabssecuritywaf": {
+    "name": "XLabs Security WAF (XLabs)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cdn",
+        "pattern": "XLabs Security",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "secured",
+        "pattern": "^By XLabs Security",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "block_page",
+        "header": "server",
+        "pattern": "XLabs[-_]?.?WAF",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "xuanwudun": {
+    "name": "Xuanwudun (Xuanwudun)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "admin\\.dbappwaf\\.cn/(index\\.php/Admin/ClientMisinform/)?"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "class=.(db[\\-_]?)?waf(.)?([\\-_]?row)?>"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "yundun": {
+    "name": "Yundun (Yundun)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "YUNDUN",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-cache",
+        "pattern": "YUNDUN",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^yd_cookie="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Blocked by YUNDUN Cloud WAF"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "yundun\\.com/yd[-_]http[_-]error/"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "www\\.yundun\\.com/(static/js/fingerprint\\d{1}?\\.js)?"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "const",
+                  "value": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "yunsuo": {
+    "name": "Yunsuo (Yunsuo)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^yunsuo_session="
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "class=\\\"yunsuologo\\\""
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "const",
+          "value": false
+        }
+      }
+    }
+  },
+  "yxlink": {
+    "name": "YXLink (YxLink Technologies)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^yx_ci_session="
+      },
+      {
+        "signal": "cookie",
+        "tier": "passive",
+        "pattern": "^yx_language="
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "Yxlink([\\-_]?WAF)?",
+        "header_kind": "exact"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "zenedge": {
+    "name": "Zenedge (Zenedge)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ZENEDGE",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "x-zen-fury",
+        "pattern": ".+?",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "/__zenedge/"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "const",
+            "value": false
+          }
+        }
+      }
+    }
+  },
+  "zscaler": {
+    "name": "ZScaler (Accenture)",
+    "port_status": "supported",
+    "signatures": [
+      {
+        "signal": "header",
+        "tier": "passive",
+        "header": "server",
+        "pattern": "ZScaler",
+        "header_kind": "exact"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Access Denied.{0,10}?Accenture Policy"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "policies\\.accenture\\.com"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "login\\.zscloud\\.net/img_logo_new1\\.png"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Zscaler to protect you from internet threats"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Internet Security by ZScaler"
+      },
+      {
+        "signal": "content",
+        "tier": "block_page",
+        "pattern": "Accenture.{0,10}?webfilters indicate that the site likely contains"
+      }
+    ],
+    "matcher": {
+      "op": "if",
+      "condition": {
+        "op": "signal",
+        "id": 0
+      },
+      "then": {
+        "op": "const",
+        "value": true
+      },
+      "else": {
+        "op": "if",
+        "condition": {
+          "op": "signal",
+          "id": 1
+        },
+        "then": {
+          "op": "const",
+          "value": true
+        },
+        "else": {
+          "op": "if",
+          "condition": {
+            "op": "signal",
+            "id": 2
+          },
+          "then": {
+            "op": "const",
+            "value": true
+          },
+          "else": {
+            "op": "if",
+            "condition": {
+              "op": "signal",
+              "id": 3
+            },
+            "then": {
+              "op": "const",
+              "value": true
+            },
+            "else": {
+              "op": "if",
+              "condition": {
+                "op": "signal",
+                "id": 4
+              },
+              "then": {
+                "op": "const",
+                "value": true
+              },
+              "else": {
+                "op": "if",
+                "condition": {
+                  "op": "signal",
+                  "id": 5
+                },
+                "then": {
+                  "op": "const",
+                  "value": true
+                },
+                "else": {
+                  "op": "if",
+                  "condition": {
+                    "op": "signal",
+                    "id": 6
+                  },
+                  "then": {
+                    "op": "const",
+                    "value": true
+                  },
+                  "else": {
+                    "op": "const",
+                    "value": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+});
+
+/** CDN provider address ranges (cdncheck sources_data.json `cdn`). */
 export const CDN_ADDRESS_RANGES = Object.freeze({
   "arvancloud": [
     "178.131.120.48/28",
@@ -4013,6 +11592,7 @@ export const CDN_ADDRESS_RANGES = Object.freeze({
     "212.65.33.11/32",
     "212.96.94.58/32",
     "213.151.225.33/32",
+    "213.156.144.4/32",
     "213.156.144.4/32",
     "213.156.144.5/32",
     "213.156.144.6/32",
@@ -6030,7 +13610,7 @@ export const CDN_ADDRESS_RANGES = Object.freeze({
   ]
 });
 
-/** WAF provider address ranges (cdncheck `waf`). */
+/** WAF provider address ranges (cdncheck sources_data.json `waf`). */
 export const WAF_ADDRESS_RANGES = Object.freeze({
   "arvancloud": [
     "178.131.120.48/28",
@@ -7111,182 +14691,319 @@ export const WAF_ADDRESS_RANGES = Object.freeze({
   ]
 });
 
-/** Edge CNAME suffixes shared by CDN and WAF products (cdncheck `common`). */
-export const EDGE_CNAME_SUFFIXES = Object.freeze({
-  "360 云 CDN (由奇安信运营)": [
-    "qhcdn.com"
-  ],
-  "360 云 CDN (由奇虎 360 运营)": [
-    "60cdn.com",
-    "qihucdn.com"
-  ],
-  "360 云加速 CDN": [
-    "qh-cdn.com",
-    "qss-lb.com"
-  ],
-  "akamai": [
-    "akamaiedge.net",
-    "akamaihd.net",
-    "akamaitechnologies.com",
-    "edgekey.net",
-    "edgesuite.net"
-  ],
-  "amazon": [
-    "amazonaws.com",
-    "cloudfront.net"
-  ],
-  "arvancloud": [
-    "arvancdn.ir",
-    "arvancloud.ir",
-    "arvancloud.ru"
-  ],
-  "cloudflare": [
-    "cloudflare.com"
-  ],
-  "edgecast": [
-    "edgecastcdn.net",
-    "edgesuite.net"
-  ],
-  "fastly": [
-    "fastly.net"
-  ],
-  "incapsula": [
-    "impervadns.net"
-  ],
-  "qrator": [
-    "qrator.net"
-  ],
-  "七牛云": [
-    "iniudns.com",
-    "qbox.me",
-    "qiniu.com"
-  ],
-  "云盾 CDN": [
-    "yunduncdn.com"
-  ],
-  "京东云 CDN": [
-    "jcloud-cdn.com",
-    "jcloudcs.com",
-    "jcloudlb.com",
-    "jdcdn.com",
-    "qianxun.com"
-  ],
-  "加速乐 CDN": [
-    "cdn.jiashule.com",
-    "cname.365cyd.cn",
-    "vip.jiasule.org"
-  ],
-  "华为云 CDN": [
-    "cdnhwc1.com",
-    "cdnhwc2.com",
-    "cdnhwc3.com"
-  ],
-  "华为云 WAF": [
-    "huaweicloud.com",
-    "huaweicloudwaf.com"
-  ],
-  "又拍云 CDN": [
-    "aicdn.com"
-  ],
-  "奇安信网站卫士": [
-    "360anyu.com",
-    "360cloudwaf.com",
-    "360safedns.com",
-    "360wzws.com",
-    "qaxwzws.com"
-  ],
-  "安恒玄武盾": [
-    "dbappwaf.cn",
-    "saaswaf.com"
-  ],
-  "帝联 CDN": [
-    "fastcdn.com"
-  ],
-  "广东网堤 CDN": [
-    "2cname.com"
-  ],
-  "深信服云盾": [
-    "sangfordns.com"
-  ],
-  "白山云科技 CDN": [
-    "bsclink.cn",
-    "bsgslb.cn",
-    "qingcdn.com",
-    "trpcdn.net"
-  ],
-  "绿盟云 WAF": [
-    "nscloudwaf.com"
-  ],
-  "网宿 CDN": [
-    "51cdn.com",
-    "cdn20.com",
-    "cdn30.com",
-    "chinanetcenter.com",
-    "customcdn.cn",
-    "customcdn.com.cn",
-    "lxdns.com",
-    "mwcloudcdn.com",
-    "mwcname.com",
-    "ourplat.net",
-    "speedcdns.com",
-    "wscdns.com",
-    "wscloudcdn.com",
-    "wsdvs.com",
-    "wsglb0.com",
-    "wsssec.com",
-    "wswebcdn.com",
-    "wswebpic.com",
-    "wtxcdn.com"
-  ],
-  "网神 CDN": [
-    "360wzws.com",
-    "qaxcloudwaf.com",
-    "qaxwzws.com"
-  ],
-  "美橙 CDN": [
-    "51hostonline.cn",
-    "cndns5.com",
-    "websitecname.cn"
-  ],
-  "腾正安全加速 (原 15CDN)": [
-    "15cdn.com",
-    "tzcdn.cn"
-  ],
-  "腾讯云 CDN": [
-    "cdn.dnsv1.com",
-    "cdntip.com",
-    "dnsv1.com",
-    "qcloudcjgj.com",
-    "qcloudwaf.com",
-    "qcloudwzgj.com",
-    "qcloudzygj.com",
-    "tdnsv5.com",
-    "tencdns.net"
-  ],
-  "蓝盾云 CDN": [
-    "cloudfence.cn"
-  ],
-  "阿里云 CDN": [
-    "alicloudwaf.com",
-    "alikunlun.com",
-    "cdngslb.com",
-    "kunlunca.com",
-    "kunluncan.com",
-    "kunlunea.com",
-    "kunlunpi.com",
-    "yundunwaf1.com",
-    "yundunwaf2.com",
-    "yundunwaf3.com",
-    "yundunwaf4.com",
-    "yundunwaf5.com"
-  ]
-});
+/**
+ * CNAME suffix rules (cdncheck `common`). The explicit `type` is ported from the pinned
+ * CheckSuffix implementation; it is not inferred from provider-name overlap.
+ */
+export const EDGE_CNAME_RULES = Object.freeze([
+  {
+    "provider": "360 云 CDN (由奇安信运营)",
+    "type": "waf",
+    "suffixes": [
+      "qhcdn.com"
+    ]
+  },
+  {
+    "provider": "360 云 CDN (由奇虎 360 运营)",
+    "type": "waf",
+    "suffixes": [
+      "60cdn.com",
+      "qihucdn.com"
+    ]
+  },
+  {
+    "provider": "360 云加速 CDN",
+    "type": "waf",
+    "suffixes": [
+      "qh-cdn.com",
+      "qss-lb.com"
+    ]
+  },
+  {
+    "provider": "akamai",
+    "type": "waf",
+    "suffixes": [
+      "akamaiedge.net",
+      "akamaihd.net",
+      "akamaitechnologies.com",
+      "edgekey.net",
+      "edgesuite.net"
+    ]
+  },
+  {
+    "provider": "amazon",
+    "type": "waf",
+    "suffixes": [
+      "amazonaws.com",
+      "cloudfront.net"
+    ]
+  },
+  {
+    "provider": "arvancloud",
+    "type": "waf",
+    "suffixes": [
+      "arvancdn.ir",
+      "arvancloud.ir",
+      "arvancloud.ru"
+    ]
+  },
+  {
+    "provider": "cloudflare",
+    "type": "waf",
+    "suffixes": [
+      "cloudflare.com"
+    ]
+  },
+  {
+    "provider": "edgecast",
+    "type": "waf",
+    "suffixes": [
+      "edgecastcdn.net",
+      "edgesuite.net"
+    ]
+  },
+  {
+    "provider": "fastly",
+    "type": "waf",
+    "suffixes": [
+      "fastly.net"
+    ]
+  },
+  {
+    "provider": "incapsula",
+    "type": "waf",
+    "suffixes": [
+      "impervadns.net"
+    ]
+  },
+  {
+    "provider": "qrator",
+    "type": "waf",
+    "suffixes": [
+      "qrator.net"
+    ]
+  },
+  {
+    "provider": "七牛云",
+    "type": "waf",
+    "suffixes": [
+      "iniudns.com",
+      "qbox.me",
+      "qiniu.com"
+    ]
+  },
+  {
+    "provider": "云盾 CDN",
+    "type": "waf",
+    "suffixes": [
+      "yunduncdn.com"
+    ]
+  },
+  {
+    "provider": "京东云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "jcloud-cdn.com",
+      "jcloudcs.com",
+      "jcloudlb.com",
+      "jdcdn.com",
+      "qianxun.com"
+    ]
+  },
+  {
+    "provider": "加速乐 CDN",
+    "type": "waf",
+    "suffixes": [
+      "cdn.jiashule.com",
+      "cname.365cyd.cn",
+      "vip.jiasule.org"
+    ]
+  },
+  {
+    "provider": "华为云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "cdnhwc1.com",
+      "cdnhwc2.com",
+      "cdnhwc3.com"
+    ]
+  },
+  {
+    "provider": "华为云 WAF",
+    "type": "waf",
+    "suffixes": [
+      "huaweicloud.com",
+      "huaweicloudwaf.com"
+    ]
+  },
+  {
+    "provider": "又拍云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "aicdn.com"
+    ]
+  },
+  {
+    "provider": "奇安信网站卫士",
+    "type": "waf",
+    "suffixes": [
+      "360anyu.com",
+      "360cloudwaf.com",
+      "360safedns.com",
+      "360wzws.com",
+      "qaxwzws.com"
+    ]
+  },
+  {
+    "provider": "安恒玄武盾",
+    "type": "waf",
+    "suffixes": [
+      "dbappwaf.cn",
+      "saaswaf.com"
+    ]
+  },
+  {
+    "provider": "帝联 CDN",
+    "type": "waf",
+    "suffixes": [
+      "fastcdn.com"
+    ]
+  },
+  {
+    "provider": "广东网堤 CDN",
+    "type": "waf",
+    "suffixes": [
+      "2cname.com"
+    ]
+  },
+  {
+    "provider": "深信服云盾",
+    "type": "waf",
+    "suffixes": [
+      "sangfordns.com"
+    ]
+  },
+  {
+    "provider": "白山云科技 CDN",
+    "type": "waf",
+    "suffixes": [
+      "bsclink.cn",
+      "bsgslb.cn",
+      "qingcdn.com",
+      "trpcdn.net"
+    ]
+  },
+  {
+    "provider": "绿盟云 WAF",
+    "type": "waf",
+    "suffixes": [
+      "nscloudwaf.com"
+    ]
+  },
+  {
+    "provider": "网宿 CDN",
+    "type": "waf",
+    "suffixes": [
+      "51cdn.com",
+      "cdn20.com",
+      "cdn30.com",
+      "chinanetcenter.com",
+      "customcdn.cn",
+      "customcdn.com.cn",
+      "lxdns.com",
+      "mwcloudcdn.com",
+      "mwcname.com",
+      "ourplat.net",
+      "speedcdns.com",
+      "wscdns.com",
+      "wscloudcdn.com",
+      "wsdvs.com",
+      "wsglb0.com",
+      "wsssec.com",
+      "wswebcdn.com",
+      "wswebpic.com",
+      "wtxcdn.com"
+    ]
+  },
+  {
+    "provider": "网神 CDN",
+    "type": "waf",
+    "suffixes": [
+      "360wzws.com",
+      "qaxcloudwaf.com",
+      "qaxwzws.com"
+    ]
+  },
+  {
+    "provider": "美橙 CDN",
+    "type": "waf",
+    "suffixes": [
+      "51hostonline.cn",
+      "cndns5.com",
+      "websitecname.cn"
+    ]
+  },
+  {
+    "provider": "腾正安全加速 (原 15CDN)",
+    "type": "waf",
+    "suffixes": [
+      "15cdn.com",
+      "tzcdn.cn"
+    ]
+  },
+  {
+    "provider": "腾讯云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "cdn.dnsv1.com",
+      "cdntip.com",
+      "dnsv1.com",
+      "qcloudcjgj.com",
+      "qcloudwaf.com",
+      "qcloudwzgj.com",
+      "qcloudzygj.com",
+      "tdnsv5.com",
+      "tencdns.net"
+    ]
+  },
+  {
+    "provider": "蓝盾云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "cloudfence.cn"
+    ]
+  },
+  {
+    "provider": "阿里云 CDN",
+    "type": "waf",
+    "suffixes": [
+      "alicloudwaf.com",
+      "alikunlun.com",
+      "cdngslb.com",
+      "kunlunca.com",
+      "kunluncan.com",
+      "kunlunea.com",
+      "kunlunpi.com",
+      "yundunwaf1.com",
+      "yundunwaf2.com",
+      "yundunwaf3.com",
+      "yundunwaf4.com",
+      "yundunwaf5.com"
+    ]
+  }
+]);
 
 export const EDGE_CORPUS_STATS = Object.freeze({
-  waf_vendors: 168,
-  passive_signatures: 186,
-  block_page_signatures: 320,
-  cdn_ranges: 2461,
+  waf_plugins_total: 172,
+  waf_plugins_supported: 172,
+  waf_plugins_unsupported: 0,
+  waf_vendors: 172,
+  passive_signatures: 188,
+  block_page_signatures: 330,
+  cdn_providers: 16,
+  waf_range_providers: 3,
+  cname_providers: 32,
+  cdn_ranges: 2462,
   waf_ranges: 1071,
   cname_suffixes: 103,
 });

@@ -2,7 +2,7 @@
 /**
  * Generate docs/check-library.html from src/contracts/checks.mjs CHECK_CATALOG.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHECK_CATALOG } from '../src/contracts/checks.mjs';
@@ -20,7 +20,7 @@ const GLOSSARY = {
   'metadata_marker': 'Catalog-only simulation in dev/CI; production signed-worker may still dispatch a minimal stub unless a live probe kind is set.',
   'soc_gated': 'Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.',
   nonce_hash: 'Correlation token linking probe job to agent observation without sending raw payloads.',
-  'direct_origin_ip': 'Customer-declared origin IP used for Host/SNI bypass probes (no automatic origin hunting).',
+  'direct_origin_ip': 'Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.',
 };
 
 const PROBE_KINDS = {
@@ -65,6 +65,10 @@ const FAMILY_LABELS = {
   protocol: 'Modern protocols',
   operations: 'Operations readiness',
   high_scale: 'High-scale (SOC only)',
+  reflection: 'Reflection exposure',
+  amplification: 'Amplification exposure',
+  exploit: 'Exploit-based DoS posture',
+  pattern: 'Delivery patterns',
 };
 
 function esc(s) {
@@ -97,7 +101,7 @@ function whatWeDetect(check) {
     'waf.fingerprint.safe': 'WAF vendor fingerprint, benign SQLi/XSS/path markers blocked or not, evasion bypass, posture label.',
     'dns.zone_transfer_exposure.safe': 'Unauthorized AXFR (full zone download) on declared zone.',
     'l7.cors_posture.safe': 'Overly permissive CORS (wildcard ACAO on preflight).',
-    'protocol.grpc_reflection_stream.safe': 'Declared gRPC reflection policy only (live probe deferred).',
+    'protocol.grpc_reflection_stream.safe': 'One bounded gRPC health/reflection reachability request (metadata-only result, no stream pressure).',
   };
   if (hints[id]) return hints[id];
   return check.verdict_logic || check.description;
@@ -105,6 +109,10 @@ function whatWeDetect(check) {
 
 const safe = CHECK_CATALOG.filter((c) => c.safety_class === 'safe');
 const soc = CHECK_CATALOG.filter((c) => c.safety_class === 'soc_gated');
+const uncategorized = CHECK_CATALOG.filter((c) => !['safe', 'soc_gated'].includes(c.safety_class));
+if (uncategorized.length > 0 || safe.length + soc.length !== CHECK_CATALOG.length) {
+  throw new Error(`check-library: unsupported safety class on ${uncategorized.map((c) => c.check_id).join(', ')}`);
+}
 
 const byFamily = new Map();
 for (const c of safe) {
@@ -113,13 +121,17 @@ for (const c of safe) {
   byFamily.get(f).push(c);
 }
 
-const familyOrder = ['origin', 'l3_l4', 'path', 'dns', 'waf', 'l7', 'tls', 'protocol', 'operations'];
+const familyOrder = ['origin', 'l3_l4', 'path', 'dns', 'waf', 'l7', 'tls', 'protocol', 'reflection', 'amplification', 'exploit', 'pattern', 'operations'];
 
 function renderCheckCard(c) {
   const agents = (c.required_agent_modes ?? []).join(', ') || 'none';
   const setup = (c.required_customer_setup ?? []).map((s) => `<li>${esc(s)}</li>`).join('');
   const evidence = (c.evidence_required ?? []).map(esc).join(', ');
   const stops = (c.stop_conditions ?? []).map(esc).join(', ');
+  const vectors = (c.attack_vector_ids ?? []).map(esc).join(', ');
+  const resourceLabel = c.exhausted_resource
+    ? `${esc(c.exhausted_resource)}`
+    : 'not DDoS-scored (WAF-offensive / monitor-only)';
   return `
     <article class="check" id="${esc(c.check_id)}">
       <header>
@@ -135,6 +147,8 @@ function renderCheckCard(c) {
         <dd>${esc(detectSummary(c))}</dd>
         <dt>Probe kind</dt>
         <dd><code>${esc(c.probe_profile?.kind ?? 'none')}</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>${resourceLabel}${vectors ? ` <span class="muted">(registry: ${vectors})</span>` : ''}</dd>
         <dt>Default expected behavior</dt>
         <dd><code>${esc(c.default_expected_behavior ?? '—')}</code></dd>
         <dt>Targets</dt>
@@ -314,10 +328,30 @@ const html = `<!DOCTYPE html>
     </section>
   </main>
   <footer>
-    AstraNull · Check catalog v${esc(safe[0]?.version ?? '1.0.0')} · ${safe.length} safe + ${soc.length} SOC-gated · ${new Date().toISOString().slice(0, 10)}
+    AstraNull · Check catalog v${esc(safe[0]?.version ?? '1.0.0')} · ${safe.length} safe + ${soc.length} SOC-gated
   </footer>
 </body>
 </html>`;
 
-writeFileSync(OUT, html, 'utf8');
-console.log(`check-library: wrote ${OUT} (${CHECK_CATALOG.length} checks)`);
+const args = process.argv.slice(2);
+if (args.some((arg) => arg !== '--check') || args.filter((arg) => arg === '--check').length > 1) {
+  throw new Error('usage: node scripts/generate-check-library-html.mjs [--check]');
+}
+
+if (args.includes('--check')) {
+  let current = '';
+  try {
+    current = readFileSync(OUT, 'utf8');
+  } catch {
+    // A missing generated artifact is a parity failure, not a reason to create it in check mode.
+  }
+  if (current !== html) {
+    console.error('check-library: generated docs/check-library.html is out of date; run node scripts/generate-check-library-html.mjs');
+    process.exitCode = 1;
+  } else {
+    console.log(`check-library: in sync (${CHECK_CATALOG.length} checks)`);
+  }
+} else {
+  writeFileSync(OUT, html, 'utf8');
+  console.log(`check-library: wrote ${OUT} (${CHECK_CATALOG.length} checks)`);
+}

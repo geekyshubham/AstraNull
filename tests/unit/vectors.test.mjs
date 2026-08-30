@@ -9,6 +9,7 @@ import {
   getCheckById,
   isCustomerRunnable,
 } from '../../src/contracts/checks.mjs';
+import { EXHAUSTED_RESOURCE_FAMILIES } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
 
 /** Maps docs/progress-detailed.md VEC-* rows to versioned catalog check_ids. */
 export const DETAILED_VECTOR_TRACKER = Object.freeze({
@@ -119,13 +120,31 @@ describe('vector catalog', () => {
       target_group_id: 'tg_1',
     });
 
+    // The catalog now contains well over the default 60-runs-per-hour tenant budget,
+    // so every completed run is aged out of the rate-limit window after its assertions.
+    const ageOutRuns = () => {
+      const stale = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      getStore().testRuns.forEach((r) => {
+        r.created_at = stale;
+        r.updated_at = stale;
+      });
+    };
+
     for (const check of CHECK_CATALOG.filter((c) => isCustomerRunnable(c))) {
       makeSeedTargetCompatibleWith(check);
-      const result = startTestRun(ctx, {
+      let result = startTestRun(ctx, {
         check_id: check.check_id,
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
       });
+      if (result.error === 'rate_limited') {
+        ageOutRuns();
+        result = startTestRun(ctx, {
+          check_id: check.check_id,
+          target_group_id: 'tg_1',
+          target_id: 'tgt_1',
+        });
+      }
       if (result.error === 'concurrent_run_blocked') {
         getStore().testRuns.forEach((r) => {
           r.status = 'verdicted';
@@ -143,6 +162,7 @@ describe('vector catalog', () => {
         assert.equal(result.run.safety_class, 'safe');
         getStore().testRuns.find((r) => r.id === result.run.id).status = 'verdicted';
       }
+      ageOutRuns();
     }
     assert.ok(getCheckById('dns.authoritative_response.safe'));
   });
@@ -189,9 +209,10 @@ describe('vector catalog', () => {
     assert.equal(result.run.check_id, 'path.protected_canary.safe');
   });
 
-  it('preflights signed-worker Host/SNI checks for declared direct origin IP', () => {
+  it('rejects alternate Host/SNI destinations and allows only a literal-IP target', () => {
     freshStore();
     const ctx = { tenantId: 'ten_demo', userId: 'u1', role: 'engineer' };
+    const worker = { probeMode: 'signed-worker', probeWorkerSecret: 's'.repeat(32) };
     getStore().agents.push({
       id: 'ag_1',
       tenant_id: 'ten_demo',
@@ -199,20 +220,59 @@ describe('vector catalog', () => {
       capabilities: ['heartbeat', 'canary', 'packet'],
       target_group_id: 'tg_1',
     });
-    const missing = startTestRun(
+    getStore().targetVerifications = [{
+      id: 'tv_vector_agent_verified',
+      tenant_id: 'ten_demo',
+      target_id: 'tgt_1',
+      state: 'agent_verified',
+      source_kind: 'agent_observation',
+      source_ref: { ownership_verification_id: 'own_vector' },
+      transitioned_at: new Date().toISOString(),
+      transitioned_by: 'system',
+    }];
+
+    const bodyRetarget = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        probe_profile: { direct_ip: '198.51.100.200' },
+      },
+      worker,
+    );
+    assert.equal(bodyRetarget.error, 'missing_target_bound_direct_address');
+    assert.match(bodyRetarget.message, /verified target itself/);
+    assert.equal(getStore().testRuns.length, 0);
+    assert.equal(getStore().probeJobs.length, 0);
+
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    target.metadata = { direct_origin_ip: '198.51.100.201' };
+    const metadataRetarget = startTestRun(
       ctx,
       {
         check_id: 'origin.direct_bypass.safe',
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
       },
-      { probeMode: 'signed-worker', probeWorkerSecret: 's'.repeat(32) },
+      worker,
     );
-    assert.equal(missing.error, 'missing_direct_origin_ip');
-    assert.equal(missing.status, 400);
+    assert.equal(metadataRetarget.error, 'missing_target_bound_direct_address');
+    assert.equal(getStore().testRuns.length, 0);
+    assert.equal(getStore().probeJobs.length, 0);
+    const bindingDenials = getStore().auditLog.filter(
+      (entry) => entry.action === 'test_run.destination_binding_denied',
+    );
+    assert.equal(bindingDenials.length, 2);
+    assert.equal(JSON.stringify(bindingDenials).includes('198.51.100.200'), false);
+    assert.equal(JSON.stringify(bindingDenials).includes('198.51.100.201'), false);
 
-    getStore().targets.find((t) => t.id === 'tgt_1').metadata = {
-      direct_origin_ip: '198.51.100.7',
+    target.kind = 'url';
+    target.value = 'https://198.51.100.7/origin?bounded=1';
+    target.metadata = {
+      direct_origin_ip: '198.51.100.201',
+      resolver_host: '8.8.8.8',
+      alert_webhook_url: 'https://victim.example.test/hook',
     };
     const accepted = startTestRun(
       ctx,
@@ -220,11 +280,28 @@ describe('vector catalog', () => {
         check_id: 'origin.direct_bypass.safe',
         target_group_id: 'tg_1',
         target_id: 'tgt_1',
+        probe_profile: {
+          protected_host: 'edge.example.test',
+          direct_ip: '198.51.100.200',
+          resolver_host: '9.9.9.9',
+          secondary_nameservers: ['ns.victim.example.test'],
+        },
       },
-      { probeMode: 'signed-worker', probeWorkerSecret: 's'.repeat(32) },
+      worker,
     );
     assert.ok(accepted.run);
     assert.ok(accepted.probe_job);
+    const job = getStore().probeJobs.at(-1);
+    assert.equal(job.target.value, target.value);
+    assert.equal(job.probe_profile.protected_host, 'edge.example.test');
+    assert.equal(job.probe_profile.direct_ip, undefined);
+    assert.equal(job.probe_profile.resolver_host, undefined);
+    assert.equal(job.probe_profile.secondary_nameservers, undefined);
+    assert.equal(job.target.metadata?.direct_origin_ip, undefined);
+    assert.equal(job.target.metadata?.alert_webhook_url, undefined);
+    assert.equal(JSON.stringify(job).includes('victim'), false);
+    assert.equal(JSON.stringify(job).includes('198.51.100.200'), false);
+    assert.equal(JSON.stringify(job).includes('198.51.100.201'), false);
   });
 
   it('requires bounded probe and evidence metadata on every customer-runnable check', () => {
@@ -307,5 +384,36 @@ describe('vector catalog', () => {
       assert.ok(Array.isArray(check.stop_conditions) && check.stop_conditions.length > 0, check.check_id);
       assert.equal(check.probe_profile, undefined, check.check_id);
     }
+  });
+
+  it('attaches resource-exhaustion metadata to every catalog check (DET-016)', () => {
+    const familyIds = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id));
+    for (const check of CHECK_CATALOG) {
+      assert.ok('exhausted_resource' in check, check.check_id);
+      assert.ok(Array.isArray(check.attack_vector_ids), check.check_id);
+      assert.ok(Array.isArray(check.delivery_patterns), check.check_id);
+      if (check.exhausted_resource !== null) {
+        assert.ok(familyIds.has(check.exhausted_resource), check.check_id);
+        assert.ok(check.attack_vector_ids.length > 0, check.check_id);
+      } else {
+        // null is only allowed for WAF-offensive or monitor-only operational checks
+        assert.ok(
+          (check.waf_vulnerability_ids?.length ?? 0) > 0 || (check.non_ddos_threat_ids?.length ?? 0) > 0,
+          check.check_id,
+        );
+      }
+    }
+    // Every DDoS family is represented in the catalog.
+    for (const family of ['volumetric', 'packet_processing', 'state_exhaustion', 'application_l7', 'computational', 'memory_exhaustion', 'backend_exhaustion', 'dns_exhaustion', 'reflection', 'amplification', 'exploit_dos', 'delivery_pattern']) {
+      assert.ok(
+        CHECK_CATALOG.some((c) => c.exhausted_resource === family),
+        `no catalog check maps to family ${family}`,
+      );
+    }
+    // Delivery-pattern checks expose their governed delivery_patterns labels.
+    const carpet = getCheckById('pattern.carpet_bombing.readiness');
+    assert.deepEqual(carpet.delivery_patterns, ['carpet_bombing']);
+    const spoofed = getCheckById('pattern.spoofed_source.readiness');
+    assert.deepEqual(spoofed.delivery_patterns, ['spoofed']);
   });
 });

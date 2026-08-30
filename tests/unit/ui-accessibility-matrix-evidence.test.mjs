@@ -9,6 +9,7 @@ import {
   createUiAccessibilityMatrixArtifact,
   main,
   parseArgs,
+  validateUiAccessibilityCollectorAcceptance,
   validateUiAccessibilityMatrixEvidence,
 } from '../../scripts/ui-accessibility-matrix-evidence.mjs';
 
@@ -82,6 +83,54 @@ describe('ui accessibility matrix evidence validator', () => {
     assert.deepEqual(validation.forbidden_fields, []);
     assert.equal(validation.summary.run_count, REQUIRED_PAGES.length * 2);
     assert.doesNotThrow(() => assertValidUiAccessibilityMatrixEvidence(validMatrixEvidence()));
+  });
+
+  it('strict collector acceptance requires the exact completed Chromium runner matrix', () => {
+    const genuine = validMatrixEvidence();
+    genuine.runs.forEach((run) => {
+      run.browser = 'chromium';
+      run.issues = { critical: 0, serious: 0, moderate: 0, minor: 0 };
+    });
+    assert.equal(genuine.runs.length, 12);
+    assert.equal(new Set(genuine.runs.map((run) => `${run.page}:${run.viewport}`)).size, 12);
+    assert.ok(genuine.runs.every((run) => run.browser === 'chromium'));
+    assert.ok(genuine.runs.every((run) => Object.values(run.issues).every((count) => count === 0)));
+    assert.equal(validateUiAccessibilityCollectorAcceptance(genuine).ok, true);
+
+    const cases = [
+      ['duplicate pair', (evidence) => evidence.runs.push(structuredClone(evidence.runs[0]))],
+      ['missing pair', (evidence) => evidence.runs.pop()],
+      ['unknown pair', (evidence) => { evidence.runs[0].page = 'unknown_page'; }],
+      ['not_run browser', (evidence) => { evidence.runs[0].browser = 'not_run'; }],
+      ['missing capture time', (evidence) => { evidence.runs[0].captured_at = ''; }, 'runs[0].captured_at'],
+      ['invalid date text', (evidence) => { evidence.runs[0].captured_at = 'not-a-date'; }, 'runs[0].captured_at'],
+      ['impossible date', (evidence) => { evidence.runs[0].captured_at = '2026-02-30T12:00:00.000Z'; }, 'runs[0].captured_at'],
+      ['timestamp without milliseconds', (evidence) => { evidence.runs[0].captured_at = '2026-08-30T12:00:00Z'; }, 'runs[0].captured_at'],
+      ['timestamp with offset', (evidence) => { evidence.runs[0].captured_at = '2026-08-30T08:00:00.000-04:00'; }, 'runs[0].captured_at'],
+      ['numeric capture time', (evidence) => { evidence.runs[0].captured_at = 1788091200000; }, 'runs[0].captured_at'],
+      ['null capture time', (evidence) => { evidence.runs[0].captured_at = null; }, 'runs[0].captured_at'],
+      ['incomplete check', (evidence) => { evidence.runs[0].keyboard_status = 'skip'; }],
+      ['serious issue', (evidence) => { evidence.runs[0].issues.serious = 1; }, 'runs[0].issues.serious'],
+      ['moderate issue', (evidence) => { evidence.runs[0].issues.moderate = 1; }, 'runs[0].issues.moderate'],
+      ['minor issue', (evidence) => { evidence.runs[0].issues.minor = 1; }, 'runs[0].issues.minor'],
+    ];
+    for (const [name, mutate, expectedProblem] of cases) {
+      const evidence = structuredClone(genuine);
+      mutate(evidence);
+      const acceptance = validateUiAccessibilityCollectorAcceptance(evidence);
+      assert.equal(acceptance.ok, false, name);
+      if (expectedProblem) assert.ok(acceptance.incomplete_checks.includes(expectedProblem), name);
+    }
+  });
+
+  it('requires issue counts to be exact non-negative numbers and integers', () => {
+    for (const invalidCount of ['0', -1, 0.5, Number.NaN]) {
+      const evidence = validMatrixEvidence();
+      evidence.runs[0].issues.moderate = invalidCount;
+      const validation = validateUiAccessibilityMatrixEvidence(evidence);
+      assert.equal(validation.ok, false, String(invalidCount));
+      assert.ok(validation.missing_run_fields.includes('dashboard.issues.moderate'));
+    }
   });
 
   it('rejects missing viewport and browser metadata', () => {

@@ -22,7 +22,8 @@ function futureWindow() {
 function completeEvidence(overrides = {}) {
   return {
     high_scale_request_id: 'hsr_provider_evidence',
-    requested_scenario_families: ['volumetric_metadata'],
+    requested_scenario_families: ['udp_flood'],
+    delivery_patterns: ['direct'],
     authorized_scope_hash: 'sha256:scope-demo-001',
     soc_reviewer: 'usr_soc_reviewer',
     legal_signoff: {
@@ -35,9 +36,10 @@ function completeEvidence(overrides = {}) {
       approval_reference: 'CF-1001',
       valid_window: futureWindow(),
       approved_targets: ['tg_demo'],
-      approved_scenario_families: ['volumetric_metadata'],
+      approved_scenario_families: ['udp_flood'],
+      approved_delivery_patterns: ['direct'],
       contact_path: 'provider-war-room@example.invalid',
-      approved_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 30 },
+      approved_limits: { max_gbps: 0.5, max_duration_minutes: 30 },
       provider_specific_evidence: { provider_ticket: 'CF-1001' },
       emergency_stop_path: 'provider-stop-bridge',
     },

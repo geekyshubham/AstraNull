@@ -26,9 +26,9 @@ Enterprises often place CDN/WAF/DDoS protection in front of apps, but the origin
 
 ## Safe validation method
 
-AstraNull sends a small labeled probe with unique nonce to the declared origin/direct path and checks whether the agent observes it. In developer simulation mode this is `SAFE_PROBE_SIMULATION`; in signed-worker mode, Host/SNI-backed origin checks send one bounded HEAD request to a declared direct-origin IP or literal-IP URL while preserving the protected Host/SNI value and declared URL path.
+AstraNull sends a small labeled probe with unique nonce to the declared origin/direct path and checks whether the agent observes it. In developer simulation mode this is `SAFE_PROBE_SIMULATION`; in signed-worker mode, Host/SNI-backed origin checks send one bounded HEAD request only when the verified target itself is an IP literal or a URL with an IP-literal host. The protected HTTP Host/TLS SNI value and declared URL path may differ because they do not retarget the socket.
 
-FQDN origin-bypass checks therefore require explicit direct-origin metadata such as `target.metadata.direct_origin_ip` or `probe_profile.direct_ip`. AstraNull must reject signed-worker origin-bypass runs before queueing a job when that direct path is missing.
+FQDN targets cannot acquire a second direct path through `probe_profile.direct_ip`, `target.metadata.direct_origin_ip`, resolver/nameserver fields, or webhook metadata. Both developer and Postgres start paths reject such Host/SNI runs with `missing_target_bound_direct_address` before queueing, and the shared signed-job builder strips alternate destinations after catalog, request, and target-metadata merges (including recovery-job creation).
 
 Do not rely only on external response. A timeout can still mean traffic reached the origin and was dropped later. Agent observation is the key proof.
 

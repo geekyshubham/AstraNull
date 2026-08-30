@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
+import { PassThrough } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
 import { loadRuntimeConfig } from '../../src/config.mjs';
 import {
@@ -20,7 +22,9 @@ import {
 import { startTestRun } from '../../src/services/testRuns.mjs';
 import { getStore } from '../../src/store.mjs';
 import { freshStore } from '../helpers/reset.mjs';
+import { runProtocolTransportFixture } from './protocol-transport-watchdog.mjs';
 import {
+  PROBE_WORKER_CYCLE_TIMEOUT_MS,
   WORKER_VERSION,
   fetchHttpHeadWithSafeRedirects,
   parseWorkerConfig,
@@ -30,7 +34,9 @@ import {
   probeTcpConnect,
   processJob,
   redactSecrets,
+  runProbeWorker,
   sanitizeProbeMetadata,
+  vetProbeDestination,
   workerSigningPath,
 } from '../../workers/probe-worker.mjs';
 
@@ -348,6 +354,41 @@ describe('probe worker DNS helper', () => {
   });
 });
 
+
+describe('probe worker liveness deadlines', () => {
+  it('keeps the hard cycle deadline below heartbeat freshness', () => {
+    assert.ok(PROBE_WORKER_CYCLE_TIMEOUT_MS < 120_000);
+  });
+
+  it('fails destination classification when A and AAAA resolution hang', async () => {
+    const never = () => new Promise(() => {});
+    await assert.rejects(
+      () => vetProbeDestination(baseJob(), {
+        resolve4Fn: never,
+        resolve6Fn: never,
+        destinationDnsTimeoutMs: 5,
+      }),
+      (error) => error?.code === 'probe_destination_dns_timeout',
+    );
+  });
+
+  it('fails a hung cycle without writing a later healthy heartbeat', async () => {
+    let heartbeatWrites = 0;
+    await assert.rejects(
+      () => runProbeWorker(
+        { once: true, heartbeatFile: '/tmp/unused-probe-heartbeat', pollIntervalMs: 1000 },
+        {
+          cycleTimeoutMs: 5,
+          pollAndProcessOnceFn: () => new Promise(() => {}),
+          writeHeartbeatFn: () => { heartbeatWrites += 1; },
+        },
+      ),
+      (error) => error?.code === 'probe_worker_cycle_timeout',
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(heartbeatWrites, 0);
+  });
+});
 describe('probe worker HTTP HEAD execution', () => {
   it('sends one HEAD with nonce header and metadata-only attestation', async () => {
     const server = createHttpServer((req, res) => {
@@ -363,7 +404,9 @@ describe('probe worker HTTP HEAD execution', () => {
     const job = baseJob({
       target: { kind: 'url', value: `http://127.0.0.1:${port}/health` },
     });
-    const outcome = await probeHttpHead(job);
+    const outcome = await probeHttpHead(job, {
+      destinationPolicy: { allowPrivate: true, allowLoopback: true },
+    });
     assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.status_code, 204);
@@ -394,7 +437,9 @@ describe('probe worker HTTP HEAD execution', () => {
         constraints: { max_requests: 1, timeout_ms: 1000 },
         target: { kind: 'url', value: `http://127.0.0.1:${port}/start` },
       });
-      const outcome = await probeHttpHead(job);
+      const outcome = await probeHttpHead(job, {
+      destinationPolicy: { allowPrivate: true, allowLoopback: true },
+    });
       assert.equal(requests, 1);
       assert.equal(outcome.requests_sent, 1);
       assert.equal(outcome.external_result, 'error');
@@ -432,7 +477,9 @@ describe('probe worker HTTP HEAD execution', () => {
       const job = baseJob({
         target: { kind: 'url', value: `http://127.0.0.1:${originPort}/start` },
       });
-      const outcome = await probeHttpHead(job);
+      const outcome = await probeHttpHead(job, {
+      destinationPolicy: { allowPrivate: true, allowLoopback: true },
+    });
       assert.equal(originRequests, 1);
       assert.equal(redirectedRequests, 0);
       assert.equal(outcome.requests_sent, 1);
@@ -450,7 +497,9 @@ describe('probe worker HTTP HEAD execution', () => {
       constraints: { max_requests: 1, timeout_ms: 50 },
       target: { kind: 'url', value: 'http://127.0.0.1:1/unreachable' },
     });
-    const outcome = await probeHttpHead(job);
+    const outcome = await probeHttpHead(job, {
+      destinationPolicy: { allowPrivate: true, allowLoopback: true },
+    });
     assert.ok(['timeout', 'blocked', 'error'].includes(outcome.external_result));
     assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.metadata.raw_packet, undefined);
@@ -469,7 +518,9 @@ describe('probe worker TCP helper', () => {
       check_id: 'l3.forbidden_tcp_port.safe',
       target: { kind: 'fqdn', value: '127.0.0.1', port },
     });
-    const outcome = await probeTcpConnect(job);
+    const outcome = await probeTcpConnect(job, {
+      destinationPolicy: { allowLoopback: true },
+    });
     assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.target_port, port);
@@ -487,7 +538,9 @@ describe('probe worker TCP helper', () => {
       check_id: 'l3.forbidden_tcp_port.safe',
       target: { kind: 'fqdn', value: `127.0.0.1:${port}` },
     });
-    const outcome = await probeTcpConnect(job);
+    const outcome = await probeTcpConnect(job, {
+      destinationPolicy: { allowLoopback: true },
+    });
     assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'tcp_connect');
@@ -518,6 +571,17 @@ describe('probe worker poll integration', () => {
     const tgt = getStore().targets.find((t) => t.id === 'tgt_1');
     tgt.kind = 'url';
     tgt.value = `http://127.0.0.1:${probePort}/health`;
+    if (!Array.isArray(getStore().targetVerifications)) getStore().targetVerifications = [];
+    getStore().targetVerifications.push({
+      id: 'tv_probe_worker_dns_verified',
+      tenant_id: 'ten_demo',
+      target_id: 'tgt_1',
+      state: 'dns_verified',
+      source_kind: 'dns_txt',
+      source_ref: { dns_challenge_id: 'dns_probe_worker' },
+      transitioned_at: new Date().toISOString(),
+      transitioned_by: 'system',
+    });
 
     apiServer = createServer({
       env: {
@@ -623,7 +687,7 @@ describe('executeProbeForJob routing', () => {
       const outcome = await executeProbeForJob(job, {
         signedJobVerified: true,
         fetchFn: async () => ({ status: 403, headers: { get: () => null } }),
-        resolve4Fn: async () => [],
+        resolve4Fn: async () => ['203.0.113.10'],
         resolve6Fn: async () => [],
         resolveNsFn: async () => ['ns1.invalid'],
         connectFn: () => {
@@ -643,6 +707,12 @@ describe('executeProbeForJob routing', () => {
         },
         resolveFn: async () => [],
         resolve4ExternalFn: async () => { throw new Error('refused'); },
+        tlsConnect: () => {
+          const socket = new EventEmitter();
+          socket.destroy = () => {};
+          queueMicrotask(() => socket.emit('error', Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })));
+          return socket;
+        },
       });
       assert.equal(outcome.metadata.probe_kind, routeCase.kind);
       assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
@@ -667,6 +737,8 @@ describe('executeProbeForJob routing', () => {
     });
     const outcome = await executeProbeForJob(job, {
       signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
       fetchFn: async (url, init) => {
         captured = { url, init };
         return { status: 200, headers: { get: () => null } };
@@ -685,8 +757,18 @@ describe('executeProbeForJob routing', () => {
       probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 1000 },
       target: { kind: 'fqdn', value: 'origin.test', port: 9999 },
     });
-    const outcome = await executeProbeForJob(job);
-    assert.ok(['connected', 'blocked', 'timeout', 'error'].includes(outcome.external_result));
+    const outcome = await executeProbeForJob(job, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      createSocket: () => ({
+        send(_payload, _port, host, callback) {
+          assert.equal(host, '203.0.113.10');
+          callback(null);
+        },
+        close() {},
+      }),
+    });
+    assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'udp_probe');
   });
 
@@ -703,7 +785,11 @@ describe('executeProbeForJob routing', () => {
       vector_family: 'ownership',
       nonce_hash: 'sha256:abc',
     });
-    const outcome = await executeProbeForJob(job);
+    const outcome = await executeProbeForJob(job, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 204, headers: { get: () => null }, url: 'https://example.test/' }),
+    });
     assert.equal(outcome.metadata.probe_kind, 'ownership_challenge');
     assert.notEqual(outcome.metadata.error_class, 'unsupported_check');
     assert.ok(['connected', 'blocked', 'timeout', 'error'].includes(outcome.external_result));
@@ -823,6 +909,73 @@ describe('executeProbeForJob routing', () => {
     assert.notEqual(outcome.metadata.error_class, 'destination_not_routable');
     assert.equal(outcome.metadata.probe_kind, 'bot_challenge_probe');
     assert.equal(fetchCalls, 1);
+  });
+
+  it('uses only the preflight A answer when a later resolver would rebind', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let resolve4Calls = 0;
+    let resolve6Calls = 0;
+    let requestOptions = null;
+    const outcome = await executeProbeForJob(baseJob({
+      vector_family: 'path',
+      probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 1000 },
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'http://rebind.example.test/probe' },
+    }), {
+      resolve4Fn: async () => {
+        resolve4Calls += 1;
+        return resolve4Calls === 1
+          ? ['203.0.113.10']
+          : ['198.51.100.99', '10.0.0.8'];
+      },
+      resolve6Fn: async () => { resolve6Calls += 1; return []; },
+      httpRequestFn: (options, callback) => {
+        requestOptions = options;
+        const request = new EventEmitter();
+        request.write = () => {};
+        request.destroy = (error) => { if (error) request.emit('error', error); };
+        request.end = () => {
+          const response = new PassThrough();
+          response.statusCode = 204;
+          response.headers = {};
+          callback(response);
+          response.end();
+        };
+        return request;
+      },
+    });
+
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(requestOptions.hostname, '203.0.113.10');
+    assert.equal(requestOptions.headers.Host, 'rebind.example.test');
+    assert.equal(resolve4Calls, 1);
+    assert.equal(resolve6Calls, 1);
+  });
+
+  it('pins a real HTTP/1 socket from preflight under a process watchdog', { timeout: 6000 }, async () => {
+    const output = await runProtocolTransportFixture('preflight-http1');
+    assert.match(output.stdout, /preflight-http1:ok/);
+  });
+
+  it('sends zero requests when hostname preflight returns zero A/AAAA answers', async () => {
+    const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
+    let requests = 0;
+    const outcome = await executeProbeForJob(baseJob({
+      vector_family: 'path',
+      probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'http://missing.example.test/probe' },
+    }), {
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => [],
+      httpRequestFn: () => { requests += 1; throw new Error('must not request'); },
+    });
+
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.probe_kind, 'destination_gate');
+    assert.equal(outcome.metadata.reason, 'no_resolved_addresses');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(requests, 0);
   });
 
   it('refuses the private-destination opt-in when the deployment is production-like', async () => {

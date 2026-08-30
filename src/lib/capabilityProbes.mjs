@@ -2,16 +2,16 @@
  * Full P0/P1 capability probes — bounded, metadata-only results, no flooding.
  */
 
-import dns from 'node:dns/promises';
-import { Resolver } from 'node:dns/promises';
+import dns, { Resolver } from 'node:dns/promises';
+import { normalizeProbeHttpPath } from '../contracts/checks.mjs';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
 import { isLiveCapabilityProbeAuthorized } from './capabilityProbeAuth.mjs';
+import { pinnedFetch, pinnedHttp2Request, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 import {
   API_DOC_PATHS,
   RISKY_ADMIN_PORTS,
-  assertProbeDestinationAllowed,
 } from './probeEndpoint.mjs';
 import {
   countAxfrProbeRequests,
@@ -93,6 +93,17 @@ function resolveHostSniTargets(job) {
   return { hostname, hostHeader, directIp, requestUrl, requestPort, requestPath };
 }
 
+function canonicalDnsHostname(value) {
+  const candidate = String(value ?? '').trim().toLowerCase();
+  if (!candidate) return null;
+  return candidate.endsWith('.') ? candidate.slice(0, -1) : candidate;
+}
+
+function isExactDnsHostname(value, expected) {
+  const candidate = canonicalDnsHostname(value);
+  return candidate != null && candidate === canonicalDnsHostname(expected);
+}
+
 function baseUrlForHost(host, https = true) {
   return `${https ? 'https' : 'http'}://${host}/`;
 }
@@ -145,7 +156,7 @@ function directHttpProbeUrl(directIp, port, path = '/') {
 }
 
 async function boundedFetch(url, options = {}, deps = {}) {
-  const fetchFn = deps.fetchFn ?? fetch;
+  const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, deps));
   const timeoutMs = options.timeoutMs ?? 5000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -199,38 +210,32 @@ async function resolveNs(zone, deps) {
  * vet (a nameserver discovered mid-probe, or a profile-declared resolver).
  *
  * IP literals are classified directly. Hostnames are resolved first and every resulting
- * address must pass — a name that resolves to nothing is allowed through so the probe
- * reports its own lookup failure. `requireIpLiteral` is for destinations that must be a
- * literal by construction (dns.Resolver#setServers).
+ * address must pass; zero A/AAAA answers fail closed. `requireIpLiteral` is for destinations
+ * that must be a literal by construction (dns.Resolver#setServers).
  *
  * @param {string} host
  * @param {Record<string, unknown>} deps
  * @param {{ requireIpLiteral?: boolean }} [options]
  */
 async function vetProbeDestinationHost(host, deps = {}, options = {}) {
-  const policy = deps.destinationPolicy ?? { allowPrivate: false, allowLoopback: false };
   const candidate = typeof host === 'string' ? host.trim() : '';
-  if (!candidate) return { ok: false, reason: 'missing_host' };
-
-  if (net.isIP(candidate) !== 0) {
-    const verdict = assertProbeDestinationAllowed(candidate, policy);
-    return verdict.ok
-      ? { ok: true, addresses: [candidate] }
-      : { ok: false, reason: verdict.message, blocked_address: candidate };
+  if (!candidate) return { ok: false, reason: 'missing_host', addresses: [] };
+  if (options.requireIpLiteral === true && net.isIP(candidate) === 0) {
+    return { ok: false, reason: 'not_an_ip_literal', addresses: [] };
   }
 
-  if (options.requireIpLiteral === true) {
-    return { ok: false, reason: 'not_an_ip_literal' };
+  try {
+    const pinned = await resolvePinnedDestination(candidate, deps);
+    return { ok: true, host: pinned.host, addresses: pinned.addresses };
+  } catch (error) {
+    return {
+      ok: false,
+      host: candidate,
+      addresses: [],
+      reason: error?.code === 'ENOTFOUND' ? 'no_resolved_addresses' : error?.message,
+      blocked_address: error?.blockedAddress ?? null,
+    };
   }
-
-  const [v4, v6] = await Promise.all([resolve4(candidate, deps), resolve6(candidate, deps)]);
-  const addresses = [...new Set([...v4, ...v6])];
-  if (addresses.length === 0) return { ok: true, addresses: [], unresolved: true };
-  for (const ip of addresses) {
-    const verdict = assertProbeDestinationAllowed(ip, policy);
-    if (!verdict.ok) return { ok: false, reason: verdict.message, blocked_address: ip };
-  }
-  return { ok: true, addresses };
 }
 
 function tcpConnectProbe(host, port, timeoutMs, connectFn = net.connect) {
@@ -355,6 +360,22 @@ export async function probeHostSniBypass(job, deps = {}) {
 
   const started = Date.now();
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
+  const directDestination = await vetProbeDestinationHost(directIp, deps);
+  if (!directDestination.ok || directDestination.addresses.length === 0) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'direct_destination_not_routable',
+        protected_host: hostname,
+        direct_ip: directIp,
+        blocked_address: directDestination.blocked_address ?? null,
+        reason: directDestination.reason ?? 'no_resolved_addresses',
+      }),
+      requests_sent: 0,
+      duration_ms: Date.now() - started,
+    };
+  }
+  const pinnedDirectIp = directDestination.addresses[0];
   const headers = {
     Host: hostHeader,
     ...(job.nonce ? { 'x-astranull-nonce': job.nonce } : {}),
@@ -363,17 +384,29 @@ export async function probeHostSniBypass(job, deps = {}) {
   const hasInjectedFetch = typeof deps.fetchFn === 'function';
   const useHttps = !hasInjectedFetch && job.probe_profile?.use_https !== false && !requestUrl;
   const { res, error } = useHttps
-    ? await httpsHeadWithSni(directIp, hostname, {
+    ? await httpsHeadWithSni(pinnedDirectIp, hostname, {
       headers,
       hostHeader,
       timeoutMs,
       port: requestPort,
       path: requestPath,
     }, deps)
-    : await boundedFetch(requestUrl ?? directHttpProbeUrl(directIp, requestPort, requestPath), {
-      timeoutMs,
-      fetchOptions: { method: 'HEAD', headers, redirect: 'manual' },
-    }, deps);
+    : await boundedFetch(
+      requestUrl ?? directHttpProbeUrl(pinnedDirectIp, requestPort, requestPath),
+      {
+        timeoutMs,
+        fetchOptions: { method: 'HEAD', headers, redirect: 'manual' },
+      },
+      // Injected fetch tests retain the declared URL; production connects to the
+      // independently classified direct-origin literal with the protected Host header.
+      hasInjectedFetch
+        ? deps
+        : {
+            ...deps,
+            vettedHost: directDestination.host ?? pinnedDirectIp,
+            vettedAddresses: directDestination.addresses,
+          },
+    );
 
   const durationMs = Date.now() - started;
   if (error) {
@@ -422,18 +455,21 @@ export async function probePortScanBounded(job, deps = {}) {
   const filtered_ports = [];
   let requestsSent = 0;
 
-  // Prefer an address the worker chokepoint already vetted; re-resolving here would
-  // reopen the rebinding window it closed.
-  const vettedAddresses = Array.isArray(deps.vettedAddresses) ? deps.vettedAddresses : [];
-  let resolvedHost = host;
-  if (net.isIP(host) === 0) {
-    if (vettedAddresses.length > 0) {
-      resolvedHost = vettedAddresses[0];
-    } else {
-      const ips = await resolve4(host, deps);
-      resolvedHost = ips[0] ?? host;
-    }
+  const destination = await vetProbeDestinationHost(host, deps);
+  if (!destination.ok || destination.addresses.length === 0) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'destination_not_routable',
+        scan_host: host,
+        blocked_address: destination.blocked_address ?? null,
+        reason: destination.reason ?? 'no_resolved_addresses',
+      }),
+      requests_sent: 0,
+      duration_ms: Date.now() - started,
+    };
   }
+  const resolvedHost = destination.addresses[0];
 
   for (const port of ports) {
     if (requestsSent >= budget) break;
@@ -524,7 +560,44 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     };
   }
 
+  const primaryHost = apexDomain(job);
+  const primaryDestination = await vetProbeDestinationHost(primaryHost, deps);
+  if (!primaryDestination.ok || primaryDestination.addresses.length === 0) {
+    return {
+      external_result: 'blocked',
+      metadata: withKind(job, kind, {
+        error_class: 'destination_not_routable',
+        blocked_address: primaryDestination.blocked_address ?? null,
+        reason: primaryDestination.reason ?? 'no_resolved_addresses',
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+  const primaryDeps = {
+    ...deps,
+    vettedHost: primaryDestination.host,
+    vettedAddresses: primaryDestination.addresses,
+  };
+
   const { hostname, directIp } = resolveHostSniTargets(job);
+  let pinnedDirectIp = null;
+  if (directIp) {
+    const directDestination = await vetProbeDestinationHost(directIp, primaryDeps);
+    if (!directDestination.ok || directDestination.addresses.length === 0) {
+      return {
+        external_result: 'blocked',
+        metadata: withKind(job, kind, {
+          error_class: 'direct_destination_not_routable',
+          blocked_address: directDestination.blocked_address ?? null,
+          reason: directDestination.reason ?? 'no_resolved_addresses',
+        }),
+        requests_sent: 0,
+        duration_ms: 0,
+      };
+    }
+    pinnedDirectIp = directDestination.addresses[0];
+  }
   const budget = resolveProbeRequestBudget(job);
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
@@ -536,7 +609,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
   const scan = await runOutsideInWafScan({
     url,
     hostname,
-    directIp,
+    directIp: pinnedDirectIp,
     budget,
     timeoutMs,
     followRedirects: job.probe_profile?.follow_redirects === true,
@@ -546,10 +619,11 @@ export async function probeOutsideInWafScan(job, deps = {}) {
       || job.target?.metadata?.agent_corroborated === true,
     requireAgentForProtected: job.probe_profile?.require_agent_for_protected !== false,
     domXssValidation,
-    fetchFn: deps.fetchFn,
+    fetchFn: deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, primaryDeps)),
     resolveCname: deps.resolveCname,
     resolve4: deps.resolve4,
     tlsConnect: deps.tlsConnect,
+    tlsHost: primaryDestination.addresses[0],
     originBypassFn: directIp && hostname
       ? async ({ directIp: ip, hostname: host, timeoutMs: tmo, deps: innerDeps }) => {
         const useHttps = job.probe_profile?.use_https !== false;
@@ -708,7 +782,10 @@ export async function probeDnssecPosture(job, deps = {}) {
  */
 export async function probeAxfrLeak(job, deps = {}) {
   const kind = 'dns_axfr_leak';
-  const zone = job.probe_profile?.zone ?? apexDomain(job);
+  // Never trust profile.zone here, even after signature verification. A stale, maliciously
+  // pre-signed, or corrupt job must not turn an owned target A into an NS lookup and TCP/53
+  // connection for victim B.
+  const zone = canonicalDnsHostname(apexDomain(job));
   if (!zone) {
     return { external_result: 'error', metadata: withKind(job, kind, { error_class: 'unsupported_target' }), requests_sent: 0, duration_ms: 0 };
   }
@@ -729,7 +806,7 @@ export async function probeAxfrLeak(job, deps = {}) {
 
   // The nameserver is discovered mid-probe, so the worker chokepoint never saw it.
   const nsVerdict = await vetProbeDestinationHost(nsHost, deps);
-  if (!nsVerdict.ok) {
+  if (!nsVerdict.ok || nsVerdict.addresses.length === 0) {
     return {
       external_result: 'blocked',
       metadata: withKind(job, kind, {
@@ -737,7 +814,7 @@ export async function probeAxfrLeak(job, deps = {}) {
         zone,
         nameserver: nsHost,
         blocked_address: nsVerdict.blocked_address ?? null,
-        reason: nsVerdict.reason,
+        reason: nsVerdict.reason ?? 'no_resolved_addresses',
       }),
       requests_sent: countAxfrProbeRequests({ nameserverResolved: true, tcpAttempted: false }),
       duration_ms: Date.now() - started,
@@ -745,7 +822,7 @@ export async function probeAxfrLeak(job, deps = {}) {
   }
 
   const outcome = await runDnsTcpAxfrQuery({
-    nsHost,
+    nsHost: nsVerdict.addresses[0],
     zone,
     timeoutMs,
     connectFn: deps.connectFn,
@@ -776,14 +853,14 @@ export async function probeTlsAudit(job, deps = {}) {
   const started = Date.now();
 
   const hostVerdict = await vetProbeDestinationHost(host, deps);
-  if (!hostVerdict.ok) {
+  if (!hostVerdict.ok || hostVerdict.addresses.length === 0) {
     return {
       external_result: 'blocked',
       metadata: withKind(job, kind, {
         error_class: 'resolver_not_routable',
         audit_host: host,
         blocked_address: hostVerdict.blocked_address ?? null,
-        reason: hostVerdict.reason,
+        reason: hostVerdict.reason ?? 'no_resolved_addresses',
       }),
       requests_sent: 0,
       duration_ms: 0,
@@ -794,7 +871,7 @@ export async function probeTlsAudit(job, deps = {}) {
     const session = await new Promise((resolve, reject) => {
       let settled = false;
       const socket = connectFn({
-        host,
+        host: hostVerdict.addresses[0],
         port: 443,
         servername: host,
         rejectUnauthorized: false,
@@ -1052,7 +1129,7 @@ export async function probeBotChallenge(job, deps = {}) {
  */
 export async function probeGraphqlPosture(job, deps = {}) {
   const kind = 'graphql_posture_probe';
-  const path = job.probe_profile?.graphql_path ?? '/graphql';
+  const path = normalizeProbeHttpPath(job.probe_profile?.graphql_path) ?? '/graphql';
   const origin = job.target?.value?.startsWith('http')
     ? new URL(job.target.value).origin
     : baseUrlForHost(apexDomain(job) ?? '').replace(/\/$/, '');
@@ -1104,7 +1181,11 @@ export async function probeGraphqlPosture(job, deps = {}) {
  */
 export async function probeOpenRecursion(job, deps = {}) {
   const kind = 'dns_open_recursion';
-  const resolverHost = job.probe_profile?.resolver_host ?? apexDomain(job);
+  // resolver_host and recursion_test_name are accepted only as exact-target metadata at the
+  // signing boundary. Derive them again here so a corrupt/pre-signed job cannot select a sibling
+  // resolver or induce a lookup for an unrelated declared domain.
+  const targetHost = canonicalDnsHostname(apexDomain(job));
+  const resolverHost = targetHost;
   if (!resolverHost) {
     return {
       external_result: 'error',
@@ -1114,15 +1195,7 @@ export async function probeOpenRecursion(job, deps = {}) {
     };
   }
 
-  const queryName = job.probe_profile?.recursion_test_name ?? apexDomain(job);
-  if (!queryName) {
-    return {
-      external_result: 'error',
-      metadata: withKind(job, kind, { error_class: 'missing_recursion_test_name' }),
-      requests_sent: 0,
-      duration_ms: 0,
-    };
-  }
+  const queryName = targetHost;
 
   // dns.Resolver#setServers only accepts IP literals, so a non-literal resolver_host is
   // both unsafe (unvetted egress) and unusable here.
@@ -1192,7 +1265,13 @@ export async function probeDnsFailoverPosture(job, deps = {}) {
   let requestsSent = 1;
   const budget = resolveProbeRequestBudget(job);
   const remainingBudget = Math.max(0, budget - requestsSent);
-  const declaredSecondary = (job.probe_profile?.secondary_nameservers ?? []).slice(0, remainingBudget);
+  // A declared secondary hostname is another DNS destination. The signing boundary already
+  // exact-binds it, and this repeated check prevents corrupt/pre-signed jobs from resolving B.
+  const declaredSecondary = (job.probe_profile?.secondary_nameservers ?? [])
+    .filter((nameserver) => isExactDnsHostname(nameserver, zone))
+    .map(() => canonicalDnsHostname(zone))
+    .filter(Boolean)
+    .slice(0, remainingBudget);
   const secondary_results = [];
 
   for (const ns of declaredSecondary) {
@@ -1238,7 +1317,181 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   cors_posture_probe: probeCorsPosture,
   bot_challenge_probe: probeBotChallenge,
   graphql_posture_probe: probeGraphqlPosture,
+  grpc_reflection_probe: probeGrpcReflection,
 });
+
+const GRPC_HEALTH_PATH = '/grpc.health.v1.Health/Check';
+const GRPC_REFLECTION_PATHS = new Set([
+  '/grpc.reflection.v1.ServerReflection/ServerReflectionInfo',
+  '/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo',
+]);
+const DEFAULT_GRPC_REFLECTION_PATH = '/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo';
+
+function grpcRequestSpec(configuredPath) {
+  const path = normalizeProbeHttpPath(configuredPath) ?? DEFAULT_GRPC_REFLECTION_PATH;
+  if (GRPC_REFLECTION_PATHS.has(path)) {
+    // ServerReflectionRequest.list_services = "" (field 7, length-delimited),
+    // wrapped in one uncompressed gRPC frame.
+    return {
+      path,
+      service: 'reflection',
+      body: Buffer.from([0, 0, 0, 0, 2, 0x3a, 0]),
+    };
+  }
+  if (path === GRPC_HEALTH_PATH) {
+    // HealthCheckRequest with an omitted service field is a valid empty message.
+    return { path, service: 'health', body: Buffer.from([0, 0, 0, 0, 0]) };
+  }
+  return null;
+}
+
+/**
+ * DET-021 — exactly one bounded gRPC reflection or health request over TLS
+ * HTTP/2. Only the two standard reflection methods and the standard health
+ * method are encoded; unknown protobuf methods fail unsupported rather than
+ * pretending an empty HTTP/1.1 POST proves reflection routing.
+ */
+export async function probeGrpcReflection(job, deps = {}) {
+  const kind = 'grpc_reflection_probe';
+  const requestSpec = grpcRequestSpec(job.probe_profile?.grpc_path);
+  if (!requestSpec) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, {
+        error_class: 'unsupported_grpc_method',
+        reflection_service_routed: null,
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  let endpoint;
+  try {
+    const value = String(job.target?.value ?? '').trim();
+    if (value) endpoint = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+  } catch {
+    endpoint = null;
+  }
+  if (!endpoint?.hostname) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, { error_class: 'unsupported_target' }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+  if (endpoint.protocol !== 'https:') {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, {
+        error_class: 'grpc_http2_tls_required',
+        grpc_transport: 'unsupported',
+        reflection_service_routed: null,
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  const started = Date.now();
+  const boundedTimeout = job.constraints?.timeout_ms ?? 5000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), boundedTimeout);
+  const requestFn = deps.http2RequestFn
+    ?? ((input, init) => pinnedHttp2Request(input, init, deps));
+
+  let res;
+  try {
+    res = await requestFn(`${endpoint.origin}${requestSpec.path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/grpc',
+        TE: 'trailers',
+        'grpc-accept-encoding': 'identity',
+      },
+      body: requestSpec.body,
+      signal: controller.signal,
+      timeoutMs: boundedTimeout,
+      maxResponseBytes: 64 * 1024,
+    });
+  } catch (error) {
+    const durationMs = Date.now() - started;
+    return {
+      external_result: classifyFetchError(error),
+      metadata: withKind(job, kind, {
+        error_class: error?.code ?? error?.name ?? 'grpc_transport_failed',
+        grpc_transport: 'h2_tls',
+        grpc_probe_service: requestSpec.service,
+        reflection_service_routed: null,
+        duration_ms: durationMs,
+      }),
+      requests_sent: 1,
+      duration_ms: durationMs,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const durationMs = Date.now() - started;
+  if (res.httpVersion !== '2.0') {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, {
+        error_class: 'grpc_http2_required',
+        grpc_transport: 'unsupported',
+        grpc_probe_service: requestSpec.service,
+        reflection_service_routed: null,
+        duration_ms: durationMs,
+      }),
+      requests_sent: 1,
+      duration_ms: durationMs,
+    };
+  }
+
+  const trailerStatus = res.trailers?.get('grpc-status') ?? null;
+  const headerStatus = res.headers.get('grpc-status');
+  const grpcStatus = trailerStatus ?? headerStatus;
+  const grpcStatusSource = trailerStatus !== null
+    ? 'trailers'
+    : (headerStatus !== null ? 'headers' : null);
+  const grpcMessage = res.trailers?.get('grpc-message')
+    ?? res.headers.get('grpc-message');
+  const contentType = res.headers.get('content-type') ?? '';
+  const contentTypeIsGrpc = contentType.toLowerCase().startsWith('application/grpc');
+  const grpcEndpointReachable = res.status >= 200
+    && res.status < 300
+    && contentTypeIsGrpc
+    && grpcStatus !== null;
+  const requestSucceeded = grpcEndpointReachable && grpcStatus === '0';
+  const isReflection = requestSpec.service === 'reflection';
+  const reflectionServiceRouted = isReflection && grpcEndpointReachable
+    ? grpcStatus !== '12'
+    : null;
+
+  return {
+    external_result: requestSucceeded ? 'connected' : 'blocked',
+    metadata: withKind(job, kind, {
+      status_code: res.status,
+      grpc_status: grpcStatus,
+      grpc_status_source: grpcStatusSource,
+      grpc_message_present: Boolean(grpcMessage),
+      content_type_is_grpc: contentTypeIsGrpc,
+      grpc_endpoint_reachable: grpcEndpointReachable,
+      grpc_request_succeeded: requestSucceeded,
+      grpc_probe_service: requestSpec.service,
+      grpc_transport: 'h2_tls',
+      pinned_address: res.pinnedAddress ?? null,
+      reflection_service_routed: reflectionServiceRouted,
+      reflection_service_exposed: isReflection && requestSucceeded,
+      requests_sent: 1,
+      duration_ms: durationMs,
+      response_body_retained: false,
+    }),
+    requests_sent: 1,
+    duration_ms: durationMs,
+  };
+}
 
 export async function executeCapabilityProbe(job, deps = {}) {
   const kind = job.probe_profile?.kind;

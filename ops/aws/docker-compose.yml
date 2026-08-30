@@ -1,4 +1,6 @@
-# Hosted stack on the AstraNull AWS VM. Run from the repo root:
+# Hosted stack on the AstraNull AWS VM. Run from the repo root only after deploy.sh
+# has built/tagged the exact commit image. This file is image-only and never builds
+# from the checkout:
 #   docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d
 services:
   postgres:
@@ -37,6 +39,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Pre-backup bootstrap for first upgrade: creates/rotates only the read-only dump role.
+  # It runs before pg_dump but never applies migrations or starts a long-lived service.
+  backup-role-bootstrap:
+    profiles: ["ops"]
+    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    environment:
+      NODE_ENV: production
+      ASTRANULL_ADMIN_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+      ASTRANULL_DATABASE_BACKUP_PASSWORD: ${ASTRANULL_DATABASE_BACKUP_PASSWORD}
+    command: ["node", "scripts/postgres-grant-app-role.mjs", "--backup-only"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   # This one-shot service is the only pg_dump boundary. The purpose-built role has
   # SELECT-only object ACLs plus BYPASSRLS so FORCE-RLS tables are backed up completely.
   backup-dump:
@@ -63,9 +80,6 @@ services:
 
   control-plane:
     image: astranull-control-plane:${ASTRANULL_CONTROL_PLANE_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
-    build:
-      context: ../..
-      dockerfile: ops/aws/Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -178,16 +192,18 @@ services:
       ASTRANULL_TEST_POLICY_RUNNER_ID: ${ASTRANULL_TEST_POLICY_RUNNER_ID:-aws-policy-runner}
       ASTRANULL_TEST_POLICY_LEASE_MS: ${ASTRANULL_TEST_POLICY_LEASE_MS:-60000}
       ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: ${ASTRANULL_TEST_POLICY_INTERVAL_SECONDS:-30}
+    # A successful 120s-max tick plus the 30s-max sleep stays 30s inside the
+    # 180s heartbeat freshness window. Failed/timed-out ticks never refresh it.
     command:
       - /bin/sh
       - -c
       - >-
         interval=$${ASTRANULL_TEST_POLICY_INTERVAL_SECONDS:-30};
         case "$$interval" in
-          ''|*[!0-9]*) echo 'test-policy-runner: interval must be an integer from 5 to 3600 seconds' >&2; exit 64 ;;
+          ''|*[!0-9]*) echo 'test-policy-runner: interval must be an integer from 5 to 30 seconds' >&2; exit 64 ;;
         esac;
-        if [ "$$interval" -lt 5 ] || [ "$$interval" -gt 3600 ]; then
-          echo 'test-policy-runner: interval must be an integer from 5 to 3600 seconds' >&2;
+        if [ "$$interval" -lt 5 ] || [ "$$interval" -gt 30 ]; then
+          echo 'test-policy-runner: interval must be an integer from 5 to 30 seconds' >&2;
           exit 64;
         fi;
         while true; do

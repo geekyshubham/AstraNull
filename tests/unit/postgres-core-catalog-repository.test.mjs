@@ -39,6 +39,7 @@ function createRecordingPool(handler) {
       if (this.failOn && this.failOn(text)) {
         throw new Error('simulated query failure');
       }
+
       return handler(text, params, this.queries);
     },
     release() {
@@ -51,6 +52,16 @@ function createRecordingPool(handler) {
       return client;
     },
   };
+}
+
+function createTestRepository(pool) {
+  return createCoreCatalogRepository(pool, {
+    auditRepository: {
+      async appendAuditEvent(entry) {
+        return { id: 'audit_test', ...entry };
+      },
+    },
+  });
 }
 
 function dataQueries(client) {
@@ -153,7 +164,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const tenant = await repo.getCurrentTenant(CTX);
     assert.equal(tenant.name, 'Demo Organization');
     assertTenantWrapped(pool.client, CTX.tenantId);
@@ -165,7 +176,7 @@ describe('postgres core catalog repository', () => {
 
   it('getCurrentTenant returns null when row missing', async () => {
     const pool = createRecordingPool(() => ({ rows: [] }));
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.getCurrentTenant(CTX), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
@@ -175,7 +186,7 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM tenants')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.patchCurrentTenant(CTX, { name: 'x' }), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
     const selects = dataQueries(pool.client).filter((q) => q.text.includes('SELECT'));
@@ -203,7 +214,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const tenant = await repo.patchCurrentTenant(CTX, {});
     assert.equal(tenant.name, 'Demo Organization');
     assertTenantWrapped(pool.client, CTX.tenantId);
@@ -251,7 +262,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const tenant = await repo.patchCurrentTenant(CTX, {
       name: 'New Name',
       privacy_settings: { metadata_retention_days: 5000 },
@@ -307,7 +318,7 @@ describe('postgres core catalog repository', () => {
       if (text.startsWith('INSERT INTO audit_logs')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const tenant = await repo.patchCurrentTenant(
       CTX,
       { privacy_settings: { metadata_retention_days: 7 } },
@@ -340,7 +351,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const items = await repo.listEnvironments(CTX);
     assert.equal(items.length, 1);
     assertTenantWrapped(pool.client, CTX.tenantId);
@@ -371,7 +382,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const env = await repo.createEnvironment(
       CTX,
       { name: 'My Env', description: 'line', privacy_settings: { metadata_retention_days: 30 } },
@@ -388,7 +399,7 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM environments')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.patchEnvironment(CTX, 'env_missing', { name: 'x' }), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
     const selects = dataQueries(pool.client).filter((q) => q.text.includes('SELECT'));
@@ -434,7 +445,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const env = await repo.patchEnvironment(
       CTX,
       'env_1',
@@ -465,7 +476,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const groups = await repo.listTargetGroups(CTX);
     assert.equal(groups.length, 1);
     assertTenantWrapped(pool.client, CTX.tenantId);
@@ -505,7 +516,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const groups = await repo.listTargetGroups(CTX);
 
     assert.equal(groups[0].target_count, 3);
@@ -548,7 +559,7 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM target_groups')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.getTargetGroup(CTX, 'tg_missing'), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
     const groupQ = dataQueries(pool.client)[0];
@@ -591,7 +602,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.getTargetGroup(CTX, 'tg_1');
     assert.equal(group.id, 'tg_1');
     assert.equal(group.targets.length, 1);
@@ -659,7 +670,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.getTargetGroup(CTX, 'tg_1');
 
     assert.equal(group.target_count, 1);
@@ -742,10 +753,7 @@ describe('postgres core catalog repository', () => {
     assert.deepEqual(offenders, []);
   });
 
-  it('getTargetGroup detail stamps verification_state on every target (dev-json parity)', async () => {
-    // dev-json's getTargetGroup maps each target with `verification_state ?? verify_state ??
-    // 'unverified'`; Postgres omitted the field entirely, so the portal verify chip read a
-    // real state on one backend and its own default on the other.
+  it('getTargetGroup detail uses only authoritative verification rows for every target', async () => {
     const pool = createRecordingPool((text) => {
       if (text.includes('FROM target_groups')) {
         return { rows: [{ id: 'tg_1', tenant_id: 'ten_demo', environment_id: 'env_1', name: 'G', safety_policy: {}, safe_test_windows: [], created_at: FIXED_NOW }] };
@@ -754,18 +762,18 @@ describe('postgres core catalog repository', () => {
         return {
           rows: [
             { id: 'tgt_plain', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'a.example', created_at: FIXED_NOW },
-            { id: 'tgt_meta', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'b.example', created_at: FIXED_NOW, metadata_json: { verification_state: 'verified' } },
-            { id: 'tgt_legacy', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'c.example', created_at: FIXED_NOW, metadata_json: { verify_state: 'pending' } },
+            { id: 'tgt_ledger', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'b.example', created_at: FIXED_NOW, verification_state: 'dns_verified' },
+            { id: 'tgt_spoof', tenant_id: 'ten_demo', target_group_id: 'tg_1', kind: 'fqdn', value: 'c.example', created_at: FIXED_NOW, metadata_json: { verify_state: 'user_confirmed' } },
           ],
         };
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.getTargetGroup(CTX, 'tg_1');
     assert.deepEqual(
       group.targets.map((t) => [t.id, t.verification_state]),
-      [['tgt_plain', 'unverified'], ['tgt_meta', 'verified'], ['tgt_legacy', 'pending']],
+      [['tgt_plain', 'unverified'], ['tgt_ledger', 'dns_verified'], ['tgt_spoof', 'unverified']],
     );
   });
 
@@ -794,7 +802,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.getTargetGroup(CTX, 'tg_1', LEAN_GROUP_LOOKUP);
 
     // Everything the internal callers actually read is still present.
@@ -829,7 +837,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.getTargetGroup(CTX, 'tg_missing', LEAN_GROUP_LOOKUP), null);
     assert.equal(dataQueries(pool.client).length, 1, 'a miss must not read targets');
   });
@@ -844,7 +852,7 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM targets')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.getTargetGroup(CTX, 'tg_1');
     assert.match(seen[2] ?? seen[0], /LATERAL/);
     assert.ok(group.loa, 'detail route keeps the LOA panel');
@@ -898,7 +906,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const group = await repo.createTargetGroup(
       CTX,
       { name: 'Origin', environment_id: 'env_demo', safety_policy: { max_runs_per_hour: 10 } },
@@ -906,6 +914,38 @@ describe('postgres core catalog repository', () => {
     );
     assert.equal(group.id, 'tg_new');
     assert.equal(group.safety_policy.max_runs_per_hour, 10);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('patchTargetGroup rechecks dedupe when only environment changes, including a null scope', async () => {
+    let duplicateChecked = false;
+    const pool = createRecordingPool((text, params) => {
+      if (text.includes('SELECT id, tenant_id, environment_id, name')) {
+        return {
+          rows: [{
+            id: 'tg_1', tenant_id: CTX.tenantId, environment_id: 'env_old', name: 'Origin',
+            safe_test_windows: [], safety_policy: {}, created_at: FIXED_NOW,
+          }],
+        };
+      }
+      if (text.includes("COALESCE(environment_id, '') = COALESCE($2, '')")) {
+        duplicateChecked = true;
+        assert.deepEqual(params, [CTX.tenantId, null, 'Origin', 'tg_1']);
+        return { rows: [{ id: 'tg_duplicate' }] };
+      }
+      if (text.includes('UPDATE target_groups')) {
+        throw new Error('duplicate environment-only move must not update');
+      }
+      return { rows: [] };
+    });
+    const repo = createTestRepository(pool);
+
+    const result = await repo.patchTargetGroup(CTX, 'tg_1', { environment_id: null });
+
+    assert.deepEqual(result, {
+      error: 'target_group_exists', status: 409, existing_id: 'tg_duplicate',
+    });
+    assert.equal(duplicateChecked, true);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
@@ -919,7 +959,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const result = await repo.createTargetGroup(
       CTX,
       { name: 'Origin', environment_id: 'prod' },
@@ -937,7 +977,7 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM target_groups')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     assert.equal(await repo.addTarget(CTX, 'tg_missing', { value: 'a.example' }), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
     const [q] = dataQueries(pool.client);
@@ -961,16 +1001,17 @@ describe('postgres core catalog repository', () => {
               target_group_id: params[2],
               kind: params[3],
               value: params[4],
-              expected_behavior: params[5],
-              metadata_json: JSON.parse(params[6]),
-              created_at: params[7],
+              normalized_value: params[5],
+              expected_behavior: params[6],
+              metadata_json: JSON.parse(params[7]),
+              created_at: params[8],
             },
           ],
         };
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     const target = await repo.addTarget(
       CTX,
       'tg_1',
@@ -989,7 +1030,7 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createCoreCatalogRepository(pool);
+    const repo = createTestRepository(pool);
     await assert.rejects(() => repo.getTargetGroup(CTX, 'tg_1'), /db read failed/);
     assert.ok(pool.client.queries.some((q) => q.text.trim() === 'ROLLBACK'));
     assert.ok(!pool.client.queries.some((q) => q.text.trim() === 'COMMIT'));

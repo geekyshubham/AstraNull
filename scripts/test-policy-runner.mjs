@@ -8,7 +8,7 @@ import { createPostgresRuntime } from '../src/persistence/postgres/runtime.mjs';
 
 
 export const TEST_POLICY_SCHEDULER_MIN_INTERVAL_SECONDS = 5;
-export const TEST_POLICY_SCHEDULER_MAX_INTERVAL_SECONDS = 3_600;
+export const TEST_POLICY_SCHEDULER_MAX_INTERVAL_SECONDS = 30;
 export const TEST_POLICY_SCHEDULER_DEFAULT_INTERVAL_SECONDS = 30;
 
 export function resolveTestPolicySchedulerIntervalSeconds(env = process.env) {
@@ -44,7 +44,7 @@ Environment:
   ASTRANULL_PROBE_WORKER_SECRET (required)
   ASTRANULL_TEST_POLICY_RUNNER_ID (optional; safe worker label)
   ASTRANULL_TEST_POLICY_LEASE_MS (optional; 1000-900000, default 60000)
-  ASTRANULL_TEST_POLICY_INTERVAL_SECONDS (optional; 5-3600, default 30)
+  ASTRANULL_TEST_POLICY_INTERVAL_SECONDS (optional; 5-30, default 30)
 
 Options:
   --tenant-id <id>           Run for one tenant (mutually exclusive with --tenant-ids-file)

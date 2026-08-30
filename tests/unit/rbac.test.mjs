@@ -35,4 +35,10 @@ describe('RBAC', () => {
     const denied = getStore().auditLog.find((a) => a.action === 'rbac.denied');
     assert.ok(denied);
   });
+
+  it('grants explicit check catalog read permission to every customer role', () => {
+    for (const role of ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer']) {
+      assert.equal(roleHasPermission(role, 'check:read'), true, role);
+    }
+  });
 });

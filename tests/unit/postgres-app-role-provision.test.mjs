@@ -5,6 +5,7 @@ import {
   provisionPostgresBackupRole,
   provisionPostgresDatabaseRoles,
   resolvePostgresAppRoleConfig,
+  resolvePostgresBackupRoleConfig,
   validatePostgresAppRolePassword,
   validatePostgresBackupRolePassword,
 } from '../../scripts/postgres-grant-app-role.mjs';
@@ -141,6 +142,19 @@ describe('Postgres purpose-specific role provisioning', () => {
         ASTRANULL_DATABASE_BACKUP_PASSWORD: backupPassword,
       }), /must be distinct/);
     }
+  });
+
+  it('resolves backup-only bootstrap without an application credential', () => {
+    const config = resolvePostgresBackupRoleConfig({
+      ASTRANULL_ADMIN_DATABASE_URL: `postgresql://astranull:${OWNER_PASSWORD}@postgres/astranull`,
+      ASTRANULL_DATABASE_BACKUP_PASSWORD: BACKUP_PASSWORD,
+    });
+    assert.equal(config.backupPassword, BACKUP_PASSWORD);
+    assert.equal('appPassword' in config, false);
+    assert.throws(() => resolvePostgresBackupRoleConfig({
+      ASTRANULL_ADMIN_DATABASE_URL: `postgresql://astranull:${OWNER_PASSWORD}@postgres/astranull`,
+      ASTRANULL_DATABASE_BACKUP_PASSWORD: OWNER_PASSWORD,
+    }), /must be distinct/);
   });
 
   it('accepts only exact 32-byte hex deployment passwords', () => {

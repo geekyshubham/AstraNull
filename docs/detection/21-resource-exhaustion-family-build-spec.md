@@ -2,8 +2,8 @@
 
 Per-family research, current coverage, build plan, and gap analysis for AstraNull DDoS readiness validation.
 
-**Machine-readable:** `src/contracts/resourceExhaustionTaxonomy.mjs` (`FAMILY_BUILD_SPECS`, `ATTACK_VECTOR_REGISTRY`, `NON_DDOS_AVAILABILITY_THREATS`)  
-**Validate:** `npm run vector:taxonomy:validate`  
+**Machine-readable:** `src/contracts/resourceExhaustionTaxonomy.mjs` (`FAMILY_BUILD_SPECS`, `ATTACK_VECTOR_REGISTRY`, `NON_DDOS_AVAILABILITY_THREATS`)<br>
+**Validate:** `npm run vector:taxonomy:validate`<br>
 **Tasks:** `PROGRESS.md` §4.1 (DET-016–DET-026, SOC-011)
 
 ---
@@ -467,18 +467,17 @@ DET-025 CI + staging signoff (last)
 
 ---
 
-## 16. Global gaps still missing from docs and code
+## 16. Global gaps: status after the 2026-08-29 build
 
-| Gap | Where it surfaced | Action |
+| Gap | Where it surfaced | Status |
 |---|---|---|
-| `exhausted_resource` field on catalog checks | DET-016 | Add to every `CHECK_CATALOG` entry |
-| 12-family dashboard heatmap | DET-024 | Replace 5-family `vector-coverage.mjs` |
-| Live volumetric execution | SOC-011 | Partner/governed adapter — dry-run only today |
-| gRPC live probe | DET-021 | `protocol.grpc_reflection_stream.safe` still `metadata_marker` |
-| SSE check | DET-021 | In protocol doc only |
-| Control-plane family in `01-vector-catalog.md` | DET-026 | Map to ND-004/ND-005 |
-| Staging ATT-* → evidence matrix | DET-025 | One live proof per family minimum |
-| WAF offensive suites | WAF SOC checks | SQLi/XSS — **WAF validation**, not DDoS taxonomy (keep separate) |
+| `exhausted_resource` field on catalog checks | DET-016 | **Done** — derived on all 175 checks from the registries; validator-enforced |
+| 12-family dashboard heatmap | DET-024 | **Dashboard source delivered** — evidence-referenced React `resource-matrix` alongside the 5-family vector heatmap; report/drill-down parity, committed bundle validation, accessibility, and staging remain open |
+| Live volumetric execution | SOC-011 | **External** — governed scenario contract + authorization-pack binding delivered; certified partner adapter execution remains open (control plane stays traffic-free) |
+| gRPC live probe | DET-021 | **Done** — bounded `grpc_reflection_probe` (single empty-frame request, metadata-only result) |
+| SSE check | DET-021 | **Done** — `protocol.sse_stream.readiness` |
+| Control-plane family in `01-vector-catalog.md` | DET-026 | **Done** — `l7.health_check_flood.readiness` + `ops.autoscaling_cost.readiness` map to ATT-109/ND-004 |
+| Staging ATT-* → evidence matrix | DET-025 | **External** — validator wired into `make verify`/CI with zero orphans; live per-family evidence needs staging execution |
 
 ---
 
@@ -574,7 +573,7 @@ ND-001 BGP hijack · ND-002 route leak · ND-003 DNS hijack/poisoning · ND-004 
 
 ---
 
-## 21. Catalog check coverage (all 65 checks mapped)
+## 21. Catalog check coverage (all 175 checks mapped)
 
 Every `check_id` in `checks.mjs` maps to at least one ATT-*, ND-*, or WV-* row. Validator fails on orphan checks.
 
@@ -595,17 +594,10 @@ Every `check_id` in `checks.mjs` maps to at least one ATT-*, ND-*, or WV-* row. 
 
 ## 22. Remaining implementation work (all families)
 
-| Family | Pending ATT count | Priority build |
-|---|---:|---|
-| Reflection | 14/15 | DET-018 exposure metadata checks |
-| Exploit DoS | 6/6 | DET-017/021 parser posture |
-| Packet-processing | 6/7 | DET-017 TCP flag probes |
-| Volumetric execution | 5/8 + SOC | DET-023 + SOC-011 |
-| Memory/slow-client | 9/13 | DET-020/021 slow probes |
-| L7 floods | 14+/32 | DET-020 POST/search/export |
-| DNS advanced | 6/13 | DET-019 NXNS/DNSBomb |
-| Delivery patterns | 5/17 + SOC | DET-022 metadata + UI |
-| Backend | 8/12 | DET-020 declared endpoints |
-| Computational | 8/11 | DET-021 Rapid Reset execution |
+Status 2026-08-29: every registered vector has catalog coverage (readiness posture, exposure inventory, or SOC-gated marker) — zero `pending`. The only open execution scope is the SOC-gated remainder:
 
-**Zero orphan catalog checks.** **149 ATT-* registered.** Implementation remains ~41% mapped (partial+implemented+soc_only); ~59% fully pending execution paths.
+| Family | Catalog coverage | Remaining execution scope |
+|---|---|---|
+| All 12 families | 0 pending — readiness/exposure checks in `CHECK_CATALOG` | Live scenario execution via certified governed partner adapter (SOC-011 / DET-023) + staging evidence per family (DET-025) |
+
+**Zero orphan catalog checks.** **149 ATT-* registered and mapped.** Reflection, amplification, and exploit-posture families are `implemented` in-repo; flood/stress execution is deliberately SOC-gated and never ships as reusable attack tooling.

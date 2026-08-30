@@ -1,0 +1,755 @@
+{
+  "manifest_version": 1,
+  "format": "astranull-edge-signature-corpus-manifest-v1",
+  "output_version": 2,
+  "generator": {
+    "path": "scripts/generate-edge-signatures.mjs",
+    "sha256": "086f72d2f558de45fcdf79f7dd96c03d56e93e6218c43f108d2dc06cf69a83ed"
+  },
+  "sources": {
+    "wafw00f": {
+      "repository": "https://github.com/EnableSecurity/wafw00f",
+      "commit": "69fbe3956bba47a172cf87e40e9037535d32a130",
+      "plugin_tree_sha256": "44f4379d119d7cd688b2b8f68e5a1cd9e5bcf150491f46cb438d8a71f223b002",
+      "plugin_tree_hash_encoding": "sorted-path-length-content-length-v1",
+      "plugin_files": [
+        {
+          "path": "wafw00f/plugins/aesecure.py",
+          "sha256": "39eff4b9b3cefc1139cde1f45e66c8cbb504ea41a2c8c70033aad34e68727687"
+        },
+        {
+          "path": "wafw00f/plugins/airee.py",
+          "sha256": "0f214a173e8e5ebe2aa56b9887986f6961706f465a95727119b6bffc278a7b9e"
+        },
+        {
+          "path": "wafw00f/plugins/airlock.py",
+          "sha256": "b6dc1a855635462e0a92a1778b2a918c2eb366230ccf93684358f865619a9ae9"
+        },
+        {
+          "path": "wafw00f/plugins/alertlogic.py",
+          "sha256": "dcacba1e2f52b78677523474d0006b300d72ecec1e104f975e751d8c72eb5d72"
+        },
+        {
+          "path": "wafw00f/plugins/aliyundun.py",
+          "sha256": "34033969b6fe9bdaef90ad4e7fbbc99f25593a1e150bb23513075b626565df87"
+        },
+        {
+          "path": "wafw00f/plugins/anquanbao.py",
+          "sha256": "8010cd7d17336d52c6926522463e41438895fa048f5707a1708dc0dc38f59df4"
+        },
+        {
+          "path": "wafw00f/plugins/anubis.py",
+          "sha256": "c967c2052a0a41d2eb858dd02800c4f061edd6c947a3335dbf740a79cfffc849"
+        },
+        {
+          "path": "wafw00f/plugins/anyu.py",
+          "sha256": "16e413aaf4a6165021efbc81b179cfb83c55d76a6b1ad2210925141048b38ade"
+        },
+        {
+          "path": "wafw00f/plugins/applicationgateway.py",
+          "sha256": "92c9de1eaf186ddb8423b754b1f47a72318d08427f8adfd3d6dac8da28eca067"
+        },
+        {
+          "path": "wafw00f/plugins/approach.py",
+          "sha256": "23f7dea188fcdd384fcf7eab13a56c3e192bd597745811923b887c3c40b04da0"
+        },
+        {
+          "path": "wafw00f/plugins/armor.py",
+          "sha256": "f4ad243210231acac33965053a643710d05ddfcfe72d4bb8da79cc7e58059f35"
+        },
+        {
+          "path": "wafw00f/plugins/arvancloud.py",
+          "sha256": "4783e813ea3698a5ee72bd07ca3dcdfc65a6c2a3fe1e93aaad7a1dc9ca96c1c5"
+        },
+        {
+          "path": "wafw00f/plugins/aspa.py",
+          "sha256": "880e14a9e756802165216dab31ae6b92639ebc8d5b4bea46190e29f11c70f532"
+        },
+        {
+          "path": "wafw00f/plugins/aspnetgen.py",
+          "sha256": "4476c652788f626951627b6dc2160ee3829612e79dbe68bc9265d1eb1e9ae946"
+        },
+        {
+          "path": "wafw00f/plugins/astra.py",
+          "sha256": "0e76e890bd5c6736785102a5fbefbf28e5038a8655741a1dedaae3bf0b3a3652"
+        },
+        {
+          "path": "wafw00f/plugins/awswaf.py",
+          "sha256": "3c9029a23b14ed494c407e27155c2f2b111542d2a899131e5b5e22920d172e17"
+        },
+        {
+          "path": "wafw00f/plugins/azion.py",
+          "sha256": "8a6cb25bad99b28549fa151c1a47a47f98c6962d1e63d845411b2ef5a4b65d62"
+        },
+        {
+          "path": "wafw00f/plugins/baffinbay.py",
+          "sha256": "d6cb4a2db231e1067ab744791208a3575d36f1c69c605d95324a698713729f1d"
+        },
+        {
+          "path": "wafw00f/plugins/baidu.py",
+          "sha256": "01d082dfb327f52bc70ed6763e491a26957a8fb5ace516d1371fe90bba0dfe1f"
+        },
+        {
+          "path": "wafw00f/plugins/barikode.py",
+          "sha256": "646a75f161bfe4222508c74e688b4738b506d18596a8c6e902a9cdea6005186d"
+        },
+        {
+          "path": "wafw00f/plugins/barracuda.py",
+          "sha256": "2ebeb5de3800df4e718f8b1df8a8492d0b3f31ba2fb2f66450b35dfafefe08e2"
+        },
+        {
+          "path": "wafw00f/plugins/bekchy.py",
+          "sha256": "93d862cdf2bc112d43e5912404086433bdc37f0c7920d8385cf5616d8ebee4c7"
+        },
+        {
+          "path": "wafw00f/plugins/beluga.py",
+          "sha256": "6e800c665b273c0244e045b6d9f81b06a0d48fc6c337dc13bb9ed0a1226d71bd"
+        },
+        {
+          "path": "wafw00f/plugins/binarysec.py",
+          "sha256": "5929463d8c9471e5400039954536b7b7078590532836d83e689421db22cf5777"
+        },
+        {
+          "path": "wafw00f/plugins/bitninja.py",
+          "sha256": "037854833af7df801028c26fd8432e1a58c707cf8b84746ac6cc9cf928fa9005"
+        },
+        {
+          "path": "wafw00f/plugins/blockdos.py",
+          "sha256": "c955a447380055184433130b94a0e8efd262850e222deb1eab95f129b48942fc"
+        },
+        {
+          "path": "wafw00f/plugins/bluedon.py",
+          "sha256": "dbe3b93a8438555a6fe217a6893a07556ed25245640bb18fee3358b8819a990f"
+        },
+        {
+          "path": "wafw00f/plugins/bulletproof.py",
+          "sha256": "6504f155a3f5c758ec1f8f97c0429ffd81205d168a50401ab3f4e51e7e29ed85"
+        },
+        {
+          "path": "wafw00f/plugins/cachefly.py",
+          "sha256": "1564589e2813eef7ab74a26c10b43cca9471850bdb5ba9259fee11ea35918d0c"
+        },
+        {
+          "path": "wafw00f/plugins/cachewall.py",
+          "sha256": "a75866644a154357bd474546c6fdf2238d80380bde3502cffbfe5e50b36cce2c"
+        },
+        {
+          "path": "wafw00f/plugins/cdnns.py",
+          "sha256": "5752bbb9f9d3addfc10c7b292f96a85ba51f64319b7b60ebbb71d9232f3549af"
+        },
+        {
+          "path": "wafw00f/plugins/cerber.py",
+          "sha256": "50ad7d97bdd72789e8e4e8de26e2fe1e9f486a24d7ddbe986a5a9a0d2a124830"
+        },
+        {
+          "path": "wafw00f/plugins/chinacache.py",
+          "sha256": "251c11baf13474e62beb346cf85e7f16257f93b755403ed6fe2bb08c86669be0"
+        },
+        {
+          "path": "wafw00f/plugins/chuangyu.py",
+          "sha256": "c8ac8851ef95d0bff62e4a2818ce2ba0cb3f8fef02620f0b674fe085ac95a2c7"
+        },
+        {
+          "path": "wafw00f/plugins/ciscoacexml.py",
+          "sha256": "b9c5f44593556335236cf5bae4d8dcc670aea8efdb20368fc708b0b3a82da1ca"
+        },
+        {
+          "path": "wafw00f/plugins/cloudbric.py",
+          "sha256": "7b0314997ada7080eac14ec59199f97f4093fa560e97e347b2b7c062a14e0f47"
+        },
+        {
+          "path": "wafw00f/plugins/cloudflare.py",
+          "sha256": "0fa631423ff3cf8e3e0ec00124108f3b85ab973fcefb1d8caae9db984011ac91"
+        },
+        {
+          "path": "wafw00f/plugins/cloudfloordns.py",
+          "sha256": "49886cceb2681b63e44ae7d5694a9b29697afce07fbfbe64ef48bb8535d3507e"
+        },
+        {
+          "path": "wafw00f/plugins/cloudfront.py",
+          "sha256": "1d2f0275fb1fdb63e908fc1b41f38a6c8ad24775d11c4c077652d378aaa0218b"
+        },
+        {
+          "path": "wafw00f/plugins/cloudprotector.py",
+          "sha256": "57813c62b3fb3b60b4efa3f8d08aa47233941b8ab8623243f391f8f68ee83bb1"
+        },
+        {
+          "path": "wafw00f/plugins/comodo.py",
+          "sha256": "9984c01ddce96f0d16dc03a9f27c3d15d2838d96806f83c0e1d24174a8f49168"
+        },
+        {
+          "path": "wafw00f/plugins/crawlprotect.py",
+          "sha256": "395822bcf7e68b42a8c2144dcc1138893fd06b5bd2a33adb6e7f4d7738cb94f6"
+        },
+        {
+          "path": "wafw00f/plugins/ddosguard.py",
+          "sha256": "559d3612b3bc60db21f245b23d16ea2c074ccf43b3f9f188cd393e79ce809210"
+        },
+        {
+          "path": "wafw00f/plugins/denyall.py",
+          "sha256": "ff6a05494497b3988701561ddc1d96b64a69e8effe9b6f95b4d85acbcb34814b"
+        },
+        {
+          "path": "wafw00f/plugins/distil.py",
+          "sha256": "c86004a5a129b2a35d940af6e30846743f3f891c3bd7e28ec6369f1d521b26bd"
+        },
+        {
+          "path": "wafw00f/plugins/dosarrest.py",
+          "sha256": "277b502440fe7aa01b7f8211ab7ce0da53ed989d2020e2509a5790b8d1cfcd7f"
+        },
+        {
+          "path": "wafw00f/plugins/dotdefender.py",
+          "sha256": "70d58ec5d7c96c650f79b04db6ecc9bfc8c6d211f039f369819ae692e2872718"
+        },
+        {
+          "path": "wafw00f/plugins/dynamicweb.py",
+          "sha256": "271751c2941843f93850e403693df15875686eaaecebc7ba1a126630a2104b7c"
+        },
+        {
+          "path": "wafw00f/plugins/edgecast.py",
+          "sha256": "b64fe9473f7c0de4bff8a61d12a0aa29c7e3603e958d01da7f4311709ab2f8f1"
+        },
+        {
+          "path": "wafw00f/plugins/eisoo.py",
+          "sha256": "e254866a28419a8bcaf092e4cf62a2013ce59ead168f70cbb973252b9fbe33ca"
+        },
+        {
+          "path": "wafw00f/plugins/envoy.py",
+          "sha256": "087cbb9e7984d1712466d54e902a7561c47e4d8fbb8e87d4442ed413dc09824f"
+        },
+        {
+          "path": "wafw00f/plugins/expressionengine.py",
+          "sha256": "55d3c93e0501591608ae6318e8a9fc0096731e934e26a68c490fb2486a52a108"
+        },
+        {
+          "path": "wafw00f/plugins/f5bigipapm.py",
+          "sha256": "4ed3fa15477445b38dc0ae45e3965bb846705b17f7f490c9a782a69625d857a3"
+        },
+        {
+          "path": "wafw00f/plugins/f5bigipasm.py",
+          "sha256": "f07f558f58fa2c321936999edf6024eac9cc49cecf4429031cba5745b27b0dda"
+        },
+        {
+          "path": "wafw00f/plugins/f5bigipltm.py",
+          "sha256": "3b3a403bf7d8182d0d4ef30cb7f26f77aecf3f2145c555b34865722c6d291179"
+        },
+        {
+          "path": "wafw00f/plugins/f5firepass.py",
+          "sha256": "b438a4629f0add9d8085029880c74609dec175396ad08ce93fa0196789c58385"
+        },
+        {
+          "path": "wafw00f/plugins/f5trafficshield.py",
+          "sha256": "8f4fb02ba26033876df673b6a1479323e8e3103fbe471063bc8560fcd82c33d8"
+        },
+        {
+          "path": "wafw00f/plugins/fastly.py",
+          "sha256": "9a78fac6c89ab9dfc398ab48992e20ff4160746b6cdc8943533efea3c3d0419c"
+        },
+        {
+          "path": "wafw00f/plugins/fortigate.py",
+          "sha256": "54121e45eade40d950b12168c66585fe05e93fd20de3a493fd493120c6dc20e9"
+        },
+        {
+          "path": "wafw00f/plugins/fortiguard.py",
+          "sha256": "05e66a8f283153bdaf3efbbfa049b1dea998a63df65076d7f90ef1684783b761"
+        },
+        {
+          "path": "wafw00f/plugins/fortiweb.py",
+          "sha256": "0c43e90c4cb1e68cac492c3cab13af87a5377cd0adaf98e9c1e0bfd113e6da8f"
+        },
+        {
+          "path": "wafw00f/plugins/frontdoor.py",
+          "sha256": "9671a70528df9c55ac8472a1f9cbd9288905acbd504b9e4d0e06f5786ff596b7"
+        },
+        {
+          "path": "wafw00f/plugins/gcparmor.py",
+          "sha256": "666d72ebff3be48db4e553fb17d9f326162972fe2fec33fc19d88f09aa51e332"
+        },
+        {
+          "path": "wafw00f/plugins/godaddy.py",
+          "sha256": "a9db927de88fa614181e28afbd5eb24d56e937cb2ab477547e5d899bf3ffe09e"
+        },
+        {
+          "path": "wafw00f/plugins/greywizard.py",
+          "sha256": "16367d66ba6d5e34153d20ebaf0996ccff9b43489736ad750206b220bcfd0f08"
+        },
+        {
+          "path": "wafw00f/plugins/huaweicloud.py",
+          "sha256": "e89b1b01209ee6bbf0cc8774eb3f2707563a4e300b99faac2a86e5b65a5d1e11"
+        },
+        {
+          "path": "wafw00f/plugins/hyperguard.py",
+          "sha256": "19678ee0e0555393bb6fbf654f5ca0f82409fc43f147b78af22dd07eaf84217b"
+        },
+        {
+          "path": "wafw00f/plugins/ibmdatapower.py",
+          "sha256": "4be19fd1351a733e65b531f6591fe444ddc5b75bbc3568a07e1384c02c8fbc3f"
+        },
+        {
+          "path": "wafw00f/plugins/imunify360.py",
+          "sha256": "f17144370c34110ced29bf6825f9c7c0f9a7c6e104ab303c2f55f6546727ecf1"
+        },
+        {
+          "path": "wafw00f/plugins/incapsula.py",
+          "sha256": "4fcac967ff08e98a7a922f8698a24c3f7fab45f18e0b9da8ae58a68a8482de7f"
+        },
+        {
+          "path": "wafw00f/plugins/indusguard.py",
+          "sha256": "b1ee31238afce89b184dcf92a5f05784dfc860622c8ea082016119aed2e19036"
+        },
+        {
+          "path": "wafw00f/plugins/instartdx.py",
+          "sha256": "ed4b13a3ca58da33f32293b02b43392731882dd17ea9e1acb2b6186777602000"
+        },
+        {
+          "path": "wafw00f/plugins/isaserver.py",
+          "sha256": "495fd9772838d838ab2c8a11de5c21c55c22fb9dd92ca2fbaa070299e04f675b"
+        },
+        {
+          "path": "wafw00f/plugins/janusec.py",
+          "sha256": "a5f17c159a0038f1115ef5e7fdff71c1ce367ad3e3f51daa5d12604e48391297"
+        },
+        {
+          "path": "wafw00f/plugins/jiasule.py",
+          "sha256": "b0345415c46671450ed75d7d9f1165ff21ed7e3b2430397725bb79752eaa5b51"
+        },
+        {
+          "path": "wafw00f/plugins/kemp.py",
+          "sha256": "b28738d6576e86a3d90be4e18ba29b9a01cdf1425e4c396a7d4bae36eeea2ba6"
+        },
+        {
+          "path": "wafw00f/plugins/keycdn.py",
+          "sha256": "18a5aee0f53f00611b90033d6973f0198717231b23a2a331a191e80147ab5b72"
+        },
+        {
+          "path": "wafw00f/plugins/knownsec.py",
+          "sha256": "d91d9c5589176d8dc37ca542f7352c7cdf6cc12270cb3136f4ca4147a01fb665"
+        },
+        {
+          "path": "wafw00f/plugins/kona.py",
+          "sha256": "e627cab6ebef513c5d754b481198775c49adf567fb810924f195c09a7fe06c22"
+        },
+        {
+          "path": "wafw00f/plugins/limelight.py",
+          "sha256": "c72a32a2e7be2980e5538e2d98e90b9b4e245ff44370f49989042eb238dec10a"
+        },
+        {
+          "path": "wafw00f/plugins/link11.py",
+          "sha256": "3affcc9034603969a31683c977bd3e862b11e1450cc4c2e09e1980fa627cfe96"
+        },
+        {
+          "path": "wafw00f/plugins/litespeed.py",
+          "sha256": "f5a431afb8a4361001a8ac46f54fdbc5c9a0f0c44bc720ab1d732c8bf3002169"
+        },
+        {
+          "path": "wafw00f/plugins/malcare.py",
+          "sha256": "b839104f3c8622d61876d5de7cdfb11b9b0a6a63fa50c1440113d1c19eefc3ba"
+        },
+        {
+          "path": "wafw00f/plugins/maxcdn.py",
+          "sha256": "62e2eac17ebfe83ae8f254c8971acd77c04154a84416a6338245b8b933c78b92"
+        },
+        {
+          "path": "wafw00f/plugins/missioncontrol.py",
+          "sha256": "e4730b71bbc544f3e9f4adc00faea9a2895bb208af202f1be8878146bf16f60f"
+        },
+        {
+          "path": "wafw00f/plugins/modsecurity.py",
+          "sha256": "de9d11d795c484286cc405c2c0b638418f836f9541913c87841c1cb0ab49db23"
+        },
+        {
+          "path": "wafw00f/plugins/naxsi.py",
+          "sha256": "270e5039e54699e532dd91b9e7e999cc0525771126d77854b4aa2abfc9e626e8"
+        },
+        {
+          "path": "wafw00f/plugins/nemesida.py",
+          "sha256": "b5a47988e2956abbd8b86580ce4e312512c02bd0093e7ad99219aaac58d4aaae"
+        },
+        {
+          "path": "wafw00f/plugins/netcontinuum.py",
+          "sha256": "e328871361d7b5c182ba51136a50b72224685b093ba8b8acb8ec2f97eca46643"
+        },
+        {
+          "path": "wafw00f/plugins/netscaler.py",
+          "sha256": "18259b27505c751f6c9773f7cbe826a5f9c90eacfc26926dee4f16dca2833f76"
+        },
+        {
+          "path": "wafw00f/plugins/nevisproxy.py",
+          "sha256": "e338b1312c8089553f1e3a2e5d74596cf2ea025a3ea3825449ca75f25ccd166f"
+        },
+        {
+          "path": "wafw00f/plugins/newdefend.py",
+          "sha256": "2d25d49ee0e3219299d0ed36706362a568243a41acc8fe152dc778ae04afd095"
+        },
+        {
+          "path": "wafw00f/plugins/nexusguard.py",
+          "sha256": "ea535f07c6b220bd324e85727005921aaf9e745a6df3cabdcc04e0cf0cb8c4b9"
+        },
+        {
+          "path": "wafw00f/plugins/ninja.py",
+          "sha256": "aa5168e6859fc82c342afab9ab774cfdd833588dccab75465fe81f38c3f2c85c"
+        },
+        {
+          "path": "wafw00f/plugins/nsfocus.py",
+          "sha256": "b5b97f583b7925971d54a29327d92a87e984e6565ca0cedf6852ccb54e326b7d"
+        },
+        {
+          "path": "wafw00f/plugins/nullddos.py",
+          "sha256": "b38e7a568f9acdc187bd118f652d32528fdcd23c8f9cb7f7c9e5464748d8419b"
+        },
+        {
+          "path": "wafw00f/plugins/onmessage.py",
+          "sha256": "b5d62e5e93237b2d45c4337fc984971df17560a7ebe9f8c9d6cde3ffe3aa41d7"
+        },
+        {
+          "path": "wafw00f/plugins/openresty.py",
+          "sha256": "01374285493ee0b2a38603d28baace032be49d7303ff4a2a3cc7fbaacd1130ad"
+        },
+        {
+          "path": "wafw00f/plugins/oraclecloud.py",
+          "sha256": "b849f990d2a6be08b6d24277e58a459a845f04a9e2f0b26d9f5be0dae97248e9"
+        },
+        {
+          "path": "wafw00f/plugins/paloalto.py",
+          "sha256": "2941b8499250766bf7d4310883d77fe859b54f09c77953c334c5842eea699896"
+        },
+        {
+          "path": "wafw00f/plugins/panyun360.py",
+          "sha256": "79ea9fd1665237c58ef876b8e20cc717d558bcd25c2a8e6b0e84eeabd4e920c7"
+        },
+        {
+          "path": "wafw00f/plugins/pentawaf.py",
+          "sha256": "224fc7a3105e3863f86b7073fd7a4a333537735c252501127b2a3dbd942232dd"
+        },
+        {
+          "path": "wafw00f/plugins/perimeterx.py",
+          "sha256": "026d8563ca1209df3b4465d78a127fa6ba1876162c27bdc34a687eee19c8c7a6"
+        },
+        {
+          "path": "wafw00f/plugins/pksec.py",
+          "sha256": "aa9eb3fc5f6eadbb3a32e46fa2a5f742e578317e95a090c9384a4c26bee752d8"
+        },
+        {
+          "path": "wafw00f/plugins/powercdn.py",
+          "sha256": "e00235d63ccaee2839f127ee86ab229d273be18024715b3f985e597f1f462286"
+        },
+        {
+          "path": "wafw00f/plugins/profense.py",
+          "sha256": "dc31bf2e76c88c65fa94b142a6fe7db8d48b005aad503ab51d5c652d76a89060"
+        },
+        {
+          "path": "wafw00f/plugins/ptaf.py",
+          "sha256": "0c4895c71c539aa7a727d750aced36cb8f56f07d7eaa78b7d79ad793b07758ef"
+        },
+        {
+          "path": "wafw00f/plugins/puhui.py",
+          "sha256": "0ec49fa7e7182887624d7dc2484f9ae7bf7488de1b842474d49f8d79f4fd4017"
+        },
+        {
+          "path": "wafw00f/plugins/qcloud.py",
+          "sha256": "c4b5aec51baa6bdc74a5c365d8df35be612685b0d5235b0e9f7f3f6af3f35593"
+        },
+        {
+          "path": "wafw00f/plugins/qiniu.py",
+          "sha256": "5bbd9edbd1263f12e0bdd1169f1021c49142bcefcd84720a6058789051f9da96"
+        },
+        {
+          "path": "wafw00f/plugins/qrator.py",
+          "sha256": "d6595b9f73f4a9e59241df618a94686b5b77500ff321bce30c9479d2c1980f3f"
+        },
+        {
+          "path": "wafw00f/plugins/radware.py",
+          "sha256": "9696b2e9f0385ba9be76d1a33bf749895bee94a3754721742c1b5eebef414cfc"
+        },
+        {
+          "path": "wafw00f/plugins/reblaze.py",
+          "sha256": "482396129cc619af1b2e733b73e78ac94d6fe681465727b73c472bdc80ec8a17"
+        },
+        {
+          "path": "wafw00f/plugins/reflected.py",
+          "sha256": "6bc2720f1ac1852cf856f380f589f8e41a2e02557281c7d71d53e335fdca18f4"
+        },
+        {
+          "path": "wafw00f/plugins/rsfirewall.py",
+          "sha256": "44b27e65971a052fed0a00868efd4c2c22e3dae9ac98a7cfb8fe374b23447e86"
+        },
+        {
+          "path": "wafw00f/plugins/rvmode.py",
+          "sha256": "d3644e64cd4d4bb7b495e0a4fed6ca56ec4951c8fb28a5461daa598fdbe90024"
+        },
+        {
+          "path": "wafw00f/plugins/sabre.py",
+          "sha256": "b35c08bdf9a5283065f9340408b8e02ebb833bc8131b7292bfe4c34639d51b32"
+        },
+        {
+          "path": "wafw00f/plugins/safe3.py",
+          "sha256": "e3ac23759017b384d0172867ee6e062deb7a72ff7387cce1f7df647d01795211"
+        },
+        {
+          "path": "wafw00f/plugins/safedog.py",
+          "sha256": "7744d7791b9e50e14a67b95ceba43a1af8c5b8ad13dbdc85c4d0fcbb7d397bcd"
+        },
+        {
+          "path": "wafw00f/plugins/safeline.py",
+          "sha256": "f3c2b20ab92aa4f1d9e109376005a0e7c995feb7f04dda2c56262f1a77d62871"
+        },
+        {
+          "path": "wafw00f/plugins/scutum.py",
+          "sha256": "9e780d241521c1ace850a87b8f755faefa273a0f89e6cc7531c0151ebe14f349"
+        },
+        {
+          "path": "wafw00f/plugins/secking.py",
+          "sha256": "bae503be2430f38f685380a2321a2bff57ede45a194ebe5efe286c29fda329b4"
+        },
+        {
+          "path": "wafw00f/plugins/secupress.py",
+          "sha256": "7197e27c8fb9d42cd3b03414837e151fd524b5fd64d36f288460ac4c8e7fda05"
+        },
+        {
+          "path": "wafw00f/plugins/secureentry.py",
+          "sha256": "b52c562f81acc585fdee39f81a9aad643ea6e250dd6351ee2590f259c89e05c9"
+        },
+        {
+          "path": "wafw00f/plugins/secureiis.py",
+          "sha256": "4430ea78686088434c06f34524e46531db2bb71de8c25a793d642147a629c032"
+        },
+        {
+          "path": "wafw00f/plugins/securesphere.py",
+          "sha256": "7a962c3c742930fee872030e7f0981471861fa1a177010175e5023b40b71050b"
+        },
+        {
+          "path": "wafw00f/plugins/senginx.py",
+          "sha256": "871ec7c60b4b4cbfce33653892dd920612407e3269f95ad945f0d1a8b97cb973"
+        },
+        {
+          "path": "wafw00f/plugins/serverdefender.py",
+          "sha256": "3e9764e15420fad12666dc1a94f92c2038470785ea5950ac164886449cfe1748"
+        },
+        {
+          "path": "wafw00f/plugins/shadowd.py",
+          "sha256": "25dded85e06d176649f3dcd0be826a89ba24558aff1f4cd9e2b556ec23c23d8f"
+        },
+        {
+          "path": "wafw00f/plugins/shieldon.py",
+          "sha256": "9d65dfdee87ce98e7c0fefbc00ad1c910fd11ea239025fbdb79424f2e1b6d977"
+        },
+        {
+          "path": "wafw00f/plugins/shieldsecurity.py",
+          "sha256": "6e3429baf7720476073933cd9376d4082b0158b90471544acf287b2666b88205"
+        },
+        {
+          "path": "wafw00f/plugins/siteground.py",
+          "sha256": "9fa2c922dd2582b4ae2d46a6f7d1c4b01bebad1335e094f8c2ff5c8ea68c3ba3"
+        },
+        {
+          "path": "wafw00f/plugins/siteguard.py",
+          "sha256": "99c2998ebc3f2b9068849059045d4119358c4f9ec6f77aaea847f617aca76910"
+        },
+        {
+          "path": "wafw00f/plugins/sitelock.py",
+          "sha256": "2df06bec64e27993c61c228d76e66ee69e82ab82338c3e04b7d931973b1c2cbd"
+        },
+        {
+          "path": "wafw00f/plugins/sonicwall.py",
+          "sha256": "9b5f946f44a002329722023f05e02451cfc94be921e7c1d5f8be8223c4fc7477"
+        },
+        {
+          "path": "wafw00f/plugins/sophos.py",
+          "sha256": "a4650ab1524c3c05ed6579672e63966c7ca5bf55343ca1e7f25058bdb7f9bc6a"
+        },
+        {
+          "path": "wafw00f/plugins/squarespace.py",
+          "sha256": "f04bca1ebde15ee8e796854876d5e5cd025d4cfff7d606c74e399fed733bc72b"
+        },
+        {
+          "path": "wafw00f/plugins/squidproxy.py",
+          "sha256": "bb7a2160446e8208cfa93b9fe885efb68e43c14b97885529061e935ae7dcfb0d"
+        },
+        {
+          "path": "wafw00f/plugins/stackpath.py",
+          "sha256": "155e930299d5207d6fad91b4fdc7a8426b67cf048265f3e3ecf8d1829c010c32"
+        },
+        {
+          "path": "wafw00f/plugins/sucuri.py",
+          "sha256": "9fabecf1d361b23fca5029ff91b07a04cbcf5425089fba3be42e8add2833f968"
+        },
+        {
+          "path": "wafw00f/plugins/tencent.py",
+          "sha256": "c786889d80d61966fd439399270700366c54d497be4cbc11c8477c2bc6fa2fd3"
+        },
+        {
+          "path": "wafw00f/plugins/teros.py",
+          "sha256": "7ccadf5605deee020dad07b26d650646cbbd5b318d5a019f277a127abbc6c6a0"
+        },
+        {
+          "path": "wafw00f/plugins/threatx.py",
+          "sha256": "a61ed0d87921aad1e9e1b0bcd4e9a2b6e5f5c8cb1513d01125a56e9692beefc0"
+        },
+        {
+          "path": "wafw00f/plugins/transip.py",
+          "sha256": "444c0f4baa90a11f4daafe5794b50f94812f7ae4cb90578b2d34816d1ce76216"
+        },
+        {
+          "path": "wafw00f/plugins/uewaf.py",
+          "sha256": "1ab434f7597825bfc59bdc0a02827999292a37bd810a41c401cb9866237f3922"
+        },
+        {
+          "path": "wafw00f/plugins/urlmaster.py",
+          "sha256": "2b001ec1f0297690593dc5a242f52c61dd40739ed04b7cec2a4620b154157802"
+        },
+        {
+          "path": "wafw00f/plugins/urlscan.py",
+          "sha256": "e7e5b341232660de271ee31df43a53cd132b8d95b6793f3c8f3270a934237b32"
+        },
+        {
+          "path": "wafw00f/plugins/variti.py",
+          "sha256": "1cc4e505cecfba60e528eb9ec2be8eb9bf1c79a7210452e779edf46ed6e05e32"
+        },
+        {
+          "path": "wafw00f/plugins/varnish.py",
+          "sha256": "04b9e012318b53aa7c6572cbbbecd1e7d1ff131d07671708a10cfa76a44caa65"
+        },
+        {
+          "path": "wafw00f/plugins/vercel.py",
+          "sha256": "e928fb7c9cfe6d2b01bac985a144062aa0876e238f0751c044b1a6554f2014d6"
+        },
+        {
+          "path": "wafw00f/plugins/viettel.py",
+          "sha256": "2954a3ccde1c2ea4fdd8f3af7cd8dcf57b97bdff78add7b99eb8ad7e29307560"
+        },
+        {
+          "path": "wafw00f/plugins/virusdie.py",
+          "sha256": "267ffe825b43e60af03425069765fa601b5e504534819dc531bb59637d010c9c"
+        },
+        {
+          "path": "wafw00f/plugins/wallarm.py",
+          "sha256": "1b5f6e35307e660ba77807ddc8985e22b8dfb689c1bb50673d677c68bdd29012"
+        },
+        {
+          "path": "wafw00f/plugins/watchguard.py",
+          "sha256": "db73aaaf69627a9124d74623f2cfd545940fafbc9580010a0007443500e69e6e"
+        },
+        {
+          "path": "wafw00f/plugins/webarx.py",
+          "sha256": "0456ddfe05dfc116d9b239978adddbadd1778543346bceb402f491a8d1c53882"
+        },
+        {
+          "path": "wafw00f/plugins/webknight.py",
+          "sha256": "a80fbe58d547c3c1d01b762d6ebadb9134bd56430af407dadc1449916b087969"
+        },
+        {
+          "path": "wafw00f/plugins/webland.py",
+          "sha256": "c6a4ca1e5dd97f48615b8a270ce4dbbeab51c27f42518b42c52a4fd5f65f21af"
+        },
+        {
+          "path": "wafw00f/plugins/webray.py",
+          "sha256": "941c766fe90816008f4b34a83b9d3f48e74602882d7740ee184baa58d87aca51"
+        },
+        {
+          "path": "wafw00f/plugins/webseal.py",
+          "sha256": "311dbf228a013c719060e244c2658cb9865f1c1aee441eabb48477de30a9b060"
+        },
+        {
+          "path": "wafw00f/plugins/webtotem.py",
+          "sha256": "f33b7990ff61c47e44974be3c4ad3537e94f8bf2d96f07c9a6252f04bec32bc2"
+        },
+        {
+          "path": "wafw00f/plugins/west263cdn.py",
+          "sha256": "482238980259a0407460b42feb600e07a18aa2e0612da205755e3c19014bf53d"
+        },
+        {
+          "path": "wafw00f/plugins/wordfence.py",
+          "sha256": "d7d1f6fc6d274e3c80f80e18386a8be0e1f8ef147212d21b21e0071206f618d2"
+        },
+        {
+          "path": "wafw00f/plugins/wpmudev.py",
+          "sha256": "e4f5638d901771ed3cf4eac96d7d9ab9b22401926f89739e1bc53d1ae521e9f9"
+        },
+        {
+          "path": "wafw00f/plugins/wts.py",
+          "sha256": "3f845dac300b0fffbaac260b66b430d8a95804d1f6ce66efe998e225c866cedb"
+        },
+        {
+          "path": "wafw00f/plugins/wzb360.py",
+          "sha256": "3cd7c211e7eecd9cce6de87c0478600ab66841aff2c60db919e3db874b22b6f3"
+        },
+        {
+          "path": "wafw00f/plugins/xlabssecuritywaf.py",
+          "sha256": "c47cc8323bb760f823ed03ceabc074aca77e802548eeb4e3a2c7ae2b2618cbb4"
+        },
+        {
+          "path": "wafw00f/plugins/xuanwudun.py",
+          "sha256": "8ffab164909a9ce8b75b4196e5fd1f261985e866fc4ebcb2c4e152841ae6e855"
+        },
+        {
+          "path": "wafw00f/plugins/yundun.py",
+          "sha256": "24e1e614f5ea007b971e8aa4f75fefa8b8619a8587c342a716a50bdc7de2f5f4"
+        },
+        {
+          "path": "wafw00f/plugins/yunsuo.py",
+          "sha256": "8f0f9a10999b5a45d5c82d1ccab6a963f6cdba05d0cd1c0ec215192097ccf076"
+        },
+        {
+          "path": "wafw00f/plugins/yxlink.py",
+          "sha256": "1ef6bf378b2c8b0e9e529b20854a96123a51945d32d729b45b13d22e1d2d8eb4"
+        },
+        {
+          "path": "wafw00f/plugins/zenedge.py",
+          "sha256": "43a48bc978f349f8de2220d683c3511cdcb04618df12f3a216ee548eaea352b3"
+        },
+        {
+          "path": "wafw00f/plugins/zscaler.py",
+          "sha256": "edca08788c8add07e0d0452250a2abfba2840fb822846dbc001ab4d3a4bb0d8b"
+        }
+      ],
+      "matcher_calls": 518,
+      "supported_plugins": 172,
+      "unsupported_plugins": 0,
+      "license": {
+        "path": "LICENSE",
+        "sha256": "fdaaf8393afcbab5a0db158ae742e76ec3803a7c72af19489f5bd521d3db08ea",
+        "notice_path": "THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt"
+      }
+    },
+    "cdncheck": {
+      "repository": "https://github.com/projectdiscovery/cdncheck",
+      "commit": "dac12984ef12fa5663c2b7591d0a304ef27c659b",
+      "ported_categories": [
+        "cdn",
+        "waf",
+        "common"
+      ],
+      "excluded_categories": [
+        {
+          "category": "cloud",
+          "reason": "general hosting ranges are not edge-protection evidence"
+        }
+      ],
+      "inputs": [
+        {
+          "path": "sources_data.json",
+          "sha256": "4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3"
+        },
+        {
+          "path": "other.go",
+          "sha256": "37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a"
+        },
+        {
+          "path": "LICENSE.md",
+          "sha256": "cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb"
+        }
+      ],
+      "cname_item_type": "waf",
+      "license": {
+        "path": "LICENSE.md",
+        "sha256": "cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb",
+        "notice_path": "THIRD_PARTY_NOTICES/cdncheck-MIT.txt"
+      }
+    }
+  },
+  "output": {
+    "path": "src/lib/data/edgeSignatureData.mjs",
+    "sha256": "94b18d931b0ecbc962098a1378297a8b189e3eed78a0c79b1b62981887145dd4",
+    "bytes": 335800
+  }
+}

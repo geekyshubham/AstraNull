@@ -31,6 +31,10 @@ import {
   syncChecklistFromProviderArtifactReview,
   telemetryObjectContainsForbiddenKeys,
   validateHighScaleIntakeFields,
+  validateScenarioFamilyAuthorization,
+  validateGovernedAuthorization,
+  governedAuthorizationFailure,
+  validateActiveLoaAuthorization,
 } from '../../lib/highScalePolicy.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 
@@ -165,6 +169,7 @@ function buildRequestPackPatch(req) {
     environment: req.environment,
     business_criticality: req.business_criticality,
     requested_scenario_families: req.requested_scenario_families,
+    delivery_patterns: req.delivery_patterns,
     requested_limits: req.requested_limits,
     stop_criteria: req.stop_criteria,
     abort_criteria: req.abort_criteria,
@@ -239,6 +244,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
   const killSwitchRepo = repositories.killSwitch;
   const validationEvidence = repositories.validationEvidence;
   const probeJobsRepo = repositories.probeJobs;
+  const portalRevamp = repositories.portalRevamp;
   const notifications = options.notifications ?? repositories.notifications;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
@@ -269,12 +275,13 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         audit_trail: [],
         scheduled_window: null,
         artifacts: [],
-        scope_hash: null,
+        scope_hash: computeScopeHashFromTargets(body.target_group_id, scope.targets),
         soc_approvals: [],
         provider_approval_checklist: buildProviderApprovalChecklist(body),
         environment: intake.environment,
         business_criticality: intake.business_criticality,
         requested_scenario_families: intake.requested_scenario_families,
+        delivery_patterns: intake.delivery_patterns ?? [],
         requested_limits: intake.requested_limits,
         stop_criteria: intake.stop_criteria,
         abort_criteria: intake.abort_criteria,
@@ -299,7 +306,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
       if (!req) return null;
       const validation = validateArtifactUploadBody(body);
       if (validation.error) return validation;
-      const artifact = buildArtifactFromUpload(ctx, body, { uploadEnvelope: options.uploadEnvelope });
+      const artifact = buildArtifactFromUpload(ctx, body, { uploadEnvelope: options.uploadEnvelope, request: req });
       if (!req.artifacts) req.artifacts = [];
       req.artifacts.push(artifact);
       if (artifact.type === 'provider_approval') {
@@ -611,6 +618,18 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         if (!authorizationPackComplete(req)) {
           return authorizationPackIncompleteResponse(req);
         }
+        // SOC-011 governance binding (Postgres parity): requested governed scenario
+        // families must be covered by accepted authorization artifacts.
+        const scenarioAuthorization = validateScenarioFamilyAuthorization(req);
+        if (!scenarioAuthorization.ok) {
+          return {
+            error: 'scenario_family_not_authorized',
+            status: 409,
+            requested_scenario_families: req.requested_scenario_families ?? [],
+            uncovered: scenarioAuthorization.uncovered,
+            approved: scenarioAuthorization.approved,
+          };
+        }
         if (!req.soc_approvals) req.soc_approvals = [];
         if (req.soc_approvals.some((a) => a.user_id === ctx.userId)) {
           return { error: 'duplicate_soc_approval', status: 409 };
@@ -630,8 +649,11 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
             });
             return { error: scope.error, status: scope.status };
           }
+          const currentScopeHash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
+          const governed = validateGovernedAuthorization(req, { currentScopeHash });
+          if (!governed.ok) return governedAuthorizationFailure(req, governed);
           req.soc_approvals.push({ user_id: ctx.userId, at: nowFn().toISOString() });
-          req.scope_hash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
+          req.scope_hash = currentScopeHash;
           resolvedState = 'approved';
           await appendAudit(auditRepo, ctx, 'high_scale.approved', 'high_scale_request', id, {
             scope_hash: req.scope_hash,
@@ -648,7 +670,13 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         if (!req.scope_hash) {
           return { error: 'missing_scope_hash', status: 409 };
         }
-        req.scheduled_window = { window_start, window_end, scope_hash: req.scope_hash };
+        const scheduledWindow = { window_start, window_end, scope_hash: req.scope_hash };
+        const scope = await validateTargetScope(coreCatalog, ctx, req.target_group_id);
+        if (scope.error) return { error: scope.error, status: scope.status };
+        const currentScopeHash = computeScopeHashFromTargets(req.target_group_id, scope.targets);
+        const governed = validateGovernedAuthorization(req, { currentScopeHash, scheduledWindow });
+        if (!governed.ok) return governedAuthorizationFailure(req, governed);
+        req.scheduled_window = scheduledWindow;
         await appendAudit(auditRepo, ctx, 'high_scale.scheduled', 'high_scale_request', id, {
           window_start,
           window_end,
@@ -698,6 +726,37 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
             actual: currentScope,
           });
           return { error: 'scope_hash_mismatch', status: 409 };
+        }
+        if (!portalRevamp || typeof portalRevamp.getActiveLoaByGroup !== 'function') {
+          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
+            reason: 'loa_repository_unavailable',
+          });
+          return { error: 'loa_repository_unavailable', status: 503 };
+        }
+        const activeLoa = await portalRevamp.getActiveLoaByGroup(ctx, req.target_group_id);
+        const loaAuthorization = validateActiveLoaAuthorization(
+          activeLoa,
+          scope.targets.map((target) => target.id),
+          nowFn().getTime(),
+        );
+        if (!loaAuthorization.ok) {
+          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
+            reason: loaAuthorization.error,
+            missing_target_ids: loaAuthorization.missing_target_ids ?? [],
+          });
+          return { error: loaAuthorization.error, status: 409 };
+        }
+        const governed = validateGovernedAuthorization(req, {
+          currentScopeHash: currentScope,
+          scheduledWindow: req.scheduled_window,
+          nowMs: nowFn().getTime(),
+        });
+        if (!governed.ok) {
+          await appendAudit(auditRepo, ctx, 'high_scale.start_gate_denied', 'high_scale_request', id, {
+            reason: 'governed_authorization_mismatch',
+            invalid_fields: governed.invalid_fields,
+          });
+          return governedAuthorizationFailure(req, governed);
         }
         const adapterGate = evaluateHighScaleAdapterStartGate(metadata.adapter_mode);
         if (adapterGate) {

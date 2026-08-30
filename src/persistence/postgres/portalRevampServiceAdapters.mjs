@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { buildAuditRecord } from '../../audit.mjs';
+import { normalizeTargetInput, targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { encodeBase32 } from '../../lib/base32.mjs';
+import { mapProviderInventory } from '../../lib/connectorInventory.mjs';
+import { paginateItems } from '../../lib/cursorPagination.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { PORTAL_REVAMP_REPOSITORY_METHODS } from './portalRevampRepository.mjs';
 
 /** @type {readonly string[]} */
@@ -97,6 +100,7 @@ const LADDER_LABELS = Object.freeze({
 const DNS_TIMEOUT_MS = 4000;
 const VERIFY_RATE_LIMIT = 6;
 const VERIFY_RATE_WINDOW_MS = 60_000;
+const LOA_SCOPE_STATES = new Set(['agent_verified', 'user_confirmed']);
 
 /** @type {Map<string, { windowStart: number, count: number }>} */
 const verifyRateBuckets = new Map();
@@ -138,14 +142,84 @@ async function resolveTxtWithTimeout(recordName, resolveTxt) {
     const dns = await import('node:dns/promises');
     resolveFn = dns.resolveTxt.bind(dns);
   }
+  let timer;
   const timeout = new Promise((_, reject) => {
-    setTimeout(() => {
+    timer = setTimeout(() => {
       const err = new Error('DNS lookup timed out');
       err.code = 'ETIMEOUT';
       reject(err);
     }, DNS_TIMEOUT_MS);
   });
-  return Promise.race([resolveFn(recordName), timeout]);
+  try {
+    return await Promise.race([resolveFn(recordName), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadConnectorInventory(repositories, ctx, connectorId) {
+  const connectorRepository = repositories?.wafPosture;
+  if (typeof connectorRepository?.getConnector !== 'function' || typeof connectorRepository?.listConnectorSnapshots !== 'function') {
+    throw new Error('Postgres connector inventory requires wafPosture connector and snapshot repositories.');
+  }
+  const connector = await connectorRepository.getConnector(ctx, connectorId);
+  if (!connector) return { error: 'connector_not_found', status: 404 };
+  if (['disabled', 'revoked'].includes(String(connector.status ?? '').toLowerCase())) {
+    return { error: 'connector_disabled', status: 409 };
+  }
+
+  const snapshots = await connectorRepository.listConnectorSnapshots(ctx, connectorId);
+  const seenResources = new Set();
+  const inventory = new Map();
+  for (const snapshot of snapshots) {
+    const resourceKey = snapshot.resource_ref_hash ?? snapshot.id;
+    if (seenResources.has(resourceKey)) continue;
+    seenResources.add(resourceKey);
+
+    const mapped = mapProviderInventory(connector.provider, snapshot.summary);
+    const direct = snapshot.summary && typeof snapshot.summary === 'object'
+      ? snapshot.summary.items ?? snapshot.summary.inventory_items ?? []
+      : [];
+    const candidates = mapped.length
+      ? mapped
+      : Array.isArray(direct) && direct.length
+        ? direct
+        : snapshot.display_ref
+          ? [{
+              kind: /(?:ip|address)/i.test(snapshot.snapshot_kind) ? 'ip'
+                : /url/i.test(snapshot.snapshot_kind) ? 'url' : 'fqdn',
+              value: snapshot.display_ref,
+              label: snapshot.display_ref,
+              importable: true,
+            }]
+          : [];
+
+    for (const candidate of candidates) {
+      if (candidate?.importable === false) continue;
+      try {
+        const normalized = normalizeTargetInput(candidate);
+        const key = targetDedupeKey(normalized);
+        if (inventory.has(key)) continue;
+        inventory.set(key, {
+          kind: normalized.kind,
+          value: normalized.value,
+          label: String(candidate.label ?? normalized.value).slice(0, 300),
+          resource_ref: snapshot.resource_ref_hash ?? null,
+          importable: true,
+          observed_at: snapshot.observed_at ?? null,
+        });
+      } catch {
+        // Fail closed for malformed provider rows; never return an unvalidated target.
+      }
+    }
+  }
+
+  const items = [...inventory.values()].sort((left, right) => left.value.localeCompare(right.value));
+  return {
+    connector: { id: connector.id, provider: connector.provider, name: connector.name, status: connector.status },
+    discovered_at: snapshots[0]?.observed_at ?? connector.last_success_at ?? null,
+    items,
+  };
 }
 
 /**
@@ -155,6 +229,7 @@ export function createPostgresPortalRevampServices(deps) {
   const repositories = deps?.repositories ?? deps;
   assertPortalRevampRepository(repositories);
   const portalRevamp = repositories.portalRevamp;
+  const nowFn = deps?.now ?? (() => new Date());
 
   const auditRepo = repositories.audit;
   const validationEvidence = repositories.validationEvidence;
@@ -172,25 +247,26 @@ export function createPostgresPortalRevampServices(deps) {
       };
     },
     async issueDnsOwnershipChallenge(ctx, { target_group_id, target_id }) {
-      const domain = await portalRevamp.resolveFqdnDomain(ctx, target_group_id, target_id ?? null);
-      if (!domain) return { error: 'no_fqdn_target', status: 409 };
+      const target = await portalRevamp.resolveFqdnTarget(ctx, target_group_id, target_id ?? null);
+      if (!target) return { error: target_id ? 'target_not_found' : 'no_fqdn_target', status: target_id ? 404 : 409 };
 
+      const now = nowFn();
       const pending = (await portalRevamp.listDnsChallengesByGroup(ctx, target_group_id))
         .find(
           (row) =>
-            row.target_id === (target_id ?? null)
+            row.target_id === target.id
             && row.state === 'pending'
-            && new Date(row.expires_at).getTime() > Date.now(),
+            && new Date(row.expires_at).getTime() > now.getTime(),
         );
       if (pending) return { error: 'challenge_active', status: 409 };
 
-      const issued_at = new Date().toISOString();
-      const expires_at = new Date(Date.now() + 15 * 60_000).toISOString();
+      const issued_at = now.toISOString();
+      const expires_at = new Date(now.getTime() + 15 * 60_000).toISOString();
       const record = {
         id: newId('dns'),
-        target_group_id: target_group_id,
-        target_id: target_id ?? null,
-        record_name: `_astranull-challenge.${domain}`,
+        target_group_id,
+        target_id: target.id,
+        record_name: `_astranull-challenge.${String(target.value).trim().toLowerCase()}`,
         record_value: encodeBase32(randomBytes(32)),
         ttl_seconds: 60,
         state: 'pending',
@@ -201,14 +277,24 @@ export function createPostgresPortalRevampServices(deps) {
       return { challenge, audit_entry_id: challenge.audit_entry_id };
     },
     async verifyDnsOwnership(ctx, { target_group_id, challenge_id }, options = {}) {
+      if (!target_group_id) return { error: 'missing_target_group_id', status: 400 };
       let challenge = challenge_id
         ? await portalRevamp.findDnsChallenge(ctx, challenge_id)
         : null;
-      if (!challenge && target_group_id) {
+      if (!challenge && !challenge_id) {
         challenge = (await portalRevamp.listDnsChallengesByGroup(ctx, target_group_id))
           .find((row) => row.state === 'pending');
       }
-      if (!challenge) return { error: 'challenge_not_found', status: 404 };
+      if (!challenge || challenge.target_group_id !== target_group_id) {
+        return { error: 'challenge_not_found', status: 404 };
+      }
+      if (!challenge.target_id) return { error: 'challenge_target_not_bound', status: 409 };
+      const target = await portalRevamp.getActiveTarget(
+        ctx,
+        target_group_id,
+        challenge.target_id,
+      );
+      if (!target) return { error: 'target_not_found', status: 404 };
       if (challenge.state !== 'pending') {
         return {
           challenge,
@@ -217,13 +303,23 @@ export function createPostgresPortalRevampServices(deps) {
         };
       }
 
-      const rateKey = challenge.target_id ?? challenge.id;
-      const rate = checkVerifyRateLimit(rateKey);
+      const lookupStartedAt = nowFn();
+      if (new Date(challenge.expires_at).getTime() <= lookupStartedAt.getTime()) {
+        return portalRevamp.finalizeDnsOwnershipCheck(ctx, {
+          challenge_id: challenge.id,
+          target_group_id,
+          finalized_at: lookupStartedAt.toISOString(),
+          matched: false,
+          last_check_result: { matched: false, expired: true },
+          transitioned_by: ctx.userId ?? 'system',
+        }, auditRepo);
+      }
+
+      const rate = checkVerifyRateLimit(challenge.target_id);
       if (!rate.allowed) {
         return { error: 'rate_limited', status: 429, retry_after_seconds: rate.retryAfterSeconds };
       }
 
-      const checked_at = new Date().toISOString();
       let lookup;
       let timedOut = false;
       try {
@@ -232,74 +328,29 @@ export function createPostgresPortalRevampServices(deps) {
         timedOut = err?.code === 'ETIMEOUT';
         lookup = [];
       }
-
+      const finalizedAt = nowFn();
       const values = flattenTxtRecords(lookup);
-      const matched = values.some((v) => v === challenge.record_value);
-      const last_check_result = {
-        resolver: 'system',
-        records: values,
+      const matched = values.some((value) => value === challenge.record_value);
+      const finalized = await portalRevamp.finalizeDnsOwnershipCheck(ctx, {
+        challenge_id: challenge.id,
+        target_group_id,
+        finalized_at: finalizedAt.toISOString(),
         matched,
-        timed_out: timedOut,
-      };
-
-      let auditEntryId = challenge.audit_entry_id;
-      let verified = false;
-      if (matched) {
-        const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-        const auditEntry = buildAuditRecord({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId,
-          actor_role: ctx.role,
-          action: 'dns_ownership.verified',
-          resource_type: 'dns_challenge',
-          resource_id: challenge.id,
-        }, prior);
-        await auditRepo.appendAuditEntry(auditEntry);
-        auditEntryId = auditEntry.id;
-        verified = true;
-        const updated = await portalRevamp.updateDnsChallenge(ctx, challenge.id, {
-          state: 'resolved',
-          resolved_at: checked_at,
-          last_checked_at: checked_at,
-          last_check_result,
-          audit_entry_id: auditEntryId,
-        }, auditRepo);
-        if (challenge.target_id) {
-          await portalRevamp.insertTargetVerification(ctx, {
-            id: newId('tv'),
-            target_id: challenge.target_id,
-            state: 'dns_verified',
-            source_kind: 'dns_txt',
-            source_ref: { dns_challenge_id: challenge.id },
-            transitioned_at: checked_at,
-            transitioned_by: ctx.userId ?? 'system',
-          }, auditRepo);
-        }
-        challenge = updated ?? challenge;
-      } else {
-        const prior = await auditRepo.getLastAuditEntry(ctx.tenantId);
-        const auditEntry = buildAuditRecord({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId,
-          actor_role: ctx.role,
-          action: 'dns_ownership.verify_checked',
-          resource_type: 'dns_challenge',
-          resource_id: challenge.id,
-          metadata: { matched: false, timed_out: timedOut },
-        }, prior);
-        await auditRepo.appendAuditEntry(auditEntry);
-        auditEntryId = auditEntry.id;
-        challenge = await portalRevamp.updateDnsChallenge(ctx, challenge.id, {
-          last_checked_at: checked_at,
-          last_check_result,
-          audit_entry_id: auditEntryId,
-        }, auditRepo) ?? challenge;
-      }
+        last_check_result: {
+          resolver: 'system',
+          records: values,
+          matched,
+          timed_out: timedOut,
+        },
+        verification_id: matched ? newId('tv') : null,
+        transitioned_by: ctx.userId ?? 'system',
+      }, auditRepo);
+      if (finalized?.error) return finalized;
 
       const response = {
-        challenge,
-        verified,
-        audit_entry_id: auditEntryId,
+        challenge: finalized.challenge,
+        verified: finalized.verified,
+        audit_entry_id: finalized.audit_entry_id,
       };
       if (timedOut) response.meta = { timeout: true };
       return response;
@@ -309,10 +360,39 @@ export function createPostgresPortalRevampServices(deps) {
   const loa = {
     async sign(ctx, groupId, payload) {
       if (payload?.attested !== true) return { error: 'attestation_required', status: 403 };
+      if (!Array.isArray(payload.scope_ack) || payload.scope_ack.length === 0) {
+        return { error: 'invalid_scope_ack', status: 400 };
+      }
+      const acknowledged = payload.scope_ack.map((targetId) => String(targetId ?? '').trim());
+      if (acknowledged.some((targetId) => !targetId)) {
+        return { error: 'invalid_scope_ack', status: 400 };
+      }
+      const scopeSource = await portalRevamp.getLoaScopeTargets(ctx, groupId);
+      if (!scopeSource) return { error: 'target_group_not_found', status: 404 };
+      const targetIds = new Set(scopeSource.targets.map((target) => target.id));
+      const ackSet = new Set(acknowledged);
+      if ([...ackSet].some((targetId) => !targetIds.has(targetId))) {
+        return { error: 'scope_target_not_found', status: 400 };
+      }
+      const scope_snapshot = { targets: [], excluded: [] };
+      for (const target of scopeSource.targets) {
+        const eligible = LOA_SCOPE_STATES.has(target.verification_state);
+        if (eligible && ackSet.has(target.id)) {
+          scope_snapshot.targets.push(target.id);
+        } else {
+          scope_snapshot.excluded.push({
+            target_id: target.id,
+            reason: eligible ? 'not_acknowledged' : 'unverified',
+          });
+        }
+      }
+      if (scope_snapshot.targets.length === 0) {
+        return { error: 'invalid_scope_ack', status: 400 };
+      }
+
       const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId);
       if (active) return { error: 'loa_active', status: 409 };
-      const signed_at = new Date().toISOString();
-      const scope_snapshot = { targets: payload.scope_ack ?? [], excluded: [] };
+      const signed_at = nowFn().toISOString();
       const custody_digest_sha256 = buildLoaCustodyDigest({
         tenant_id: ctx.tenantId,
         target_group_id: groupId,
@@ -327,11 +407,11 @@ export function createPostgresPortalRevampServices(deps) {
           id: newId('loa'),
           target_group_id: groupId,
           state: 'signed',
-          signer_name: payload.signer_name,
-          signer_title: payload.signer_title,
-          signer_email: payload.signer_email,
+          signer_name: String(payload.signer_name ?? '').trim(),
+          signer_title: String(payload.signer_title ?? '').trim(),
+          signer_email: String(payload.signer_email ?? '').trim(),
           signed_at,
-          expires_at: null,
+          expires_at: payload.expires_at ?? null,
           emergency_contact: payload.emergency_contact ?? {},
           attested: true,
           scope_snapshot,
@@ -340,6 +420,7 @@ export function createPostgresPortalRevampServices(deps) {
         },
         auditRepo,
       );
+      if (loaRecord?.error) return loaRecord;
       return {
         loa: loaRecord,
         custody_artifact_id: loaRecord.custody_artifact_id,
@@ -428,25 +509,13 @@ export function createPostgresPortalRevampServices(deps) {
       };
     },
     async confirmTarget(ctx, groupId, targetId, signer) {
-      const active = await portalRevamp.getActiveLoaByGroup(ctx, groupId);
-      if (!active) return { error: 'loa_missing', status: 409 };
-      const current = await portalRevamp.getTargetVerificationCurrent(ctx, targetId);
-      if (!current || !['agent_verified', 'user_confirmed'].includes(current.state)) {
-        return { error: 'verify_prereq_not_met', status: 409 };
-      }
-      const verification = await portalRevamp.insertTargetVerification(ctx, {
-        id: newId('tv'),
+      return portalRevamp.confirmTargetWithLoa(ctx, {
+        target_group_id: groupId,
         target_id: targetId,
-        state: 'user_confirmed',
-        source_kind: 'user_attestation',
-        source_ref: { signer: signer?.signer ?? ctx.userId, loa_id: active.id },
-        transitioned_at: new Date().toISOString(),
-        transitioned_by: ctx.userId ?? 'system',
+        verification_id: newId('tv'),
+        transitioned_at: nowFn().toISOString(),
+        note: signer?.note ?? null,
       }, auditRepo);
-      return {
-        target: { id: targetId, target_group_id: groupId },
-        verification,
-      };
     },
   };
 
@@ -522,19 +591,30 @@ export function createPostgresPortalRevampServices(deps) {
 
   const portalTargetGroups = {
     async restoreArchived(ctx, groupId) {
-      const restored = await portalRevamp.restoreTargetGroup(ctx, groupId, auditRepo);
-      if (!restored) {
-        return { error: 'not_archived', status: 404 };
+      if (typeof repositories.coreCatalog?.restoreTargetGroup !== 'function') {
+        throw new Error('Postgres target restore requires coreCatalog.restoreTargetGroup().');
       }
-      return { target_group: restored };
+      const restored = await repositories.coreCatalog.restoreTargetGroup(ctx, groupId);
+      if (restored?.error) return restored.error === 'not_found' ? { error: 'not_archived', status: 404 } : restored;
+      const targetGroup = await repositories.coreCatalog.getTargetGroup(ctx, groupId, LEAN_GROUP_LOOKUP);
+      return { target_group: targetGroup, audit_entry_id: restored.audit_entry_id };
     },
-    async bulkImportTargets(_ctx, groupId, _body) {
-      return {
-        imported: [],
-        skipped: [],
-        count: 0,
-        meta: { empty_reason: 'no_targets_imported', target_group_id: groupId },
-      };
+    async bulkImportTargets(ctx, groupId, body = {}) {
+      if (typeof repositories.coreCatalog?.bulkImportTargets !== 'function') {
+        throw new Error('Postgres target import requires coreCatalog.bulkImportTargets().');
+      }
+      let trustedConnector = null;
+      let connectorInventoryKeys = new Set();
+      if (body.connector_id) {
+        const inventory = await loadConnectorInventory(repositories, ctx, String(body.connector_id));
+        if (inventory.error) return inventory;
+        trustedConnector = inventory.connector;
+        connectorInventoryKeys = new Set(inventory.items.map((item) => targetDedupeKey(item)));
+      }
+      return repositories.coreCatalog.bulkImportTargets(ctx, groupId, body, {
+        trustedConnector,
+        connectorInventoryKeys,
+      });
     },
   };
 
@@ -547,15 +627,25 @@ export function createPostgresPortalRevampServices(deps) {
         meta: { empty_reason: 'coverage_summary_not_populated', tenant_id: ctx.tenantId },
       };
     },
-    async getConnectorInventory(_ctx, connectorId, _query = {}) {
+    async getConnectorInventory(ctx, connectorId, query = {}) {
+      const inventory = await loadConnectorInventory(repositories, ctx, connectorId);
+      if (inventory.error) return inventory;
+      const paged = paginateItems(inventory.items, {
+        limit: Number(query.limit) || 50,
+        cursor: query.cursor,
+        cursorField: 'value',
+      });
       return {
-        provider: null,
-        account: null,
-        scope: null,
-        discovered_at: null,
-        items: [],
-        count: 0,
-        meta: { empty_reason: 'connector_inventory_not_populated', connector_id: connectorId },
+        provider: inventory.connector.provider ?? null,
+        account: inventory.connector.name ?? null,
+        scope: 'read_only',
+        discovered_at: inventory.discovered_at,
+        items: paged.items,
+        count: paged.count,
+        next_cursor: paged.next_cursor ?? undefined,
+        meta: paged.items.length
+          ? undefined
+          : { empty_reason: 'connector_inventory_not_populated', connector_id: connectorId },
       };
     },
   };

@@ -19,9 +19,15 @@ function readEmptyReason(meta: DataItem | null | undefined, keys: string[] = ['e
   return '';
 }
 
-export function PortalLoadingSkeleton({ rows = 3 }: { rows?: number }) {
+export function PortalLoadingSkeleton({
+  rows = 3,
+  label = 'Loading workspace data'
+}: {
+  rows?: number;
+  label?: string;
+}) {
   return (
-    <div className="content stack-tight" aria-busy="true" aria-live="polite">
+    <div className="content stack-tight" role="status" aria-label={label} aria-busy="true" aria-live="polite">
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="skeleton skeleton-row" />
       ))}

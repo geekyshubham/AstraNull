@@ -68,8 +68,8 @@ async function seedExpiredCollectingRun(pool) {
       [TARGET_GROUP, TENANT, ENVIRONMENT],
     );
     await client.query(
-      `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, expected_behavior)
-       VALUES ($1, $2, $3, 'ip', '203.0.113.10', 'must_block_before_origin')`,
+      `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, normalized_value, expected_behavior)
+       VALUES ($1, $2, $3, 'ip', '203.0.113.10', '203.0.113.10', 'must_block_before_origin')`,
       [TARGET, TENANT, TARGET_GROUP],
     );
     await client.query(

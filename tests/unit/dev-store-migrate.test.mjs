@@ -279,6 +279,7 @@ describe('dev store migration', () => {
       internalAuditLog: [],
       breakGlassActivations: [],
       testPolicies: [],
+      testPolicyDispatches: [],
       wafOffensiveRequests: [],
       wafOffensiveReports: [],
       evidenceBundles: [],

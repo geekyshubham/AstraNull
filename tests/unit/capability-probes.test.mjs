@@ -231,6 +231,7 @@ describe('capability probes P0/P1', () => {
         },
       }),
       {
+        destinationPolicy: { allowPrivate: true },
         connectFn: ({ port }, cb) => {
           probedPorts.push(port);
           const socket = {
@@ -310,6 +311,7 @@ describe('capability probes P0/P1', () => {
         probe_profile: { kind: 'port_scan_bounded', ports: [22, 443, 9999] },
       }),
       {
+        destinationPolicy: { allowPrivate: true },
         connectFn: ({ port }, cb) => {
           const socket = {
             once(event, handler) {
@@ -403,6 +405,7 @@ describe('capability probes P0/P1', () => {
     try {
       const outcome = await probeAxfrLeak(job({
         probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+        target: { kind: 'fqdn', value: 'example.test' },
       }), {
         signedJobVerified: true,
         // Local harness nameserver: loopback is opt-in for the destination guard, so this
@@ -422,9 +425,65 @@ describe('capability probes P0/P1', () => {
     }
   });
 
+  it('axfr derives the canonical zone from exact target A even when a corrupt profile names victim B', async () => {
+    const victim = 'victim.example';
+    const touched = [];
+    let written = null;
+    const refusedDns = Buffer.alloc(12);
+    refusedDns[3] = 0x05;
+    const refusedFramed = frameDnsTcpMessage(refusedDns);
+
+    const outcome = await probeAxfrLeak(job({
+      target: { kind: 'fqdn', value: 'Verified.Example.' },
+      probe_profile: { kind: 'dns_axfr_leak', zone: victim },
+    }), {
+      signedJobVerified: true,
+      resolveNsFn: async (zone) => {
+        touched.push(['resolveNs', zone]);
+        assert.equal(zone, 'verified.example');
+        return ['ns1.verified.example'];
+      },
+      resolve4Fn: async (host) => {
+        touched.push(['resolve4', host]);
+        assert.equal(host, 'ns1.verified.example');
+        return ['203.0.113.53'];
+      },
+      resolve6Fn: async (host) => {
+        touched.push(['resolve6', host]);
+        assert.equal(host, 'ns1.verified.example');
+        return [];
+      },
+      connectFn: (options) => {
+        touched.push(['connect', options.host]);
+        assert.equal(options.host, '203.0.113.53');
+        return {
+          once(event, handler) {
+            if (event === 'connect') setImmediate(handler);
+          },
+          on(event, handler) {
+            if (event === 'data') setImmediate(() => handler(refusedFramed));
+          },
+          write(buffer) {
+            written = buffer;
+          },
+          destroy() {},
+        };
+      },
+    });
+
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.metadata.zone, 'verified.example');
+    assert.equal(outcome.metadata.axfr_refused, true);
+    assert.equal(outcome.requests_sent, 2);
+    assert.ok(written.includes(encodeDnsQName('verified.example')));
+    assert.equal(written.includes(encodeDnsQName(victim)), false);
+    assert.equal(JSON.stringify(touched).includes(victim), false);
+  });
+
   it('axfr leak probe counts resolve-only when no nameservers', async () => {
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'missing.test' },
+      target: { kind: 'fqdn', value: 'missing.test' },
     }), {
       resolveNsFn: async () => [],
     });
@@ -441,8 +500,11 @@ describe('capability probes P0/P1', () => {
 
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+        target: { kind: 'fqdn', value: 'example.test' },
     }), {
       resolveNsFn: async () => ['ns1.example.test'],
+      resolve4Fn: async () => ['203.0.113.53'],
+      resolve6Fn: async () => [],
       connectFn: () => ({
         once(event, handler) {
           if (event === 'connect') setImmediate(() => handler());
@@ -471,6 +533,7 @@ describe('capability probes P0/P1', () => {
     let connectCalls = 0;
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+        target: { kind: 'fqdn', value: 'example.test' },
     }), {
       signedJobVerified: true,
       resolveNsFn: async () => ['ns-internal.example.test'],
@@ -488,6 +551,7 @@ describe('capability probes P0/P1', () => {
     let connectCalls = 0;
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+        target: { kind: 'fqdn', value: 'example.test' },
     }), {
       signedJobVerified: true,
       resolveNsFn: async () => ['169.254.169.254'],
@@ -498,23 +562,26 @@ describe('capability probes P0/P1', () => {
     assert.equal(connectCalls, 0);
   });
 
-  it('open recursion probe refuses a non-routable resolver_host', async () => {
+  it('open recursion ignores a profile resolver and blocks the exact private target', async () => {
     let resolverCalls = 0;
     const outcome = await probeOpenRecursion(job({
-      probe_profile: { kind: 'dns_open_recursion', resolver_host: '10.0.0.53' },
+      target: { kind: 'ip', value: '10.0.0.53' },
+      probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
     }), {
       resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
     });
     assert.equal(outcome.external_result, 'blocked');
     assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.metadata.blocked_address, '10.0.0.53');
     assert.equal(outcome.requests_sent, 0);
     assert.equal(resolverCalls, 0);
   });
 
-  it('open recursion probe refuses a resolver_host that is not an IP literal', async () => {
+  it('open recursion refuses an exact target that is not an IP literal', async () => {
     let resolverCalls = 0;
     const outcome = await probeOpenRecursion(job({
-      probe_profile: { kind: 'dns_open_recursion', resolver_host: 'resolver.example.test' },
+      target: { kind: 'fqdn', value: 'resolver.example.test' },
+      probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
     }), {
       resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
     });
@@ -592,6 +659,7 @@ describe('capability probes P0/P1', () => {
   it('axfr session reports malformed_response for a zero-length frame without hanging', async () => {
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
+        target: { kind: 'fqdn', value: 'example.test' },
     }), {
       signedJobVerified: true,
       resolveNsFn: async () => ['203.0.113.53'],
@@ -615,6 +683,8 @@ describe('capability probes P0/P1', () => {
     const outcome = await probeTlsAudit(job({
       probe_profile: { kind: 'tls_audit' },
     }), {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
       connectFn: () => ({
         once(event, handler) {
           if (event === 'secureConnect') handler();
@@ -650,51 +720,31 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.observations[1].x_cache, 'HIT');
   });
 
-  it('open recursion probe detects open resolver', async () => {
+  it('open recursion uses only exact target for resolver and query despite corrupt profile fields', async () => {
+    const calls = [];
     const outcome = await probeOpenRecursion(job({
-      probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
-    }), {
-      resolve4ExternalFn: async () => ['93.184.216.34'],
-    });
-    assert.equal(outcome.metadata.open_recursion_detected, true);
-    assert.equal(outcome.external_result, 'connected');
-  });
-
-  it('open recursion probe derives the query name from the target when not specified', async () => {
-    let observedName = null;
-    const outcome = await probeOpenRecursion(job({
-      target: { kind: 'fqdn', value: 'shop.example.test' },
-      probe_profile: { kind: 'dns_open_recursion', resolver_host: '8.8.8.8' },
-    }), {
-      resolve4ExternalFn: async (_resolver, name) => {
-        observedName = name;
-        return ['93.184.216.34'];
-      },
-    });
-    assert.equal(observedName, 'shop.example.test');
-    assert.equal(outcome.metadata.recursion_test_name, 'shop.example.test');
-    assert.equal(outcome.external_result, 'connected');
-  });
-
-  it('open recursion probe honors an explicit recursion_test_name', async () => {
-    let observedName = null;
-    await probeOpenRecursion(job({
-      target: { kind: 'fqdn', value: 'shop.example.test' },
+      target: { kind: 'ip', value: '8.8.8.8' },
       probe_profile: {
         kind: 'dns_open_recursion',
-        resolver_host: '8.8.8.8',
-        recursion_test_name: 'canary.declared.test',
+        resolver_host: '9.9.9.9',
+        recursion_test_name: 'victim.example',
       },
     }), {
-      resolve4ExternalFn: async (_resolver, name) => {
-        observedName = name;
-        return [];
+      resolve4ExternalFn: async (resolver, name) => {
+        calls.push({ resolver, name });
+        return ['8.8.8.8'];
       },
     });
-    assert.equal(observedName, 'canary.declared.test');
+    assert.deepEqual(calls, [{ resolver: '8.8.8.8', name: '8.8.8.8' }]);
+    assert.equal(outcome.metadata.resolver_host, '8.8.8.8');
+    assert.equal(outcome.metadata.recursion_test_name, '8.8.8.8');
+    assert.equal(outcome.metadata.open_recursion_detected, true);
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(JSON.stringify(calls).includes('victim.example'), false);
+    assert.equal(JSON.stringify(calls).includes('9.9.9.9'), false);
   });
 
-  it('open recursion probe errors with explicit class when no target-derived name exists', async () => {
+  it('open recursion errors without an exact target-derived resolver', async () => {
     let called = false;
     const outcome = await probeOpenRecursion(job({
       target: { kind: 'fqdn', value: '' },
@@ -706,18 +756,36 @@ describe('capability probes P0/P1', () => {
       },
     });
     assert.equal(outcome.external_result, 'error');
-    assert.equal(outcome.metadata.error_class, 'missing_recursion_test_name');
+    assert.equal(outcome.metadata.error_class, 'unsupported_target');
     assert.equal(outcome.requests_sent, 0);
     assert.equal(called, false);
   });
 
-  it('dns failover posture flags weak secondary NS coverage', async () => {
+  it('dns failover resolves only an exact-target secondary from a corrupt profile', async () => {
+    const resolved = [];
     const outcome = await probeDnsFailoverPosture(job({
-      probe_profile: { kind: 'dns_failover_posture', secondary_nameservers: ['ns2.example.test'] },
+      target: { kind: 'fqdn', value: 'Shop.Example.Test.' },
+      probe_profile: {
+        kind: 'dns_failover_posture',
+        secondary_nameservers: ['victim.example', 'shop.example.test'],
+      },
     }), {
-      resolveNsFn: async () => ['ns1.example.test'],
-      resolve4Fn: async (host) => (host === 'ns2.example.test' ? [] : ['203.0.113.1']),
+      resolveNsFn: async (zone) => {
+        assert.equal(zone, 'Shop.Example.Test.');
+        return ['ns1.example.test'];
+      },
+      resolve4Fn: async (host) => {
+        resolved.push(host);
+        return [];
+      },
     });
+    assert.deepEqual(resolved, ['shop.example.test']);
+    assert.equal(JSON.stringify(resolved).includes('victim.example'), false);
+    assert.deepEqual(outcome.metadata.secondary_results, [{
+      nameserver: 'shop.example.test',
+      reachable: false,
+      addresses: [],
+    }]);
     assert.equal(outcome.metadata.weak_failover, true);
     assert.equal(outcome.external_result, 'connected');
   });

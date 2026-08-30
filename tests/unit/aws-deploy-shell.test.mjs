@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -85,6 +86,7 @@ describe('AWS deploy shell lifecycle', () => {
       migration_started=0
       finished=0
       git() { return 0; }
+      rebind_control_plane_image_tag() { return 0; }
       cleanup_compose_snapshots() { return 0; }
       install_failure_traps
     `;
@@ -260,7 +262,7 @@ fi
         previous="$OLD_TAG"
         SHA="$TARGET_TAG"
         previous_control_plane_tag="$OLD_TAG"
-        previous_control_plane_image_id="sha256:${'2'.repeat(64)}"
+        previous_control_plane_image_id="$OLD_IMAGE_ID"
         previous_compose="$LEGACY_COMPOSE"
         target_compose="$TARGET_COMPOSE"
         plain_host=''
@@ -273,23 +275,27 @@ fi
         compose_timeout() { printf 'compose|%s|%s|%s|%s|%s\\n' "$ACTIVE_COMPOSE_FILE" "$ASTRANULL_CONTROL_PLANE_IMAGE_TAG" "$ASTRANULL_WORKER_IMAGE_TAG" "$ASTRANULL_IMAGE_TAG" "$*" >> "$CALL_LOG"; }
         check_control_plane() { printf 'control-health|%s\\n' "$ACTIVE_COMPOSE_FILE" >> "$CALL_LOG"; }
         check_workers() { printf 'worker-health|%s\\n' "$ACTIVE_COMPOSE_FILE" >> "$CALL_LOG"; }
+        rebind_control_plane_image_tag() { printf 'rebind|%s|%s\\n' "$1" "$2" >> "$CALL_LOG"; }
         verify_control_plane_image_tag() { printf 'verify-control|%s|%s\\n' "$1" "$2" >> "$CALL_LOG"; }
         verify_workers_image_tag() { printf 'verify-workers|%s\\n' "$1" >> "$CALL_LOG"; }
-        persist_control_plane_image_tag() { printf 'persist|%s\\n' "$1" >> "$CALL_LOG"; }
+        persist_control_plane_image_state() { printf 'persist|%s|%s\\n' "$1" "$2" >> "$CALL_LOG"; }
         rollback_on_error 73
       `, {
         CALL_LOG: callLog,
         LEGACY_COMPOSE: legacyCompose,
+        OLD_IMAGE_ID: `sha256:${'2'.repeat(64)}`,
         OLD_TAG: oldTag,
         TARGET_COMPOSE: targetCompose,
         TARGET_TAG: targetTag,
       });
       assert.equal(result.status, 73, result.stderr);
-      assert.match(result.stderr, new RegExp(`control-plane ${oldTag} with orchestration/workers ${targetTag}`));
+      assert.match(result.stderr, new RegExp(`control-plane ${oldTag}@sha256:${'2'.repeat(64)} with orchestration/workers ${targetTag}`));
       assert.match(result.stderr, /database was not downgraded/);
       const calls = readFileSync(callLog, 'utf8');
       assert.match(calls, new RegExp(`git\\|checkout -q --detach ${targetTag}`));
+      assert.match(calls, new RegExp(`rebind\\|${oldTag}\\|sha256:${'2'.repeat(64)}`));
       assert.match(calls, new RegExp(`compose\\|${targetCompose.replaceAll('/', '\\/')}\\|${oldTag}\\|${targetTag}\\|${targetTag}\\|300 up -d`));
+      assert.ok(calls.indexOf('rebind|') < calls.indexOf('compose|'), 'rollback must rebind before Compose activation');
       assert.match(calls, new RegExp(`control-health\\|${targetCompose.replaceAll('/', '\\/')}`));
       assert.match(calls, new RegExp(`worker-health\\|${targetCompose.replaceAll('/', '\\/')}`));
       assert.doesNotMatch(calls, new RegExp(`compose\\|${legacyCompose.replaceAll('/', '\\/')}\\|`));
@@ -298,7 +304,101 @@ fi
     }
   });
 
-  it('feeds a real git archive tar to docker build stdin without a Docker daemon', () => {
+  it('rebinds a clobbered same-SHA tag to the captured image ID before automatic rollback', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-same-sha-rollback-'));
+    const fakeDocker = path.join(temp, 'docker');
+    const tagFile = path.join(temp, 'tag-image-id');
+    const containerFile = path.join(temp, 'container-image-id');
+    const callLog = path.join(temp, 'docker.log');
+    const oldImageId = `sha256:${'a'.repeat(64)}`;
+    const rebuiltImageId = `sha256:${'b'.repeat(64)}`;
+    const sameSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+    writeFakeTimeout(temp);
+    writeFileSync(fakeDocker, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [[ "$1" == build ]]; then
+  cat >/dev/null
+  printf '%s\n' "$REBUILT_IMAGE_ID" > "$TAG_FILE"
+elif [[ "$1 $2" == 'image inspect' ]]; then
+  if [[ "$5" == "$OLD_IMAGE_ID" ]]; then printf '%s\n' "$OLD_IMAGE_ID";
+  elif [[ "$5" == "astranull-control-plane:$SAME_SHA" ]]; then cat "$TAG_FILE";
+  else exit 91; fi
+elif [[ "$1 $2" == 'image tag' ]]; then
+  [[ "$3" == "$OLD_IMAGE_ID" && "$4" == "astranull-control-plane:$SAME_SHA" ]]
+  printf '%s\n' "$OLD_IMAGE_ID" > "$TAG_FILE"
+elif [[ "$1" == inspect && "$3" == '{{.Config.Image}}' && "$4" == control-cid ]]; then
+  printf 'astranull-control-plane:%s\n' "$SAME_SHA"
+elif [[ "$1" == inspect && "$3" == '{{.Image}}' && "$4" == control-cid ]]; then
+  cat "$CONTAINER_FILE"
+else
+  exit 92
+fi
+`);
+    chmodSync(fakeDocker, 0o755);
+
+    try {
+      const result = runBash(`
+        source "$1"
+        same_sha=$(git rev-parse HEAD)
+        DEPLOY_STATE_DIR="$STATE_DIR"
+        CONTROL_PLANE_IMAGE_TAG_FILE="$DEPLOY_STATE_DIR/control-plane-image-tag"
+        persist_control_plane_image_state "$same_sha" "$OLD_IMAGE_ID"
+        printf '%s\n' "$OLD_IMAGE_ID" > "$TAG_FILE"
+        build_control_plane_from_commit "$same_sha"
+        [[ "$(cat "$TAG_FILE")" == "$REBUILT_IMAGE_ID" ]] || exit 93
+
+        MODE=deploy
+        previous="$same_sha"
+        SHA="$same_sha"
+        previous_control_plane_tag="$same_sha"
+        previous_control_plane_image_id="$OLD_IMAGE_ID"
+        previous_compose="$DUMMY_COMPOSE"
+        target_compose="$DUMMY_COMPOSE"
+        plain_host=''
+        backup=/safe/predeploy.dump.enc
+        activated=1
+        migration_started=1
+        cleanup_compose_snapshots() { :; }
+        git() { [[ "$*" == "checkout -q --detach $same_sha" ]]; }
+        compose_timeout() {
+          if [[ "$*" == '300 up -d --remove-orphans --wait --wait-timeout 240' ]]; then
+            cat "$TAG_FILE" > "$CONTAINER_FILE"
+          elif [[ "$*" == '30 ps -q control-plane' ]]; then
+            printf control-cid
+          else
+            return 94
+          fi
+        }
+        check_control_plane() { :; }
+        check_workers() { :; }
+        verify_workers_image_tag() { [[ "$1" == "$same_sha" ]]; }
+        rollback_on_error 73
+      `, {
+        CONTAINER_FILE: containerFile,
+        DUMMY_COMPOSE: path.join(temp, 'compose.yml'),
+        FAKE_DOCKER_LOG: callLog,
+        OLD_IMAGE_ID: oldImageId,
+        PATH: `${temp}:${process.env.PATH}`,
+        REBUILT_IMAGE_ID: rebuiltImageId,
+        SAME_SHA: sameSha,
+        STATE_DIR: path.join(temp, 'state'),
+        TAG_FILE: tagFile,
+      });
+      assert.equal(result.status, 73, result.stderr);
+      assert.match(result.stderr, /automatic hybrid rollback restored control-plane/);
+      assert.equal(readFileSync(tagFile, 'utf8').trim(), oldImageId);
+      assert.equal(readFileSync(containerFile, 'utf8').trim(), oldImageId);
+      assert.equal(readFileSync(path.join(temp, 'state/control-plane-image-tag'), 'utf8'), `${sameSha}\n${oldImageId}\n`);
+      const calls = readFileSync(callLog, 'utf8');
+      assert.match(calls, /build -f ops\/aws\/Dockerfile -t astranull-control-plane:[0-9a-f]{40} -/);
+      assert.match(calls, new RegExp(`image tag ${oldImageId} astranull-control-plane:[0-9a-f]{40}`));
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('feeds a real git archive tar to docker build stdin without a Docker daemon', (t) => {
     const temp = mkdtempSync(path.join(tmpdir(), 'astranull-archive-build-'));
     const fakeDocker = path.join(temp, 'docker');
     const argsFile = path.join(temp, 'args');
@@ -337,26 +437,69 @@ tar -tf - > "$FAKE_DOCKER_TAR_LIST"
       const entries = readFileSync(tarList, 'utf8').trim().split('\n');
       assert.ok(entries.includes('package.json'));
       assert.ok(entries.includes('ops/aws/Dockerfile'));
+
+      const releaseIndex = new Set(readFileSync(path.join(ROOT, 'ops/aws/release-archive-inputs.txt'), 'utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#')));
+      const dockerfile = readFileSync(path.join(ROOT, 'ops/aws/Dockerfile'), 'utf8');
+      const copySources = dockerfile.split('\n')
+        .filter((line) => line.startsWith('COPY '))
+        .flatMap((line) => {
+          const fields = line.trim().split(/\s+/).slice(1);
+          while (fields[0]?.startsWith('--')) fields.shift();
+          return fields.slice(0, -1);
+        });
+      for (const source of copySources) {
+        assert.ok(releaseIndex.has(source), `Dockerfile COPY source ${source} must be in the release archive index`);
+      }
+
+      const criticalRuntimeInputs = [
+        'scripts/worker-heartbeat-health.mjs',
+        'THIRD_PARTY_NOTICES/cdncheck-MIT.txt',
+        'THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt',
+      ];
+      for (const input of criticalRuntimeInputs) {
+        assert.ok(releaseIndex.has(input), `${input} must be explicitly indexed`);
+      }
+
+      const archiveHas = (input) => entries.includes(input) || entries.some((entry) => entry.startsWith(`${input}/`));
+      for (const input of releaseIndex) {
+        if (archiveHas(input)) continue;
+        const worktreePath = path.join(ROOT, input);
+        assert.ok(existsSync(worktreePath), `${input} is absent from both the exact HEAD archive and worktree`);
+        const indexed = spawnSync('git', ['ls-files', '--cached', '--error-unmatch', '--', input], {
+          cwd: ROOT,
+          encoding: 'utf8',
+        });
+        assert.equal(
+          indexed.status,
+          0,
+          `${input} is absent from the exact HEAD archive and final candidate index; stage it before release validation`,
+        );
+        t.diagnostic(`${input} is present in the final candidate index and MUST remain in the aggregate commit before exact-SHA deployment`);
+      }
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }
   });
 
-  it('atomically persists the hybrid control-plane tag outside the checkout', () => {
+  it('atomically persists the hybrid control-plane tag and immutable ID outside the checkout', () => {
     const temp = mkdtempSync(path.join(tmpdir(), 'astranull-deploy-state-'));
     const tag = 'a'.repeat(40);
+    const imageId = `sha256:${'5'.repeat(64)}`;
     try {
       const result = runBash(`
         source "$1"
         DEPLOY_STATE_DIR="$STATE_DIR"
         CONTROL_PLANE_IMAGE_TAG_FILE="$DEPLOY_STATE_DIR/control-plane-image-tag"
-        persist_control_plane_image_tag "$EXPECTED_TAG"
-        read_control_plane_image_tag "${'b'.repeat(40)}"
-      `, { STATE_DIR: temp, EXPECTED_TAG: tag });
+        persist_control_plane_image_state "$EXPECTED_TAG" "$EXPECTED_IMAGE_ID"
+        printf '%s|%s' "$(read_control_plane_image_tag "${'b'.repeat(40)}")" "$(read_control_plane_image_id)"
+      `, { STATE_DIR: temp, EXPECTED_IMAGE_ID: imageId, EXPECTED_TAG: tag });
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout.trim(), tag);
+      assert.equal(result.stdout, `${tag}|${imageId}`);
       const stateFile = path.join(temp, 'control-plane-image-tag');
-      assert.equal(readFileSync(stateFile, 'utf8'), `${tag}\n`);
+      assert.equal(readFileSync(stateFile, 'utf8'), `${tag}\n${imageId}\n`);
       assert.equal(statSync(stateFile).mode & 0o777, 0o600);
       assert.equal(statSync(temp).mode & 0o777, 0o700);
       assert.equal(stateFile.startsWith(ROOT), false);
@@ -375,14 +518,16 @@ describe('AWS restore image identity', () => {
     const workerImageId = `sha256:${'4'.repeat(64)}`;
     const stateFile = path.join(temp, 'control-plane-image-tag');
     const fakeDocker = path.join(temp, 'docker');
-    writeFileSync(stateFile, `${persistedTag}\n`, { mode: 0o600 });
+    writeFileSync(stateFile, `${persistedTag}\n${controlImageId}\n`, { mode: 0o600 });
     writeFakeTimeout(temp);
     writeFileSync(fakeDocker, `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1 $2" == 'image inspect' ]]; then
-  if [[ "$5" == "astranull-control-plane:$PERSISTED_TAG" ]]; then printf '%s\\n' "$CONTROL_IMAGE_ID";
+  if [[ "$5" == "$CONTROL_IMAGE_ID" || "$5" == "astranull-control-plane:$PERSISTED_TAG" ]]; then printf '%s\\n' "$CONTROL_IMAGE_ID";
   elif [[ "$5" == "astranull-control-plane:$CURRENT_TAG" ]]; then printf '%s\\n' "$WORKER_IMAGE_ID";
   else exit 81; fi
+elif [[ "$1 $2" == 'image tag' ]]; then
+  [[ "$3" == "$CONTROL_IMAGE_ID" && "$4" == "astranull-control-plane:$PERSISTED_TAG" ]]
 elif [[ "$1" == inspect && "$3" == '{{.Config.Image}}' ]]; then
   if [[ "$4" == control-cid ]]; then printf 'astranull-control-plane:%s\\n' "$PERSISTED_TAG";
   else printf 'astranull-control-plane:%s\\n' "$CURRENT_TAG"; fi
@@ -422,6 +567,101 @@ fi
       }, RESTORE);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, `${persistedTag}|${currentTag}|${persistedTag}|${currentTag}|${currentTag}`);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs a stopped same-SHA stack from the persisted ID before loading worker identity', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-restore-stopped-'));
+    const sameTag = '9'.repeat(40);
+    const expectedImageId = `sha256:${'c'.repeat(64)}`;
+    const clobberedImageId = `sha256:${'d'.repeat(64)}`;
+    const stateFile = path.join(temp, 'control-plane-image-tag');
+    const tagFile = path.join(temp, 'tag-image-id');
+    const callLog = path.join(temp, 'docker.log');
+    const fakeDocker = path.join(temp, 'docker');
+    writeFileSync(stateFile, `${sameTag}\n${expectedImageId}\n`, { mode: 0o600 });
+    writeFileSync(tagFile, `${clobberedImageId}\n`);
+    writeFakeTimeout(temp);
+    writeFileSync(fakeDocker, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [[ "$1 $2" == 'image inspect' ]]; then
+  if [[ "$5" == "$EXPECTED_IMAGE_ID" ]]; then printf '%s\n' "$EXPECTED_IMAGE_ID";
+  elif [[ "$5" == "astranull-control-plane:$SAME_TAG" ]]; then cat "$TAG_FILE";
+  else exit 95; fi
+elif [[ "$1 $2" == 'image tag' ]]; then
+  [[ "$3" == "$EXPECTED_IMAGE_ID" && "$4" == "astranull-control-plane:$SAME_TAG" ]]
+  printf '%s\n' "$EXPECTED_IMAGE_ID" > "$TAG_FILE"
+else
+  exit 96
+fi
+`);
+    chmodSync(fakeDocker, 0o755);
+
+    try {
+      const result = runBash(`
+        source "$1"
+        CONTROL_PLANE_IMAGE_TAG_FILE="$STATE_FILE"
+        git() { [[ "$*" == 'rev-parse HEAD' ]] && printf '%s\n' "$SAME_TAG"; }
+        compose_timeout() { [[ "$*" == '30 ps -q control-plane' ]]; }
+        load_restore_image_identity
+        verify_running_control_plane_state
+        printf '%s|%s' "$control_plane_image_id" "$worker_image_id"
+      `, {
+        EXPECTED_IMAGE_ID: expectedImageId,
+        FAKE_DOCKER_LOG: callLog,
+        PATH: `${temp}:${process.env.PATH}`,
+        SAME_TAG: sameTag,
+        STATE_FILE: stateFile,
+        TAG_FILE: tagFile,
+      }, RESTORE);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `${expectedImageId}|${expectedImageId}`);
+      assert.equal(readFileSync(tagFile, 'utf8').trim(), expectedImageId);
+      assert.match(readFileSync(callLog, 'utf8'), new RegExp(`image tag ${expectedImageId} astranull-control-plane:${sameTag}`));
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed for a stopped stack when the persisted image ID is missing', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-restore-missing-image-'));
+    const tag = '1'.repeat(40);
+    const expectedImageId = `sha256:${'e'.repeat(64)}`;
+    const mutableImageId = `sha256:${'f'.repeat(64)}`;
+    const stateFile = path.join(temp, 'control-plane-image-tag');
+    const fakeDocker = path.join(temp, 'docker');
+    const callLog = path.join(temp, 'docker.log');
+    writeFileSync(stateFile, `${tag}\n${expectedImageId}\n`, { mode: 0o600 });
+    writeFakeTimeout(temp);
+    writeFileSync(fakeDocker, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [[ "$1 $2" == 'image inspect' && "$5" == "$EXPECTED_IMAGE_ID" ]]; then exit 1; fi
+if [[ "$1 $2" == 'image inspect' && "$5" == "astranull-control-plane:$TAG" ]]; then printf '%s\n' "$MUTABLE_IMAGE_ID"; exit 0; fi
+exit 97
+`);
+    chmodSync(fakeDocker, 0o755);
+
+    try {
+      const result = runBash(`
+        source "$1"
+        CONTROL_PLANE_IMAGE_TAG_FILE="$STATE_FILE"
+        git() { [[ "$*" == 'rev-parse HEAD' ]] && printf '%s\n' "$TAG"; }
+        load_restore_image_identity
+      `, {
+        EXPECTED_IMAGE_ID: expectedImageId,
+        FAKE_DOCKER_LOG: callLog,
+        MUTABLE_IMAGE_ID: mutableImageId,
+        PATH: `${temp}:${process.env.PATH}`,
+        STATE_FILE: stateFile,
+        TAG: tag,
+      }, RESTORE);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /expected control-plane image .* is unavailable/);
+      assert.doesNotMatch(readFileSync(callLog, 'utf8'), /image tag/);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }

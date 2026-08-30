@@ -2,27 +2,29 @@
 
 Tracks implementation of the [resource-exhaustion taxonomy](19-resource-exhaustion-taxonomy.md) against the master attack list (UDP/SYN/ACK floods, DNS laundering, HTTP/2 Rapid Reset, carpet bombing, reflection protocols, etc.).
 
-**Source of truth:** `src/contracts/resourceExhaustionTaxonomy.mjs`  
-**Validate:** `npm run vector:taxonomy:validate`  
-**Progress tracker:** `PROGRESS.md` §4.1  
+**Source of truth:** `src/contracts/resourceExhaustionTaxonomy.mjs`<br>
+**Validate:** `npm run vector:taxonomy:validate`<br>
+**Progress tracker:** `PROGRESS.md` §4.1<br>
 **Full family build spec:** [21-resource-exhaustion-family-build-spec.md](21-resource-exhaustion-family-build-spec.md)
 
 ## Task summary
 
+> **Status 2026-08-29:** DET-016–022 and DET-026 have code-level catalog implementations (175-check catalog; zero pending registry vectors). DET-024 has the evidence-bound dashboard matrix but remains open for report/drill-down, bundle, accessibility, and staging parity. DET-025 has local/CI gates but remains open for parent full validation and staging ATT-* evidence. DET-023 + SOC-011 carry the governed scenario contract and authorization-pack binding; live partner execution remains external. See `PROGRESS.md` §4.1 for full notes.
+
 | ID | Status | Scope | Acceptance |
 |---|---|---|---|
-| DET-016 | `[ ]` | Add `exhausted_resource`, `attack_vector_ids[]`, and optional `delivery_patterns[]` to every `CHECK_CATALOG` entry; extend vector heatmap and API `GET /v1/checks` response | All 65 checks mapped; validator requires field; unit tests |
-| DET-017 | `[ ]` | L3/L4: ICMP, ACK/SYN-ACK/RST/FIN floods, fragmentation, GRE/ESP, out-of-state TCP, SIP/VoIP | New `check_id` entries + probe profiles or SOC markers per vector; matrix rows in `12-vector-test-matrix.md` |
-| DET-018 | `[ ]` | Reflection/amplification: NTP, CLDAP, Memcached, SSDP, SNMP, WS-Discovery, TCP middlebox, etc. | Metadata exposure checks only — no reflection traffic generation |
-| DET-019 | `[ ]` | Advanced DNS: laundering, garbage flood, phantom domain, lock-up, NXNSAttack, DNSBomb | Named checks + evidence model; correlate with resolver telemetry where available |
-| DET-020 | `[ ]` | L7: HTTP POST flood, Slowloris/RUDY/slow-read, search/export/batch abuse, WordPress XML-RPC | Customer-declared endpoints; volumetric profiles where authorized |
-| DET-021 | `[ ]` | HTTP/2–3: CONTINUATION flood, MadeYouReset, true Rapid Reset validation (not readiness-only), gRPC live probe | Protocol probe kinds in `capabilityProbes.mjs`; finish `protocol.grpc_reflection_stream.safe` |
-| DET-022 | `[ ]` | Delivery patterns: carpet bombing, pulse-wave, spoofed flood, multi-vector UI | Scenario metadata on high-scale requests; dashboard coverage by pattern |
-| DET-023 | `[ ]` | Volumetric probe profiles + signed-worker execution for authorized RPS/Gbps scenarios | Depends on SOC-011; governed caps in `probe_profile`; staging fleet evidence |
-| DET-024 | `[ ]` | UI: resource-exhaustion matrix on dashboard/reports; readiness score by exhausted resource | Replace 5-family heatmap with 12-family view; link each cell to checks/findings |
-| DET-025 | `[ ]` | CI harness: taxonomy validator in `make verify`; staging matrix maps ATT-* → live evidence | `npm run vector:taxonomy:validate` green; staging signoff artifact |
-| DET-026 | `[ ]` | Operational/control-plane: health-check flood, autoscaling cost, alert blind spots, BGP/DNS integrity boundaries | ATT-109, ND-004–006; [Family Build Spec §13](21-resource-exhaustion-family-build-spec.md) |
-| SOC-011 | `[ ]` | Governed volumetric execution: UDP/SYN/HTTP/DNS flood scenarios through partner adapter | Authorization pack binds scenario family + max rate; live telemetry ingestion; kill switch proof |
+| DET-016 | `[x]` (code) | Add `exhausted_resource`, `attack_vector_ids[]`, and optional `delivery_patterns[]` to every `CHECK_CATALOG` entry; extend vector heatmap and API `GET /v1/checks` response | All 175 checks mapped via `applyResourceExhaustionMetadata`; validator requires the field; unit tests. **External:** staging catalog signoff |
+| DET-017 | `[x]` (code) | L3/L4: ICMP, ACK/SYN-ACK/RST/FIN floods, fragmentation, GRE/ESP, out-of-state TCP, SIP/VoIP | New `check_id` entries with bounded probe profiles or policy metadata per vector; registry rows upgraded. **External:** matrix staging evidence |
+| DET-018 | `[x]` (code) | Reflection/amplification: NTP, CLDAP, Memcached, SSDP, SNMP, WS-Discovery, TCP middlebox, etc. | Full exposure inventory — one bounded fingerprint per declared host; no reflection traffic generation. **External:** live-edge validation |
+| DET-019 | `[x]` (code) | Advanced DNS: laundering, garbage flood, phantom domain, lock-up, NXNSAttack, DNSBomb | Named checks + evidence model (bounded lookups + policy metadata). **External:** resolver staging evidence |
+| DET-020 | `[x]` (code) | L7: HTTP POST flood, Slowloris/RUDY/slow-read, search/export/batch abuse, WordPress XML-RPC | Customer-declared endpoints; bounded low-rate validation profiles (≤5 requests); posture metadata for slow-client/limits. **External:** threshold staging evidence |
+| DET-021 | `[x]` (code) | HTTP/2–3: CONTINUATION flood, MadeYouReset, Rapid Reset validation posture, gRPC live probe | New bounded `grpc_reflection_probe` (deferral closed); protocol readiness checks. **External:** protocol staging matrix; reset/handshake execution stays SOC-gated |
+| DET-022 | `[x]` (code) | Delivery patterns: carpet bombing, pulse-wave, spoofed flood, multi-vector UI | Governed `delivery_patterns[]` on high-scale requests; pattern readiness checks; resource matrix family. **External:** SOC telemetry-driven timeline |
+| DET-023 | `[~]` | Volumetric probe profiles + signed-worker execution for authorized RPS/Gbps scenarios | Governed scenario contract + authorization-pack caps binding delivered; depends on SOC-011 partner execution + staging fleet evidence for `[x]` |
+| DET-024 | `[~]` | UI: resource-exhaustion matrix on dashboard/reports; readiness score by exhausted resource | Evidence-referenced 12-family React dashboard matrix and checks-page tabs delivered. **Remaining:** report/drill-down parity, committed bundle check, browser/accessibility matrix, and staging live-data signoff |
+| DET-025 | `[~]` | CI harness: taxonomy validator in `make verify`; staging matrix maps ATT-* → live evidence | Code gates cover taxonomy, deterministic check-library output, and edge-corpus parity with zero current orphans/pending ATT entries. **Remaining:** parent full-suite run and staging signoff artifact |
+| DET-026 | `[x]` (code) | Operational/control-plane: health-check flood, autoscaling cost, alert blind spots, BGP/DNS integrity boundaries | Health-check/autoscaling/alert-coverage checks; ND-001–003, ND-007–009 `monitor_only` boundaries; not scored in DDoS readiness |
+| SOC-011 | `[~]` | Governed volumetric execution: UDP/SYN/HTTP/DNS flood scenarios through partner adapter | Authorization pack binds scenario family + max rate (enforced at SOC approve); telemetry + kill switch wired. **External:** certified partner adapter execution + staging fleet evidence |
 
 ## Per-attack registry
 

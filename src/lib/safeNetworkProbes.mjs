@@ -4,11 +4,10 @@
 
 import { randomBytes } from 'node:crypto';
 import dgram from 'node:dgram';
-import dns from 'node:dns/promises';
 import http2 from 'node:http2';
 import net from 'node:net';
 import tls from 'node:tls';
-import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
+import { pinnedFetch, pinnedWebSocketUpgrade, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
 
 const SAFE_UDP_PAYLOAD_PREFIX = 'ASTRANULL:udp:';
 const SAFE_ALERT_PAYLOAD_TYPE = 'astranull_alert_workflow_ping';
@@ -36,16 +35,31 @@ export function parseNetworkEndpoint(job) {
 }
 
 function resolveHostForJob(job) {
+  const value = String(job.target?.value ?? '').trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      return new URL(value).hostname.replace(/^\[/, '').replace(/\]$/, '') || null;
+    } catch {
+      return null;
+    }
+  }
   const endpoint = parseNetworkEndpoint(job);
   if (endpoint?.host) return endpoint.host;
-  const value = String(job.target?.value ?? '').trim();
-  if (!value || /^https?:\/\//i.test(value)) return null;
-  try {
-    if (/^https?:\/\//i.test(value)) return new URL(value).hostname;
-  } catch {
-    /* ignore */
-  }
   return value.replace(/^\/+/, '') || null;
+}
+
+function resolvePortForJob(job, fallback = 443) {
+  const value = String(job.target?.value ?? '').trim();
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const port = Number(new URL(value).port);
+      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+    } catch {
+      return fallback;
+    }
+  }
+  return parseNetworkEndpoint(job)?.port ?? fallback;
 }
 
 function withProfileKind(job, metadata) {
@@ -88,11 +102,10 @@ function sendUdpDatagram(socket, payload, port, host, timeoutMs) {
 
 /**
  * @param {Record<string, unknown>} job
- * @param {{ createSocket?: typeof dgram.createSocket, lookupFn?: typeof dns.lookup }} deps
+ * @param {{ createSocket?: typeof dgram.createSocket }} deps
  */
 export async function probeUdpDatagram(job, deps = {}) {
   const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
-  const lookupFn = deps.lookupFn ?? dns.lookup;
   const endpoint = parseNetworkEndpoint(job);
   if (!endpoint) {
     return {
@@ -108,11 +121,13 @@ export async function probeUdpDatagram(job, deps = {}) {
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+  let requestsSent = 0;
   try {
-    await lookupFn(endpoint.host);
-    const socket = createSocket('udp4');
+    const pinned = await resolvePinnedDestination(endpoint.host, deps);
+    const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
     const payload = safeUdpPayload(job);
-    await sendUdpDatagram(socket, payload, endpoint.port, endpoint.host, timeoutMs);
+    requestsSent = 1;
+    await sendUdpDatagram(socket, payload, endpoint.port, pinned.address, timeoutMs);
     const durationMs = Date.now() - started;
     return {
       external_result: 'connected',
@@ -122,7 +137,7 @@ export async function probeUdpDatagram(job, deps = {}) {
         target_port: endpoint.port,
         datagram_bytes: payload.length,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
@@ -137,7 +152,7 @@ export async function probeUdpDatagram(job, deps = {}) {
           duration_ms: durationMs,
           target_port: endpoint.port,
         }),
-        requests_sent: 1,
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -147,6 +162,7 @@ export async function probeUdpDatagram(job, deps = {}) {
       || code === 'EHOSTUNREACH'
       || code === 'ENETUNREACH'
       || code === 'ENOTFOUND'
+      || code === 'EDESTINATION'
     ) {
       return {
         external_result: 'blocked',
@@ -156,7 +172,7 @@ export async function probeUdpDatagram(job, deps = {}) {
           duration_ms: durationMs,
           target_port: endpoint.port,
         }),
-        requests_sent: 1,
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -168,7 +184,7 @@ export async function probeUdpDatagram(job, deps = {}) {
         duration_ms: durationMs,
         target_port: endpoint.port,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   }
@@ -195,7 +211,7 @@ function resolveHttpUrl(job) {
 
 const TLS_BLOCKED_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENOTFOUND', 'ENETUNREACH']);
 
-function classifyNetworkProbeError(err, durationMs, job, probeKind) {
+function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent = 1) {
   const code = err?.code ?? '';
   if (code === 'ETIMEOUT') {
     return {
@@ -205,11 +221,11 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind) {
         error_class: 'timeout',
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   }
-  if (TLS_BLOCKED_CODES.has(code)) {
+  if (TLS_BLOCKED_CODES.has(code) || code === 'EDESTINATION') {
     return {
       external_result: 'blocked',
       metadata: withProfileKind(job, {
@@ -217,7 +233,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind) {
         error_class: code,
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   }
@@ -228,7 +244,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind) {
       error_class: code || 'probe_failed',
       duration_ms: durationMs,
     }),
-    requests_sent: 1,
+    requests_sent: requestsSent,
     duration_ms: durationMs,
   };
 }
@@ -244,7 +260,9 @@ function openTlsSession(connectFn, endpoint, timeoutMs) {
     const socket = connectFn({
       host: endpoint.host,
       port: endpoint.port,
-      servername: endpoint.host,
+      ...(net.isIP(endpoint.servername ?? endpoint.host) === 0
+        ? { servername: endpoint.servername ?? endpoint.host }
+        : {}),
       rejectUnauthorized: false,
     });
 
@@ -284,10 +302,19 @@ function openTlsSession(connectFn, endpoint, timeoutMs) {
  * @param {string} url
  * @param {number} timeoutMs
  */
-function readHttp2RemoteSettings(connectFn, url, timeoutMs) {
+function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connectHost) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const session = connectFn(url);
+    const parsed = new URL(url);
+    const logicalHost = parsed.hostname.replace(/^\[/, '').replace(/\]$/, '');
+    const session = connectFn(parsed.origin, {
+      createConnection: () => tlsConnectFn({
+        host: connectHost,
+        port: parsed.port ? Number(parsed.port) : 443,
+        ...(net.isIP(logicalHost) === 0 ? { servername: logicalHost } : {}),
+        rejectUnauthorized: false,
+      }),
+    });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -321,9 +348,7 @@ function readHttp2RemoteSettings(connectFn, url, timeoutMs) {
     session.once('connect', () => {
       if (settled) return;
       const remote = session.remoteSettings;
-      if (remote && Object.keys(remote).length > 0) {
-        captureSettings(remote);
-      }
+      if (remote && Object.keys(remote).length > 0) captureSettings(remote);
     });
     session.once('error', (err) => settle(err));
   });
@@ -348,12 +373,19 @@ export async function probeTlsSession(job, deps = {}) {
     };
   }
 
-  const port = parseNetworkEndpoint(job)?.port ?? 443;
+  const port = resolvePortForJob(job);
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+  let requestsSent = 0;
 
   try {
-    const sessionInfo = await openTlsSession(connectFn, { host, port }, timeoutMs);
+    const pinned = await resolvePinnedDestination(host, deps);
+    requestsSent = 1;
+    const sessionInfo = await openTlsSession(connectFn, {
+      host: pinned.address,
+      ...(net.isIP(host) === 0 ? { servername: host } : {}),
+      port,
+    }, timeoutMs);
     const durationMs = Date.now() - started;
     return {
       external_result: 'connected',
@@ -364,12 +396,17 @@ export async function probeTlsSession(job, deps = {}) {
         authorized: sessionInfo.authorized,
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
-    const durationMs = Date.now() - started;
-    return classifyNetworkProbeError(err, durationMs, job, 'tls_session');
+    return classifyNetworkProbeError(
+      err,
+      Date.now() - started,
+      job,
+      'tls_session',
+      requestsSent,
+    );
   }
 }
 
@@ -379,8 +416,10 @@ export async function probeTlsSession(job, deps = {}) {
  */
 export async function probeHttp2Settings(job, deps = {}) {
   const connectFn = deps.connectFn ?? http2.connect;
+  const tlsConnectFn = deps.tlsConnectFn ?? tls.connect;
   const httpUrl = resolveHttpUrl(job);
-  if (!httpUrl) {
+  const host = resolveHostForJob(job);
+  if (!httpUrl || !host) {
     return {
       external_result: 'error',
       metadata: withProfileKind(job, {
@@ -394,9 +433,18 @@ export async function probeHttp2Settings(job, deps = {}) {
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+  let requestsSent = 0;
 
   try {
-    const settings = await readHttp2RemoteSettings(connectFn, httpUrl, timeoutMs);
+    const pinned = await resolvePinnedDestination(host, deps);
+    requestsSent = 1;
+    const settings = await readHttp2RemoteSettings(
+      connectFn,
+      tlsConnectFn,
+      httpUrl,
+      timeoutMs,
+      pinned.address,
+    );
     const durationMs = Date.now() - started;
     return {
       external_result: 'connected',
@@ -406,23 +454,26 @@ export async function probeHttp2Settings(job, deps = {}) {
         enable_push: settings.enable_push,
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
-    const durationMs = Date.now() - started;
-    return classifyNetworkProbeError(err, durationMs, job, 'http2_settings');
+    return classifyNetworkProbeError(
+      err,
+      Date.now() - started,
+      job,
+      'http2_settings',
+      requestsSent,
+    );
   }
 }
 
 /**
  * @param {Record<string, unknown>} job
- * @param {{ fetchFn?: typeof fetch, createSocket?: typeof dgram.createSocket, lookupFn?: typeof dns.lookup }} deps
+ * @param {{ fetchFn?: typeof fetch, createSocket?: typeof dgram.createSocket }} deps
  */
 export async function probeQuicReachability(job, deps = {}) {
-  const fetchFn = deps.fetchFn ?? fetch;
   const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
-  const lookupFn = deps.lookupFn ?? dns.lookup;
   const host = resolveHostForJob(job);
   const httpUrl = resolveHttpUrl(job);
 
@@ -444,6 +495,13 @@ export async function probeQuicReachability(job, deps = {}) {
   let altSvc = { alt_svc_present: false, quic_port: null };
 
   try {
+    const pinned = await resolvePinnedDestination(host, deps);
+    const pinnedDeps = {
+      ...deps,
+      vettedHost: pinned.host,
+      vettedAddresses: pinned.addresses,
+    };
+    const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, pinnedDeps));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -459,11 +517,10 @@ export async function probeQuicReachability(job, deps = {}) {
     }
 
     const quicPort = altSvc.quic_port ?? 443;
-    await lookupFn(host);
-    const socket = createSocket('udp4');
+    const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
     const payload = safeUdpPayload(job);
-    await sendUdpDatagram(socket, payload, quicPort, host, timeoutMs);
     requestsSent += 1;
+    await sendUdpDatagram(socket, payload, quicPort, pinned.address, timeoutMs);
 
     const durationMs = Date.now() - started;
     return {
@@ -491,11 +548,11 @@ export async function probeQuicReachability(job, deps = {}) {
           alt_svc_present: altSvc.alt_svc_present,
           quic_port: altSvc.quic_port,
         }),
-        requests_sent: Math.max(requestsSent, 1),
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
-    if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'EHOSTUNREACH') {
+    if (['ENOTFOUND', 'EDESTINATION', 'ECONNREFUSED', 'EHOSTUNREACH'].includes(code)) {
       return {
         external_result: 'blocked',
         metadata: withProfileKind(job, {
@@ -505,7 +562,7 @@ export async function probeQuicReachability(job, deps = {}) {
           alt_svc_present: altSvc.alt_svc_present,
           quic_port: altSvc.quic_port,
         }),
-        requests_sent: Math.max(requestsSent, 1),
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -518,7 +575,7 @@ export async function probeQuicReachability(job, deps = {}) {
         alt_svc_present: altSvc.alt_svc_present,
         quic_port: altSvc.quic_port,
       }),
-      requests_sent: Math.max(requestsSent, 1),
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   }
@@ -534,16 +591,6 @@ export function resolveAlertWebhookUrl(job) {
   return null;
 }
 
-async function resolveWebhookAddresses(hostname, deps) {
-  const resolve4Fn = deps.resolve4Fn ?? dns.resolve4;
-  const resolve6Fn = deps.resolve6Fn ?? dns.resolve6;
-  const settled = await Promise.all([
-    resolve4Fn(hostname).catch(() => []),
-    resolve6Fn(hostname).catch(() => []),
-  ]);
-  return [...new Set(settled.flat().filter((ip) => typeof ip === 'string'))];
-}
-
 /**
  * @param {Record<string, unknown>} job
  * @param {{
@@ -554,7 +601,6 @@ async function resolveWebhookAddresses(hostname, deps) {
  * }} deps
  */
 export async function probeAlertWebhookPing(job, deps = {}) {
-  const fetchFn = deps.fetchFn ?? fetch;
   const webhookUrl = resolveAlertWebhookUrl(job);
   if (!webhookUrl) {
     return {
@@ -598,45 +644,31 @@ export async function probeAlertWebhookPing(job, deps = {}) {
     };
   }
 
-  // Tenant-supplied host: every resolved address must be routable before any request.
-  const policy = deps.destinationPolicy ?? { allowPrivate: false, allowLoopback: false };
   const webhookHostname = parsedUrl.hostname.replace(/^\[/, '').replace(/\]$/, '');
-  const addresses = net.isIP(webhookHostname) !== 0
-    ? [webhookHostname]
-    : await resolveWebhookAddresses(webhookHostname, deps);
-
-  if (addresses.length === 0) {
+  let pinned;
+  try {
+    pinned = await resolvePinnedDestination(webhookHostname, deps);
+  } catch (error) {
     return {
       external_result: 'blocked',
       metadata: withProfileKind(job, {
         probe_kind: 'alert_webhook_ping',
         error_class: 'webhook_host_not_routable',
         webhook_host: webhookHostname,
-        reason: 'no_resolved_addresses',
+        blocked_address: error?.blockedAddress ?? null,
+        reason: error?.code === 'ENOTFOUND' ? 'no_resolved_addresses' : error?.message,
       }),
       requests_sent: 0,
       duration_ms: 0,
     };
   }
-
-  for (const address of addresses) {
-    const verdict = assertProbeDestinationAllowed(address, policy);
-    if (!verdict.ok) {
-      return {
-        external_result: 'blocked',
-        metadata: withProfileKind(job, {
-          probe_kind: 'alert_webhook_ping',
-          error_class: 'webhook_host_not_routable',
-          webhook_host: webhookHostname,
-          blocked_address: address,
-          reason: verdict.message,
-        }),
-        requests_sent: 0,
-        duration_ms: 0,
-      };
-    }
-  }
-  const pinnedAddress = addresses[0];
+  const pinnedAddress = pinned.address;
+  const pinnedDeps = {
+    ...deps,
+    vettedHost: pinned.host,
+    vettedAddresses: pinned.addresses,
+  };
+  const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, pinnedDeps));
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
@@ -771,11 +803,16 @@ function classifyWebsocketUpgradeStatus(status) {
 
 /**
  * @param {Record<string, unknown>} job
- * @param {{ fetchFn?: typeof fetch }} deps
+ * @param {{ websocketUpgradeFn?: Function, fetchFn?: typeof fetch }} deps
  */
 export async function probeWebsocketUpgradePosture(job, deps = {}) {
-  const fetchFn = deps.fetchFn ?? fetch;
-  const httpUrl = resolveHttpUrl(job);
+  const upgradeFn = deps.websocketUpgradeFn
+    ?? deps.fetchFn
+    ?? ((input, init) => pinnedWebSocketUpgrade(input, init, deps));
+  const resolvedUrl = resolveHttpUrl(job);
+  const httpUrl = resolvedUrl
+    ?.replace(/^wss:/i, 'https:')
+    .replace(/^ws:/i, 'http:');
   if (!httpUrl) {
     return {
       external_result: 'error',
@@ -817,11 +854,12 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
   if (job.nonce) headers['x-astranull-nonce'] = String(job.nonce);
 
   try {
-    const res = await fetchFn(httpUrl, {
+    const res = await upgradeFn(httpUrl, {
       method: 'GET',
       headers,
       redirect: 'manual',
       signal: controller.signal,
+      timeoutMs,
     });
     const durationMs = Date.now() - started;
     const classification = classifyWebsocketUpgradeStatus(res.status);

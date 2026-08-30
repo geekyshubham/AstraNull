@@ -44,8 +44,10 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [data, setData] = useState<PortalData>(EMPTY_PORTAL_DATA);
   const [loading, setLoading] = useState(true);
+  const [hydratingRoute, setHydratingRoute] = useState<RouteId | null>(null);
   const bootStarted = useRef(false);
   const lastHydratedRoute = useRef<RouteId | null>(null);
+  const routeHydrationRequestId = useRef(0);
 
   const activeSession = useMemo(() => session ?? {}, [session]);
 
@@ -118,7 +120,15 @@ export default function App() {
       // a later expiry can still trigger its own single redirect.
       if (nextSession) resetReauthGuard();
       if (!isPublicOnlyPath(window.location.pathname) && nextSession) {
-        const bootRoute = getRouteFromLocation();
+        const requestedBootRoute = getRouteFromLocation();
+        const bootRoute = canAccessRoute(nextSession.role, requestedBootRoute, {
+          principal: nextSession.principal,
+          staffRole: nextSession.staff_role,
+        }) ? requestedBootRoute : 'dashboard';
+        if (bootRoute !== requestedBootRoute) {
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#dashboard`);
+        }
+        setRoute(bootRoute);
         await refresh(nextConfig, nextSession, bootRoute);
         lastHydratedRoute.current = bootRoute;
       }
@@ -145,8 +155,10 @@ export default function App() {
       };
       if (!canAccessRoute(role, nextRoute, accessContext)) {
         window.location.replace(`${window.location.pathname}${window.location.search}#dashboard`);
+        if (lastHydratedRoute.current !== 'dashboard') setHydratingRoute('dashboard');
         setRoute('dashboard');
       } else {
+        if (lastHydratedRoute.current !== nextRoute) setHydratingRoute(nextRoute);
         setRoute(nextRoute);
       }
       setPath(window.location.pathname);
@@ -184,9 +196,21 @@ export default function App() {
     if (loading || !config || !session) return;
     if (isPublicOnlyPath(path)) return;
     if (lastHydratedRoute.current === route) return;
+    const requestId = ++routeHydrationRequestId.current;
     lastHydratedRoute.current = route;
-    void refresh(config, session, route);
+    setHydratingRoute(route);
+    void refresh(config, session, route).finally(() => {
+      if (routeHydrationRequestId.current !== requestId) return;
+      setHydratingRoute((current) => current === route ? null : current);
+    });
   }, [route, loading, config, session, path, refresh]);
+
+  function handleRouteChange(nextRoute: RouteId) {
+    if (nextRoute !== route && lastHydratedRoute.current !== nextRoute) {
+      setHydratingRoute(nextRoute);
+    }
+    setRoute(nextRoute);
+  }
 
   function handleRoleChange(role: string) {
     // Role switcher is a local dev-headers convenience only — never elevate OIDC sessions.
@@ -233,12 +257,19 @@ export default function App() {
       route={route}
       session={activeSession}
       data={data}
-      onRouteChange={setRoute}
+      onRouteChange={handleRouteChange}
       onRoleChange={handleRoleChange}
       onRefresh={() => void handleRefresh()}
       showRoleSwitcher={config.authMode === 'dev-headers' && activeSession.principal !== 'staff'}
     >
-      <RouteView route={route} data={data} config={config} session={activeSession} onRefresh={handleRefresh} />
+      <RouteView
+        route={route}
+        data={data}
+        config={config}
+        session={activeSession}
+        onRefresh={handleRefresh}
+        hydrating={hydratingRoute === route}
+      />
     </AppShell>
   );
 }

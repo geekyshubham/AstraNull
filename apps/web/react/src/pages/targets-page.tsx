@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import {
   Cloud,
   CloudSun,
@@ -45,18 +45,41 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }
 .targets-page .target-row-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .targets-page .target-row-actions .btn { min-height: 34px; }
-@media (min-width: 701px) {
+@media (min-width: 901px) {
   .targets-page .data-table { width: 100%; table-layout: fixed; }
-  .targets-page .data-table th:nth-child(1) { width: 23%; }
-  .targets-page .data-table th:nth-child(2) { width: 14%; }
-  .targets-page .data-table th:nth-child(3) { width: 12%; }
-  .targets-page .data-table th:nth-child(4) { width: 14%; }
+  .targets-page .data-table th:nth-child(1) { width: 22%; }
+  .targets-page .data-table th:nth-child(2) { width: 12%; }
+  .targets-page .data-table th:nth-child(3) { width: 13%; }
+  .targets-page .data-table th:nth-child(4) { width: 12%; }
   .targets-page .data-table th:nth-child(5) { width: 14%; }
-  .targets-page .data-table th:nth-child(6) { width: 11%; }
-  .targets-page .data-table th:nth-child(7) { width: 12%; }
+  .targets-page .data-table th:nth-child(6) { width: 9%; }
+  .targets-page .data-table th:nth-child(7) { width: 18%; }
   .targets-page .target-primary,
   .targets-page .provider-line { min-width: 0; }
   .targets-page .provider-line { align-items: flex-start; }
+  .targets-page .data-table td { min-width: 0; overflow-wrap: anywhere; }
+}
+@media (min-width: 701px) and (max-width: 900px) {
+  .targets-page .targets-table-wrap { overflow-x: visible; }
+  .targets-page .targets-table-wrap .data-table,
+  .targets-page .targets-table-wrap tbody { display: block; width: 100%; }
+  .targets-page .targets-table-wrap thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .targets-page .targets-table-wrap tbody { display: grid; gap: var(--space-3); }
+  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); padding: var(--space-4); }
+  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td { display: grid; grid-template-columns: minmax(92px, .42fr) minmax(0, 1fr); gap: var(--space-3); align-items: start; min-width: 0; border-bottom: 0; padding: var(--space-1) 0; }
+  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td::before { content: attr(data-label); color: var(--fg-2); font-size: var(--text-xs); font-weight: 600; }
+  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td:last-child { grid-column: 1 / -1; }
+  .targets-page .target-primary,
+  .targets-page .provider-line { min-width: 0; }
+  .targets-page .target-row-actions { align-items: center; flex-direction: row; }
+  .targets-page .target-row-actions .btn { width: auto; justify-content: center; }
+}
+@media (max-width: 900px) {
+  .targets-page .target-row-actions .btn { min-height: 44px; }
+}
+@media (min-width: 901px) and (max-width: 1100px) {
+  .targets-page .target-row-actions { align-items: stretch; flex-direction: column; }
+  .targets-page .target-row-actions .btn { width: 100%; justify-content: center; }
 }
 @media (max-width: 1000px) { .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-intake-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .targets-page .targets-summary, .targets-page .targets-intake-form { grid-template-columns: 1fr; } .targets-page .targets-filter { flex: 1 1 100%; } .targets-page .targets-intake-form .btn { width: 100%; } }
@@ -224,24 +247,6 @@ export function TargetsPage({
     }
   }
 
-  function rowProps(item: DataItem): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
-    const id = getString(item, ['id'], '');
-    if (!id) return {};
-    const go = () => { window.location.hash = `target-detail?id=${encodeURIComponent(id)}`; };
-    return {
-      role: 'link',
-      tabIndex: 0,
-      'aria-label': `Open target ${getString(item, ['value'], id)}`,
-      onClick: go,
-      onKeyDown: (event: KeyboardEvent<HTMLTableRowElement>) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          go();
-        }
-      }
-    };
-  }
-
   const columns: TableColumn<DataItem>[] = [
     {
       key: 'target',
@@ -298,8 +303,15 @@ export function TargetsPage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         return (
-          <span className="target-row-actions" onClick={(event) => event.stopPropagation()}>
-            <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', id)}>Open</AnchorButton>
+          <span className="target-row-actions">
+            <AnchorButton
+              size="sm"
+              variant="ghost"
+              href={buildDetailHref('target-detail', id)}
+              aria-label={`Open target ${getString(item, ['value'], id)}`}
+            >
+              Open target
+            </AnchorButton>
             <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button>
           </span>
         );
@@ -348,7 +360,7 @@ export function TargetsPage({
 
       <Card>
         <CardHeader>
-          <div><CardTitle>Target inventory</CardTitle><CardDescription>{filtered.length} of {targets.length} configured targets. Rows open the evidence-backed target detail.</CardDescription></div>
+          <div><CardTitle>Target inventory</CardTitle><CardDescription>{filtered.length} of {targets.length} configured targets. Use Open target for evidence-backed detail; other row actions remain independent.</CardDescription></div>
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">
@@ -357,10 +369,10 @@ export function TargetsPage({
             <label className="targets-filter"><span>Eligibility</span><select value={eligibilityFilter} onChange={(event) => setEligibilityFilter(event.target.value)}><option value="all">All targets</option><option value="eligible">Eligible</option><option value="not_eligible">Not eligible</option></select></label>
           </div>
           <DataTable
+            className="targets-table-wrap"
             columns={columns}
             items={filtered}
             getRowId={(item, index) => getString(item, ['id'], String(index))}
-            getRowProps={(item) => rowProps(item)}
             loadError={data.loadErrors.targets}
             onRetry={() => void onRefresh()}
             empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets configured yet'} body={targets.length ? 'Clear or adjust the filters to return to the full declared inventory.' : 'Add a single domain here, or import approved provider inventory into a target group.'} actionLabel={targets.length ? undefined : 'Add single domain'} onAction={targets.length ? undefined : () => setShowAdd(true)} />}

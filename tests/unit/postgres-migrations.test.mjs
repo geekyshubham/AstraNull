@@ -682,4 +682,45 @@ describe('postgres migrations', () => {
     assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_waf_retest_requests_execution_lock/);
     assert.match(sql, /WHERE execution_lock_token IS NOT NULL/);
   });
+
+  it('0044 expands, backfills, and preserves prior-release target inserts before enforcing the contract', () => {
+    const sql = fs.readFileSync(
+      path.join(MIGRATIONS_DIR, '0044_target_management_rules_and_schedules.sql'),
+      'utf8',
+    );
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS normalized_value TEXT/);
+    assert.match(sql, /CREATE OR REPLACE FUNCTION astranull_target_compat_normalized_value/);
+    assert.match(sql, /IF normalized_kind = 'ip'/);
+    assert.match(sql, /EXCEPTION WHEN invalid_text_representation/);
+    assert.match(sql, /RETURN trimmed_value/);
+    assert.match(sql, /CREATE TRIGGER targets_normalized_value_compat/);
+    assert.match(sql, /BEFORE INSERT OR UPDATE OF kind, value, normalized_value ON targets/);
+    assert.match(sql, /NEW\.normalized_value IS NULL/);
+    assert.match(sql, /normalized_value = astranull_target_compat_normalized_value\(kind, value\)/);
+    assert.doesNotMatch(sql, /RAISE EXCEPTION[\s\S]*legacy (?:url|tcp|canary)/i);
+
+    const expand = sql.indexOf('ADD COLUMN IF NOT EXISTS normalized_value TEXT');
+    const trigger = sql.indexOf('CREATE TRIGGER targets_normalized_value_compat');
+    const backfill = sql.indexOf('normalized_value = astranull_target_compat_normalized_value(kind, value)');
+    const contract = sql.indexOf('ALTER TABLE targets ALTER COLUMN normalized_value SET NOT NULL');
+    const unique = sql.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS uniq_targets_active_canonical');
+    assert.ok(expand < trigger && trigger < backfill && backfill < contract && contract < unique);
+
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ/);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS uniq_target_groups_active_name/);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS uniq_targets_active_canonical/);
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS max_concurrent_runs INTEGER NOT NULL DEFAULT 1/);
+    assert.match(sql, /test_policies_max_concurrent_runs_check CHECK \(max_concurrent_runs = 1\)/);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS uniq_test_policies_active_group_check/);
+    assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_test_policies_due/);
+    assert.match(sql, /ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS policy_id TEXT/);
+    assert.match(sql, /CONSTRAINT fk_test_runs_policy_tenant/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS test_policy_dispatches/);
+    assert.match(sql, /CONSTRAINT test_policy_dispatches_idempotency UNIQUE/);
+    assert.match(sql, /CONSTRAINT test_policy_dispatches_occurrence UNIQUE/);
+    assert.match(sql, /ALTER TABLE test_policy_dispatches ENABLE ROW LEVEL SECURITY/);
+    assert.match(sql, /ALTER TABLE test_policy_dispatches FORCE ROW LEVEL SECURITY/);
+    assert.match(sql, /CREATE POLICY test_policy_dispatches_tenant_isolation/);
+    assert.match(sql, /'connector_inventory', 'customer_declaration'/);
+  });
 });

@@ -1,5 +1,86 @@
 import type { DataItem } from './types';
 
+export type GovernedHighScaleScenario = {
+  id: string;
+  label: string;
+  deliveryPatterns: ReadonlyArray<{ id: string; label: string }>;
+  limit: {
+    field: 'max_gbps' | 'max_cps' | 'max_rps';
+    label: string;
+    unit: string;
+    min: number;
+    max: number;
+    step: number;
+    defaultValue: number;
+  };
+};
+
+/** Customer-requestable subset of the backend governed scenario taxonomy. */
+export const GOVERNED_HIGH_SCALE_SCENARIOS: ReadonlyArray<GovernedHighScaleScenario> = [
+  {
+    id: 'udp_flood',
+    label: 'UDP volumetric',
+    deliveryPatterns: [
+      { id: 'direct', label: 'Direct' },
+      { id: 'spoofed', label: 'Spoofed' }
+    ],
+    limit: {
+      field: 'max_gbps',
+      label: 'Maximum traffic rate',
+      unit: 'Gbps',
+      min: 0.001,
+      max: 1000,
+      step: 0.001,
+      defaultValue: 0.5
+    }
+  },
+  {
+    id: 'syn_flood',
+    label: 'SYN state exhaustion',
+    deliveryPatterns: [
+      { id: 'direct', label: 'Direct' },
+      { id: 'spoofed', label: 'Spoofed' }
+    ],
+    limit: {
+      field: 'max_cps',
+      label: 'Maximum connection rate',
+      unit: 'connections/second',
+      min: 1,
+      max: 10_000_000,
+      step: 1,
+      defaultValue: 1000
+    }
+  },
+  {
+    id: 'http_get_flood',
+    label: 'HTTP GET flood',
+    deliveryPatterns: [
+      { id: 'direct', label: 'Direct' },
+      { id: 'coordinated_swarm', label: 'Coordinated swarm' }
+    ],
+    limit: {
+      field: 'max_rps',
+      label: 'Maximum request rate',
+      unit: 'requests/second',
+      min: 1,
+      max: 10_000_000,
+      step: 1,
+      defaultValue: 500
+    }
+  }
+];
+
+const GOVERNED_NUMERIC_LIMIT_FIELDS = [
+  'max_gbps',
+  'max_pps',
+  'max_rps',
+  'max_qps',
+  'max_cps',
+  'max_connections',
+  'max_resets_per_sec',
+  'max_duration_minutes'
+] as const;
+
 /** Required authorization-pack artifact types from `authorizationTemplates.mjs`. */
 export const REQUIRED_AUTHORIZATION_ARTIFACT_TYPES = [
   'customer_authorization_letter',
@@ -232,13 +313,21 @@ export function buildMetadataArtifactUploadBody(
       ? request.provider_context as DataItem
       : {};
   const scenarioFamilies = Array.isArray(request.requested_scenario_families)
-    ? request.requested_scenario_families.map((item) => String(item))
-    : ['volumetric_metadata'];
+    ? request.requested_scenario_families.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const deliveryPatterns = Array.isArray(request.delivery_patterns)
+    ? request.delivery_patterns.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  const approvedLimits: Record<string, number> = {};
+  for (const field of GOVERNED_NUMERIC_LIMIT_FIELDS) {
+    const value = requestedLimits[field];
+    if (typeof value === 'number' && Number.isFinite(value)) approvedLimits[field] = value;
+  }
   const emergencyContacts = Array.isArray(request.emergency_contacts) ? request.emergency_contacts : [];
   const abortCriteria =
     request.abort_criteria && typeof request.abort_criteria === 'object' && !Array.isArray(request.abort_criteria)
       ? request.abort_criteria
-      : { threshold: 'error_rate_above_5pct', auto_stop: true };
+      : {};
 
   const body: DataItem = {
     type,
@@ -253,8 +342,11 @@ export function buildMetadataArtifactUploadBody(
     },
     approved_targets: targetGroupId ? [targetGroupId] : [],
     approved_scenario_families: scenarioFamilies,
-    max_rate: requestedLimits.max_rate ?? 'metadata-only-cap',
-    max_duration_minutes: requestedLimits.max_duration_minutes ?? 30,
+    approved_delivery_patterns: deliveryPatterns,
+    approved_limits: approvedLimits,
+    ...(typeof approvedLimits.max_duration_minutes === 'number'
+      ? { max_duration_minutes: approvedLimits.max_duration_minutes }
+      : {}),
     emergency_contacts: emergencyContacts,
     abort_criteria: abortCriteria,
     retention_policy: {
@@ -262,6 +354,19 @@ export function buildMetadataArtifactUploadBody(
       classification: 'governance'
     }
   };
+
+  const tenantId = String(request.tenant_id ?? '').trim();
+  const scopeHash = String(request.scope_hash ?? '').trim();
+  if (tenantId && targetGroupId && scopeHash) {
+    body.authorization_binding = {
+      tenant_id: tenantId,
+      target_group_id: targetGroupId,
+      scope_hash: scopeHash,
+      requested_window: requestedWindow,
+      approved_schedule_window: requestedWindow,
+      delivery_patterns: deliveryPatterns
+    };
+  }
 
   const custodyId = String(fields.custody_id ?? '').trim();
   if (custodyId) {

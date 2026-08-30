@@ -3,7 +3,10 @@ import {
   Activity,
   Bot,
   CheckCircle2,
+  CircleHelp,
+  CircleMinus,
   Cloud,
+  CloudSun,
   ClipboardList,
   FileCheck2,
   FileText,
@@ -13,6 +16,9 @@ import {
   ListChecks,
   Network,
   PlugZap,
+  RefreshCw,
+  Route,
+  Server,
   ServerCog,
   ShieldCheck,
   Siren,
@@ -26,6 +32,7 @@ import { ReadinessPostureDonut } from '../components/charts/readiness-posture-do
 import { WafSummaryPanel } from '../components/dashboard/waf-summary-panel';
 import { ScoreTrend } from '../components/charts/score-trend';
 import { VectorHeatmap } from '../components/charts/vector-heatmap';
+import { ResourceMatrix } from '../components/charts/resource-matrix';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { TargetGroupPicker } from '../components/policies/target-group-picker';
@@ -129,8 +136,7 @@ const POLICY_CADENCE_OPTIONS: SelectOption[] = [
   { value: 'manual', label: 'Manual' },
   { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-  { value: 'event_driven', label: 'Event-driven' }
+  { value: 'monthly', label: 'Monthly' }
 ];
 
 const POLICY_VERDICT_OPTIONS: SelectOption[] = [
@@ -193,7 +199,6 @@ function derivePolicyNextRun(policy: DataItem, socGated: boolean): { label: stri
   }
   const cadence = getString(policy, ['cadence'], 'manual');
   if (cadence === 'manual') return { label: 'On demand', iso: null };
-  if (cadence === 'event_driven') return { label: 'On event', iso: null };
   const interval = POLICY_CADENCE_INTERVAL_MS[cadence];
   if (!interval) return { label: '—', iso: null };
   const anchor = Date.parse(getString(policy, ['last_run_at', 'updated_at', 'created_at'], ''));
@@ -281,7 +286,7 @@ function featureEnabled(data: PortalData, key: 'waf_posture' | 'external_discove
   return Boolean(data.deploymentFeatures?.[key]);
 }
 
-/** Row props that make a DataTable row behave like a link to a detail route. */
+/** Keep native table-row semantics while adding click and keyboard navigation. */
 function detailRowProps(
   route: RouteId,
   id: string,
@@ -296,7 +301,6 @@ function detailRowProps(
     window.location.hash = hashIndex >= 0 ? href.slice(hashIndex + 1) : href;
   };
   return {
-    role: 'link',
     tabIndex: 0,
     style: { cursor: 'pointer' },
     'aria-label': label,
@@ -1441,6 +1445,31 @@ export function DashboardPage({
                 testPolicies={data.testPolicies}
                 runs={data.runs}
                 evidence={data.evidence}
+              />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Resource exhaustion matrix</CardTitle>
+              <CardDescription>
+                Stored verdict posture by exhausted resource, target applicability, and 30-day evidence freshness.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ResourceMatrix
+                checks={data.checks}
+                targetGroups={data.targetGroups}
+                runs={data.runs}
+                evidence={data.evidence}
+                config={config}
+                session={session}
+                dataLoadError={[
+                  data.loadErrors.checks,
+                  data.loadErrors.targetGroups,
+                  data.loadErrors.runs,
+                  data.loadErrors.evidence
+                ].filter(Boolean).join(' ') || null}
+                onRefresh={onRefresh}
               />
             </CardContent>
           </Card>
@@ -3290,15 +3319,28 @@ export function PolicyPage({
       setError('Select a check from the catalog before creating a policy.');
       return;
     }
+
+    const cadence = String(form.get('cadence') ?? 'manual').trim();
+
     const day = String(form.get('safe_window_day') ?? '').trim();
     const start = String(form.get('safe_window_start') ?? '').trim();
     const end = String(form.get('safe_window_end') ?? '').trim();
-    const safe_windows = day && start && end
-      ? [{ day, start, end, timezone: String(form.get('safe_window_timezone') ?? 'UTC').trim() || 'UTC' }]
-      : [];
+    const timezone = String(form.get('safe_window_timezone') ?? '').trim();
+    const safeWindowValues = [day, start, end, timezone];
+    const hasSafeWindow = safeWindowValues.some(Boolean);
+    if (hasSafeWindow && !safeWindowValues.every(Boolean)) {
+      setError('Complete the safe-window day, start, end, and timezone, or leave all four fields blank.');
+      return;
+    }
+    if (hasSafeWindow && start >= end) {
+      setError('Safe window end time must be later than its start time.');
+      return;
+    }
+
+    const safe_windows = hasSafeWindow ? [{ day, start, end, timezone }] : [];
     const bodyBase = {
       check_id: checkId,
-      cadence: String(form.get('cadence') ?? 'manual'),
+      cadence,
       expected_verdict: String(form.get('expected_verdict') ?? 'pass'),
       safe_windows
     };
@@ -3306,23 +3348,58 @@ export function PolicyPage({
     setError('');
     setMessage('');
     try {
-      let lastResult: unknown = null;
+      const successes: Array<{ targetGroupId: string; result: unknown }> = [];
+      const failures: Array<{ targetGroupId: string; message: string }> = [];
       for (const targetGroupId of policyTargetGroupIds) {
-        lastResult = await requestJson(config, session, '/v1/test-policies', {
-          method: 'POST',
-          body: { ...bodyBase, target_group_id: targetGroupId }
-        });
+        try {
+          const result = await requestJson(config, session, '/v1/test-policies', {
+            method: 'POST',
+            body: { ...bodyBase, target_group_id: targetGroupId }
+          });
+          successes.push({ targetGroupId, result });
+        } catch (err) {
+          failures.push({
+            targetGroupId,
+            message: apiErrorMessage(err, 'Policy creation failed.')
+          });
+        }
       }
-      setMessage(formatMutationSuccessMessage(
-        `Created ${policyTargetGroupIds.length} test ${policyTargetGroupIds.length === 1 ? 'policy' : 'policies'} from declared scope and check catalog.`,
-        lastResult
-      ));
+
+      let refreshFailure = '';
+      if (successes.length > 0) {
+        try {
+          await onRefresh();
+        } catch (err) {
+          refreshFailure = apiErrorMessage(err, 'The policy list could not be refreshed.');
+        }
+      }
+
+      if (failures.length > 0) {
+        setPolicyTargetGroupIds(failures.map((failure) => failure.targetGroupId));
+        const failedResults = failures
+          .map((failure) => `${failure.targetGroupId}: ${failure.message}`)
+          .join(' ');
+        setError(
+          `Created ${successes.length} of ${policyTargetGroupIds.length} policies. `
+          + `Failed ${failures.length}: ${failedResults} `
+          + 'Successful writes were retained; only failed target groups remain selected for retry.'
+          + (refreshFailure ? ` ${refreshFailure}` : '')
+        );
+        return;
+      }
+
+      const lastResult = successes.at(-1)?.result ?? null;
+      const success = `Created ${successes.length} test ${successes.length === 1 ? 'policy' : 'policies'} from declared scope and check catalog.`;
+      if (refreshFailure) {
+        setPolicyTargetGroupIds([]);
+        formElement.reset();
+        setError(`${success} ${refreshFailure} The writes succeeded; refresh the page instead of creating them again.`);
+        return;
+      }
+      setMessage(formatMutationSuccessMessage(success, lastResult));
       setPolicyTargetGroupIds([]);
       formElement.reset();
       setShowCreateSchedule(false);
-      await onRefresh();
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
@@ -3427,7 +3504,7 @@ export function PolicyPage({
       <FormModal
         open={showCreateSchedule}
         title="Create validation schedule"
-        description="Bind a customer-runnable check to an active declared target group. SOC-gated checks remain request-only."
+        description="Bind a customer-runnable check to one or more active declared target groups. Each group is written sequentially and any partial result remains visible. SOC-gated checks remain request-only."
         wide
         onClose={() => setShowCreateSchedule(false)}
       >
@@ -3465,21 +3542,22 @@ export function PolicyPage({
               />
               <details className="full">
                 <summary>Safe window (optional)</summary>
+                <p className="muted small full">Leave every field blank for no safe window, or complete all four fields explicitly.</p>
                 <label>
                   <span>Safe window day</span>
-                  <input name="safe_window_day" defaultValue="Mon" placeholder="Mon" />
+                  <input name="safe_window_day" placeholder="Mon" autoComplete="off" />
                 </label>
                 <label>
                   <span>Window timezone</span>
-                  <input name="safe_window_timezone" defaultValue="UTC" />
+                  <input name="safe_window_timezone" placeholder="UTC" autoComplete="off" spellCheck={false} />
                 </label>
                 <label>
                   <span>Window start</span>
-                  <input name="safe_window_start" type="time" defaultValue="02:00" />
+                  <input name="safe_window_start" type="time" />
                 </label>
                 <label>
                   <span>Window end</span>
-                  <input name="safe_window_end" type="time" defaultValue="04:00" />
+                  <input name="safe_window_end" type="time" />
                 </label>
               </details>
               <div className="form-actions full">
@@ -3514,7 +3592,6 @@ const CONNECTOR_SNAPSHOT_KIND_OPTIONS = [
 type DnsProviderDirectoryEntry = {
   id: string;
   label: string;
-  mark: string;
   icon: LucideIcon;
   backendProvider: 'cloudflare' | 'aws_waf' | 'generic_waf';
   supportsCredentialPolling: boolean;
@@ -3527,92 +3604,107 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
   {
     id: 'cloudflare',
     label: 'Cloudflare',
-    mark: 'CF',
-    icon: Cloud,
+    icon: CloudSun,
     backendProvider: 'cloudflare',
     supportsCredentialPolling: true,
-    capability: 'Read-only polling',
-    description: 'Vault-backed polling can collect normalized DNS and edge metadata without making provider changes.',
+    capability: 'Read-only polling available',
+    description: 'Use a vault-backed read-only token for bounded metadata polling, or keep this provider entirely manual.',
     tone: 'accent'
   },
   {
     id: 'route53',
     label: 'Route 53',
-    mark: 'R53',
-    icon: Network,
+    icon: Route,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic read-only record with operator-supplied DNS-zone snapshots; no live Route 53 credential polling.',
+    description: 'Record selected DNS-zone metadata without AWS account access or automatic inventory discovery.',
     tone: 'warn'
   },
   {
     id: 'godaddy',
     label: 'GoDaddy',
-    mark: 'GD',
     icon: Globe2,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic read-only record for normalized domain inventory and manual DNS-zone evidence.',
+    description: 'Declare domains or submit normalized DNS-zone snapshots; provider credentials are not accepted here.',
     tone: 'success'
   },
   {
     id: 'namecheap',
     label: 'Namecheap',
-    mark: 'NC',
     icon: Globe2,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic read-only record for normalized domain inventory and manual DNS-zone evidence.',
+    description: 'Declare domains or submit normalized DNS-zone snapshots; provider credentials are not accepted here.',
     tone: 'signal'
   },
   {
     id: 'hetzner_dns',
     label: 'Hetzner DNS',
-    mark: 'HZ',
-    icon: ServerCog,
+    icon: Server,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic metadata connector for manually supplied DNS-zone snapshots; no live credential polling.',
+    description: 'Create a metadata-only provider record and attach operator-supplied DNS-zone evidence.',
     tone: 'accent'
   },
   {
     id: 'google_cloud_dns',
     label: 'Google Cloud DNS',
-    mark: 'GCP',
     icon: Cloud,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic read-only record for normalized cloud DNS metadata; live Cloud DNS polling is not available here.',
+    description: 'Record selected cloud DNS metadata without project access or live Cloud DNS polling.',
     tone: 'success'
   },
   {
     id: 'azure_dns',
     label: 'Azure DNS',
-    mark: 'AZ',
     icon: Cloud,
     backendProvider: 'generic_waf',
     supportsCredentialPolling: false,
     capability: 'Manual metadata',
-    description: 'Generic read-only record for normalized cloud DNS metadata; live Azure DNS polling is not available here.',
+    description: 'Record selected cloud DNS metadata without subscription access or live Azure DNS polling.',
     tone: 'signal'
   },
   {
     id: 'aws',
-    label: 'AWS',
-    mark: 'AWS',
+    label: 'AWS WAF',
     icon: Cloud,
     backendProvider: 'aws_waf',
     supportsCredentialPolling: true,
-    capability: 'WAF metadata polling',
-    description: 'Vault-backed AWS WAF polling is available; DNS-zone evidence remains a manual metadata workflow.',
+    capability: 'WAF polling available',
+    description: 'Use vault-backed read-only credentials for bounded WAF metadata polling; DNS zones stay manual.',
     tone: 'warn'
   }
 ];
+
+const DECLARED_DOMAIN_BEHAVIORS = new Set(['block_at_edge', 'absorb_at_origin', 'rate_shape']);
+
+function validateDeclaredHostname(input: string) {
+  const hostname = input.trim().toLowerCase().replace(/\.$/, '');
+  if (!hostname) return { hostname: '', error: 'Enter a hostname.' };
+  if (hostname.length > 253) return { hostname, error: 'Hostname must be 253 characters or fewer.' };
+  if (/[\s/:?#@]/.test(hostname)) {
+    return { hostname, error: 'Enter a hostname only, without a protocol, port, path, query, or spaces.' };
+  }
+  const labels = hostname.split('.');
+  if (labels.length < 2) return { hostname, error: 'Enter a fully qualified domain name, such as api.example.com.' };
+  for (const label of labels) {
+    if (!label || label.length > 63) return { hostname, error: 'Each hostname label must contain 1 to 63 characters.' };
+    if (!/^[a-z0-9-]+$/.test(label) || label.startsWith('-') || label.endsWith('-')) {
+      return { hostname, error: 'Use letters, numbers, and interior hyphens only. International domains must use punycode.' };
+    }
+  }
+  if (/^\d+$/.test(labels[labels.length - 1])) {
+    return { hostname, error: 'The final hostname label cannot contain only numbers.' };
+  }
+  return { hostname, error: '' };
+}
 
 const INTEGRATION_PAGE_STYLES = `
 .integration-page .dns-provider-grid {
@@ -3639,13 +3731,16 @@ const INTEGRATION_PAGE_STYLES = `
 }
 .integration-page .dns-provider-card-head,
 .integration-page .dns-provider-card-footer,
-.integration-page .dns-directory-heading {
+.integration-page .dns-directory-heading,
+.integration-page .provider-flow-context,
+.integration-page .domain-result-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
 }
-.integration-page .dns-provider-identity {
+.integration-page .dns-provider-identity,
+.integration-page .provider-flow-provider {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -3656,9 +3751,7 @@ const INTEGRATION_PAGE_STYLES = `
   width: var(--space-12);
   height: var(--space-12);
   flex: 0 0 var(--space-12);
-  grid-template-rows: 1fr auto;
   place-items: center;
-  padding: var(--space-2) var(--space-1);
   border: 1px solid currentColor;
   border-radius: var(--radius-md);
   background: var(--signal-soft);
@@ -3675,13 +3768,6 @@ const INTEGRATION_PAGE_STYLES = `
 .integration-page .dns-provider-mark[data-tone='success'] {
   background: color-mix(in oklab, var(--success), transparent 88%);
   color: var(--success);
-}
-.integration-page .dns-provider-mark span {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: var(--tracking-caps);
 }
 .integration-page .dns-provider-name {
   min-width: 0;
@@ -3712,14 +3798,191 @@ const INTEGRATION_PAGE_STYLES = `
   max-width: 72ch;
   margin: 0;
 }
+.integration-page .provider-flow-context {
+  align-items: flex-end;
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+.integration-page .provider-flow-context label {
+  min-width: min(100%, 260px);
+}
+.integration-page .provider-path-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.integration-page .provider-path {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--proof-surface);
+}
+.integration-page .provider-path-icon {
+  display: grid;
+  width: var(--space-10);
+  height: var(--space-10);
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.integration-page .provider-path h3,
+.integration-page .provider-path p {
+  margin: 0;
+}
+.integration-page .provider-path h3 {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.integration-page .provider-path p {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+.integration-page .provider-path .btn {
+  width: 100%;
+  margin-top: auto;
+}
+.integration-page .domain-scope-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.integration-page .domain-scope-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+}
+.integration-page .domain-scope-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.integration-page .domain-scope-option input {
+  width: auto;
+  min-height: 0;
+  margin-top: var(--space-1);
+}
+.integration-page .domain-scope-option strong,
+.integration-page .domain-scope-option span {
+  display: block;
+}
+.integration-page .domain-scope-option strong {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.integration-page .domain-scope-option span {
+  margin-top: var(--space-1);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+.integration-page .domain-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+.integration-page .domain-progress li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.integration-page .domain-progress li > span {
+  display: grid;
+  width: var(--space-6);
+  height: var(--space-6);
+  flex: 0 0 var(--space-6);
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.integration-page .domain-progress li[data-state='active'] > span {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.integration-page .domain-progress li[data-state='complete'] > span {
+  border-color: var(--success);
+  background: color-mix(in oklab, var(--success), transparent 88%);
+  color: var(--success);
+}
+.integration-page .domain-progress li[data-state='error'] > span {
+  border-color: var(--danger);
+  background: color-mix(in oklab, var(--danger), transparent 90%);
+  color: var(--danger);
+}
+.integration-page .domain-progress-status {
+  margin: 0 0 var(--space-4);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+.integration-page .domain-provenance,
+.integration-page .domain-result {
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+}
+.integration-page .domain-provenance {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.integration-page .domain-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.integration-page .domain-result h3,
+.integration-page .domain-result p {
+  margin: 0;
+}
+.integration-page .domain-result h3 {
+  color: var(--fg);
+  font-size: var(--text-base);
+}
+.integration-page .domain-result p {
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+@media (max-width: 860px) {
+  .integration-page .provider-path-grid {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 640px) {
   .integration-page .dns-directory-heading,
-  .integration-page .dns-provider-card-footer {
+  .integration-page .dns-provider-card-footer,
+  .integration-page .provider-flow-context,
+  .integration-page .domain-result-heading {
     align-items: flex-start;
     flex-direction: column;
   }
-  .integration-page .dns-provider-card-footer .btn {
+  .integration-page .dns-provider-card-footer .btn,
+  .integration-page .provider-flow-context label {
     width: 100%;
+  }
+  .integration-page .domain-scope-options,
+  .integration-page .domain-progress {
+    grid-template-columns: 1fr;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3762,34 +4025,87 @@ export function IntegrationPage({
   onRefresh: () => Promise<void>;
 }) {
   const [selectedConnectorId, setSelectedConnectorId] = useState('');
+  const [pendingConnector, setPendingConnector] = useState<DataItem | null>(null);
+  const [pendingTargetGroup, setPendingTargetGroup] = useState<DataItem | null>(null);
   const [selectedCreateProviderId, setSelectedCreateProviderId] = useState('cloudflare');
+  const [connectorSetupMode, setConnectorSetupMode] = useState<'connect' | 'manual'>('connect');
   const [domainTargetGroupId, setDomainTargetGroupId] = useState(() => getString(data.targetGroups[0] ?? {}, ['id'], ''));
+  const [domainScopeMode, setDomainScopeMode] = useState<'existing' | 'new'>(data.targetGroups.length > 0 ? 'existing' : 'new');
+  const [tenantEnvironments, setTenantEnvironments] = useState<DataItem[]>([]);
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
+  const [environmentsLoading, setEnvironmentsLoading] = useState(true);
+  const [environmentError, setEnvironmentError] = useState('');
   const [showConnectorAdvanced, setShowConnectorAdvanced] = useState(false);
+  const [showProviderFlow, setShowProviderFlow] = useState(false);
   const [showCreateConnector, setShowCreateConnector] = useState(false);
   const [showManualSnapshot, setShowManualSnapshot] = useState(false);
   const [showAddDomain, setShowAddDomain] = useState(false);
+  const [domainProgressStep, setDomainProgressStep] = useState(0);
+  const [domainProgressState, setDomainProgressState] = useState<'idle' | 'working' | 'complete' | 'error'>('idle');
+  const [domainProgressLabel, setDomainProgressLabel] = useState('');
+  const [domainResult, setDomainResult] = useState<{ hostname: string; groupName: string } | null>(null);
   const [snapshots, setSnapshots] = useState<DataItem[]>([]);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const featureFlags = data.deploymentFeatures as { connectors?: boolean; waf_posture?: boolean } | null;
   const connectorsEnabled = featureFlags?.connectors === true;
-  const activeConnectors = data.connectors.filter(
+  const connectorsLoadError = data.loadErrors.connectors;
+  const targetGroupsLoadError = data.loadErrors.targetGroups;
+  const connectorRecords = pendingConnector && !data.connectors.some(
+    (connector) => getString(connector, ['id'], '') === getString(pendingConnector, ['id'], '')
+  ) ? [pendingConnector, ...data.connectors] : data.connectors;
+  const targetGroupRecords = pendingTargetGroup && !data.targetGroups.some(
+    (group) => getString(group, ['id'], '') === getString(pendingTargetGroup, ['id'], '')
+  ) ? [pendingTargetGroup, ...data.targetGroups] : data.targetGroups;
+  const activeConnectors = connectorRecords.filter(
     (connector) => getString(connector, ['status'], '').toLowerCase() !== 'disabled'
   );
   const selectedConnector =
     activeConnectors.find((connector) => getString(connector, ['id'], '') === selectedConnectorId) ?? activeConnectors[0];
   const effectiveConnectorId = getString(selectedConnector ?? {}, ['id'], '');
   const selectedCreateProvider = getDirectoryProvider(selectedCreateProviderId);
-  const effectiveDomainTargetGroupId = data.targetGroups.some(
+  const effectiveDomainTargetGroupId = targetGroupRecords.some(
     (group) => getString(group, ['id'], '') === domainTargetGroupId
-  ) ? domainTargetGroupId : getString(data.targetGroups[0] ?? {}, ['id'], '');
+  ) ? domainTargetGroupId : getString(targetGroupRecords[0] ?? {}, ['id'], '');
+  const effectiveEnvironmentId = tenantEnvironments.some(
+    (environment) => getString(environment, ['id'], '') === selectedEnvironmentId
+  ) ? selectedEnvironmentId : getString(tenantEnvironments[0] ?? {}, ['id'], '');
+  const domainProgressStages = ['Validate', 'Target group', 'Domain record', 'Refresh'];
 
   useEffect(() => {
     if (effectiveDomainTargetGroupId !== domainTargetGroupId) {
       setDomainTargetGroupId(effectiveDomainTargetGroupId);
     }
   }, [domainTargetGroupId, effectiveDomainTargetGroupId]);
+
+  useEffect(() => {
+    if (effectiveEnvironmentId !== selectedEnvironmentId) {
+      setSelectedEnvironmentId(effectiveEnvironmentId);
+    }
+  }, [effectiveEnvironmentId, selectedEnvironmentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEnvironmentsLoading(true);
+    setEnvironmentError('');
+    requestJson(config, session, '/v1/environments')
+      .then((response) => {
+        const payload = response as { items?: DataItem[] } | DataItem[];
+        const items = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
+        if (!cancelled) setTenantEnvironments(items);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setTenantEnvironments([]);
+          setEnvironmentError(apiErrorMessage(err, 'Could not load environments.'));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setEnvironmentsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [config, session]);
 
   const connectorColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Connector', render: (item) => getString(item, ['name', 'id']) },
@@ -3803,7 +4119,7 @@ export function IntegrationPage({
         return <Badge tone={hasCredentialPoll ? 'success' : 'muted'}>{hasCredentialPoll ? 'Credential polling' : 'Manual metadata'}</Badge>;
       }
     },
-    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : getString(item, ['status']) === 'error' ? 'danger' : 'muted'}>{getString(item, ['status'])}</Badge> },
+    { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : getString(item, ['status']) === 'error' ? 'danger' : 'muted'}>{getString(item, ['status'], 'unrecorded')}</Badge> },
     { key: 'last_poll', label: 'Last poll', render: (item) => formatDate(item.last_polled_at ?? item.last_success_at ?? item.last_poll_at) },
     { key: 'poll_errors', label: 'Poll errors', render: (item) => getNumber(item, ['poll_error_count', 'error_count'], 0) },
     { key: 'secret', label: 'Secret ref', render: (item) => getString(item, ['secret_id'], 'none — manual only') },
@@ -3840,17 +4156,63 @@ export function IntegrationPage({
     }
   ];
 
-  function openCreateConnector(providerId = 'cloudflare') {
+  function openProviderFlow(providerId = 'cloudflare') {
     setSelectedCreateProviderId(providerId);
     setError('');
     setMessage('');
+    setShowProviderFlow(true);
+  }
+
+  function beginConnectorSetup(mode: 'connect' | 'manual') {
+    if (!connectorsEnabled) return;
+    if (mode === 'connect' && !selectedCreateProvider.supportsCredentialPolling) return;
+    setConnectorSetupMode(mode);
+    setShowProviderFlow(false);
     setShowCreateConnector(true);
+    setError('');
+    setMessage('');
   }
 
   function openAddDomain() {
+    setShowProviderFlow(false);
+    setShowAddDomain(true);
+    setDomainScopeMode(targetGroupRecords.length > 0 ? 'existing' : 'new');
+    setDomainProgressStep(0);
+    setDomainProgressState('idle');
+    setDomainProgressLabel('');
+    setDomainResult(null);
     setError('');
     setMessage('');
-    setShowAddDomain(true);
+  }
+
+  function closeAddDomain() {
+    if (busy === 'add-single-domain') return;
+    setShowAddDomain(false);
+    setDomainResult(null);
+    setDomainProgressState('idle');
+    setError('');
+  }
+
+  async function retryEnvironmentLoad() {
+    setEnvironmentsLoading(true);
+    setEnvironmentError('');
+    try {
+      const response = await requestJson(config, session, '/v1/environments') as { items?: DataItem[] } | DataItem[];
+      setTenantEnvironments(Array.isArray(response) ? response : Array.isArray(response?.items) ? response.items : []);
+    } catch (err) {
+      setTenantEnvironments([]);
+      setEnvironmentError(apiErrorMessage(err, 'Could not load environments.'));
+    } finally {
+      setEnvironmentsLoading(false);
+    }
+  }
+
+  function setDomainValidationError(nextError: string) {
+    setError(nextError);
+    setMessage('');
+    setDomainProgressStep(1);
+    setDomainProgressState('error');
+    setDomainProgressLabel(nextError);
   }
 
   async function runAction<T>(label: string, action: () => Promise<T>, success: string) {
@@ -3872,37 +4234,129 @@ export function IntegrationPage({
 
   async function handleAddSingleDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!effectiveDomainTargetGroupId) {
-      setError('Create a target group before adding a domain.');
-      return;
-    }
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const hostname = String(form.get('hostname') ?? '').trim();
+    const hostnameResult = validateDeclaredHostname(String(form.get('hostname') ?? ''));
     const expectedBehavior = String(form.get('expected_behavior') ?? '').trim();
-    if (!hostname) {
-      setError('Hostname is required.');
+    const groupName = String(form.get('group_name') ?? '').trim();
+    const selectedGroup = targetGroupRecords.find((group) => getString(group, ['id'], '') === effectiveDomainTargetGroupId) ?? null;
+
+    if (hostnameResult.error) {
+      setDomainValidationError(hostnameResult.error);
       return;
     }
-    if (!expectedBehavior) {
-      setError('Select the expected behavior for this domain.');
+    if (!DECLARED_DOMAIN_BEHAVIORS.has(expectedBehavior)) {
+      setDomainValidationError('Select a supported expected behavior for this domain.');
       return;
     }
-    const added = await runAction(
-      'add-single-domain',
-      () => requestJson(config, session, `/v1/target-groups/${encodeURIComponent(effectiveDomainTargetGroupId)}/targets`, {
+    if (domainScopeMode === 'existing' && !effectiveDomainTargetGroupId) {
+      setDomainValidationError(targetGroupsLoadError
+        ? 'Target groups could not be loaded. Retry the list or create a new declared group.'
+        : 'Select a target group or choose Create new group.');
+      return;
+    }
+    if (domainScopeMode === 'new') {
+      if (!groupName) {
+        setDomainValidationError('Enter a name for the new target group.');
+        return;
+      }
+      if (groupName.length > 120) {
+        setDomainValidationError('Target group name must be 120 characters or fewer.');
+        return;
+      }
+      if (environmentsLoading) {
+        setDomainValidationError('Wait for environments to finish loading before creating the group.');
+        return;
+      }
+      if (environmentError) {
+        setDomainValidationError('Environments could not be loaded. Retry before creating the group.');
+        return;
+      }
+      if (!effectiveEnvironmentId) {
+        setDomainValidationError('Create an environment before creating a target group.');
+        return;
+      }
+    }
+
+    setBusy('add-single-domain');
+    setError('');
+    setMessage('');
+    setDomainResult(null);
+    setDomainProgressState('working');
+    setDomainProgressStep(1);
+    setDomainProgressLabel(`Validated ${hostnameResult.hostname}.`);
+
+    let groupId = effectiveDomainTargetGroupId;
+    let resolvedGroupName = getString(selectedGroup ?? {}, ['name'], groupId);
+    let createdGroup: DataItem | null = null;
+    try {
+      setDomainProgressStep(2);
+      if (domainScopeMode === 'new') {
+        setDomainProgressLabel(`Creating declared target group “${groupName}”…`);
+        createdGroup = await requestJson(config, session, '/v1/target-groups', {
+          method: 'POST',
+          body: {
+            name: groupName,
+            environment_id: effectiveEnvironmentId,
+            description: 'Customer-created from the Integrations single-domain declaration flow.',
+            expected_behavior_default: expectedBehavior,
+            timezone: 'UTC'
+          }
+        }) as DataItem;
+        groupId = getString(createdGroup, ['id'], '');
+        if (!groupId) throw new Error('The target group was created without a usable identifier. Refresh and verify the group before retrying.');
+        resolvedGroupName = getString(createdGroup, ['name'], groupName);
+        setPendingTargetGroup(createdGroup);
+        setDomainTargetGroupId(groupId);
+      } else {
+        setDomainProgressLabel(`Using declared target group “${resolvedGroupName}”.`);
+      }
+
+      setDomainProgressStep(3);
+      setDomainProgressLabel(`Adding ${hostnameResult.hostname} as a customer-declared FQDN…`);
+      await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}/targets`, {
         method: 'POST',
         body: {
           kind: 'fqdn',
-          value: hostname,
-          expected_behavior: expectedBehavior
+          value: hostnameResult.hostname,
+          expected_behavior: expectedBehavior,
+          metadata: {
+            source: 'manual',
+            source_app: 'AstraNull portal',
+            declaration_path: 'integrations_single_domain',
+            provider_access: 'none'
+          }
         }
-      }),
-      'Domain added to the declared target group.'
-    );
-    if (added) {
+      });
+
+      setDomainProgressStep(4);
+      setDomainProgressLabel('Refreshing declared inventory…');
+      try {
+        await onRefresh();
+      } catch {
+        // The write is already complete. Keep the success truthful and let the user refresh later.
+      }
+      const success = `${hostnameResult.hostname} was added to ${resolvedGroupName}. No provider credentials or inventory discovery were used. Ownership remains unverified.`;
+      setMessage(success);
+      setDomainResult({ hostname: hostnameResult.hostname, groupName: resolvedGroupName });
+      setDomainProgressState('complete');
+      setDomainProgressLabel('Domain declaration complete. Verify ownership before running external probes.');
       formElement.reset();
-      setShowAddDomain(false);
+    } catch (err) {
+      const failure = apiErrorMessage(err, 'Could not add the declared domain.');
+      if (createdGroup && groupId) {
+        setPendingTargetGroup(createdGroup);
+        setDomainTargetGroupId(groupId);
+        setDomainScopeMode('existing');
+        try { await onRefresh(); } catch { /* Preserve the actionable write error below. */ }
+        setError(`Target group “${resolvedGroupName}” was created, but ${hostnameResult.hostname} was not added. ${failure} The form now targets the created group; retry to add only the domain.`);
+      } else {
+        setError(failure);
+      }
+      setDomainProgressState('error');
+      setDomainProgressLabel(failure);
+    } finally {
+      setBusy('');
     }
   }
 
@@ -3911,10 +4365,15 @@ export function IntegrationPage({
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const directoryProvider = getDirectoryProvider(String(form.get('provider') ?? selectedCreateProviderId));
+    const credentialSetup = connectorSetupMode === 'connect';
+    if (credentialSetup && !directoryProvider.supportsCredentialPolling) {
+      setError(`${directoryProvider.label} does not have an implemented credential polling path. Choose Manual metadata instead.`);
+      return;
+    }
     const provider = directoryProvider.backendProvider;
     const name = String(form.get('name') ?? '').trim();
-    const secretInput = directoryProvider.supportsCredentialPolling ? String(form.get('secret') ?? '').trim() : '';
-    const externalSecretId = directoryProvider.supportsCredentialPolling ? String(form.get('secret_id') ?? '').trim() : '';
+    const secretInput = credentialSetup ? String(form.get('secret') ?? '').trim() : '';
+    const externalSecretId = credentialSetup ? String(form.get('secret_id') ?? '').trim() : '';
     const resourceRefHash = String(form.get('resource_ref_hash') ?? '').trim();
     const region = String(form.get('region') ?? '').trim();
     const defaultSnapshotKind = String(form.get('default_snapshot_kind') ?? (provider === 'aws_waf' ? 'waf_policy' : 'dns_zone'));
@@ -3922,8 +4381,17 @@ export function IntegrationPage({
       setError('Connector name is required.');
       return;
     }
-    if (secretInput && !window.confirm('Store this provider credential in the encrypted tenant vault before creating the connector?')) return;
-    await runAction('create-connector', async () => {
+    if (credentialSetup && !secretInput && !externalSecretId) {
+      setError('Enter a read-only credential or an existing vault secret reference to enable polling.');
+      return;
+    }
+    if (secretInput && externalSecretId) {
+      setError('Choose either a new credential or an existing secret reference, not both.');
+      return;
+    }
+    if (secretInput && !window.confirm('Store this read-only provider credential in the encrypted tenant vault before creating the connector?')) return;
+
+    const createdResult = await runAction('create-connector', async () => {
       let secretId = externalSecretId || null;
       if (secretInput) {
         const stored = await requestJson(config, session, '/v1/secrets', {
@@ -3932,7 +4400,7 @@ export function IntegrationPage({
             purpose: 'waf_connector',
             name: `${provider}:${name}`,
             plaintext: secretInput,
-            metadata: { provider, read_only: true }
+            metadata: { provider, read_only: true, access: 'bounded_metadata_polling' }
           }
         }) as { secret?: { id?: string } };
         secretId = stored.secret?.id ?? null;
@@ -3946,6 +4414,7 @@ export function IntegrationPage({
           status: 'active',
           config: {
             read_only: true,
+            connection_mode: credentialSetup ? 'bounded_polling' : 'manual_metadata',
             default_snapshot_kind: defaultSnapshotKind,
             ...(provider === 'generic_waf' ? { owner_hint: directoryProvider.id } : {}),
             ...(provider === 'cloudflare' && resourceRefHash ? { zone_ref_hash: resourceRefHash } : {}),
@@ -3954,23 +4423,31 @@ export function IntegrationPage({
           }
         }
       }) as { connector?: DataItem };
+      if (created.connector?.id) {
+        setPendingConnector(created.connector);
+        setSelectedConnectorId(String(created.connector.id));
+      }
       formElement.reset();
-      if (created.connector?.id) setSelectedConnectorId(String(created.connector.id));
       setShowCreateConnector(false);
       return created;
-    }, directoryProvider.supportsCredentialPolling
-      ? 'Read-only connector created from the backend API.'
-      : 'Manual metadata connector created from the backend API.');
+    }, credentialSetup
+      ? 'Read-only connector created. Validate it before requesting a provider poll.'
+      : 'Manual metadata connector created without provider credentials.');
+
+    if (createdResult && connectorSetupMode === 'manual') {
+      setShowManualSnapshot(true);
+      setMessage('Manual metadata connector created. Add its first normalized snapshot now; no provider access is used.');
+    }
   }
 
   async function validateConnector(id: string) {
     if (!id) return;
-    await runAction(`validate-${id}`, () => requestJson(config, session, `/v1/connectors/${id}/validate`, { method: 'POST' }), 'Connector validation completed.');
+    await runAction(`validate-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/validate`, { method: 'POST' }), 'Connector validation completed.');
   }
 
   async function pollConnector(id: string) {
     if (!id) return;
-    const result = await runAction(`poll-${id}`, () => requestJson(config, session, `/v1/connectors/${id}/poll`, { method: 'POST', body: {} }), 'Connector poll requested.');
+    const result = await runAction(`poll-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/poll`, { method: 'POST', body: {} }), 'Connector poll requested.');
     const nextSnapshots = result && typeof result === 'object' && 'snapshots' in result ? (result as { snapshots?: DataItem[] }).snapshots : null;
     if (Array.isArray(nextSnapshots)) setSnapshots(nextSnapshots);
   }
@@ -3978,12 +4455,12 @@ export function IntegrationPage({
   async function disableConnector(id: string) {
     if (!id) return;
     if (!window.confirm('Disable this connector? Deliveries through it will stop.')) return;
-    await runAction(`disable-${id}`, () => requestJson(config, session, `/v1/connectors/${id}/disable`, { method: 'POST', body: { reason: 'Disabled from integrations page.' } }), 'Connector disabled.');
+    await runAction(`disable-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/disable`, { method: 'POST', body: { reason: 'Disabled from integrations page.' } }), 'Connector disabled.');
   }
 
   async function loadSnapshots(id: string) {
     if (!id) return;
-    const result = await runAction(`snapshots-${id}`, () => requestJson(config, session, `/v1/connectors/${id}/snapshots`), 'Connector snapshots loaded.');
+    const result = await runAction(`snapshots-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/snapshots`), 'Connector snapshots loaded.');
     const items = result && typeof result === 'object' && 'items' in result ? (result as { items?: DataItem[] }).items : null;
     setSnapshots(Array.isArray(items) ? items : []);
     setSelectedConnectorId(id);
@@ -4020,7 +4497,7 @@ export function IntegrationPage({
     }
     const result = await runAction(
       `snapshot-${id}`,
-      () => requestJson(config, session, `/v1/connectors/${id}/poll`, { method: 'POST', body: { manual_only: true, snapshots: [snapshot] } }),
+      () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/poll`, { method: 'POST', body: { manual_only: true, snapshots: [snapshot] } }),
       'Manual connector snapshot ingested.'
     );
     const nextSnapshots = result && typeof result === 'object' && 'snapshots' in result ? (result as { snapshots?: DataItem[] }).snapshots : null;
@@ -4031,6 +4508,14 @@ export function IntegrationPage({
     }
   }
 
+  function domainStageState(index: number) {
+    const step = index + 1;
+    if (domainProgressState === 'complete' || step < domainProgressStep) return 'complete';
+    if (step === domainProgressStep && domainProgressState === 'error') return 'error';
+    if (step === domainProgressStep && domainProgressState === 'working') return 'active';
+    return 'pending';
+  }
+
   return (
     <div className="content integration-page">
       <style>{INTEGRATION_PAGE_STYLES}</style>
@@ -4039,30 +4524,27 @@ export function IntegrationPage({
         eyebrow="DNS & edge integrations"
         actions={
           <>
-            <Button variant="default" size="sm" disabled={busy !== ''} onClick={openAddDomain}>+ Add single domain</Button>
+            <Button variant="default" size="sm" disabled={busy !== ''} onClick={() => openProviderFlow()}><PlugZap size={15} aria-hidden="true" /> Add provider</Button>
             {connectorsEnabled ? (
-              <>
-                <Button variant="secondary" size="sm" disabled={busy !== ''} onClick={() => openCreateConnector()}>Add connector</Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={activeConnectors.length === 0 || busy !== ''}
-                  onClick={() => {
-                    setError('');
-                    setMessage('');
-                    setShowManualSnapshot(true);
-                  }}
-                >
-                  Manual snapshot
-                </Button>
-              </>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={activeConnectors.length === 0 || busy !== '' || Boolean(connectorsLoadError)}
+                onClick={() => {
+                  setError('');
+                  setMessage('');
+                  setShowManualSnapshot(true);
+                }}
+              >
+                <FileCheck2 size={15} aria-hidden="true" /> Manual snapshot
+              </Button>
             ) : null}
           </>
         }
       />
       <PageContextSummary>
-        <span className="tabular-nums">{DNS_PROVIDER_DIRECTORY.length}</span> DNS provider paths ·{' '}
-        <span className="tabular-nums">{data.connectors.length}</span> connector records · provider access remains optional
+        <span className="tabular-nums">{DNS_PROVIDER_DIRECTORY.length}</span> provider paths ·{' '}
+        {connectorsLoadError ? 'connector status unavailable' : <><span className="tabular-nums">{connectorRecords.length}</span> connector records</>} · provider access remains optional
       </PageContextSummary>
       {(message || error) && (
         <div
@@ -4080,7 +4562,7 @@ export function IntegrationPage({
             <div>
               <CardTitle id="dns-provider-directory-title">DNS provider directory</CardTitle>
               <CardDescription className="dns-directory-note">
-                Choose an optional read-only metadata path, or add one declared domain without provider credentials. No provider is connected by viewing this directory.
+                Choose an implemented read-only connector, a manual metadata record, or one customer-declared domain. Opening a provider never grants AstraNull cloud access.
               </CardDescription>
             </div>
             <Badge tone="info">Optional integrations</Badge>
@@ -4090,7 +4572,7 @@ export function IntegrationPage({
           <div className="dns-provider-grid" aria-labelledby="dns-provider-directory-title">
             {DNS_PROVIDER_DIRECTORY.map((provider) => {
               const ProviderIcon = provider.icon;
-              const configuredCount = data.connectors.filter(
+              const configuredCount = connectorsLoadError ? null : connectorRecords.filter(
                 (connector) => connectorDirectoryProvider(connector)?.id === provider.id
               ).length;
               return (
@@ -4098,8 +4580,7 @@ export function IntegrationPage({
                   <div className="dns-provider-card-head">
                     <div className="dns-provider-identity">
                       <div className="dns-provider-mark" data-tone={provider.tone} aria-hidden="true">
-                        <ProviderIcon size={18} strokeWidth={1.8} />
-                        <span>{provider.mark}</span>
+                        <ProviderIcon size={20} strokeWidth={1.8} />
                       </div>
                       <div className="dns-provider-name">
                         <strong>{provider.label}</strong>
@@ -4111,15 +4592,11 @@ export function IntegrationPage({
                   <p className="dns-provider-description">{provider.description}</p>
                   <div className="dns-provider-card-footer">
                     <span className="dns-provider-record-count tabular-nums">
-                      {configuredCount > 0 ? `${configuredCount} configured` : 'Optional'}
+                      {configuredCount === null ? 'Status unavailable' : configuredCount > 0 ? `${configuredCount} configured` : 'Not configured'}
                     </span>
-                    {connectorsEnabled ? (
-                      <Button size="sm" variant="secondary" onClick={() => openCreateConnector(provider.id)}>
-                        Configure
-                      </Button>
-                    ) : (
-                      <Badge tone="muted">Connector feature off</Badge>
-                    )}
+                    <Button size="sm" variant="secondary" onClick={() => openProviderFlow(provider.id)}>
+                      Add
+                    </Button>
                   </div>
                 </article>
               );
@@ -4135,7 +4612,7 @@ export function IntegrationPage({
             <CardDescription>Provider connector records and snapshots are not enabled for this tenant.</CardDescription>
           </CardHeader>
           <CardContent className="callout-list">
-            <CalloutNote icon={ShieldCheck} tone="info">Core DDoS validation and the single-domain workflow continue to work without cloud credentials.</CalloutNote>
+            <CalloutNote icon={ShieldCheck} tone="info">Core DDoS validation and the single-domain flow continue to work without cloud credentials.</CalloutNote>
             <CalloutNote icon={FileCheck2}>Contact support only if you need optional read-only connector metadata.</CalloutNote>
           </CardContent>
         </Card>
@@ -4145,12 +4622,14 @@ export function IntegrationPage({
             <PanelCardHeader
               title="Configured connectors"
               description="Validate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered."
-              trailing={<Badge tone="info">{data.connectors.length} total</Badge>}
+              trailing={<Badge tone={connectorsLoadError ? 'warn' : 'info'}>{connectorsLoadError ? 'Unavailable' : `${connectorRecords.length} total`}</Badge>}
             />
             <CardContent>
               <DataTable
                 columns={connectorColumns}
-                items={data.connectors}
+                items={connectorRecords}
+                loadError={connectorsLoadError}
+                onRetry={() => void onRefresh()}
                 empty={<EmptyState icon={PlugZap} title="No connectors configured." body="Configure an optional read-only provider record, or keep using declared domains and manual evidence without provider access." />}
               />
             </CardContent>
@@ -4175,13 +4654,82 @@ export function IntegrationPage({
               </CardContent>
             </Card>
           ) : null}
+        </>
+      )}
 
+      <FormModal
+        open={showProviderFlow}
+        title="Add provider"
+        description="Choose the least-access path that meets your need. A provider selection alone never connects an account."
+        wide
+        onClose={() => setShowProviderFlow(false)}
+      >
+        <div className="provider-flow-context">
+          <div className="provider-flow-provider">
+            <div className="dns-provider-mark" data-tone={selectedCreateProvider.tone} aria-hidden="true">
+              <selectedCreateProvider.icon size={20} strokeWidth={1.8} />
+            </div>
+            <div className="dns-provider-name">
+              <strong>{selectedCreateProvider.label}</strong>
+              <span>{selectedCreateProvider.capability}</span>
+            </div>
+          </div>
+          <label>
+            <span>Provider</span>
+            <select value={selectedCreateProviderId} onChange={(event) => setSelectedCreateProviderId(event.target.value)}>
+              {DNS_PROVIDER_DIRECTORY.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="provider-path-grid">
+          <article className="provider-path">
+            <span className="provider-path-icon" aria-hidden="true"><KeyRound size={18} /></span>
+            <Badge tone={connectorsEnabled && selectedCreateProvider.supportsCredentialPolling ? 'success' : 'muted'}>
+              {connectorsEnabled && selectedCreateProvider.supportsCredentialPolling ? 'Implemented' : 'Unavailable for this provider'}
+            </Badge>
+            <h3>Connect read-only</h3>
+            <p>Store a vault-backed read-only credential and use the bounded polling worker. Available only for the implemented Cloudflare and AWS WAF contracts.</p>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!connectorsEnabled || !selectedCreateProvider.supportsCredentialPolling}
+              onClick={() => beginConnectorSetup('connect')}
+            >
+              Continue to connect
+            </Button>
+          </article>
+          <article className="provider-path">
+            <span className="provider-path-icon" aria-hidden="true"><FileCheck2 size={18} /></span>
+            <Badge tone={connectorsEnabled ? 'info' : 'muted'}>{connectorsEnabled ? 'No credentials' : 'Add-on disabled'}</Badge>
+            <h3>Manual metadata</h3>
+            <p>Create a provider record without credentials, then submit selected normalized zone or policy metadata. No provider API call is made.</p>
+            <Button type="button" size="sm" variant="secondary" disabled={!connectorsEnabled} onClick={() => beginConnectorSetup('manual')}>
+              Continue manually
+            </Button>
+          </article>
+          <article className="provider-path">
+            <span className="provider-path-icon" aria-hidden="true"><Target size={18} /></span>
+            <Badge tone="info">Core workflow</Badge>
+            <h3>Single domain</h3>
+            <p>Declare one FQDN in an existing or new target group. This creates scoped inventory only; ownership verification remains required.</p>
+            <Button type="button" size="sm" variant="secondary" onClick={openAddDomain}>
+              + Add single domain
+            </Button>
+          </article>
+        </div>
+        <div className="form-actions">
+          <Button type="button" variant="ghost" onClick={() => setShowProviderFlow(false)}>Cancel</Button>
+        </div>
+      </FormModal>
+
+      {connectorsEnabled ? (
+        <>
           <FormModal
             open={showCreateConnector}
-            title={`Configure ${selectedCreateProvider.label}`}
-            description={selectedCreateProvider.supportsCredentialPolling
-              ? 'Create a read-only connector. A vault-backed credential enables the implemented provider poll worker; a connector without one remains metadata/manual.'
-              : 'Create a generic read-only metadata connector. Live provider credential polling is not implemented for this option.'}
+            title={connectorSetupMode === 'connect' ? `Connect ${selectedCreateProvider.label} read-only` : `Add ${selectedCreateProvider.label} manually`}
+            description={connectorSetupMode === 'connect'
+              ? 'Creates a vault-backed connector for the implemented bounded metadata poller. Validate it before the first poll.'
+              : 'Creates a metadata-only connector. No cloud credential or provider API access is requested.'}
             wide
             onClose={() => setShowCreateConnector(false)}
           >
@@ -4195,7 +4743,7 @@ export function IntegrationPage({
                     value={selectedCreateProviderId}
                     onChange={(event) => setSelectedCreateProviderId(event.target.value)}
                   >
-                    {DNS_PROVIDER_DIRECTORY.map((provider) => (
+                    {DNS_PROVIDER_DIRECTORY.filter((provider) => connectorSetupMode === 'manual' || provider.supportsCredentialPolling).map((provider) => (
                       <option key={provider.id} value={provider.id}>
                         {provider.label} — {provider.supportsCredentialPolling ? provider.capability : 'manual metadata'}
                       </option>
@@ -4204,12 +4752,12 @@ export function IntegrationPage({
                 </label>
                 <label>
                   <span>Connector name</span>
-                  <input name="name" placeholder={`${selectedCreateProvider.id}-readonly`} required />
+                  <input name="name" placeholder={`${selectedCreateProvider.id}-${connectorSetupMode === 'connect' ? 'readonly' : 'manual'}`} required />
                 </label>
-                {selectedCreateProvider.supportsCredentialPolling ? (
+                {connectorSetupMode === 'connect' ? (
                   <>
                     <label className="full">
-                      <span>API key or credential JSON</span>
+                      <span>New read-only credential</span>
                       <textarea
                         name="secret"
                         rows={4}
@@ -4218,23 +4766,21 @@ export function IntegrationPage({
                           : 'Read-only AWS credential JSON'}
                       />
                     </label>
-                    <p className="muted full">Credentials are encrypted in the tenant vault and never shown again. Leave blank to keep this connector metadata/manual only.</p>
+                    <label className="full">
+                      <span>Or existing vault secret ref</span>
+                      <input name="secret_id" placeholder="secret_..." />
+                    </label>
+                    <p className="muted full">Provide one option. New credentials are encrypted in the tenant vault and never shown again.</p>
                   </>
                 ) : (
                   <div className="full">
                     <CalloutNote icon={FileCheck2} tone="info">
-                      {selectedCreateProvider.label} uses the backend&apos;s generic connector contract. Do not enter provider credentials; add normalized metadata with Manual snapshot.
+                      Manual mode never accepts provider credentials. After creation, add a normalized metadata snapshot with hashes rather than raw provider payloads.
                     </CalloutNote>
                   </div>
                 )}
                 <details className="full" open={showConnectorAdvanced} onToggle={(event) => setShowConnectorAdvanced((event.currentTarget as HTMLDetailsElement).open)}>
                   <summary>Advanced metadata</summary>
-                  {selectedCreateProvider.supportsCredentialPolling ? (
-                    <label>
-                      <span>Existing secret ref</span>
-                      <input name="secret_id" placeholder="secret_..." />
-                    </label>
-                  ) : null}
                   <label>
                     <span>Resource hash</span>
                     <input name="resource_ref_hash" placeholder="Optional zone or resource hash" />
@@ -4256,7 +4802,9 @@ export function IntegrationPage({
                 </details>
                 <div className="form-actions full">
                   <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowCreateConnector(false)}>Cancel</Button>
-                  <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">Create connector</Button>
+                  <Button loading={busy === 'create-connector'} disabled={busy !== ''} type="submit">
+                    {connectorSetupMode === 'connect' ? 'Create read-only connector' : 'Create manual connector'}
+                  </Button>
                 </div>
               </fieldset>
             </form>
@@ -4270,118 +4818,226 @@ export function IntegrationPage({
             onClose={() => setShowManualSnapshot(false)}
           >
             {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-            <form className="product-form" onSubmit={handleManualSnapshot} aria-busy={busy.startsWith('snapshot-') || undefined}>
-              <label className="full">
-                <span>Connector</span>
-                <select value={effectiveConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)}>
-                  {activeConnectors.map((connector) => (
-                    <option key={getString(connector, ['id'])} value={getString(connector, ['id'])}>
-                      {getString(connector, ['name'])} — {formatConnectorProvider(connector)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Snapshot kind</span>
-                <select name="snapshot_kind" defaultValue="dns_zone">
-                  {CONNECTOR_SNAPSHOT_KIND_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Display ref</span>
-                <input name="display_ref" placeholder="zone-a" required />
-              </label>
-              <label>
-                <span>Resource hash</span>
-                <input name="resource_ref_hash" placeholder="res_hash_1" required />
-              </label>
-              <label>
-                <span>Config hash</span>
-                <input name="config_hash" placeholder="cfg_hash_1" required />
-              </label>
-              <label>
-                <span>Policy mode</span>
-                <select name="policy_mode" defaultValue="monitor">
-                  <option value="block">Block</option>
-                  <option value="monitor">Monitor</option>
-                  <option value="unknown">Unknown</option>
-                </select>
-              </label>
-              <label>
-                <span>Rule count</span>
-                <input name="rule_count" type="number" min="0" defaultValue="0" />
-              </label>
-              <label className="full">
-                <span>Hostnames</span>
-                <input name="hostnames" placeholder="app.example.com, api.example.com" />
-              </label>
-              <div className="form-actions full">
-                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowManualSnapshot(false)}>Cancel</Button>
-                <Button loading={busy.startsWith('snapshot-')} disabled={busy !== '' || !effectiveConnectorId} type="submit">Ingest snapshot</Button>
+            {connectorsLoadError && !pendingConnector ? (
+              <div className="form-banner error" role="alert">
+                <span>Could not load connectors — {connectorsLoadError}</span>
+                <Button type="button" size="sm" variant="ghost" onClick={() => void onRefresh()}>Retry</Button>
               </div>
-            </form>
+            ) : (
+              <form className="product-form" onSubmit={handleManualSnapshot} aria-busy={busy.startsWith('snapshot-') || undefined}>
+                <label className="full">
+                  <span>Connector</span>
+                  <select value={effectiveConnectorId} onChange={(event) => setSelectedConnectorId(event.target.value)} required>
+                    {activeConnectors.map((connector) => (
+                      <option key={getString(connector, ['id'])} value={getString(connector, ['id'])}>
+                        {getString(connector, ['name'])} — {formatConnectorProvider(connector)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Snapshot kind</span>
+                  <select name="snapshot_kind" defaultValue="dns_zone">
+                    {CONNECTOR_SNAPSHOT_KIND_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Display ref</span>
+                  <input name="display_ref" placeholder="zone-a" required />
+                </label>
+                <label>
+                  <span>Resource hash</span>
+                  <input name="resource_ref_hash" placeholder="res_hash_1" required />
+                </label>
+                <label>
+                  <span>Config hash</span>
+                  <input name="config_hash" placeholder="cfg_hash_1" required />
+                </label>
+                <label>
+                  <span>Policy mode</span>
+                  <select name="policy_mode" defaultValue="monitor">
+                    <option value="block">Block</option>
+                    <option value="monitor">Monitor</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Rule count</span>
+                  <input name="rule_count" type="number" min="0" defaultValue="0" />
+                </label>
+                <label className="full">
+                  <span>Hostnames</span>
+                  <input name="hostnames" placeholder="app.example.com, api.example.com" />
+                </label>
+                <div className="form-actions full">
+                  <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowManualSnapshot(false)}>Cancel</Button>
+                  <Button loading={busy.startsWith('snapshot-')} disabled={busy !== '' || !effectiveConnectorId} type="submit">Ingest snapshot</Button>
+                </div>
+              </form>
+            )}
           </FormModal>
         </>
-      )}
+      ) : null}
 
       <FormModal
         open={showAddDomain}
         title="Add single domain"
-        description="Declare one hostname and its expected behavior. This does not discover provider inventory or require cloud credentials."
-        onClose={() => setShowAddDomain(false)}
+        description="Declare one hostname in an existing or new customer target group. This is not provider discovery and does not grant cloud access."
+        wide
+        onClose={closeAddDomain}
       >
         {error ? <div className="form-banner error" role="alert">{error}</div> : null}
-        {data.targetGroups.length === 0 ? (
-          <EmptyState
-            icon={Target}
-            title="Create a target group first."
-            body="Every declared domain must belong to a customer-defined target group before it can be validated."
-            actionLabel="Open target groups"
-            actionHref="#target-groups"
-          />
+        {domainProgressState !== 'idle' ? (
+          <>
+            <ol className="domain-progress" aria-label="Domain declaration progress">
+              {domainProgressStages.map((stage, index) => {
+                const state = domainStageState(index);
+                return (
+                  <li key={stage} data-state={state}>
+                    <span aria-hidden="true">{state === 'complete' ? <CheckCircle2 size={14} /> : index + 1}</span>
+                    <small>{stage}</small>
+                  </li>
+                );
+              })}
+            </ol>
+            <p className="domain-progress-status" role={domainProgressState === 'error' ? 'alert' : 'status'} aria-live="polite">{domainProgressLabel}</p>
+          </>
+        ) : null}
+        {domainResult ? (
+          <div className="domain-result">
+            <div className="domain-result-heading">
+              <div>
+                <h3>{domainResult.hostname} is now declared</h3>
+                <p>Target group: {domainResult.groupName}</p>
+              </div>
+              <Badge tone="warn">Ownership unverified</Badge>
+            </div>
+            <p>Provenance: manual customer declaration in the AstraNull portal. No provider credentials, account inventory, or automatic discovery were used.</p>
+            <div className="form-actions">
+              <AnchorButton href="#targets" variant="secondary">View target inventory</AnchorButton>
+              <Button type="button" onClick={closeAddDomain}>Done</Button>
+            </div>
+          </div>
         ) : (
           <form className="product-form" onSubmit={handleAddSingleDomain} aria-busy={busy === 'add-single-domain' || undefined}>
-            <label className="full">
-              <span>Target group</span>
-              <select
-                name="target_group_id"
-                value={effectiveDomainTargetGroupId}
-                onChange={(event) => setDomainTargetGroupId(event.target.value)}
-              >
-                {data.targetGroups.map((group) => {
-                  const id = getString(group, ['id'], '');
-                  return <option key={id} value={id}>{getString(group, ['name'], id)}</option>;
-                })}
-              </select>
-            </label>
-            <label className="full">
-              <span>Hostname</span>
-              <input
-                name="hostname"
-                className="mono"
-                placeholder="checkout.example.com"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                required
-                autoFocus
-              />
-            </label>
-            <label className="full">
-              <span>Expected behavior</span>
-              <select name="expected_behavior" defaultValue="block_at_edge" required>
-                <option value="block_at_edge">Block at edge</option>
-                <option value="absorb_at_origin">Absorb at origin</option>
-                <option value="rate_shape">Rate shape</option>
-              </select>
-            </label>
-            <p className="muted full">Ownership verification is still required before live external probes can be dispatched.</p>
-            <div className="form-actions full">
-              <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowAddDomain(false)}>Cancel</Button>
-              <Button type="submit" loading={busy === 'add-single-domain'} disabled={busy !== '' || !effectiveDomainTargetGroupId}>Add domain</Button>
-            </div>
+            <fieldset disabled={busy === 'add-single-domain'}>
+              <div className="domain-scope-options full" role="radiogroup" aria-label="Target group destination">
+                <label className="domain-scope-option">
+                  <input
+                    type="radio"
+                    name="scope_mode"
+                    value="existing"
+                    checked={domainScopeMode === 'existing'}
+                    onChange={() => setDomainScopeMode('existing')}
+                    disabled={targetGroupRecords.length === 0}
+                  />
+                  <span><strong>Existing target group</strong><span>Attach the domain to customer-declared scope already in AstraNull.</span></span>
+                </label>
+                <label className="domain-scope-option">
+                  <input type="radio" name="scope_mode" value="new" checked={domainScopeMode === 'new'} onChange={() => setDomainScopeMode('new')} />
+                  <span><strong>Create new group</strong><span>Create the declared scope first, then add this domain to it.</span></span>
+                </label>
+              </div>
+
+              {domainScopeMode === 'existing' ? (
+                <div className="full">
+                  {targetGroupsLoadError ? (
+                    <div className="form-banner error" role="alert">
+                      <span>Could not refresh target groups — {targetGroupsLoadError}. Previously loaded choices may be stale.</span>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => void onRefresh()}>Retry</Button>
+                    </div>
+                  ) : null}
+                  {targetGroupRecords.length > 0 ? (
+                    <label className="full">
+                      <span>Target group</span>
+                      <select
+                        name="target_group_id"
+                        value={effectiveDomainTargetGroupId}
+                        onChange={(event) => setDomainTargetGroupId(event.target.value)}
+                        required
+                      >
+                        {targetGroupRecords.map((group) => {
+                          const id = getString(group, ['id'], '');
+                          return <option key={id} value={id}>{getString(group, ['name'], id)}</option>;
+                        })}
+                      </select>
+                    </label>
+                  ) : targetGroupsLoadError ? null : (
+                    <CalloutNote icon={Target} tone="info">No target groups are configured. Choose Create new group to declare scope here.</CalloutNote>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <label>
+                    <span>New target group name</span>
+                    <input name="group_name" placeholder="Checkout production" maxLength={120} required />
+                  </label>
+                  <div>
+                    {environmentsLoading ? (
+                      <div className="form-banner info" role="status">Loading environments…</div>
+                    ) : environmentError ? (
+                      <div className="form-banner error" role="alert">
+                        <span>{environmentError}</span>
+                        <Button type="button" size="sm" variant="ghost" onClick={() => void retryEnvironmentLoad()}>Retry</Button>
+                      </div>
+                    ) : tenantEnvironments.length === 0 ? (
+                      <div className="form-banner info">
+                        <span>No environments are configured. Create one before declaring a new target group.</span>
+                        <AnchorButton href="#environments" size="sm" variant="ghost">Open environments</AnchorButton>
+                      </div>
+                    ) : (
+                      <label>
+                        <span>Environment</span>
+                        <select value={effectiveEnvironmentId} onChange={(event) => setSelectedEnvironmentId(event.target.value)} required>
+                          {tenantEnvironments.map((environment) => {
+                            const id = getString(environment, ['id'], '');
+                            return <option key={id} value={id}>{getString(environment, ['name'], id)}</option>;
+                          })}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                </>
+              )}
+
+              <label className="full">
+                <span>Hostname</span>
+                <input
+                  name="hostname"
+                  className="mono"
+                  placeholder="checkout.example.com"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  inputMode="url"
+                  required
+                  autoFocus
+                />
+              </label>
+              <label className="full">
+                <span>Expected behavior</span>
+                <select name="expected_behavior" defaultValue="block_at_edge" required>
+                  <option value="block_at_edge">Block at edge</option>
+                  <option value="absorb_at_origin">Absorb at origin</option>
+                  <option value="rate_shape">Rate shape</option>
+                </select>
+              </label>
+              <div className="domain-provenance full">
+                <strong>Recorded provenance:</strong> manual customer declaration via AstraNull Integrations; provider access: none. The target starts unverified and cannot receive external probes until ownership is proven.
+              </div>
+              <div className="form-actions full">
+                <Button type="button" variant="ghost" disabled={busy !== ''} onClick={closeAddDomain}>Cancel</Button>
+                <Button
+                  type="submit"
+                  loading={busy === 'add-single-domain'}
+                  disabled={busy !== '' || (domainScopeMode === 'existing' ? !effectiveDomainTargetGroupId : !effectiveEnvironmentId || environmentsLoading || Boolean(environmentError))}
+                >
+                  {domainScopeMode === 'new' ? 'Create group & add domain' : 'Add declared domain'}
+                </Button>
+              </div>
+            </fieldset>
           </form>
         )}
       </FormModal>
@@ -4502,14 +5158,36 @@ const ENTITLEMENT_FEATURE_LABELS: Record<(typeof ENTITLEMENT_FEATURES)[number], 
 };
 
 const SUBSCRIPTION_PAGE_STYLES = `
+.subscription-page .subscription-toolbar,
 .subscription-page .subscription-plan-heading,
-.subscription-page .subscription-section-heading,
-.subscription-page .subscription-entitlement-pill,
-.subscription-page .subscription-signal {
+.subscription-page .subscription-usage-card-head,
+.subscription-page .subscription-signal-strip,
+.subscription-page .subscription-state-error,
+.subscription-page .subscription-entitlement-indicator {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
+}
+.subscription-page .subscription-toolbar,
+.subscription-page .subscription-plan-heading,
+.subscription-page .subscription-usage-card-head,
+.subscription-page .subscription-state-error {
+  justify-content: space-between;
+}
+.subscription-page .subscription-toolbar {
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--proof-surface);
+}
+.subscription-page .subscription-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
 }
 .subscription-page .subscription-plan-heading {
   align-items: flex-start;
@@ -4525,16 +5203,18 @@ const SUBSCRIPTION_PAGE_STYLES = `
 }
 .subscription-page .subscription-plan-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-  gap: var(--space-2);
-  margin: 0 0 var(--space-6);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--border-soft);
 }
 .subscription-page .subscription-plan-fact {
   min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--proof-surface);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
 }
 .subscription-page .subscription-plan-fact dt {
   margin-bottom: var(--space-1);
@@ -4549,112 +5229,129 @@ const SUBSCRIPTION_PAGE_STYLES = `
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.subscription-page .subscription-section + .subscription-section {
-  margin-top: var(--space-6);
-  padding-top: var(--space-6);
-  border-top: 1px solid var(--border-soft);
-}
-.subscription-page .subscription-section-heading {
-  align-items: flex-end;
-  margin-bottom: var(--space-3);
-}
-.subscription-page .subscription-section-heading h3,
-.subscription-page .subscription-section-heading p {
-  margin: 0;
-}
-.subscription-page .subscription-section-heading h3 {
-  color: var(--fg);
-  font-size: var(--text-base);
-}
-.subscription-page .subscription-section-heading p {
-  margin-top: var(--space-1);
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.subscription-page .subscription-usage-list {
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-.subscription-page .subscription-usage-row {
+.subscription-page .subscription-usage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: var(--space-2) var(--space-4);
-  padding: var(--space-4);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
 }
-.subscription-page .subscription-usage-row + .subscription-usage-row {
-  border-top: 1px solid var(--border-soft);
-}
-.subscription-page .subscription-usage-copy,
-.subscription-page .subscription-usage-count {
+.subscription-page .subscription-usage-card {
   display: flex;
   min-width: 0;
   flex-direction: column;
-}
-.subscription-page .subscription-usage-copy strong,
-.subscription-page .subscription-usage-count strong {
-  color: var(--fg);
-  font-size: var(--text-sm);
-}
-.subscription-page .subscription-usage-copy span,
-.subscription-page .subscription-usage-count span,
-.subscription-page .subscription-limit-note {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-usage-count {
-  align-items: flex-end;
-  font-variant-numeric: tabular-nums;
-}
-.subscription-page .subscription-usage-row .progress,
-.subscription-page .subscription-limit-note {
-  grid-column: 1 / -1;
-}
-.subscription-page .subscription-signal-grid,
-.subscription-page .subscription-entitlement-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  gap: var(--space-2);
-}
-.subscription-page .subscription-signal,
-.subscription-page .subscription-entitlement-pill {
-  min-width: 0;
-  padding: var(--space-3);
+  gap: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--proof-surface);
 }
-.subscription-page .subscription-signal > div,
-.subscription-page .subscription-entitlement-pill > div {
+.subscription-page .subscription-usage-copy,
+.subscription-page .subscription-usage-value {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: var(--space-1);
 }
-.subscription-page .subscription-signal span,
-.subscription-page .subscription-entitlement-pill span {
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-.subscription-page .subscription-signal strong,
-.subscription-page .subscription-entitlement-pill strong {
+.subscription-page .subscription-usage-copy strong,
+.subscription-page .subscription-usage-value strong {
   color: var(--fg);
   font-size: var(--text-sm);
 }
-@media (max-width: 640px) {
+.subscription-page .subscription-usage-copy span,
+.subscription-page .subscription-usage-value span,
+.subscription-page .subscription-limit-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-usage-value strong {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+}
+.subscription-page .subscription-limit-note {
+  margin: auto 0 0;
+  line-height: 1.45;
+}
+.subscription-page .subscription-signal-strip {
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+.subscription-page .subscription-signal-strip > strong {
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-signal-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+.subscription-page .subscription-entitlement-indicator {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.subscription-page .subscription-entitlement-indicator[data-state='enabled'] {
+  color: var(--success);
+}
+.subscription-page .subscription-entitlement-indicator[data-state='disabled'] {
+  color: var(--fg-2);
+}
+.subscription-page .subscription-entitlement-indicator[data-state='unknown'] {
+  color: var(--warn);
+}
+.subscription-page .subscription-state-error {
+  align-items: flex-start;
+  padding: var(--space-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--danger), transparent 92%);
+}
+.subscription-page .subscription-state-error > div {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-3);
+}
+.subscription-page .subscription-state-error h2,
+.subscription-page .subscription-state-error p {
+  margin: 0;
+}
+.subscription-page .subscription-state-error h2 {
+  color: var(--fg);
+  font-size: var(--text-base);
+}
+.subscription-page .subscription-state-error p {
+  margin-top: var(--space-1);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+@media (max-width: 960px) {
+  .subscription-page .subscription-plan-facts,
+  .subscription-page .subscription-usage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .subscription-page .subscription-toolbar,
   .subscription-page .subscription-plan-heading,
-  .subscription-page .subscription-section-heading {
+  .subscription-page .subscription-usage-card-head,
+  .subscription-page .subscription-state-error {
     align-items: flex-start;
     flex-direction: column;
   }
-  .subscription-page .subscription-usage-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .subscription-page .subscription-plan-facts,
+  .subscription-page .subscription-usage-grid {
+    grid-template-columns: 1fr;
   }
-  .subscription-page .subscription-usage-row > .badge {
-    grid-column: 1 / -1;
-    justify-self: start;
+  .subscription-page .subscription-toolbar .btn,
+  .subscription-page .subscription-state-error .btn {
+    width: 100%;
   }
 }
 `;
@@ -4665,8 +5362,37 @@ function formatEntitlementGrantSource(value: string) {
   return value;
 }
 
+function subscriptionRecordedTimestamp(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && Number.isFinite(Date.parse(value))) return value;
+  }
+  return '';
+}
+
+function SubscriptionEntitlementIndicator({
+  value,
+  enabledLabel,
+  disabledLabel
+}: {
+  value: unknown;
+  enabledLabel: string;
+  disabledLabel: string;
+}) {
+  const state = value === true ? 'enabled' : value === false ? 'disabled' : 'unknown';
+  const label = value === true ? enabledLabel : value === false ? disabledLabel : 'Not recorded';
+  const Icon = value === true ? CheckCircle2 : value === false ? CircleMinus : CircleHelp;
+  return (
+    <span className="subscription-entitlement-indicator" data-state={state} aria-label={label}>
+      <Icon size={15} aria-hidden="true" />
+      <span>{label}</span>
+    </span>
+  );
+}
+
 export function SubscriptionPage({ data }: { data: PortalData }) {
+  const [portalLoadedAt] = useState(() => new Date().toISOString());
   const summary = data.subscriptionSummary;
+  const subscriptionLoadError = data.loadErrors.subscriptionSummary;
   const subscription = getNestedItem(summary, ['subscription']);
   const plan = getNestedItem(summary, ['plan']);
   const account = getNestedItem(summary, ['account']);
@@ -4697,6 +5423,18 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
   const highScaleEntitlement = effectiveEntitlements?.high_scale_program;
   const highScaleLabel = highScaleEntitlement === true ? 'enabled' : highScaleEntitlement === false ? 'disabled' : 'not recorded';
   const supportOwner = getString(support ?? account ?? {}, ['owner', 'support_owner'], 'unassigned');
+  const sourceTimestamp = subscriptionRecordedTimestamp(
+    summary?.generated_at,
+    summary?.as_of,
+    usage?.as_of,
+    usage?.observed_at
+  );
+  const subscriptionRecordTimestamp = subscriptionRecordedTimestamp(subscription?.updated_at);
+  const freshnessLabel = sourceTimestamp
+    ? `Source snapshot ${formatDate(sourceTimestamp)}`
+    : subscriptionRecordTimestamp
+      ? `Subscription record updated ${formatDate(subscriptionRecordTimestamp)} · usage snapshot timestamp not provided`
+      : `Portal loaded ${formatDate(portalLoadedAt)} · source timestamp not provided`;
   const entitlementRows: DataItem[] = ENTITLEMENT_FEATURES.map((feature) => {
     const grant = entitlementGrants.find((entry) => getString(entry, ['feature'], '') === feature);
     const planValue = planEntitlements?.[feature];
@@ -4722,22 +5460,91 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
     { label: 'High-scale requests', description: 'Current month · SOC-gated', used: highScaleMonthUsed, limit: highScaleMonthLimit }
   ];
   const recordedUsageCount = usageRows.filter((row) => row.used !== null).length;
+  const entitlementColumns: TableColumn<DataItem>[] = [
+    {
+      key: 'feature',
+      label: 'Feature',
+      render: (item) => {
+        const feature = getString(item, ['feature']);
+        return <strong>{ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature}</strong>;
+      }
+    },
+    {
+      key: 'plan',
+      label: 'Plan inclusion',
+      render: (item) => (
+        <SubscriptionEntitlementIndicator value={item.plan_enabled} enabledLabel="Included" disabledLabel="Not included" />
+      )
+    },
+    {
+      key: 'effective',
+      label: 'Effective access (authoritative)',
+      render: (item) => (
+        <SubscriptionEntitlementIndicator value={item.effective_enabled} enabledLabel="Enabled" disabledLabel="Disabled" />
+      )
+    },
+    {
+      key: 'grant',
+      label: 'Access source',
+      render: (item) => formatEntitlementGrantSource(getString(item, ['grant_source'], 'not recorded'))
+    }
+  ];
+  const refreshPage = () => window.location.reload();
+
+  if (subscriptionLoadError) {
+    return (
+      <div className="content subscription-page">
+        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
+        <PageHeader route="subscription" eyebrow="Plan & usage" />
+        <Card>
+          <CardContent>
+            <div className="subscription-state-error" role="alert">
+              <div>
+                <TriangleAlert size={20} aria-hidden="true" />
+                <div>
+                  <h2>Subscription data could not be loaded</h2>
+                  <p>{subscriptionLoadError} Existing limits and entitlements are not shown as an empty account.</p>
+                </div>
+              </div>
+              <Button type="button" variant="secondary" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Retry</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!data.loaded) {
+    return (
+      <div className="content subscription-page">
+        <style>{SUBSCRIPTION_PAGE_STYLES}</style>
+        <PageHeader route="subscription" eyebrow="Plan & usage" />
+        <EmptyState
+          icon={Activity}
+          variant="skeleton"
+          title="Loading subscription…"
+          body="Fetching the authoritative plan, effective entitlements, and current usage snapshot."
+        />
+      </div>
+    );
+  }
 
   if (!hasSubscription) {
     return (
       <div className="content subscription-page">
         <style>{SUBSCRIPTION_PAGE_STYLES}</style>
-        <PageHeader route="subscription" eyebrow="Entitlements" />
+        <PageHeader
+          route="subscription"
+          eyebrow="Entitlements"
+          actions={<Button type="button" variant="secondary" size="sm" onClick={refreshPage}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>}
+        />
         <EmptyState
           icon={LifeBuoy}
           title="No subscription configured for this tenant."
-          body="Limits, entitlements, and billing metadata stay hidden until staff provisioning completes. Contact AstraNull support for provisioning or billing assistance."
-          actionLabel="Contact support"
-          actionHref={SUPPORT_CONTACT_MAILTO}
+          body="The subscription API loaded successfully but returned no subscription record. Contact AstraNull support for provisioning or billing assistance."
+          actionLabel="Open support workspace"
+          actionHref="#support"
         />
-        <div className="row-actions row-actions--spaced">
-          <AnchorButton href="#support" variant="secondary">Open support workspace</AnchorButton>
-        </div>
       </div>
     );
   }
@@ -4746,6 +5553,12 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
     <div className="content subscription-page">
       <style>{SUBSCRIPTION_PAGE_STYLES}</style>
       <PageHeader route="subscription" eyebrow="Plan & usage" />
+      <div className="subscription-toolbar" role="status" aria-live="polite">
+        <span className="subscription-freshness"><Activity size={14} aria-hidden="true" /> {freshnessLabel}</span>
+        <Button type="button" variant="secondary" size="sm" onClick={refreshPage} title="Reload the page to request a fresh subscription snapshot.">
+          <RefreshCw size={15} aria-hidden="true" /> Refresh
+        </Button>
+      </div>
       <PageContextSummary>
         {planLabel} · runs{' '}
         <span className="tabular-nums">
@@ -4760,9 +5573,9 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
             <div className="subscription-plan-title">
               <p className="eyebrow">Current plan</p>
               <CardTitle>{planLabel}</CardTitle>
-              <CardDescription>Contract posture, live workspace usage, and effective access in one view.</CardDescription>
+              <CardDescription>Contract posture and account ownership, without duplicating usage or entitlement panels.</CardDescription>
             </div>
-            <Badge tone={subscriptionStatusBadgeTone(subscriptionStatus)}>{subscriptionStatus}</Badge>
+            <Badge tone={subscriptionStatusBadgeTone(subscriptionStatus)}>{subscriptionStatus.replaceAll('_', ' ')}</Badge>
           </div>
         </CardHeader>
         <CardContent>
@@ -4792,17 +5605,19 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
               <dd>{getString(account ?? {}, ['contract_reference'], 'unrecorded')}</dd>
             </div>
           </dl>
+        </CardContent>
+      </Card>
 
-          <section className="subscription-section" aria-labelledby="subscription-usage-title">
-            <div className="subscription-section-heading">
-              <div>
-                <h3 id="subscription-usage-title">Usage against plan limits</h3>
-                <p>Joined usage rows keep each recorded count, plan limit, and progress measure together.</p>
-              </div>
-              <Badge tone={recordedUsageCount === usageRows.length ? 'info' : 'muted'}>{recordedUsageCount} / {usageRows.length} recorded</Badge>
-            </div>
-            {usage ? (
-              <div className="subscription-usage-list" role="list" aria-label="Subscription usage">
+      <Card className="card--dense">
+        <PanelCardHeader
+          title="Usage against plan limits"
+          description="Each card joins the recorded count, authoritative limit, and progress state."
+          trailing={<Badge tone={recordedUsageCount === usageRows.length ? 'info' : 'muted'}>{recordedUsageCount} / {usageRows.length} recorded</Badge>}
+        />
+        <CardContent>
+          {usage ? (
+            <>
+              <div className="subscription-usage-grid" role="list" aria-label="Subscription usage">
                 {usageRows.map((row) => {
                   const hasUsage = row.used !== null;
                   const hasLimit = row.limit >= 0;
@@ -4811,18 +5626,20 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
                     : null;
                   const atLimit = hasUsage && hasLimit && (row.limit === 0 ? row.used! > 0 : row.used! >= row.limit);
                   return (
-                    <div className="subscription-usage-row" role="listitem" key={row.label}>
-                      <div className="subscription-usage-copy">
-                        <strong>{row.label}</strong>
-                        <span>{row.description}</span>
+                    <article className="subscription-usage-card" role="listitem" key={row.label}>
+                      <div className="subscription-usage-card-head">
+                        <div className="subscription-usage-copy">
+                          <strong>{row.label}</strong>
+                          <span>{row.description}</span>
+                        </div>
+                        <Badge tone={percent === null ? 'muted' : atLimit ? 'warn' : 'info'}>
+                          {percent === null ? 'No measure' : `${percent}%`}
+                        </Badge>
                       </div>
-                      <div className="subscription-usage-count" aria-label={`${row.label} count and limit`}>
+                      <div className="subscription-usage-value" aria-label={`${row.label} count and limit`}>
                         <strong>{hasUsage ? formatNumber(row.used!) : 'Not recorded'}</strong>
                         <span>{hasUsage ? (hasLimit ? `of ${formatNumber(row.limit)}` : 'used · limit not recorded') : 'Usage unavailable'}</span>
                       </div>
-                      <Badge tone={percent === null ? 'muted' : atLimit ? 'warn' : 'info'}>
-                        {percent === null ? (hasUsage ? 'Limit not recorded' : 'No usage record') : `${percent}%`}
-                      </Badge>
                       {percent !== null ? (
                         <Progress
                           value={percent}
@@ -4830,115 +5647,39 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
                           label={`${row.label} usage, ${row.used} of ${row.limit}`}
                         />
                       ) : (
-                        <span className="subscription-limit-note">Progress is hidden until both usage and a plan limit are recorded.</span>
+                        <p className="subscription-limit-note">Progress is unavailable until both usage and a plan limit are recorded.</p>
                       )}
-                    </div>
+                    </article>
                   );
                 })}
               </div>
-            ) : (
-              <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan metadata is available, but the subscription API did not return workspace usage counts." />
-            )}
-          </section>
-
-          <section className="subscription-section" aria-labelledby="subscription-signals-title">
-            <div className="subscription-section-heading">
-              <div>
-                <h3 id="subscription-signals-title">Workspace signals</h3>
-                <p>Operational counts are shown separately because they are not subscription limits.</p>
+              <div className="subscription-signal-strip" aria-label="Workspace signals that are not subscription limits">
+                <strong>Workspace signals · not plan limits</strong>
+                <span className="subscription-signal-item">Open findings <Badge tone={openFindings === null ? 'muted' : openFindings > 0 ? 'warn' : 'success'}>{openFindings === null ? 'Not recorded' : formatNumber(openFindings)}</Badge></span>
+                <span className="subscription-signal-item">Pending high-scale <Badge tone={pendingHighScale === null ? 'muted' : pendingHighScale > 0 ? 'warn' : 'muted'}>{pendingHighScale === null ? 'Not recorded' : formatNumber(pendingHighScale)}</Badge></span>
               </div>
-            </div>
-            <div className="subscription-signal-grid">
-              <div className="subscription-signal">
-                <div>
-                  <strong>Open findings</strong>
-                  <span>Active readiness records</span>
-                </div>
-                <Badge tone={openFindings === null ? 'muted' : openFindings > 0 ? 'warn' : 'success'}>{openFindings === null ? 'Not recorded' : formatNumber(openFindings)}</Badge>
-              </div>
-              <div className="subscription-signal">
-                <div>
-                  <strong>Pending high-scale</strong>
-                  <span>Awaiting SOC workflow</span>
-                </div>
-                <Badge tone={pendingHighScale === null ? 'muted' : pendingHighScale > 0 ? 'warn' : 'muted'}>{pendingHighScale === null ? 'Not recorded' : formatNumber(pendingHighScale)}</Badge>
-              </div>
-            </div>
-          </section>
-
-          <section className="subscription-section" aria-labelledby="subscription-entitlement-summary-title">
-            <div className="subscription-section-heading">
-              <div>
-                <h3 id="subscription-entitlement-summary-title">Effective entitlement summary</h3>
-                <p>Explicit API values only; missing entitlement fields are labeled as not recorded.</p>
-              </div>
-              <Badge tone={recordedEntitlements.length > 0 && enabledEntitlements > 0 ? 'success' : 'muted'}>
-                {recordedEntitlements.length > 0 ? `${enabledEntitlements} / ${recordedEntitlements.length} enabled` : 'Not recorded'}
-              </Badge>
-            </div>
-            <div className="subscription-entitlement-grid" role="list" aria-label="Effective entitlements">
-              {entitlementRows.map((row) => {
-                const feature = getString(row, ['feature'], '');
-                const value = row.effective_enabled;
-                return (
-                  <div className="subscription-entitlement-pill" role="listitem" key={feature}>
-                    <div>
-                      <strong>{ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature}</strong>
-                      <span>Effective access</span>
-                    </div>
-                    <Badge tone={value === true ? 'success' : 'muted'}>
-                      {value === true ? 'Enabled' : value === false ? 'Disabled' : 'Not recorded'}
-                    </Badge>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+            </>
+          ) : (
+            <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan metadata is available, but the subscription API did not return workspace usage counts." />
+          )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Entitlement breakdown</CardTitle>
-          <CardDescription>Plan defaults, staff grants, and effective feature access for this tenant.</CardDescription>
-        </CardHeader>
+      <Card className="card--dense">
+        <PanelCardHeader
+          title="Effective entitlements"
+          description="Effective access is the authoritative subscription API result. Plan inclusion and access source explain how it was derived."
+          trailing={
+            <Badge tone={recordedEntitlements.length > 0 && enabledEntitlements > 0 ? 'success' : 'muted'}>
+              {recordedEntitlements.length > 0 ? `${enabledEntitlements} / ${recordedEntitlements.length} enabled` : 'Not recorded'}
+            </Badge>
+          }
+        />
         <CardContent>
           <DataTable
-            columns={[
-              {
-                key: 'feature',
-                label: 'Feature',
-                render: (item) => {
-                  const feature = getString(item, ['feature']);
-                  return ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature;
-                }
-              },
-              {
-                key: 'plan',
-                label: 'Plan default',
-                render: (item) => (
-                  <Badge tone={item.plan_enabled === true ? 'success' : 'muted'}>
-                    {item.plan_enabled === true ? 'Enabled' : item.plan_enabled === false ? 'Disabled' : 'Not recorded'}
-                  </Badge>
-                )
-              },
-              {
-                key: 'effective',
-                label: 'Effective',
-                render: (item) => (
-                  <Badge tone={item.effective_enabled === true ? 'success' : 'muted'}>
-                    {item.effective_enabled === true ? 'Enabled' : item.effective_enabled === false ? 'Disabled' : 'Not recorded'}
-                  </Badge>
-                )
-              },
-              {
-                key: 'grant',
-                label: 'Grant source',
-                render: (item) => formatEntitlementGrantSource(getString(item, ['grant_source'], 'not recorded'))
-              }
-            ]}
+            columns={entitlementColumns}
             items={entitlementRows}
-            empty={<EmptyState icon={ShieldCheck} title="No entitlement features." body="Plan feature entitlements were not returned by the subscription API." />}
+            empty={<EmptyState icon={ShieldCheck} title="No entitlement definitions." body="The subscription catalog did not return any recognized feature definitions." />}
           />
         </CardContent>
       </Card>

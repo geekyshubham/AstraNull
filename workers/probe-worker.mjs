@@ -9,7 +9,9 @@ import { hostname } from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeFileSync } from 'node:fs';
 import { executeCapabilityProbe } from '../src/lib/capabilityProbes.mjs';
+import { pinnedFetch, resolvePinnedDestination } from '../src/lib/pinnedHttpRequest.mjs';
 import {
   probeAlertWebhookPing,
   probeHttp2Settings,
@@ -17,6 +19,7 @@ import {
   probeTlsSession,
   probeUdpDatagram,
   probeWebsocketUpgradePosture,
+  resolveAlertWebhookUrl,
 } from '../src/lib/safeNetworkProbes.mjs';
 import { resolveDeploymentProfile } from '../src/lib/deploymentProfile.mjs';
 import { assertProbeDestinationAllowed } from '../src/lib/probeEndpoint.mjs';
@@ -32,6 +35,9 @@ const POLL_INTERVAL_MAX_MS = 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_API_URL = 'http://localhost:3000';
 const MIN_SECRET_LENGTH = 32;
+const CONTROL_REQUEST_TIMEOUT_MS = 15_000;
+export const PROBE_WORKER_DESTINATION_DNS_TIMEOUT_MS = 10_000;
+export const PROBE_WORKER_CYCLE_TIMEOUT_MS = 110_000;
 
 const DNS_VECTOR_FAMILIES = new Set(['dns']);
 const TCP_VECTOR_FAMILIES = new Set(['l3_l4']);
@@ -128,6 +134,7 @@ export function parseWorkerConfig(argv = process.argv.slice(2), env = process.en
     once,
     pollIntervalMs,
     tenantId: tenantIdStr,
+    heartbeatFile: String(env.ASTRANULL_WORKER_HEARTBEAT_FILE ?? '').trim() || null,
   };
 }
 
@@ -150,7 +157,12 @@ async function signedFetch(config, method, path, body) {
   if (body != null) headers['content-type'] = 'application/json';
 
   const url = `${config.apiUrl}${path}`;
-  const res = await fetch(url, { method, headers, body: body == null ? undefined : bodyText });
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body == null ? undefined : bodyText,
+    signal: AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
+  });
   const text = await res.text();
   let json;
   try {
@@ -159,6 +171,20 @@ async function signedFetch(config, method, path, body) {
     json = null;
   }
   return { status: res.status, json, text };
+}
+
+function withHardDeadline(promise, timeoutMs, code, message) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = code;
+        reject(error);
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function clampAttestation(job, requestsSent, durationMs) {
@@ -296,6 +322,16 @@ function dnsQueryName(job) {
  * @returns {string | null}
  */
 export function probeDestinationHost(job) {
+  if (job?.probe_profile?.kind === 'alert_webhook_ping') {
+    const webhookUrl = resolveAlertWebhookUrl(job);
+    if (!webhookUrl) return null;
+    try {
+      return new URL(webhookUrl).hostname.replace(/^\[/, '').replace(/\]$/, '') || null;
+    } catch {
+      return null;
+    }
+  }
+
   const value = String(job?.target?.value ?? '').trim();
   if (!value) return null;
   if (/^https?:\/\//i.test(value)) {
@@ -317,7 +353,7 @@ export function probeDestinationHost(job) {
 async function resolveOrEmpty(fn, host) {
   try {
     const out = await fn(host);
-    return Array.isArray(out) ? out.filter((ip) => typeof ip === 'string') : [];
+    return Array.isArray(out) ? out.filter((ip) => typeof ip === 'string' && net.isIP(ip) !== 0) : [];
   } catch {
     return [];
   }
@@ -330,8 +366,7 @@ async function resolveOrEmpty(fn, host) {
  * resolved address is non-routable. Resolving once (rather than letting each probe
  * re-resolve) also closes the DNS-rebinding/TOCTOU window between check and connect.
  *
- * Hosts that resolve to nothing are allowed through: there is no address to probe, so
- * the underlying probe reports its own ENOTFOUND/blocked outcome.
+ * Hostnames with no A/AAAA answers fail closed before any probe transport is created.
  *
  * @param {Record<string, unknown>} job
  * @param {{ resolve4Fn?: Function, resolve6Fn?: Function, destinationPolicy?: object, env?: NodeJS.ProcessEnv }} deps
@@ -352,13 +387,29 @@ export async function vetProbeDestination(job, deps = {}) {
 
   const resolve4Fn = deps.resolve4Fn ?? dns.resolve4;
   const resolve6Fn = deps.resolve6Fn ?? dns.resolve6;
-  const [v4, v6] = await Promise.all([
-    resolveOrEmpty(resolve4Fn, host),
-    resolveOrEmpty(resolve6Fn, host),
-  ]);
+  const configuredDnsTimeoutMs = Number(deps.destinationDnsTimeoutMs);
+  const dnsTimeoutMs = Number.isFinite(configuredDnsTimeoutMs) && configuredDnsTimeoutMs > 0
+    ? configuredDnsTimeoutMs
+    : PROBE_WORKER_DESTINATION_DNS_TIMEOUT_MS;
+  const [v4, v6] = await withHardDeadline(
+    Promise.all([
+      resolveOrEmpty(resolve4Fn, host),
+      resolveOrEmpty(resolve6Fn, host),
+    ]),
+    dnsTimeoutMs,
+    'probe_destination_dns_timeout',
+    'Probe destination DNS classification timed out.',
+  );
   const addresses = [...new Set([...v4, ...v6])];
   if (addresses.length === 0) {
-    return { ok: true, host, addresses: [], unresolved: true, policy };
+    return {
+      ok: false,
+      host,
+      addresses: [],
+      unresolved: true,
+      reason: 'no_resolved_addresses',
+      policy,
+    };
   }
 
   for (const ip of addresses) {
@@ -478,7 +529,7 @@ export async function fetchHttpHeadWithSafeRedirects(startUrl, sensitiveHeaders,
 }
 
 export async function probeHttpHead(job, deps = {}) {
-  const fetchFn = deps.fetchFn ?? fetch;
+  const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, deps));
   const url = resolveHttpUrl(job);
   if (!url) {
     return {
@@ -700,11 +751,11 @@ export async function probeDns(job, deps = {}) {
   }
 }
 
-export function probeTcpConnect(job, deps = {}) {
+export async function probeTcpConnect(job, deps = {}) {
   const connectFn = deps.connectFn ?? net.connect;
   const endpoint = parseTcpEndpoint(job);
   if (!endpoint) {
-    return Promise.resolve({
+    return {
       external_result: 'error',
       metadata: withProfileKind(job, {
         probe_kind: 'tcp_connect',
@@ -712,21 +763,36 @@ export function probeTcpConnect(job, deps = {}) {
       }),
       requests_sent: 0,
       duration_ms: 0,
-    });
+    };
   }
 
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
+  let pinned;
+  try {
+    pinned = await resolvePinnedDestination(endpoint.host, deps);
+  } catch (error) {
+    return {
+      external_result: 'blocked',
+      metadata: withProfileKind(job, {
+        probe_kind: 'tcp_connect',
+        error_class: error?.code === 'ENOTFOUND'
+          ? 'destination_unresolved'
+          : 'destination_not_routable',
+      }),
+      requests_sent: 0,
+      duration_ms: Date.now() - started,
+    };
+  }
 
   return new Promise((resolve) => {
     let settled = false;
     let requestsSent = 0;
     const socket = connectFn(
-      { host: endpoint.host, port: endpoint.port },
+      { host: pinned.address, port: endpoint.port },
       () => {
         if (settled) return;
         settled = true;
-        requestsSent = 1;
         const durationMs = Date.now() - started;
         socket.destroy();
         resolve({
@@ -741,12 +807,12 @@ export function probeTcpConnect(job, deps = {}) {
         });
       },
     );
+    requestsSent = 1;
 
     socket.setTimeout(timeoutMs);
     socket.on('timeout', () => {
       if (settled) return;
       settled = true;
-      requestsSent = 1;
       const durationMs = Date.now() - started;
       socket.destroy();
       resolve({
@@ -763,7 +829,6 @@ export function probeTcpConnect(job, deps = {}) {
     socket.on('error', (err) => {
       if (settled) return;
       settled = true;
-      requestsSent = 1;
       const durationMs = Date.now() - started;
       const code = err?.code ?? '';
       const external =
@@ -787,10 +852,11 @@ export function probeTcpConnect(job, deps = {}) {
 export function probeMetadataMarker(job) {
   const marker = job.probe_profile?.marker ?? 'astranull-safe-marker';
   return {
-    external_result: 'blocked',
+    external_result: 'not_run',
     metadata: withProfileKind(job, {
       probe_kind: 'metadata_marker',
       marker,
+      not_run_reason: 'metadata_only_check_has_no_executable_probe',
       simulation: 'SAFE_PROBE_SIMULATION',
     }),
     requests_sent: 0,
@@ -805,6 +871,7 @@ export async function executeProbeForJob(job, deps = {}) {
   // other kind egresses and must clear the classifier before any probe helper — and
   // therefore before any connectFn/fetchFn — is touched.
   let destinationPolicy = deps.destinationPolicy;
+  let vettedHost = null;
   let vettedAddresses = [];
   if (profileKind !== 'metadata_marker') {
     const vetted = await vetProbeDestination(job, deps);
@@ -812,12 +879,14 @@ export async function executeProbeForJob(job, deps = {}) {
       return destinationBlockedOutcome(job, vetted);
     }
     destinationPolicy = vetted.policy;
+    vettedHost = vetted.host;
     vettedAddresses = vetted.addresses ?? [];
   }
-  // Reuse the vetted policy for destinations discovered mid-probe (NS hosts, resolvers),
-  // and hand down the already-vetted IP literals so probes need not re-resolve.
+  // Reuse the policy for newly discovered hosts. For the original host, overwrite any
+  // caller-supplied values with the exact nonempty set produced by this preflight.
   const probeDeps = { ...deps, destinationPolicy };
-  if (vettedAddresses.length > 0 && deps.vettedAddresses == null) {
+  if (vettedHost != null) {
+    probeDeps.vettedHost = vettedHost;
     probeDeps.vettedAddresses = vettedAddresses;
   }
 
@@ -829,26 +898,26 @@ export async function executeProbeForJob(job, deps = {}) {
     return probeMetadataMarker(job);
   }
   if (profileKind === 'udp_probe') {
-    return probeUdpDatagram(job);
+    return probeUdpDatagram(job, probeDeps);
   }
   if (profileKind === 'quic_reachability') {
-    return probeQuicReachability(job);
+    return probeQuicReachability(job, probeDeps);
   }
   if (profileKind === 'alert_webhook_ping') {
-    return probeAlertWebhookPing(job, { destinationPolicy });
+    return probeAlertWebhookPing(job, probeDeps);
   }
   if (profileKind === 'ownership_challenge') {
-    const res = await probeHttpHead(job);
+    const res = await probeHttpHead(job, probeDeps);
     res.metadata = { ...res.metadata, probe_kind: 'ownership_challenge' };
     return res;
   }
-  if (profileKind === 'tls_session') return probeTlsSession(job);
-  if (profileKind === 'http2_settings') return probeHttp2Settings(job);
-  if (profileKind === 'websocket_upgrade_posture') return probeWebsocketUpgradePosture(job);
+  if (profileKind === 'tls_session') return probeTlsSession(job, probeDeps);
+  if (profileKind === 'http2_settings') return probeHttp2Settings(job, probeDeps);
+  if (profileKind === 'websocket_upgrade_posture') return probeWebsocketUpgradePosture(job, probeDeps);
   const vectorFamily = job.vector_family;
-  if (DNS_VECTOR_FAMILIES.has(vectorFamily)) return probeDns(job);
-  if (TCP_VECTOR_FAMILIES.has(vectorFamily)) return probeTcpConnect(job);
-  if (HTTP_VECTOR_FAMILIES.has(vectorFamily) || resolveHttpUrl(job)) return probeHttpHead(job);
+  if (DNS_VECTOR_FAMILIES.has(vectorFamily)) return probeDns(job, probeDeps);
+  if (TCP_VECTOR_FAMILIES.has(vectorFamily)) return probeTcpConnect(job, probeDeps);
+  if (HTTP_VECTOR_FAMILIES.has(vectorFamily) || resolveHttpUrl(job)) return probeHttpHead(job, probeDeps);
   return {
     external_result: 'error',
     metadata: withProfileKind(job, { probe_kind: 'none', error_class: 'unsupported_check' }),
@@ -903,11 +972,30 @@ export async function pollAndProcessOnce(config) {
   return results;
 }
 
-export async function runProbeWorker(config) {
+export async function runProbeWorker(config, deps = {}) {
+  const pollOnce = deps.pollAndProcessOnceFn ?? pollAndProcessOnce;
+  const writeHeartbeat = deps.writeHeartbeatFn ?? writeFileSync;
+  const requestedCycleTimeoutMs = Number(deps.cycleTimeoutMs);
+  const cycleTimeoutMs = Number.isFinite(requestedCycleTimeoutMs) && requestedCycleTimeoutMs > 0
+    ? Math.min(requestedCycleTimeoutMs, PROBE_WORKER_CYCLE_TIMEOUT_MS)
+    : PROBE_WORKER_CYCLE_TIMEOUT_MS;
+
   do {
-    await pollAndProcessOnce(config);
+    await withHardDeadline(
+      Promise.resolve().then(() => pollOnce(config)),
+      cycleTimeoutMs,
+      'probe_worker_cycle_timeout',
+      'Probe worker cycle timed out.',
+    );
+    if (config.heartbeatFile) {
+      writeHeartbeat(config.heartbeatFile, `${new Date().toISOString()}\n`, { mode: 0o600 });
+    }
     if (config.once) break;
-    await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+    if (typeof deps.sleepFn === 'function') {
+      await deps.sleepFn(config.pollIntervalMs);
+    } else {
+      await new Promise((r) => setTimeout(r, config.pollIntervalMs));
+    }
   } while (!config.once);
 }
 

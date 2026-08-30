@@ -142,8 +142,8 @@ async function seedBaseFixtures(client, ids) {
     ],
   );
   await client.query(
-    `INSERT INTO targets (id, tenant_id, target_group_id, kind, value)
-     VALUES ($1, $2, $3, 'fqdn', 'a.example'), ($4, $5, $6, 'fqdn', 'b.example')`,
+    `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, normalized_value)
+     VALUES ($1, $2, $3, 'fqdn', 'a.example', 'a.example'), ($4, $5, $6, 'fqdn', 'b.example', 'b.example')`,
     [ids.targetA, ids.tenantA, ids.targetGroupA, ids.targetB, ids.tenantB, ids.targetGroupB],
   );
   await client.query(

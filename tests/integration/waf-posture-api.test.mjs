@@ -65,6 +65,24 @@ async function createDemoAsset(baseUrl, headers, extra = {}) {
 }
 
 async function createBoundSafeTestRun(baseUrl, headers) {
+  const store = getStore();
+  if (!store.targetVerifications) store.targetVerifications = [];
+  if (!store.targetVerifications.some((row) => (
+    row.tenant_id === 'ten_demo'
+    && row.target_id === 'tgt_1'
+    && (row.state === 'dns_verified' || row.state === 'agent_verified' || row.state === 'user_confirmed')
+  ))) {
+    store.targetVerifications.push({
+      id: `tv_waf_safe_${store.targetVerifications.length + 1}`,
+      tenant_id: 'ten_demo',
+      target_id: 'tgt_1',
+      state: 'dns_verified',
+      source_kind: 'dns_txt',
+      source_ref: { challenge_id: 'dns_waf_fixture' },
+      transitioned_at: new Date().toISOString(),
+      transitioned_by: 'usr_eng',
+    });
+  }
   const runRes = await request(baseUrl, 'POST', '/v1/test-runs', {
     headers,
     body: {

@@ -247,18 +247,26 @@ describe('hardening acceptance gaps', () => {
       headers: soc,
       body: { window_start: pastStart, window_end: pastEnd },
     });
-    assert.equal(schedulePast.status, 200);
+    assert.equal(schedulePast.status, 409);
+    assert.equal(schedulePast.json.error, 'governed_authorization_mismatch');
+    assert.ok(schedulePast.json.invalid_fields.includes('scheduled_window.outside_requested_window'));
 
+    const activeStart = new Date(Date.now() - 60000).toISOString();
+    const activeEnd = new Date(Date.now() + 3600000).toISOString();
+    const scheduleActive = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/schedule`, {
+      headers: soc,
+      body: { window_start: activeStart, window_end: activeEnd },
+    });
+    assert.equal(scheduleActive.status, 200);
+
+    const req = getStore().highScaleRequests.find((r) => r.id === hsId);
+    req.scheduled_window = { window_start: pastStart, window_end: pastEnd, scope_hash: req.scope_hash };
     const outside = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
     assert.equal(outside.status, 409);
     assert.equal(outside.json.error, 'outside_schedule_window');
     assert.ok(getStore().auditLog.some((a) => a.action === 'high_scale.start_gate_denied'));
 
-    const activeStart = new Date(Date.now() - 60000).toISOString();
-    const activeEnd = new Date(Date.now() + 3600000).toISOString();
-    const req = getStore().highScaleRequests.find((r) => r.id === hsId);
-    req.state = 'scheduled';
-    req.scheduled_window = { window_start: activeStart, window_end: activeEnd };
+    req.scheduled_window = { window_start: activeStart, window_end: activeEnd, scope_hash: req.scope_hash };
 
     const inside = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
     assert.equal(inside.status, 200);
@@ -315,7 +323,8 @@ describe('hardening acceptance gaps', () => {
     assert.equal(stored.emergency_contacts.length, 1);
     assert.equal(stored.environment, 'staging');
     assert.equal(stored.business_criticality, 'high');
-    assert.deepEqual(stored.requested_scenario_families, ['volumetric_metadata']);
+    assert.deepEqual(stored.requested_scenario_families, ['udp_flood']);
+    assert.deepEqual(stored.delivery_patterns, ['direct']);
     assert.equal(stored.requested_limits.max_duration_minutes, 45);
     assert.ok(stored.stop_criteria.abort_on_customer_signal);
     assert.ok(stored.abort_criteria.auto_stop);

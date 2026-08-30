@@ -7,7 +7,7 @@ import { Select, type SelectOption } from '../ui/select';
 import { DataTable, type TableColumn } from '../ui/table';
 import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../../lib/crud-ui';
 import { PortalLoadingSkeleton } from '../../lib/empty-from-api';
-import { buildMetadataArtifactUploadBody } from '../../lib/high-scale';
+import { GOVERNED_HIGH_SCALE_SCENARIOS, buildMetadataArtifactUploadBody } from '../../lib/high-scale';
 import { sha256CanonicalJsonForCustody } from '../../lib/custody';
 import { requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
@@ -15,11 +15,10 @@ import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
 
-const HIGH_SCALE_CATALOG_LABELS: Record<string, string> = {
-  volumetric_metadata: 'Volumetric (metadata-only catalog)',
-  '500_rps_metadata': 'Up to 500 RPS (metadata catalog)',
-  error_rate_above_5pct: 'Abort if error rate exceeds 5%'
-};
+const HIGH_SCALE_SCENARIO_OPTIONS: SelectOption[] = GOVERNED_HIGH_SCALE_SCENARIOS.map((scenario) => ({
+  value: scenario.id,
+  label: `${scenario.label} (${scenario.id})`
+}));
 
 const HIGH_SCALE_CRITICALITY_OPTIONS: SelectOption[] = [
   { value: 'medium', label: 'Medium' },
@@ -44,6 +43,23 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
   }
   if (current !== undefined && current !== null && current !== '') return String(current);
   return fallback;
+}
+
+function governedLimitDisplay(item: DataItem) {
+  const familyId = Array.isArray(item.requested_scenario_families)
+    ? String(item.requested_scenario_families[0] ?? '')
+    : '';
+  const scenario = GOVERNED_HIGH_SCALE_SCENARIOS.find((entry) => entry.id === familyId);
+  const limits = item.requested_limits && typeof item.requested_limits === 'object' && !Array.isArray(item.requested_limits)
+    ? item.requested_limits as DataItem
+    : {};
+  const rate = scenario && typeof limits[scenario.limit.field] === 'number'
+    ? `${limits[scenario.limit.field]} ${scenario.limit.unit}`
+    : '';
+  const duration = typeof limits.max_duration_minutes === 'number'
+    ? `${limits.max_duration_minutes} minutes`
+    : '';
+  return [rate, duration].filter(Boolean).join(' · ') || '—';
 }
 
 function targetGroupDisplayName(data: PortalData, groupId: string) {
@@ -122,6 +138,15 @@ export function RunsSocGatePanel({
   const [packRequestId, setPackRequestId] = useState('');
   const [targetGroupId, setTargetGroupId] = useState(() => getString(data.targetGroups[0] ?? {}, ['id'], ''));
   const [criticality, setCriticality] = useState('high');
+  const [scenarioFamilyId, setScenarioFamilyId] = useState(GOVERNED_HIGH_SCALE_SCENARIOS[0]?.id ?? '');
+  const [deliveryPatternId, setDeliveryPatternId] = useState(
+    GOVERNED_HIGH_SCALE_SCENARIOS[0]?.deliveryPatterns[0]?.id ?? ''
+  );
+  const selectedScenario = GOVERNED_HIGH_SCALE_SCENARIOS.find((scenario) => scenario.id === scenarioFamilyId);
+  const deliveryPatternOptions: SelectOption[] = (selectedScenario?.deliveryPatterns ?? []).map((pattern) => ({
+    value: pattern.id,
+    label: `${pattern.label} (${pattern.id})`
+  }));
   // P0#2: customers are non-staff principals. The queue item must open the customer
   // high-scale detail surface (HighScaleDetailView), not the staff SOC gate.
   const isStaffPrincipal = session.principal === 'staff';
@@ -194,15 +219,35 @@ export function RunsSocGatePanel({
       onError('Confirm that declared scope and authorization metadata are accurate before submitting.');
       return;
     }
+    if (!selectedScenario || !selectedScenario.deliveryPatterns.some((pattern) => pattern.id === deliveryPatternId)) {
+      onError('Select a governed scenario family and one of its compatible delivery patterns.');
+      return;
+    }
+    const scenarioLimit = Number(form.get(selectedScenario.limit.field));
+    const maxDurationMinutes = Number(form.get('max_duration_minutes'));
+    if (
+      !Number.isFinite(scenarioLimit)
+      || scenarioLimit < selectedScenario.limit.min
+      || scenarioLimit > selectedScenario.limit.max
+      || (selectedScenario.limit.step === 1 && !Number.isInteger(scenarioLimit))
+      || !Number.isFinite(maxDurationMinutes)
+      || !Number.isInteger(maxDurationMinutes)
+      || maxDurationMinutes < 1
+      || maxDurationMinutes > 720
+    ) {
+      onError('Enter numeric governed limits within the displayed units and bounds.');
+      return;
+    }
     const body = {
       target_group_id: String(form.get('target_group_id') ?? '').trim(),
       objective: String(form.get('objective') ?? '').trim(),
       environment: String(form.get('environment') ?? 'staging').trim(),
       business_criticality: String(form.get('business_criticality') ?? 'high').trim(),
-      requested_scenario_families: ['volumetric_metadata'],
+      requested_scenario_families: [selectedScenario.id],
+      delivery_patterns: [deliveryPatternId],
       requested_limits: {
-        max_rate: String(form.get('max_rate') ?? '500_rps_metadata').trim(),
-        max_duration_minutes: Number(form.get('max_duration_minutes') ?? 45)
+        [selectedScenario.limit.field]: scenarioLimit,
+        max_duration_minutes: maxDurationMinutes
       },
       stop_criteria: { abort_on_customer_signal: true, max_error_rate_pct: 5 },
       abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
@@ -244,6 +289,7 @@ export function RunsSocGatePanel({
       requested_window: request.requested_window ?? null,
       requested_limits: request.requested_limits ?? null,
       requested_scenario_families: request.requested_scenario_families ?? [],
+      delivery_patterns: request.delivery_patterns ?? [],
       emergency_contacts: request.emergency_contacts ?? [],
       abort_criteria: request.abort_criteria ?? null,
       provider_context: request.provider_context ?? null
@@ -292,7 +338,7 @@ export function RunsSocGatePanel({
     },
     { key: 'policy', label: 'Policy', render: (item) => <code>{getString(item, ['policy_id', 'requested_scenario_families'], 'soc_gated')}</code> },
     { key: 'group', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },
-    { key: 'rps', label: 'Peak RPS', render: (item) => getNestedString(item, ['requested_limits', 'max_rate'], '—') },
+    { key: 'limits', label: 'Governed limits', render: (item) => governedLimitDisplay(item) },
     {
       key: 'pack',
       label: 'Pack',
@@ -400,7 +446,43 @@ export function RunsSocGatePanel({
               <Select label="Business criticality" name="business_criticality" value={criticality} options={HIGH_SCALE_CRITICALITY_OPTIONS} onChange={setCriticality} disabled={busy !== ''} />
               <label><span>Window start</span><input name="window_start" type="datetime-local" defaultValue={datetimeLocalValue(24)} required disabled={busy !== ''} /></label>
               <label><span>Window end</span><input name="window_end" type="datetime-local" defaultValue={datetimeLocalValue(48)} required disabled={busy !== ''} /></label>
-              <label><span>Max rate (catalog)</span><input name="max_rate" defaultValue="500_rps_metadata" placeholder={HIGH_SCALE_CATALOG_LABELS['500_rps_metadata']} required disabled={busy !== ''} /></label>
+              <Select
+                label="Governed scenario family"
+                name="requested_scenario_family"
+                value={scenarioFamilyId}
+                options={HIGH_SCALE_SCENARIO_OPTIONS}
+                disabled={busy !== ''}
+                onChange={(value) => {
+                  const scenario = GOVERNED_HIGH_SCALE_SCENARIOS.find((entry) => entry.id === value);
+                  setScenarioFamilyId(value);
+                  setDeliveryPatternId(scenario?.deliveryPatterns[0]?.id ?? '');
+                }}
+              />
+              <Select
+                label="Compatible delivery pattern"
+                name="delivery_pattern"
+                value={deliveryPatternId}
+                options={deliveryPatternOptions}
+                disabled={busy !== '' || !selectedScenario}
+                onChange={setDeliveryPatternId}
+              />
+              {selectedScenario ? (
+                <label>
+                  <span>{selectedScenario.limit.label} ({selectedScenario.limit.unit})</span>
+                  <input
+                    key={selectedScenario.id}
+                    name={selectedScenario.limit.field}
+                    type="number"
+                    min={selectedScenario.limit.min}
+                    max={selectedScenario.limit.max}
+                    step={selectedScenario.limit.step}
+                    defaultValue={selectedScenario.limit.defaultValue}
+                    required
+                    disabled={busy !== ''}
+                  />
+                </label>
+              ) : null}
+              <label><span>Maximum duration (minutes)</span><input name="max_duration_minutes" type="number" min={1} max={720} step={1} defaultValue={45} required disabled={busy !== ''} /></label>
               <label><span>Provider</span><input name="provider_name" placeholder="CDN or WAF provider fronting this scope" required disabled={busy !== ''} /></label>
               <label><span>Emergency contact</span><input name="contact_name" placeholder="Name of the on-call owner SOC can reach" required disabled={busy !== ''} /></label>
               <label><span>Contact path</span><input name="contact" placeholder="Email or phone SOC can reach during the window" required disabled={busy !== ''} /></label>

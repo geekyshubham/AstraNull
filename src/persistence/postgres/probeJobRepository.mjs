@@ -10,42 +10,26 @@ const PROBE_JOB_COLUMNS_QUALIFIED = PROBE_JOB_COLUMNS.split(',')
   .map((column) => `j.${column.trim()}`)
   .join(', ');
 
-const DEFAULT_LEASE_LIMIT = 50;
-const MAX_LEASE_LIMIT = 100;
+// The worker heartbeat is considered stale at 120 seconds. Leasing one row per poll keeps a
+// successful cycle bounded to one destination and prevents later rows in a serial batch from
+// aging invisibly behind an earlier probe.
+const DEFAULT_LEASE_LIMIT = 1;
+const MAX_LEASE_LIMIT = 1;
 
 /**
- * Lease TTL derivation — deliberately generous, because the failure mode of a SHORT TTL is
- * double execution of a live probe (real duplicated outbound traffic at a customer target),
- * while the failure mode of a LONG TTL is only a slower self-heal. A wedged slot is already
- * customer-recoverable via `POST /v1/test-runs/:id/cancel`, so erring long costs little.
+ * Lease TTL derivation for the single-job worker cycle.
  *
- * The TTL must cover an entire *batch* drain, not one probe. `leasePendingJobsForWorker`
- * hands out up to MAX_LEASE_LIMIT jobs stamped with a single `leased_at`, and the worker
- * processes them serially (`for (const job of jobs)` in workers/probe-worker.mjs). The last
- * job in a batch therefore does not begin executing until every earlier job has finished, yet
- * its lease clock started with the first. Deriving from a single job's budget would reclaim —
- * and re-execute — jobs a live worker is still legitimately working through.
+ * The worker has its own 110-second hard cycle deadline. The lease remains longer than that
+ * deadline (plus restart/clock-skew allowance), preventing a live worker from being duplicated
+ * while still reclaiming a crashed worker's row in minutes rather than hours.
  *
- * TTL(row) = GREATEST(floor, perJobSeconds * batchFactor + overhead)
- *   perJobSeconds  this row's constraints_json.max_duration_seconds (the worker's own
- *                  per-probe wall-clock cap; strictly larger than timeout_ms * max_requests,
- *                  so it is the conservative choice)
- *   batchFactor    MAX_LEASE_LIMIT — the largest batch any worker could be holding. The lease
- *                  that went stale may have used a different limit than the current call, so
- *                  the ceiling is used rather than this call's limit.
- *   overhead       poll interval (up to 60s), per-job ingest round-trips, and clock skew:
- *                  `leased_at` is app-supplied while `now()` is the database clock.
- *   floor          absolute minimum regardless of constraints. Load-bearing: checks may
- *                  legally declare max_duration_seconds as low as 1 (tests/unit/vectors.test.mjs
- *                  asserts only >= 1), which would otherwise derive a TTL of seconds.
- *
- * A missing or non-numeric max_duration_seconds falls back to the default rather than erroring,
- * so one malformed constraints_json row cannot break lease polling for the whole tenant.
+ * A missing or non-numeric max_duration_seconds falls back to the catalog maximum rather than
+ * erroring, so one malformed constraints_json row cannot break lease polling for the tenant.
  */
-const LEASE_TTL_FLOOR_SECONDS = 900;
+const LEASE_TTL_FLOOR_SECONDS = 180;
 const LEASE_TTL_DEFAULT_PER_JOB_SECONDS = 120;
 const LEASE_TTL_BATCH_FACTOR = MAX_LEASE_LIMIT;
-const LEASE_TTL_OVERHEAD_SECONDS = 300;
+const LEASE_TTL_OVERHEAD_SECONDS = 60;
 
 /**
  * Per-row stale-lease cutoff. Kept as a fragment (not a literal) so every tunable stays a
@@ -227,6 +211,23 @@ export function createProbeJobRepository(pool) {
       });
     },
 
+    async getProbeJobByTestRun(ctx, testRunId, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${PROBE_JOB_COLUMNS}
+           FROM probe_jobs
+           WHERE tenant_id = $1 AND test_run_id = $2
+           ORDER BY created_at
+           LIMIT 2`,
+          [ctx.tenantId, testRunId],
+        );
+        if (rows.length > 1) {
+          throw new Error('multiple_probe_jobs_for_test_run');
+        }
+        return mapProbeJobRow(rows[0] ?? null);
+      });
+    },
+
     async getJobById(ctx, id, options = {}) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
@@ -297,6 +298,35 @@ export function createProbeJobRepository(pool) {
 
       return withTenantContext(pool, tenantId, async (client) => {
         const ownershipVerificationId = record.ownership_verification_id ?? null;
+
+        // There is intentionally no schema change in this repair. Serialize creators by the
+        // tenant/run binding, then reuse the durable row if a prior process committed it before
+        // crashing. The lock also closes the concurrent retry race until a unique index can be
+        // introduced in a separately governed migration.
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [JSON.stringify([tenantId, record.test_run_id])],
+        );
+        const existingResult = await client.query(
+          `SELECT ${PROBE_JOB_COLUMNS}
+           FROM probe_jobs
+           WHERE tenant_id = $1 AND test_run_id = $2
+           ORDER BY created_at
+           LIMIT 2`,
+          [tenantId, record.test_run_id],
+        );
+        if (existingResult.rows.length > 1) {
+          throw new Error('multiple_probe_jobs_for_test_run');
+        }
+        const existing = mapProbeJobRow(existingResult.rows[0] ?? null);
+        if (existing) {
+          const sameBinding = existing.check_id === record.check_id
+            && (existing.target_id ?? null) === (record.target_id ?? null)
+            && (existing.ownership_verification_id ?? null) === ownershipVerificationId;
+          if (!sameBinding) throw new Error('probe_job_test_run_binding_conflict');
+          return existing;
+        }
+
         const { rows } = await client.query(
           `INSERT INTO probe_jobs (
              id, tenant_id, test_run_id, target_id, check_id, vector_family, status,

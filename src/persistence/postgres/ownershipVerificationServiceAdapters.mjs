@@ -2,8 +2,6 @@ import { generateNonce, hashNonce } from '../../lib/crypto.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { buildSignedProbeJobRecord, signProbeJob } from '../../lib/probeJobs.mjs';
 
-const OPEN_STATUSES = new Set(['challenge_sent', 'verified']);
-
 /** @type {readonly string[]} */
 export const OWNERSHIP_VERIFICATION_REPOSITORY_METHODS = Object.freeze([
   'insertVerification',
@@ -11,10 +9,13 @@ export const OWNERSHIP_VERIFICATION_REPOSITORY_METHODS = Object.freeze([
   'findById',
   'findOpenByNonceHash',
   'listByTenant',
+  'recordOwnershipSignalAtomic',
+  'confirmOwnershipAtomic',
   'updateVerificationSignals',
   'updateVerificationConfirmed',
   'updateTargetGroupOwnershipStatus',
   'updateTargetGroupDnsOwnership',
+  'getCurrentTargetVerification',
   'listFqdnTargetValues',
   'getActiveTargetGroup',
 ]);
@@ -85,43 +86,6 @@ async function auditTargetGroup(auditRepo, ctx, targetGroupId, action) {
   });
 }
 
-async function applyOwnershipSignal(deps, ctx, record, { source, nonce_hash }) {
-  const { ownershipVerifications: repo, audit: auditRepo } = deps;
-
-  if (!OPEN_STATUSES.has(record.status)) {
-    return { error: 'ownership_verification_not_open', status: 409 };
-  }
-  if (nonce_hash !== record.challenge_nonce_hash) {
-    return { error: 'nonce_mismatch', status: 400 };
-  }
-
-  let probe_observed = record.probe_observed;
-  let agent_observed = record.agent_observed;
-  if (source === 'probe') {
-    probe_observed = true;
-  } else if (source === 'agent') {
-    agent_observed = true;
-  } else {
-    return { error: 'invalid_source', status: 400 };
-  }
-
-  let status = record.status;
-  let verified_at = record.verified_at;
-  if (probe_observed && agent_observed && record.status === 'challenge_sent') {
-    verified_at = new Date().toISOString();
-    status = 'verified';
-    await repo.updateTargetGroupOwnershipStatus(ctx, record.target_group_id, 'agent_verified');
-    await auditVerification(auditRepo, ctx, record.id, 'ownership_verification.agent_verified');
-  }
-
-  const verification = await repo.updateVerificationSignals(ctx, record.id, {
-    probe_observed,
-    agent_observed,
-    status,
-    verified_at,
-  });
-  return { verification };
-}
 
 function buildOwnershipChallengeProbeJob(ctx, verification, runtimeConfig) {
   const run = {
@@ -214,7 +178,6 @@ export function createPostgresOwnershipVerificationServices(deps) {
   const audit = deps?.audit ?? repositories.audit;
 
   const challengeDeps = { ownershipVerifications, agentControl };
-  const serviceDeps = { ownershipVerifications, audit };
 
   return {
     async verifyOwnershipSetup(ctx, body, _runtimeConfig) {
@@ -302,37 +265,36 @@ export function createPostgresOwnershipVerificationServices(deps) {
     },
 
     async recordOwnershipSignal(ctx, id, payload) {
-      const record = await ownershipVerifications.findById(ctx, id);
-      if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-      return applyOwnershipSignal(serviceDeps, ctx, record, payload);
+      return ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
+        verification_id: id,
+        source: payload.source,
+        nonce_hash: payload.nonce_hash,
+        target_verification_id: newId('tv'),
+        observed_at: new Date().toISOString(),
+        transitioned_by: ctx.userId ?? 'system',
+      }, audit);
     },
 
     async recordOwnershipSignalByNonce({ tenantId }, payload) {
-      const ctx = { tenantId };
-      const record = await ownershipVerifications.findOpenByNonceHash(ctx, payload.nonce_hash);
-      if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-      return applyOwnershipSignal(serviceDeps, ctx, record, payload);
+      const ctx = { tenantId, userId: 'system', role: 'system' };
+      return ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
+        source: payload.source,
+        nonce_hash: payload.nonce_hash,
+        target_verification_id: newId('tv'),
+        observed_at: new Date().toISOString(),
+        transitioned_by: 'system',
+      }, audit);
     },
 
     async confirmOwnership(ctx, id) {
-      const record = await ownershipVerifications.findById(ctx, id);
-      if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-      if (record.status !== 'verified') {
-        return { error: 'ownership_not_verified', status: 409 };
-      }
-
-      const now = new Date().toISOString();
-      await ownershipVerifications.updateTargetGroupOwnershipStatus(
-        ctx,
-        record.target_group_id,
-        'user_confirmed',
-      );
-      const verification = await ownershipVerifications.updateVerificationConfirmed(ctx, id, {
-        confirmed_by_user_id: ctx.userId,
-        confirmed_at: now,
-      });
-      await auditVerification(audit, ctx, id, 'ownership_verification.user_confirmed');
-      return { verification };
+      const actorUserId = ctx.userId ?? 'system';
+      return ownershipVerifications.confirmOwnershipAtomic(ctx, {
+        verification_id: id,
+        target_verification_id: newId('tv'),
+        confirmed_by_user_id: actorUserId,
+        confirmed_at: new Date().toISOString(),
+        transitioned_by: actorUserId,
+      }, audit);
     },
 
     async listOwnershipVerifications(ctx) {

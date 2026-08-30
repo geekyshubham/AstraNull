@@ -761,6 +761,58 @@ function respondPasswordAuthResult(res, result) {
   return json(res, status, body);
 }
 
+function respondPasswordResetResult(res, result) {
+  if (result?.status === 'password_reset' && !result.error) {
+    return json(res, 200, { status: 'password_reset' });
+  }
+  if (!result?.error) {
+    return json(res, 503, {
+      error: 'password_login_unavailable',
+      message: 'Password authentication is not available on this deployment.',
+    });
+  }
+  const status = Number(result.status) || 400;
+  if (status === 429 && result.retry_after_seconds) {
+    res.setHeader('Retry-After', String(result.retry_after_seconds));
+  }
+  const body = {
+    error: result.error,
+    message: result.message,
+    ...(Array.isArray(result.failures) ? { failures: result.failures } : {}),
+    ...(Array.isArray(result.fields) ? { fields: result.fields } : {}),
+  };
+  return json(res, status, body);
+}
+
+function readPasswordSessionGeneration(headers) {
+  const authorization = headers?.authorization;
+  const match = typeof authorization === 'string'
+    ? authorization.match(/^Bearer\s+(.+)$/i)
+    : null;
+  if (!match) return null;
+  const parts = match[1].trim().split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (payload?.auth_source !== 'password') return null;
+    const generation = Number(payload.session_generation);
+    return {
+      tagged: true,
+      valid: Number.isSafeInteger(generation) && generation > 0,
+      generation,
+    };
+  } catch {
+    // Signature/shape verification has already run. A locally tagged token whose payload cannot
+    // be parsed is nevertheless invalid and must not be treated as an untagged enterprise token.
+    return { tagged: true, valid: false, generation: null };
+  }
+}
+
+function isPasswordRecoveryPublicRoute(pathname, method) {
+  return method === 'POST'
+    && (pathname === '/v1/auth/request-password-reset' || pathname === '/v1/auth/reset-password');
+}
+
 export function createServer(options = {}) {
   const env = options.env ?? process.env;
   const runtimeConfig =
@@ -1036,7 +1088,10 @@ export function createServer(options = {}) {
             return;
           }
         }
-        if (isPublicApiRoute(url.pathname, req.method)) {
+        if (
+          isPublicApiRoute(url.pathname, req.method)
+          || isPasswordRecoveryPublicRoute(url.pathname, req.method)
+        ) {
           await handlePublicApi(req, res, url, runtimeConfig, {
             clientKey,
             services: serviceDeps,
@@ -1069,6 +1124,23 @@ export function createServer(options = {}) {
         if (!auth.ok) {
           json(res, auth.status, auth.body);
           return;
+        }
+        const passwordSession = readPasswordSessionGeneration(req.headers);
+        if (passwordSession?.tagged) {
+          const validatePasswordSession = serviceDeps.passwordAuth?.validatePasswordSession;
+          if (!passwordSession.valid || typeof validatePasswordSession !== 'function') {
+            json(res, 401, { error: 'unauthorized', message: 'Missing or invalid session token.' });
+            return;
+          }
+          const sessionState = await validatePasswordSession({
+            tenantId: auth.ctx?.tenantId,
+            userId: auth.ctx?.userId,
+            sessionGeneration: passwordSession.generation,
+          });
+          if (sessionState?.valid !== true) {
+            json(res, 401, { error: 'unauthorized', message: 'Missing or invalid session token.' });
+            return;
+          }
         }
         const authCtx = auth.ctx ?? { tenantId: null, userId: null, role: 'viewer' };
         const ctx =
@@ -2216,6 +2288,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const g = await serviceDeps.targetGroups.patchTargetGroup(ctx, tgMatch[1], body);
     if (!g) return json(res, 404, { error: 'not_found' });
+    if (g.error) return json(res, g.status ?? 400, g);
     return json(res, 200, g);
   }
   if (tgMatch && method === 'DELETE') {
@@ -2294,6 +2367,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const t = await serviceDeps.targetGroups.addTarget(ctx, tgtMatch[1], body);
     if (!t) return json(res, 404, { error: 'not_found' });
+    if (t.error) return json(res, t.status ?? 400, t);
     return json(res, 201, t);
   }
   const tgtConfirmMatch = path.match(/^\/v1\/target-groups\/([^/]+)\/targets\/([^/]+):confirm$/);
@@ -2315,6 +2389,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const t = await serviceDeps.targetGroups.patchTarget(ctx, tgtIdMatch[1], tgtIdMatch[2], body);
     if (!t) return json(res, 404, { error: 'not_found' });
+    if (t.error) return json(res, t.status ?? 400, t);
     return json(res, 200, t);
   }
   if (tgtIdMatch && method === 'DELETE') {
@@ -2527,6 +2602,47 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, { ...meta, secret });
   }
 
+  if (
+    method === 'POST'
+    && (
+      path === '/v1/auth/mfa/enroll'
+      || path === '/v1/auth/mfa/verify'
+      || path === '/v1/auth/mfa/disable'
+    )
+  ) {
+    const gate = requirePermission(ctx, 'profile:mfa');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const passwordAuthService = serviceDeps.passwordAuth;
+    const methodName = path === '/v1/auth/mfa/enroll'
+      ? 'beginMfaEnrollment'
+      : path === '/v1/auth/mfa/verify'
+        ? 'confirmMfaEnrollment'
+        : 'disableMfa';
+    if (typeof passwordAuthService?.[methodName] !== 'function') {
+      return json(res, 503, {
+        error: 'mfa_unavailable',
+        message: 'Multi-factor authentication is not available on this deployment.',
+      });
+    }
+    const body = path === '/v1/auth/mfa/enroll'
+      ? {}
+      : await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await passwordAuthService[methodName]({
+      tenantId: ctx.tenantId,
+      userId: ctx.userId,
+      actorRole: ctx.role,
+      code: body?.totp ?? body?.code,
+    }, { runtimeConfig });
+    if (result.error) {
+      return json(res, result.status ?? 400, {
+        error: result.error,
+        message: result.message,
+        fields: result.fields,
+      });
+    }
+    return json(res, 200, result);
+  }
+
   if (path === '/v1/secrets' && method === 'POST') {
     const gate = requirePermission(ctx, 'secret:write');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2696,6 +2812,8 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   }
 
   if (path === '/v1/checks' && method === 'GET') {
+    const gate = requirePermission(ctx, 'check:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
     return json(res, 200, { items: await serviceDeps.testRuns.listChecks() });
   }
   if (path === '/v1/test-policies' && method === 'GET') {
@@ -2721,6 +2839,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const result = await serviceDeps.testPolicies.patchTestPolicy(ctx, policyMatch[1], body);
     if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
   }
   if (policyMatch && method === 'DELETE') {
@@ -2729,6 +2848,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (blockTestPolicyRoute(serviceDeps, method, res)) return;
     const result = await serviceDeps.testPolicies.archiveTestPolicy(ctx, policyMatch[1]);
     if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
   }
   if (path === '/v1/test-runs' && method === 'POST') {
@@ -3222,7 +3342,12 @@ async function handlePublicApi(req, res, url, runtimeConfig, options = {}) {
 
   if (
     method === 'POST'
-    && (path === '/v1/auth/login' || path === '/v1/auth/set-password')
+    && (
+      path === '/v1/auth/login'
+      || path === '/v1/auth/set-password'
+      || path === '/v1/auth/request-password-reset'
+      || path === '/v1/auth/reset-password'
+    )
   ) {
     if (runtimeConfig.passwordLoginEnabled !== true) {
       return json(res, 403, {
@@ -3233,18 +3358,36 @@ async function handlePublicApi(req, res, url, runtimeConfig, options = {}) {
     const passwordAuthService = options.services?.passwordAuth;
     const methodName = path === '/v1/auth/login'
       ? 'loginWithPassword'
-      : 'setPasswordWithInvite';
+      : path === '/v1/auth/set-password'
+        ? 'setPasswordWithInvite'
+        : path === '/v1/auth/request-password-reset'
+          ? 'requestPasswordReset'
+          : 'resetPasswordWithToken';
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     if (typeof passwordAuthService?.[methodName] !== 'function') {
+      if (methodName === 'requestPasswordReset') {
+        return json(res, 200, { status: 'reset_requested' });
+      }
       return json(res, 503, {
         error: 'password_login_unavailable',
         message: 'Password authentication is not available on this deployment.',
       });
     }
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
     const result = await passwordAuthService[methodName](body, {
       runtimeConfig,
       clientKey: options.clientKey,
+      ...(methodName === 'requestPasswordReset'
+        ? { delivery: options.services?.passwordRecoveryDelivery }
+        : {}),
     });
+    if (methodName === 'requestPasswordReset') {
+      // Defense in depth: a custom/injected service cannot accidentally reintroduce account or
+      // delivery-state enumeration through this public response.
+      return json(res, 200, { status: 'reset_requested' });
+    }
+    if (methodName === 'resetPasswordWithToken') {
+      return respondPasswordResetResult(res, result);
+    }
     return respondPasswordAuthResult(res, result);
   }
 

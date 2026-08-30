@@ -47,6 +47,16 @@ jobs:
       - name: Portal lint
         run: npm run lint:portal
 
+      - name: Deployment artifacts
+        run: |
+          ruby -e "require 'yaml'; YAML.parse_file('.github/workflows/deploy-aws.yml')"
+          bash -n ops/aws/deploy.sh
+          bash -n ops/aws/restore.sh
+          node --check scripts/validate-aws-compose-secrets.mjs
+          node --check scripts/worker-heartbeat-health.mjs
+          docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/env.example --profile ops config --no-interpolate --no-path-resolution >/dev/null
+          docker build -f ops/aws/Dockerfile -t astranull-ci-check:${GITHUB_SHA:-local} .
+
       - name: Web typecheck
         run: npm run web:typecheck
 
@@ -75,6 +85,15 @@ jobs:
 
       - name: Postgres tenant query audit
         run: node scripts/postgres-tenant-query-audit.mjs
+
+      - name: Resource-exhaustion taxonomy validation (DET-025)
+        run: node scripts/validate-resource-exhaustion-taxonomy.mjs
+
+      - name: Generated check library is in sync
+        run: node scripts/generate-check-library-html.mjs --check
+
+      - name: Edge signature corpus provenance and hash parity
+        run: node --test tests/unit/edge-signature-corpus.test.mjs
 
       # apps/web/react-app.{js,css} is a hand-committed bundle that is deployed
       # as-is. Nothing else rebuilds it, so portal source and the shipped bundle

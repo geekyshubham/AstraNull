@@ -54,11 +54,11 @@ describe('target groups API CRUD', () => {
       `/v1/target-groups/${groupId}/targets/${targetId}`,
       {
         headers: engineer,
-        body: { value: 'api-updated.example.com' },
+        body: { expected_behavior: 'should_be_protected' },
       },
     );
     assert.equal(targetPatched.status, 200);
-    assert.equal(targetPatched.json.value, 'api-updated.example.com');
+    assert.equal(targetPatched.json.expected_behavior, 'should_be_protected');
 
     const targetDeleted = await request(
       baseUrl,
@@ -185,5 +185,60 @@ describe('target groups API CRUD', () => {
     });
     assert.equal(archived.status, 409);
     assert.equal(archived.json.error, 'target_group_active_run');
+  });
+
+  it('ignores ownership/provenance spoofing and enforces canonical scoped dedupe', async () => {
+    const engineer = demoHeaders('engineer');
+    const created = await request(baseUrl, 'POST', '/v1/target-groups', {
+      headers: engineer,
+      body: {
+        name: 'Trust boundary group',
+        environment_id: 'env_demo',
+        ownership_status: 'user_confirmed',
+        dns_ownership: { verified: true },
+      },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.ownership_status, 'unverified');
+    assert.equal(created.json.dns_ownership, null);
+
+    const duplicateGroup = await request(baseUrl, 'POST', '/v1/target-groups', {
+      headers: engineer,
+      body: { name: ' trust boundary GROUP ', environment_id: 'env_demo' },
+    });
+    assert.equal(duplicateGroup.status, 409);
+    assert.equal(duplicateGroup.json.error, 'target_group_exists');
+
+    const target = await request(baseUrl, 'POST', `/v1/target-groups/${created.json.id}/targets`, {
+      headers: engineer,
+      body: {
+        kind: 'hostname',
+        value: 'WWW.Example.COM.',
+        metadata: {
+          notes: 'keep me',
+          verification_state: 'user_confirmed',
+          eligibility: 'eligible',
+          source: 'trusted_connector',
+          provenance: { trusted: true },
+        },
+      },
+    });
+    assert.equal(target.status, 201);
+    assert.equal(target.json.kind, 'fqdn');
+    assert.equal(target.json.value, 'www.example.com');
+    assert.deepEqual(target.json.metadata, { notes: 'keep me' });
+
+    const duplicateTarget = await request(baseUrl, 'POST', `/v1/target-groups/${created.json.id}/targets`, {
+      headers: engineer,
+      body: { kind: 'fqdn', value: 'www.example.com' },
+    });
+    assert.equal(duplicateTarget.status, 409);
+    assert.equal(duplicateTarget.json.error, 'target_exists');
+
+    const inventory = await request(baseUrl, 'GET', '/v1/targets', { headers: engineer });
+    const item = inventory.json.items.find((row) => row.id === target.json.id);
+    assert.equal(item.verification_state, 'unverified');
+    assert.equal(item.eligibility, 'not_eligible');
+    assert.equal(item.source, 'manual');
   });
 });

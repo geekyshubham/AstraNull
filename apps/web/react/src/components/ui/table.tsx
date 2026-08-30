@@ -68,6 +68,12 @@ const DATA_TABLE_STYLES = `
   min-height: 34px;
   padding-block: 0;
 }
+@media (max-width: 900px) {
+  .table-wrap .data-table tbody .btn-sm {
+    min-height: 44px;
+    padding-block: 10px;
+  }
+}
 @media (max-width: 700px) {
   .table-wrap:has(> .data-table) {
     border-radius: var(--radius-md);
@@ -75,6 +81,20 @@ const DATA_TABLE_STYLES = `
   .table-wrap .data-table .data-table-head th,
   .table-wrap .data-table tbody td {
     padding-inline: var(--space-3);
+  }
+  .table-wrap .data-table tbody tr,
+  .table-wrap .data-table tbody td,
+  .table-wrap .data-table .data-table-cell-content {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .table-wrap .data-table tbody td,
+  .table-wrap .data-table .data-table-cell-content {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .table-wrap .data-table tbody td .row-actions--compact {
+    flex-wrap: wrap;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -99,9 +119,8 @@ type DataTableProps<T> = {
   getRowId?: (item: T, index: number) => string | number;
   getRowProps?: (item: T, index: number) => Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
   /**
-   * Why this dataset is missing. When set, `items` is a fallback rather than
-   * data, so the error is shown INSTEAD of the empty state — an operator must
-   * never read "no findings" when the truth is "findings failed to load".
+   * Why this dataset could not be refreshed. With no items, the error replaces the empty state.
+   * With cached items, the error remains visible above those retained rows.
    */
   loadError?: string | null;
   /** Retry affordance for `loadError`. Omitted renders the message alone. */
@@ -117,11 +136,22 @@ function isDeploymentModeMessage(message: string) {
   return message === DEPLOYMENT_MODE_GAP_MESSAGE;
 }
 
-export function TableLoadError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function TableLoadError({
+  message,
+  onRetry,
+  retainedRows = false
+}: {
+  message: string;
+  onRetry?: () => void;
+  retainedRows?: boolean;
+}) {
   const permanent = isDeploymentModeMessage(message);
   return (
     <div className="form-banner error table-load-error" role="alert">
-      <span>{permanent ? message : `Could not load — ${message}`}</span>
+      <span>
+        {permanent ? message : `Could not load — ${message}`}
+        {retainedRows ? ' Showing previously loaded rows below.' : ''}
+      </span>
       {onRetry && !permanent ? (
         <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
           Retry
@@ -149,7 +179,6 @@ type DataTableBodyRowProps<T> = {
   item: T;
   index: number;
   columns: TableColumn<T>[];
-  rowId: string | number;
   isSelected: boolean;
   rowProps: Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
 };
@@ -158,22 +187,37 @@ function DataTableBodyRow<T>({
   item,
   index,
   columns,
-  rowId,
   isSelected,
   rowProps
 }: DataTableBodyRowProps<T>) {
-  const { className: rowClassName, ...restRowProps } = rowProps;
+  const { className: rowClassName, onClick, onKeyDown, ...restRowProps } = rowProps;
   const zebra = index % 2 === 1;
+  const nestedInteractiveOwnsEvent = (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => {
+    const target = event.target;
+    if (!(target instanceof Element) || target === event.currentTarget) return false;
+    const owner = target.closest('a, button, input, select, textarea, summary, [role="button"], [role="link"]');
+    return owner !== null && owner !== event.currentTarget;
+  };
 
   return (
     <tr
       {...restRowProps}
       className={cn(zebra && 'table-row-zebra', isSelected && 'table-row-selected', rowClassName)}
       aria-selected={isSelected ? true : restRowProps['aria-selected']}
+      onClick={onClick ? (event) => {
+        if (nestedInteractiveOwnsEvent(event)) return;
+        onClick(event);
+      } : undefined}
+      onKeyDown={onKeyDown ? (event) => {
+        // A nested link, button, input, or other focusable descendant owns its keyboard event.
+        // The row handler runs only while focus is on the row itself.
+        if (event.target !== event.currentTarget) return;
+        onKeyDown(event);
+      } : undefined}
     >
       {columns.map((column) => (
         <td key={column.key} data-label={column.label}>
-          {column.render(item)}
+          <div className="data-table-cell-content">{column.render(item)}</div>
         </td>
       ))}
     </tr>
@@ -194,7 +238,12 @@ function DataTableChrome<T>({
       <style>{DATA_TABLE_STYLES}</style>
       {/* tabIndex=0 makes the horizontally-scrollable region keyboard-accessible
           (WCAG 2.1.1 / axe scrollable-region-focusable). role+label name it. */}
-      <div className={cn('table-wrap', className)} tabIndex={0} role="region" aria-label="Data table, scrollable">
+      <div
+        className={cn('table-wrap', className)}
+        tabIndex={0}
+        role="region"
+        aria-label={`${columns.map((column) => column.label).join(', ')} data table`}
+      >
         <table className="data-table">
           <TableHeaderRow columns={columns} />
           {children}
@@ -215,8 +264,8 @@ export function DataTable<T>({
   loadError = null,
   onRetry
 }: DataTableProps<T>) {
+  const failureMessage = loadError?.trim() ?? '';
   if (items.length === 0) {
-    const failed = Boolean(loadError && loadError.trim());
     return (
       <>
         <style>{DATA_TABLE_STYLES}</style>
@@ -224,10 +273,10 @@ export function DataTable<T>({
           className={cn('table-wrap data-table-empty-wrap', className)}
           tabIndex={0}
           role="region"
-          aria-label="Data table, empty"
+          aria-label={`${columns.map((column) => column.label).join(', ')} data table, empty`}
         >
           <div className="table-empty">
-            {failed ? <TableLoadError message={String(loadError).trim()} onRetry={onRetry} /> : empty}
+            {failureMessage ? <TableLoadError message={failureMessage} onRetry={onRetry} /> : empty}
           </div>
         </div>
       </>
@@ -235,26 +284,30 @@ export function DataTable<T>({
   }
 
   return (
-    <DataTableChrome columns={columns} className={className}>
-      <tbody>
-        {items.map((item, index) => {
-          const rowId = getRowId?.(item, index) ?? index;
-          const isSelected = selectedId != null && selectedId === rowId;
-          const rowProps = getRowProps?.(item, index) ?? {};
+    <>
+      {failureMessage ? (
+        <TableLoadError message={failureMessage} onRetry={onRetry} retainedRows />
+      ) : null}
+      <DataTableChrome columns={columns} className={className}>
+        <tbody>
+          {items.map((item, index) => {
+            const rowId = getRowId?.(item, index) ?? index;
+            const isSelected = selectedId != null && selectedId === rowId;
+            const rowProps = getRowProps?.(item, index) ?? {};
 
-          return (
-            <DataTableBodyRow
-              key={rowId}
-              item={item}
-              index={index}
-              columns={columns}
-              rowId={rowId}
-              isSelected={isSelected}
-              rowProps={rowProps}
-            />
-          );
-        })}
-      </tbody>
-    </DataTableChrome>
+            return (
+              <DataTableBodyRow
+                key={rowId}
+                item={item}
+                index={index}
+                columns={columns}
+                isSelected={isSelected}
+                rowProps={rowProps}
+              />
+            );
+          })}
+        </tbody>
+      </DataTableChrome>
+    </>
   );
 }

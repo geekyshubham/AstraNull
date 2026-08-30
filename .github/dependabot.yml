@@ -10,6 +10,7 @@ updates:
       - "/"
       - "/agents/linux"
       - "/ops/digitalocean"
+      - "/ops/aws"
       - "/ops/railway"
       - "/ops/docker"
       - "/ops/kubernetes"

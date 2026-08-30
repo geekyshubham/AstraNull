@@ -17,7 +17,10 @@ import {
 } from '../probe-fleet-matrix-evidence.mjs';
 import { REQUIRED_SCENARIOS } from '../staging-e2e-matrix-evidence.mjs';
 import { REQUIRED_CONCURRENCY_ROUTE_FAMILIES } from '../postgres-concurrency-evidence.mjs';
-import { REQUIRED_PAGES } from '../ui-accessibility-matrix-evidence.mjs';
+import {
+  REQUIRED_PAGES,
+  validateUiAccessibilityCollectorAcceptance,
+} from '../ui-accessibility-matrix-evidence.mjs';
 import { computeSnapshotHash } from '../evidence-snapshot-manifest.mjs';
 import { PRODUCTION_RELEASE_EVIDENCE_COMPLETE } from '../../tests/fixtures/productionReleaseEvidenceComplete.mjs';
 
@@ -600,45 +603,42 @@ export function buildCollectorScriptInput(kind, context = {}) {
     case 'ui_accessibility_matrix': {
       const live = loadLiveEvidenceInput(context, 'ui-accessibility-matrix-input.json');
       if (live?.runs?.length) {
+        const runnerSource = 'run-live-ui-accessibility-matrix';
+        const acceptance = validateUiAccessibilityCollectorAcceptance(live, {
+          requireRunnerSource: true,
+          inputSource: runnerSource,
+          environment,
+        });
         return {
-          input: {
-            schema_version: 1,
-            artifact_type: 'ui_accessibility_matrix_input',
-            captured_at: createdAt,
-            runs: live.runs,
-          },
+          input: live,
+          inputSource: acceptance.ok ? runnerSource : 'invalid-live-ui-accessibility-matrix',
         };
       }
       const runs = [];
       for (const page of REQUIRED_PAGES) {
-        runs.push({
-          page,
-          viewport: 'desktop',
-          browser: 'chromium',
-          axe_status: 'pass',
-          keyboard_status: 'pass',
-          screen_reader_status: 'pass',
-          issues: { critical: 0, serious: 0, moderate: 0, minor: 0 },
-          captured_at: createdAt,
-        });
-        runs.push({
-          page,
-          viewport: 'mobile',
-          browser: 'webkit',
-          axe_status: 'pass',
-          keyboard_status: 'pass',
-          screen_reader_status: 'pass',
-          issues: { critical: 0, serious: 0, moderate: 0, minor: 0 },
-          captured_at: createdAt,
-        });
+        for (const viewport of ['desktop', 'mobile']) {
+          runs.push({
+            page,
+            viewport,
+            browser: 'not_run',
+            axe_status: 'fail',
+            keyboard_status: 'fail',
+            screen_reader_status: 'fail',
+            issues: { critical: 0, serious: 0, moderate: 1, minor: 0 },
+            notes: 'not_run: live UI accessibility matrix execution is pending; run npm run staging:live:ui-accessibility',
+          });
+        }
       }
       return {
         input: {
           schema_version: 1,
           artifact_type: 'ui_accessibility_matrix_input',
-          captured_at: createdAt,
+          environment,
+          evidence_uri: `evidence://ui/accessibility-matrix/${environment}/pending`,
+          execution_state: 'pending',
           runs,
         },
+        inputSource: 'pending-live-ui-accessibility-matrix',
       };
     }
 
@@ -821,7 +821,8 @@ export function buildCollectorScriptInput(kind, context = {}) {
       return {
         input: {
           high_scale_request_id: 'hsr_provider_evidence_staging_sim',
-          requested_scenario_families: ['volumetric_metadata'],
+          requested_scenario_families: ['udp_flood'],
+          delivery_patterns: ['direct'],
           authorized_scope_hash: 'sha256:scope-staging-sim-001',
           soc_reviewer: 'usr_soc_reviewer',
           legal_signoff: {
@@ -834,9 +835,10 @@ export function buildCollectorScriptInput(kind, context = {}) {
             approval_reference: 'CF-1001',
             valid_window: { valid_from: '2026-07-01T00:00:00.000Z', valid_to: '2026-07-10T00:00:00.000Z' },
             approved_targets: ['tg_staging_sim'],
-            approved_scenario_families: ['volumetric_metadata'],
+            approved_scenario_families: ['udp_flood'],
+            approved_delivery_patterns: ['direct'],
             contact_path: 'provider-war-room@example.invalid',
-            approved_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 30 },
+            approved_limits: { max_gbps: 0.5, max_duration_minutes: 30 },
             provider_specific_evidence: { provider_ticket: 'CF-1001' },
             emergency_stop_path: 'provider-stop-bridge',
           },

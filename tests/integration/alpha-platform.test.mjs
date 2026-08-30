@@ -107,7 +107,7 @@ describe('alpha platform slice', () => {
     const firstApprove = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, { headers: soc });
     assert.equal(firstApprove.status, 200);
     assert.equal(firstApprove.json.state, 'under_review');
-    assert.equal(firstApprove.json.scope_hash, null);
+    assert.ok(firstApprove.json.scope_hash);
     const secondApprove = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/approve`, {
       headers: socSecondary(),
     });
@@ -131,6 +131,14 @@ describe('alpha platform slice', () => {
       expected_behavior: 'must_block_before_origin',
     });
 
+    const loaBlocked = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
+    assert.equal(loaBlocked.status, 409);
+    assert.equal(loaBlocked.json.error, 'loa_scope_mismatch');
+
+    const activeLoa = getStore().loaSignatures.find(
+      (row) => row.tenant_id === 'ten_demo' && row.target_group_id === 'tg_1' && row.state === 'signed',
+    );
+    activeLoa.scope_snapshot.targets.push('tgt_new');
     const start = await request(baseUrl, 'POST', `/internal/soc/high-scale/${hsId}/start`, { headers: soc });
     assert.equal(start.status, 409);
     assert.equal(start.json.error, 'scope_hash_mismatch');

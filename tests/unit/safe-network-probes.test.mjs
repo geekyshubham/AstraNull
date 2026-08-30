@@ -46,29 +46,42 @@ describe('safe network probes', () => {
     assert.equal(resolveAlertWebhookUrl(job), 'https://hooks.example.test/alerts');
   });
 
-  it('probeUdpDatagram reports blocked when lookup fails', async () => {
+  it('probeUdpDatagram reports blocked without sending when A/AAAA are empty', async () => {
+    let sockets = 0;
     const outcome = await probeUdpDatagram(baseJob(), {
-      lookupFn: async () => {
-        throw Object.assign(new Error('not found'), { code: 'ENOTFOUND' });
-      },
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => [],
+      createSocket: () => { sockets += 1; throw new Error('must not create socket'); },
     });
     assert.equal(outcome.external_result, 'blocked');
     assert.equal(outcome.metadata.probe_kind, 'udp_probe');
-    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(sockets, 0);
   });
 
-  it('probeUdpDatagram reports connected after single datagram send', async () => {
+  it('probeUdpDatagram sends only to the injected preflight literal', async () => {
+    let resolverCalls = 0;
+    let sentHost = null;
     const outcome = await probeUdpDatagram(baseJob(), {
-      lookupFn: async () => [{ address: '127.0.0.1', family: 4 }],
-      createSocket: () => ({
-        send(_payload, _port, _host, cb) {
-          cb(null);
-        },
-        close() {},
-      }),
+      vettedHost: 'origin.test',
+      vettedAddresses: ['203.0.113.20'],
+      resolve4Fn: async () => { resolverCalls += 1; return ['10.0.0.8']; },
+      resolve6Fn: async () => { resolverCalls += 1; return []; },
+      createSocket: (type) => {
+        assert.equal(type, 'udp4');
+        return {
+          send(_payload, _port, host, cb) {
+            sentHost = host;
+            cb(null);
+          },
+          close() {},
+        };
+      },
     });
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.datagram_bytes > 0, true);
+    assert.equal(sentHost, '203.0.113.20');
+    assert.equal(resolverCalls, 0);
   });
 
   it('probeQuicReachability collects Alt-Svc and UDP send metadata', async () => {
@@ -87,9 +100,13 @@ describe('safe network probes', () => {
             },
           },
         }),
-        lookupFn: async () => [{ address: '127.0.0.1', family: 4 }],
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['203.0.113.21'],
+        resolve4Fn: async () => { throw new Error('resolver must not run'); },
+        resolve6Fn: async () => { throw new Error('resolver must not run'); },
         createSocket: () => ({
-          send(_payload, _port, _host, cb) {
+          send(_payload, _port, host, cb) {
+            assert.equal(host, '203.0.113.21');
             cb(null);
           },
           close() {},
@@ -237,7 +254,13 @@ describe('safe network probes', () => {
         target: { kind: 'fqdn', value: 'edge.example.test' },
       }),
       {
-        connectFn: () => {
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['93.184.216.34'],
+        resolve4Fn: async () => { throw new Error('resolver must not run'); },
+        resolve6Fn: async () => { throw new Error('resolver must not run'); },
+        connectFn: (options) => {
+          assert.equal(options.host, '93.184.216.34');
+          assert.equal(options.servername, 'edge.example.test');
           const handlers = {};
           const socket = {
             once(event, fn) {
@@ -268,6 +291,8 @@ describe('safe network probes', () => {
         target: { kind: 'fqdn', value: 'edge.example.test' },
       }),
       {
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['93.184.216.34'],
         connectFn: () => {
           const handlers = {};
           const socket = {
@@ -296,6 +321,8 @@ describe('safe network probes', () => {
         target: { kind: 'fqdn', value: 'edge.example.test' },
       }),
       {
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['93.184.216.34'],
         connectFn: () => ({
           once() {},
           end() {},
@@ -315,6 +342,8 @@ describe('safe network probes', () => {
         target: { kind: 'fqdn', value: 'edge.example.test' },
       }),
       {
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['93.184.216.34'],
         connectFn: () => {
           const handlers = {};
           const session = {
@@ -347,6 +376,8 @@ describe('safe network probes', () => {
         target: { kind: 'url', value: 'https://edge.example.test/' },
       }),
       {
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['93.184.216.34'],
         connectFn: () => {
           const handlers = {};
           const session = {

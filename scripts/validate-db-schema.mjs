@@ -63,6 +63,8 @@ const REQUIRED_TABLES = [
   'users',
   'user_credentials',
   'user_password_invites',
+  'user_password_resets',
+  'password_recovery_delivery_outbox',
   'signup_requests',
   'staff_users',
   'tenant_accounts',
@@ -72,12 +74,16 @@ const REQUIRED_TABLES = [
   'internal_audit_log',
   'target_groups',
   'targets',
+  'dns_challenges',
+  'target_verifications',
   'bootstrap_tokens',
   'agents',
   'agent_jobs',
   'probe_jobs',
   'test_runs',
   'test_policies',
+  'test_policy_dispatches',
+  'loa_signatures',
   'events',
   'verdicts',
   'findings',
@@ -135,6 +141,12 @@ const REQUIRED_COLUMNS = [
   [/CREATE TABLE test_runs[\s\S]*?awaiting_external_probe/m, 'test_runs.awaiting_external_probe'],
   [/CREATE TABLE test_runs[\s\S]*?safety_constraints/m, 'test_runs.safety_constraints'],
   [/CREATE TABLE test_runs[\s\S]*?created_by/m, 'test_runs.created_by'],
+  [/CREATE TABLE test_runs[\s\S]*?policy_dispatch_id/m, 'test_runs.policy_dispatch_id'],
+  [/CREATE TABLE target_groups[\s\S]*?deleted_at/m, 'target_groups.deleted_at'],
+  [/CREATE TABLE target_groups[\s\S]*?deleted_by/m, 'target_groups.deleted_by'],
+  [/CREATE TABLE dns_challenges[\s\S]*?expires_at/m, 'dns_challenges.expires_at'],
+  [/CREATE TABLE target_verifications[\s\S]*?source_ref/m, 'target_verifications.source_ref'],
+  [/CREATE TABLE test_policy_dispatches[\s\S]*?start_claimed_at/m, 'test_policy_dispatches.start_claimed_at'],
   [/CREATE TABLE events[\s\S]*?agent_id/m, 'events.agent_id'],
   [/CREATE TABLE audit_logs[\s\S]*?sequence/m, 'audit_logs.sequence'],
   [/CREATE TABLE audit_logs[\s\S]*?prev_hash/m, 'audit_logs.prev_hash'],
@@ -220,6 +232,12 @@ const REQUIRED_INDEXES = [
   'idx_internal_audit_log_tenant_created',
   'idx_internal_audit_log_staff_created',
   'idx_user_password_invites_token_hash',
+  'idx_user_password_resets_token_hash',
+  'idx_password_recovery_delivery_outbox_due',
+  'dns_challenges_by_group',
+  'target_verifications_latest',
+  'uniq_test_runs_policy_dispatch',
+  'loa_signatures_active_tenant_group',
   'idx_waf_assets_tenant_group_url',
   'idx_external_asset_candidates_approval_queue',
   'uniq_waf_posture_snapshot_current',
@@ -251,6 +269,8 @@ const TENANT_RLS_TABLES = [
   'users',
   'user_credentials',
   'user_password_invites',
+  'user_password_resets',
+  'password_recovery_delivery_outbox',
   'tenant_accounts',
   'tenant_subscriptions',
   'entitlement_grants',
@@ -258,10 +278,14 @@ const TENANT_RLS_TABLES = [
   'internal_audit_log',
   'target_groups',
   'targets',
+  'dns_challenges',
+  'target_verifications',
   'bootstrap_tokens',
   'agents',
   'test_runs',
   'test_policies',
+  'test_policy_dispatches',
+  'loa_signatures',
   'probe_jobs',
   'agent_jobs',
   'events',
@@ -308,6 +332,12 @@ const TENANT_RLS_TABLES = [
   'waf_action_items',
   'waf_coverage_daily_rollups',
   'waf_scenario_intakes',
+];
+
+const REQUIRED_MIGRATION_FILES = [
+  '0043_password_resets_and_mfa.sql',
+  '0044_target_management_rules_and_schedules.sql',
+  '0045_ownership_and_policy_dispatch_hardening.sql',
 ];
 
 const REQUIRED_RLS = [
@@ -461,6 +491,9 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
   const combinedMigration = stripSqlComments(
     loaded.migrationFiles.map((m) => (typeof m === 'string' ? m : m.sql)).join('\n'),
   );
+  const migrationNames = loaded.migrationFiles
+    .filter((migration) => typeof migration !== 'string')
+    .map((migration) => migration.name);
   const schema = stripSqlComments(loaded.schemaSql ?? schemaSql);
 
   for (const table of REQUIRED_TABLES) {
@@ -558,15 +591,36 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
   if (loaded.migrationFiles.length === 0) {
     errors.push('migrations: expected at least one .sql file');
   } else {
+    for (const requiredName of REQUIRED_MIGRATION_FILES) {
+      errors.push(
+        !migrationNames.includes(requiredName)
+          ? `migrations: missing required file ${requiredName}`
+          : null,
+      );
+    }
     const first = loaded.migrationFiles[0];
     const firstSql = typeof first === 'string' ? first : first.sql;
     const firstName = typeof first === 'string' ? 'migration' : first.name;
     if (!/0001_core_validation_loop/.test(firstName) && !/0001_core_validation_loop/.test(firstSql)) {
       errors.push('migrations: expected 0001_core_validation_loop baseline');
     }
-    for (const table of ['probe_jobs', 'agent_jobs']) {
-      errors.push(assertPattern(`migration:${table}`, combinedMigration, new RegExp(`CREATE TABLE ${table}\\b`, 'i')));
+    for (const table of [
+      'probe_jobs',
+      'agent_jobs',
+      'dns_challenges',
+      'target_verifications',
+      'user_password_resets',
+      'password_recovery_delivery_outbox',
+      'test_policy_dispatches',
+      'loa_signatures',
+    ]) {
+      errors.push(assertPattern(`migration:${table}`, combinedMigration, new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${table}\\b`, 'i')));
     }
+    errors.push(assertPattern('migration:test_runs_policy_dispatch_id', combinedMigration, /test_runs[\s\S]*?policy_dispatch_id/m));
+    errors.push(assertPattern('migration:uniq_test_runs_policy_dispatch', combinedMigration, /uniq_test_runs_policy_dispatch/));
+    errors.push(assertPattern('migration:fk_test_runs_policy_dispatch_tenant', combinedMigration, /fk_test_runs_policy_dispatch_tenant/));
+    errors.push(assertPattern('migration:target_groups_deleted_at', combinedMigration, /target_groups[\s\S]*?deleted_at/m));
+    errors.push(assertPattern('migration:target_groups_deleted_by', combinedMigration, /target_groups[\s\S]*?deleted_by/m));
     errors.push(assertPattern('migration:rls', combinedMigration, /ALTER TABLE tenants ENABLE ROW LEVEL SECURITY/));
     errors.push(assertPattern('migration:rls_force', combinedMigration, /ALTER TABLE tenants FORCE ROW LEVEL SECURITY/));
     for (const table of TENANT_RLS_TABLES) {

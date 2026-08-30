@@ -45,6 +45,7 @@ function InstallCodeBlock({ tabId, label, code }: { tabId: InstallTabId; label: 
       id={installPanelId(tabId)}
       role="tabpanel"
       aria-label={`${label} install commands`}
+      tabIndex={0}
       style={INSTALL_CODE_STYLE}
     >
       {code}

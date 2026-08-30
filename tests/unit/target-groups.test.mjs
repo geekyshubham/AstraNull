@@ -61,10 +61,11 @@ describe('target group service CRUD', () => {
 
     const patched = patchTarget(ctx, group.id, target.id, {
       value: 'two.example.com',
-      metadata: { source: 'manual' },
+      metadata: { notes: 'renamed target', source: 'trusted', ownership_status: 'verified' },
     });
-    assert.equal(patched.value, 'two.example.com');
-    assert.deepEqual(patched.metadata, { source: 'manual' });
+    assert.equal(patched.error, 'target_identity_immutable');
+    assert.equal(patched.status, 409);
+    assert.equal(target.value, 'one.example.com');
 
     getStore().testRuns.push({
       id: 'run_target_active',
@@ -82,6 +83,9 @@ describe('target group service CRUD', () => {
     const deleted = deleteTarget(ctx, group.id, target.id);
     assert.equal(deleted.deleted, true);
     assert.equal(getTargetGroup(ctx, group.id).targets.length, 0);
+    const archived = getStore().targets.find((row) => row.id === target.id);
+    assert.ok(archived.deleted_at);
+    assert.equal(archived.deleted_by, ctx.userId);
   });
 
   it('persists optional onboard metadata (agent_id binding, notes) on add', () => {
@@ -96,10 +100,19 @@ describe('target group service CRUD', () => {
     });
     assert.deepEqual(bound.metadata, { agent_id: 'agt_edge_1' });
 
-    // IP onboard form captures a free-text note.
-    const noted = addTarget(ctx, group.id, {
+    // IP targets reject host:port; ports belong to the explicit tcp kind.
+    const invalidIp = addTarget(ctx, group.id, {
       kind: 'ip',
       value: '203.0.113.10:443',
+      metadata: { notes: 'must be rejected' },
+    });
+    assert.equal(invalidIp.error, 'invalid_target');
+    assert.equal(invalidIp.field, 'value');
+
+    // A valid IP onboard form still captures a free-text note.
+    const noted = addTarget(ctx, group.id, {
+      kind: 'ip',
+      value: '203.0.113.10',
       expected_behavior: 'absorb_at_origin',
       metadata: { notes: 'Origin behind CDN · single-AZ' },
     });
@@ -112,7 +125,7 @@ describe('target group service CRUD', () => {
     // All three survive the round-trip through getTargetGroup.
     const reloaded = getTargetGroup(ctx, group.id).targets;
     assert.equal(reloaded.find((t) => t.value === 'origin.example.com').metadata.agent_id, 'agt_edge_1');
-    assert.equal(reloaded.find((t) => t.value === '203.0.113.10:443').metadata.notes, 'Origin behind CDN · single-AZ');
+    assert.equal(reloaded.find((t) => t.value === '203.0.113.10').metadata.notes, 'Origin behind CDN · single-AZ');
   });
 
   it('caps findings_on_group at 50 newest-first and reports the full total', () => {

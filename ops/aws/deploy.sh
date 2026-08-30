@@ -17,7 +17,6 @@ previous_compose=''
 target_compose=''
 ACTIVE_COMPOSE_FILE=''
 plain_host=''
-plain_container=''
 backup=''
 activated=0
 migration_started=0
@@ -97,9 +96,13 @@ ensure_postgres_ready_for_backup() {
   check_postgres
 }
 
+control_plane_state_exists() {
+  [[ -e "$CONTROL_PLANE_IMAGE_TAG_FILE" || -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]]
+}
+
 read_control_plane_image_tag() {
   local fallback=$1 tag
-  if [[ ! -e "$CONTROL_PLANE_IMAGE_TAG_FILE" && ! -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]]; then
+  if ! control_plane_state_exists; then
     printf '%s\n' "$fallback"
     return
   fi
@@ -115,22 +118,76 @@ read_control_plane_image_tag() {
   printf '%s\n' "$tag"
 }
 
-persist_control_plane_image_tag() {
-  local tag=$1 temporary
+read_control_plane_image_id() {
+  local compatibility=${1:-} image_id line_count
+  [[ -f "$CONTROL_PLANE_IMAGE_TAG_FILE" && ! -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]] || {
+    echo "deploy: missing or invalid control-plane state file $CONTROL_PLANE_IMAGE_TAG_FILE" >&2
+    return 1
+  }
+  line_count=$(awk 'END { print NR }' "$CONTROL_PLANE_IMAGE_TAG_FILE")
+  if [[ "$line_count" == 1 && "$compatibility" == allow-legacy-tag-only ]]; then
+    # One release bridges the former tag-only record after proving it against the
+    # running container (or, for a stopped stack, the still-bound local tag).
+    return 0
+  fi
+  [[ "$line_count" == 2 ]] || {
+    echo 'deploy: persisted control-plane state must contain exactly a tag and image ID' >&2
+    return 1
+  }
+  image_id=$(sed -n '2p' "$CONTROL_PLANE_IMAGE_TAG_FILE")
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'deploy: persisted control-plane image ID is invalid' >&2
+    return 1
+  }
+  printf '%s\n' "$image_id"
+}
+
+persist_control_plane_image_state() {
+  local tag=$1 image_id=$2 temporary
   [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || {
     echo 'deploy: refusing to persist a non-SHA control-plane image tag' >&2
     return 1
   }
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'deploy: refusing to persist an invalid control-plane image ID' >&2
+    return 1
+  }
   mkdir -p "$DEPLOY_STATE_DIR"
   chmod 700 "$DEPLOY_STATE_DIR"
-  temporary=$(mktemp "$DEPLOY_STATE_DIR/.control-plane-image-tag.XXXXXX")
-  printf '%s\n' "$tag" > "$temporary"
+  temporary=$(mktemp "$DEPLOY_STATE_DIR/.control-plane-image-state.XXXXXX")
+  printf '%s\n%s\n' "$tag" "$image_id" > "$temporary"
   chmod 600 "$temporary"
   mv -f -- "$temporary" "$CONTROL_PLANE_IMAGE_TAG_FILE"
 }
 
 image_id_for_ref() {
   timeout -k 5 30 docker image inspect --format '{{.Id}}' "$1"
+}
+
+rebind_control_plane_image_tag() {
+  local tag=$1 expected_image_id=$2 ref available_image_id rebound_image_id
+  ref="astranull-control-plane:$tag"
+  [[ "$tag" =~ ^[0-9a-f]{40}$ && "$expected_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'deploy: refusing to rebind an invalid control-plane image identity' >&2
+    return 1
+  }
+  available_image_id=$(image_id_for_ref "$expected_image_id") || {
+    echo "deploy: preserved control-plane image $expected_image_id is unavailable" >&2
+    return 1
+  }
+  [[ "$available_image_id" == "$expected_image_id" ]] || {
+    echo 'deploy: preserved control-plane image resolved to an unexpected identity' >&2
+    return 1
+  }
+  timeout -k 5 30 docker image tag "$expected_image_id" "$ref" || {
+    echo "deploy: could not rebind $ref to its preserved image identity" >&2
+    return 1
+  }
+  rebound_image_id=$(image_id_for_ref "$ref") || return 1
+  [[ "$rebound_image_id" == "$expected_image_id" ]] || {
+    echo "deploy: rebound control-plane tag $tag does not resolve to its preserved image" >&2
+    return 1
+  }
 }
 
 build_control_plane_from_commit() {
@@ -143,8 +200,12 @@ build_control_plane_from_commit() {
 }
 
 prepare_previous_control_plane_image() {
-  local tag=$1 ref control_plane_cid actual_image_id tagged_image_id
+  local tag=$1 ref control_plane_cid actual_image_id tagged_image_id persisted_image_id state_present=0
   ref="astranull-control-plane:$tag"
+  if control_plane_state_exists; then
+    state_present=1
+    persisted_image_id=$(read_control_plane_image_id allow-legacy-tag-only)
+  fi
   control_plane_cid=$(compose_timeout 30 ps --all -q control-plane)
 
   if [[ -n "$control_plane_cid" ]]; then
@@ -154,13 +215,19 @@ prepare_previous_control_plane_image() {
       return 1
     }
 
-    if [[ -e "$CONTROL_PLANE_IMAGE_TAG_FILE" || -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]]; then
+    if ((state_present)) && [[ -n "$persisted_image_id" ]]; then
+      [[ "$actual_image_id" == "$persisted_image_id" ]] || {
+        echo 'deploy: persisted control-plane image ID does not match the running container' >&2
+        return 1
+      }
+      rebind_control_plane_image_tag "$tag" "$persisted_image_id"
+    elif ((state_present)); then
       tagged_image_id=$(image_id_for_ref "$ref") || {
-        echo "deploy: persisted control-plane image $ref is unavailable" >&2
+        echo "deploy: legacy persisted control-plane image $ref is unavailable" >&2
         return 1
       }
       [[ "$tagged_image_id" == "$actual_image_id" ]] || {
-        echo "deploy: persisted control-plane tag $tag does not match the running image identity" >&2
+        echo "deploy: legacy persisted control-plane tag $tag does not match the running image identity" >&2
         return 1
       }
     else
@@ -173,9 +240,14 @@ prepare_previous_control_plane_image() {
         return 1
       }
     fi
-  elif [[ -e "$CONTROL_PLANE_IMAGE_TAG_FILE" || -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]]; then
+  elif ((state_present)) && [[ -n "$persisted_image_id" ]]; then
+    # A stopped stack cannot prove identity through a container. Resolve the immutable
+    # persisted ID itself, then repair the mutable tag before it can be activated.
+    rebind_control_plane_image_tag "$tag" "$persisted_image_id"
+    actual_image_id=$persisted_image_id
+  elif ((state_present)); then
     actual_image_id=$(image_id_for_ref "$ref") || {
-      echo "deploy: persisted control-plane image $ref is unavailable" >&2
+      echo "deploy: legacy persisted control-plane image $ref is unavailable" >&2
       return 1
     }
   else
@@ -260,24 +332,27 @@ prune_backups() {
 }
 
 backup_database() {
-  compose_timeout 180 exec -T postgres pg_dump -U astranull -d astranull \
-    --format=custom --no-owner --no-acl --file="$plain_container"
-  local postgres_cid backup_output backup_container_path
-  postgres_cid=$(compose_timeout 30 ps -q postgres)
-  [[ -n "$postgres_cid" ]]
-  timeout -k 5 30 docker cp "$postgres_cid:$plain_container" "$plain_host"
-  compose_timeout 30 exec -T postgres rm -f -- "$plain_container"
+  local backup_output backup_container_path plain_name
+  plain_name=${plain_host##*/}
+  compose_timeout 90 --profile ops run --rm --no-deps backup-role-bootstrap
+  compose_timeout 180 --profile ops run --rm --no-deps \
+    -u "$(id -u):$(id -g)" -v "$BACKUP_DIR:/backup" backup-dump \
+    sh -eu -c 'umask 077; exec pg_dump --format=custom --no-owner --no-acl --dbname="$ASTRANULL_BACKUP_DATABASE_URL" --file="$1"' \
+    sh "/backup/$plain_name"
+  [[ -s "$plain_host" ]]
   chmod 600 "$plain_host"
-  backup_output=$(compose_timeout 90 --profile ops run --rm --no-deps \
+  backup_output=$(compose_timeout 180 --profile ops run --rm --no-deps \
     -u "$(id -u):$(id -g)" -v "$BACKUP_DIR:/backup" backup \
-    node scripts/postgres-backup.mjs --input "/backup/${plain_host##*/}" --out /backup --label "predeploy-${previous:0:12}")
+    node scripts/postgres-backup.mjs \
+    --input "/backup/$plain_name" --out /backup --label "predeploy-${previous:0:12}" \
+    --database-host postgres --database-port 5432 --database-name astranull)
   rm -f -- "$plain_host"
   backup_container_path=$(printf '%s\n' "$backup_output" | sed -n 's/^  backup: //p' | tail -1)
   [[ "$backup_container_path" == /backup/*.dump.enc ]]
   backup="$BACKUP_DIR/${backup_container_path##*/}"
   [[ -s "$backup" && -s "$backup.manifest.json" ]]
   chmod 600 "$backup" "$backup.manifest.json"
-  compose_timeout 90 --profile ops run --rm --no-deps \
+  compose_timeout 180 --profile ops run --rm --no-deps \
     -u "$(id -u):$(id -g)" -v "$BACKUP_DIR:/backup:ro" backup \
     node scripts/postgres-restore-drill.mjs \
     --manifest "/backup/${backup##*/}.manifest.json" --backup "/backup/${backup##*/}" --validate-only
@@ -307,9 +382,6 @@ rollback_on_error() {
   ACTIVE_COMPOSE_FILE=$rollback_compose
 
   [[ -z ${plain_host:-} ]] || rm -f -- "$plain_host"
-  if [[ -n ${plain_container:-} ]]; then
-    timeout -k 5 30 docker compose --project-directory "$ROOT/ops/aws" -f "$ACTIVE_COMPOSE_FILE" --env-file "$ENV_FILE" exec -T postgres rm -f -- "$plain_container" >/dev/null 2>&1
-  fi
 
   if ((activated)); then
     export ASTRANULL_IMAGE_TAG="$rollback_orchestration_tag"
@@ -317,18 +389,24 @@ rollback_on_error() {
     export ASTRANULL_WORKER_IMAGE_TAG="$rollback_orchestration_tag"
     if ! git checkout -q --detach "$rollback_orchestration_tag"; then
       echo "deploy: automatic hybrid rollback could not restore orchestration checkout $rollback_orchestration_tag; encrypted database backup is $backup" >&2
+    elif ! rebind_control_plane_image_tag "$previous_control_plane_tag" "$previous_control_plane_image_id"; then
+      echo "deploy: automatic hybrid rollback could not rebind the preserved control-plane image; encrypted database backup is $backup" >&2
     elif ! compose_timeout 300 up -d --remove-orphans --wait --wait-timeout 240; then
       echo "deploy: automatic hybrid rollback failed; encrypted database backup is $backup" >&2
     elif ! check_control_plane || ! check_workers; then
       echo "deploy: hybrid rollback stack failed health checks; encrypted database backup is $backup" >&2
     elif ! verify_control_plane_image_tag "$previous_control_plane_tag" "$previous_control_plane_image_id" \
       || ! verify_workers_image_tag "$rollback_orchestration_tag" \
-      || ! persist_control_plane_image_tag "$previous_control_plane_tag"; then
+      || ! persist_control_plane_image_state "$previous_control_plane_tag" "$previous_control_plane_image_id"; then
       echo "deploy: hybrid rollback image identity could not be verified or persisted; encrypted database backup is $backup" >&2
     else
-      echo "deploy: automatic hybrid rollback restored control-plane $previous_control_plane_tag with orchestration/workers $rollback_orchestration_tag; database was not downgraded; encrypted backup is $backup" >&2
+      echo "deploy: automatic hybrid rollback restored control-plane $previous_control_plane_tag@$previous_control_plane_image_id with orchestration/workers $rollback_orchestration_tag; database was not downgraded; encrypted backup is $backup" >&2
     fi
   else
+    if [[ -n "$previous_control_plane_tag" && -n "$previous_control_plane_image_id" ]] \
+      && ! rebind_control_plane_image_tag "$previous_control_plane_tag" "$previous_control_plane_image_id"; then
+      echo 'deploy: failed before service activation and could not restore the preserved control-plane tag identity' >&2
+    fi
     if git checkout -q --detach "$previous"; then
       echo "deploy: failed before service activation; restored checkout $previous" >&2
     else
@@ -370,7 +448,7 @@ main() {
   flock -n 9 || { echo 'deploy: another deployment or restore is active' >&2; exit 1; }
   cd "$ROOT"
   [[ -f "$ENV_FILE" ]] || { echo "deploy: missing $ENV_FILE" >&2; exit 1; }
-  local env_mode env_owner remote_main stamp
+  local env_mode env_owner remote_main stamp active_control_plane_image_id
   env_mode=$(stat -c '%a' "$ENV_FILE")
   env_owner=$(stat -c '%u' "$ENV_FILE")
   [[ "$env_mode" =~ ^[46]00$ ]] || { echo "deploy: $ENV_FILE must have mode 400 or 600" >&2; exit 1; }
@@ -402,7 +480,6 @@ main() {
   chmod 700 "$BACKUP_DIR"
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   plain_host="$BACKUP_DIR/.${stamp}-${previous}.dump"
-  plain_container="/tmp/${plain_host##*/}"
   backup=''
   activated=0
   migration_started=0
@@ -411,7 +488,7 @@ main() {
   install_failure_traps
   previous_control_plane_tag=$(read_control_plane_image_tag "$previous")
   prepare_previous_control_plane_image "$previous_control_plane_tag"
-  persist_control_plane_image_tag "$previous_control_plane_tag"
+  persist_control_plane_image_state "$previous_control_plane_tag" "$previous_control_plane_image_id"
 
   if [[ "$MODE" == rollback ]]; then
     # Explicit rollback retains the current release's Compose/worker contract and
@@ -428,9 +505,10 @@ main() {
     compose_timeout 300 up -d --remove-orphans --wait --wait-timeout 240
     check_control_plane
     check_workers
-    verify_control_plane_image_tag "$SHA"
+    active_control_plane_image_id=$(image_id_for_ref "astranull-control-plane:$SHA")
+    verify_control_plane_image_tag "$SHA" "$active_control_plane_image_id"
     verify_workers_image_tag "$previous"
-    persist_control_plane_image_tag "$SHA"
+    persist_control_plane_image_state "$SHA" "$active_control_plane_image_id"
   else
     git checkout -q --detach "$SHA"
     [[ -z $(git status --porcelain --untracked-files=all) ]]
@@ -439,7 +517,7 @@ main() {
     export ASTRANULL_CONTROL_PLANE_IMAGE_TAG="$SHA"
     export ASTRANULL_WORKER_IMAGE_TAG="$SHA"
     validate_compose
-    timeout -k 30 480 docker build -f ops/aws/Dockerfile -t "astranull-control-plane:$SHA" .
+    build_control_plane_from_commit "$SHA"
     ensure_postgres_ready_for_backup
     backup_database
     migration_started=1
@@ -448,9 +526,10 @@ main() {
     compose_timeout 300 up -d --remove-orphans --wait --wait-timeout 240
     check_control_plane
     check_workers
-    verify_control_plane_image_tag "$SHA"
+    active_control_plane_image_id=$(image_id_for_ref "astranull-control-plane:$SHA")
+    verify_control_plane_image_tag "$SHA" "$active_control_plane_image_id"
     verify_workers_image_tag "$SHA"
-    persist_control_plane_image_tag "$SHA"
+    persist_control_plane_image_state "$SHA" "$active_control_plane_image_id"
   fi
 
   finished=1
@@ -459,7 +538,7 @@ main() {
   cleanup_compose_snapshots
   timeout -k 5 30 docker image prune -f >/dev/null || echo 'deploy: image prune timed out (non-fatal)' >&2
 
-  echo "deploy: ok $SHA backup=$backup mode=$MODE control_plane=$SHA orchestration_workers=$(git rev-parse HEAD)"
+  echo "deploy: ok $SHA backup=$backup mode=$MODE control_plane=$SHA@$active_control_plane_image_id orchestration_workers=$(git rev-parse HEAD)"
   echo "deploy: code rollback='bash $ROOT/ops/aws/deploy.sh --rollback $previous'"
   echo 'deploy: database restore remains a separately approved locked operation; use ops/aws/restore.sh.'
 }

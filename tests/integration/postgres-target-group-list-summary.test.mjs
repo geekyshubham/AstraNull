@@ -54,8 +54,8 @@ async function seed(client) {
   ];
   for (const [id, tenantId, groupId, value] of targets) {
     await client.query(
-      `INSERT INTO targets (id, tenant_id, target_group_id, kind, value)
-       VALUES ($1, $2, $3, 'fqdn', $4)`,
+      `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, normalized_value)
+       VALUES ($1, $2, $3, 'fqdn', $4, $4)`,
       [id, tenantId, groupId, value],
     );
   }

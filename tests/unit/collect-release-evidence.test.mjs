@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
@@ -18,11 +18,17 @@ import {
   parseArgs,
   runCollector,
   validateCollectedRecord,
+  validateUiAccessibilityCollectorAcceptance,
 } from '../../scripts/collect-release-evidence.mjs';
 import {
   adaptContractEvidence,
   buildCollectorScriptInput,
 } from '../../scripts/lib/releaseEvidenceCollectorInputs.mjs';
+import {
+  REQUIRED_PAGES,
+  createUiAccessibilityMatrixArtifact,
+} from '../../scripts/ui-accessibility-matrix-evidence.mjs';
+import { createReleaseEvidenceBundle } from '../../scripts/release-evidence-bundle.mjs';
 
 const tempDirs = [];
 
@@ -30,6 +36,31 @@ function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'astranull-collect-evidence-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function liveUiAccessibilityMatrix() {
+  const runs = REQUIRED_PAGES.flatMap((page) => ['desktop', 'mobile'].map((viewport) => ({
+    page,
+    viewport,
+    browser: 'chromium',
+    axe_status: 'pass',
+    keyboard_status: 'pass',
+    screen_reader_status: 'pass',
+    issues: { critical: 0, serious: 0, moderate: 0, minor: 0 },
+    captured_at: '2026-08-30T12:00:00.000Z',
+    notes: 'axe executed; keyboard traversal executed; screen-reader semantics executed',
+  })));
+  return {
+    schema_version: 1,
+    artifact_type: 'ui_accessibility_matrix_input',
+    environment: 'staging',
+    evidence_uri: 'evidence://ui/accessibility-matrix/staging',
+    runs,
+    pages: Object.fromEntries(REQUIRED_PAGES.map((page) => [
+      page,
+      { runs: runs.filter((run) => run.page === page) },
+    ])),
+  };
 }
 
 afterEach(() => {
@@ -136,6 +167,11 @@ describe('collect release evidence orchestrator', () => {
 
     assert.equal(payload.dry_run, true);
     assert.equal(payload.submittable, false);
+    const uiRecord = payload.records.find((record) => record.kind === 'ui_accessibility_matrix');
+    assert.ok(uiRecord);
+    assert.ok(uiRecord.evidence.runs.every((run) => run.axe_status === 'fail'));
+    assert.ok(uiRecord.evidence.runs.every((run) => run.keyboard_status === 'fail'));
+    assert.ok(uiRecord.evidence.runs.every((run) => run.screen_reader_status === 'fail'));
 
     for (const record of payload.records) {
       assert.equal(record.status, 'draft');
@@ -211,6 +247,271 @@ describe('collect release evidence orchestrator', () => {
     ]) {
       assert.equal(byId.get(scenarioId).status, 'not_run', `${scenarioId} should be pending`);
     }
+  });
+
+  it('fails closed when staging accessibility live input is absent', () => {
+    const outDir = tempDir();
+    const context = buildCollectionContext({
+      outDir,
+      environment: 'staging',
+      releaseId: 'rel_staging_missing_ui',
+      continueOnError: true,
+      createdAt: '2026-08-30T12:05:00.000Z',
+    });
+    const built = buildCollectorScriptInput('ui_accessibility_matrix', context);
+
+    assert.equal(built.inputSource, 'pending-live-ui-accessibility-matrix');
+    assert.equal(built.input.runs.length, REQUIRED_PAGES.length * 2);
+    for (const run of built.input.runs) {
+      assert.equal(run.axe_status, 'fail');
+      assert.equal(run.keyboard_status, 'fail');
+      assert.equal(run.screen_reader_status, 'fail');
+      assert.match(run.notes, /not_run:.*pending/);
+      assert.equal(Object.values(run).includes('pass'), false);
+    }
+
+    const acceptance = validateUiAccessibilityCollectorAcceptance(built.input, {
+      requireRunnerSource: true,
+      inputSource: built.inputSource,
+      environment: context.environment,
+    });
+    assert.equal(acceptance.ok, false);
+    assert.ok(acceptance.source_errors.includes('input_source'));
+    assert.ok(acceptance.incomplete_checks.some((field) => field.endsWith('.axe_status')));
+
+    const pendingArtifact = createUiAccessibilityMatrixArtifact({
+      evidence: built.input,
+      createdAt: context.createdAt,
+    });
+    const pendingRecord = extractProductionReleaseRecord(
+      'ui_accessibility_matrix',
+      pendingArtifact,
+      context,
+    );
+    assert.equal(pendingRecord.status, 'draft');
+    assert.equal(pendingRecord.submittable, false);
+    assert.throws(
+      () => validateCollectedRecord(pendingRecord, { requireSubmittable: true }),
+      /requires completed, passed live checks/,
+    );
+
+    const forgedAcceptedRecord = {
+      ...pendingRecord,
+      status: 'accepted',
+      submittable: undefined,
+    };
+    assert.throws(
+      () => validateCollectedRecord(forgedAcceptedRecord, { requireSubmittable: true }),
+      /requires completed, passed live checks/,
+    );
+
+    const completeRecords = PRODUCTION_RELEASE_EVIDENCE_KINDS.map((kind) => (
+      kind === 'ui_accessibility_matrix'
+        ? pendingRecord
+        : {
+          kind,
+          evidence: adaptContractEvidence(kind, context),
+          status: 'accepted',
+          release_id: context.releaseId,
+        }
+    ));
+    const payload = buildRecordsPayload(completeRecords, context);
+    assert.equal(payload.records.length, PRODUCTION_RELEASE_EVIDENCE_KINDS.length);
+    assert.equal(payload.collection_complete, false);
+    assert.equal(payload.submittable, false);
+    assert.throws(() => createReleaseEvidenceBundle(payload), /non-submittable/);
+
+    const forgedPayload = buildRecordsPayload(
+      completeRecords.map((record) => (
+        record.kind === 'ui_accessibility_matrix' ? forgedAcceptedRecord : record
+      )),
+      context,
+    );
+    assert.equal(forgedPayload.collection_complete, false);
+    assert.equal(forgedPayload.submittable, false);
+
+    let invoked = 0;
+    const collector = RELEASE_EVIDENCE_COLLECTORS.find((entry) => entry.kind === 'ui_accessibility_matrix');
+    const result = runCollector(collector, context, {
+      runCommand: () => {
+        invoked += 1;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    assert.equal(invoked, 0);
+    assert.equal(result.ok, false);
+    assert.equal(result.record, undefined);
+    assert.match(result.error, /requires completed, passed output/);
+  });
+
+  it('rejects malformed and issue-bearing live accessibility files despite forged provenance', () => {
+    const cases = [
+      {
+        name: 'duplicate 13th pair',
+        mutate(matrix) {
+          matrix.runs.push(structuredClone(matrix.runs[0]));
+        },
+        expectedProblem: 'duplicate_pair:dashboard:desktop',
+      },
+      {
+        name: 'not_run browser',
+        mutate(matrix) {
+          matrix.runs[0].browser = 'not_run';
+        },
+        expectedProblem: 'runs[0].browser',
+      },
+      {
+        name: 'moderate issue',
+        mutate(matrix) {
+          matrix.runs[0].issues.moderate = 1;
+        },
+        expectedProblem: 'runs[0].issues.moderate',
+      },
+      {
+        name: 'minor issue',
+        mutate(matrix) {
+          matrix.runs[0].issues.minor = 1;
+        },
+        expectedProblem: 'runs[0].issues.minor',
+      },
+      ...[
+        ['invalid date text', 'not-a-date'],
+        ['impossible date', '2026-02-30T12:00:00.000Z'],
+        ['timestamp without milliseconds', '2026-08-30T12:00:00Z'],
+        ['timestamp with offset', '2026-08-30T08:00:00.000-04:00'],
+        ['numeric capture time', 1788091200000],
+        ['null capture time', null],
+      ].map(([name, capturedAt]) => ({
+        name,
+        mutate(matrix) {
+          matrix.runs[0].captured_at = capturedAt;
+        },
+        expectedProblem: 'runs[0].captured_at',
+      })),
+    ];
+
+    for (const testCase of cases) {
+      const outDir = tempDir();
+      const context = buildCollectionContext({
+        outDir,
+        environment: 'staging',
+        releaseId: `rel_${testCase.name.replaceAll(/[^a-z0-9]+/gi, '_')}`,
+        continueOnError: true,
+        createdAt: '2026-08-30T12:05:00.000Z',
+      });
+      const matrix = liveUiAccessibilityMatrix();
+      testCase.mutate(matrix);
+      writeFileSync(
+        path.join(outDir, 'ui-accessibility-matrix-input.json'),
+        `${JSON.stringify(matrix, null, 2)}\n`,
+      );
+
+      const built = buildCollectorScriptInput('ui_accessibility_matrix', context);
+      assert.equal(built.inputSource, 'invalid-live-ui-accessibility-matrix', testCase.name);
+      const forgedSourceAcceptance = validateUiAccessibilityCollectorAcceptance(built.input, {
+        requireRunnerSource: true,
+        inputSource: 'run-live-ui-accessibility-matrix',
+        environment: context.environment,
+      });
+      assert.equal(forgedSourceAcceptance.ok, false, testCase.name);
+      assert.ok(
+        [...forgedSourceAcceptance.run_shape_errors, ...forgedSourceAcceptance.incomplete_checks]
+          .includes(testCase.expectedProblem),
+        testCase.name,
+      );
+
+      const artifact = createUiAccessibilityMatrixArtifact({
+        evidence: built.input,
+        createdAt: context.createdAt,
+      });
+      const record = extractProductionReleaseRecord('ui_accessibility_matrix', artifact, context);
+      assert.equal(record.status, 'draft', testCase.name);
+      assert.equal(record.submittable, false, testCase.name);
+
+      const forgedAcceptedRecord = { ...record, status: 'accepted', submittable: undefined };
+      assert.throws(
+        () => validateCollectedRecord(forgedAcceptedRecord, { requireSubmittable: true }),
+        /requires completed, passed live checks/,
+        testCase.name,
+      );
+
+      const records = PRODUCTION_RELEASE_EVIDENCE_KINDS.map((kind) => (
+        kind === 'ui_accessibility_matrix'
+          ? forgedAcceptedRecord
+          : {
+            kind,
+            evidence: adaptContractEvidence(kind, context),
+            status: 'accepted',
+            release_id: context.releaseId,
+          }
+      ));
+      const payload = buildRecordsPayload(records, context);
+      assert.equal(payload.collection_complete, false, testCase.name);
+      assert.equal(payload.submittable, false, testCase.name);
+      assert.throws(() => createReleaseEvidenceBundle(payload), /non-submittable/, testCase.name);
+
+      let invoked = 0;
+      const collector = RELEASE_EVIDENCE_COLLECTORS.find((entry) => entry.kind === 'ui_accessibility_matrix');
+      const result = runCollector(collector, context, {
+        runCommand: () => {
+          invoked += 1;
+          return { status: 0, stdout: '', stderr: '' };
+        },
+      });
+      assert.equal(invoked, 0, testCase.name);
+      assert.equal(result.ok, false, testCase.name);
+      assert.match(result.error, /requires completed, passed output/, testCase.name);
+    }
+  });
+
+  it('accepts complete passed output from the live accessibility runner', () => {
+    const outDir = tempDir();
+    const context = buildCollectionContext({
+      outDir,
+      environment: 'staging',
+      releaseId: 'rel_staging_live_ui',
+      createdAt: '2026-08-30T12:05:00.000Z',
+    });
+    writeFileSync(
+      path.join(outDir, 'ui-accessibility-matrix-input.json'),
+      `${JSON.stringify(liveUiAccessibilityMatrix(), null, 2)}\n`,
+    );
+
+    const collector = RELEASE_EVIDENCE_COLLECTORS.find((entry) => entry.kind === 'ui_accessibility_matrix');
+    const result = runCollector(collector, context, {
+      runCommand: (_command, args) => {
+        const inputPath = args[args.indexOf('--input') + 1];
+        const outPath = args[args.indexOf('--out') + 1];
+        const artifact = createUiAccessibilityMatrixArtifact({
+          evidence: JSON.parse(readFileSync(inputPath, 'utf8')),
+          createdAt: context.createdAt,
+        });
+        writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`);
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.record.status, 'accepted');
+    assert.equal(result.record.submittable, undefined);
+    assert.doesNotThrow(() => validateCollectedRecord(result.record, { requireSubmittable: true }));
+    assert.equal(result.record.evidence.runs.length, REQUIRED_PAGES.length * 2);
+
+    const completeRecords = PRODUCTION_RELEASE_EVIDENCE_KINDS.map((kind) => (
+      kind === 'ui_accessibility_matrix'
+        ? result.record
+        : {
+          kind,
+          evidence: adaptContractEvidence(kind, context),
+          status: 'accepted',
+          release_id: context.releaseId,
+        }
+    ));
+    const payload = buildRecordsPayload(completeRecords, context);
+    assert.equal(payload.collection_complete, true);
+    assert.equal(payload.submittable, true);
+    const bundle = createReleaseEvidenceBundle(payload);
+    assert.equal(bundle.records.find((record) => record.kind === 'ui_accessibility_matrix').validation.ok, true);
   });
 
   it('records payload is suitable for gap audit input shape', () => {

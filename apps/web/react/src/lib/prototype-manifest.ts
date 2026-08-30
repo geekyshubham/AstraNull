@@ -535,7 +535,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'custom', label: 'Custom', summary: 'Customer-defined checks bound to declarations.', evidence: 'Policy record and reviewed scope.' }
   ],
   'test-policies': [
-    { id: 'cadence', label: 'Cadence', summary: 'Daily, weekly, monthly, and event-driven validation windows.', evidence: 'Policy schedule and target binding.' },
+    { id: 'cadence', label: 'Cadence', summary: 'Manual, daily, weekly, and monthly validation windows.', evidence: 'Policy schedule and target binding.' },
     { id: 'bindings', label: 'Target Bindings', summary: 'Policies bind only to declared target groups.', evidence: 'Declared target-group reference.' },
     { id: 'expected-verdicts', label: 'Expected Verdicts', summary: 'Expected pass, warn, or fail behavior for each check.', evidence: 'Customer declaration and check contract.' },
     { id: 'windows', label: 'Safe Windows', summary: 'Local maintenance and observation windows.', evidence: 'Policy record and audit.' },

@@ -17,6 +17,7 @@ export const CAPABILITY_PROBE_KIND_LABELS: Record<string, string> = {
   cors_posture_probe: 'CORS posture',
   graphql_posture_probe: 'GraphQL posture',
   bot_challenge_probe: 'Bot/challenge probe',
+  grpc_reflection_probe: 'gRPC health/reflection probe',
 };
 
 export const REQUIRED_SETUP_LABELS: Record<string, string> = {

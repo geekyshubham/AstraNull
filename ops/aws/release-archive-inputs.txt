@@ -1,0 +1,20 @@
+# Exact-commit AWS control-plane release context.
+# Every non-comment path must exist in the git archive used by deploy.sh.
+# Directory COPY roots are listed alongside runtime-critical leaf files whose
+# accidental untracked status would otherwise make a local Docker build lie.
+ops/aws/Dockerfile
+package.json
+package-lock.json
+src
+scripts
+apps/web
+docs/api.md
+db/schema.sql
+db/migrations
+THIRD_PARTY_NOTICES
+workers
+
+# Runtime-critical leaves referenced by Compose or shipped attribution data.
+scripts/worker-heartbeat-health.mjs
+THIRD_PARTY_NOTICES/cdncheck-MIT.txt
+THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt

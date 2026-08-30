@@ -52,6 +52,7 @@ import {
   POSTGRES_INTERNAL_MANAGEMENT_SERVICE_METHODS,
 } from '../../src/persistence/postgres/serviceAdapters.mjs';
 import { POSTGRES_EVENTS_SERVICE_METHODS } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
+import { TEST_POLICY_REPOSITORY_METHODS } from '../../src/persistence/postgres/testPolicyServiceAdapters.mjs';
 import {
   POSTGRES_WAF_COVERAGE_ROLLUP_SERVICE_METHODS,
   WAF_COVERAGE_ROLLUP_REPOSITORY_METHODS,
@@ -256,6 +257,13 @@ function createHarness(overrides = {}) {
         }
         return repo;
       }
+      if (key === 'testPolicies') {
+        const repo = {};
+        for (const method of TEST_POLICY_REPOSITORY_METHODS) {
+          repo[method] = async () => null;
+        }
+        return repo;
+      }
       return { key };
     };
   }
@@ -317,6 +325,7 @@ describe('postgres runtime adapter', () => {
       'wafOrchestrator',
       'internalManagement',
       'portalRevamp',
+      'testPolicies',
     ]);
     assert.equal(getDefaultPostgresMigrationsDir(), path.join(ROOT, 'db', 'migrations'));
   });
@@ -474,6 +483,37 @@ describe('postgres runtime adapter', () => {
       assert.equal(typeof runtime.services.wafCoverageRollup[method], 'function', method);
     }
     await runtime.close();
+  });
+
+
+  it('accepts an explicitly enforced non-owner NOBYPASSRLS runtime role', async () => {
+    const { deps } = createHarness({
+      checkRoleRlsPosture: async () => ({
+        role: 'astranull_app',
+        bypassesRls: false,
+        ownsTables: false,
+        warnings: [],
+      }),
+    });
+    const runtime = await createPostgresRuntime({ ASTRANULL_ENFORCE_DATABASE_ROLE: '1' }, deps);
+    assert.equal(runtime.latestMigration, '0001_test');
+    await runtime.close();
+  });
+
+  it('fails closed and releases the pool for an RLS-bypass runtime role', async () => {
+    const { pool, deps } = createHarness({
+      checkRoleRlsPosture: async () => ({
+        role: 'astranull',
+        bypassesRls: true,
+        ownsTables: true,
+        warnings: ['superuser'],
+      }),
+    });
+    await assert.rejects(
+      () => createPostgresRuntime({ ASTRANULL_ENFORCE_DATABASE_ROLE: '1' }, deps),
+      /non-owner NOSUPERUSER NOBYPASSRLS/,
+    );
+    assert.equal(pool.endCalls, 1);
   });
 
   it('services forward tenant catalog calls to the coreCatalog repository', async () => {

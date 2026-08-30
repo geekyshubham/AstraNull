@@ -70,6 +70,18 @@ function seedStore() {
         expected_behavior: 'must_block_before_origin',
       },
     ],
+    targetVerifications: [
+      {
+        id: 'tv_waf_tgt_1',
+        tenant_id: 'ten_demo',
+        target_id: 'tgt_1',
+        state: 'agent_verified',
+        source_kind: 'agent_observation',
+        source_ref: { ownership_verification_id: 'ov_waf' },
+        transitioned_at: new Date().toISOString(),
+        transitioned_by: 'system',
+      },
+    ],
     wafAssets: [
       {
         id: 'waf_1',

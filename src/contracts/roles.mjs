@@ -18,6 +18,7 @@ export const PERMISSIONS = {
   'secret:rotate': ['owner', 'admin'],
   'agent:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'agent:revoke': ['owner', 'admin'],
+  'check:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'test_policy:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'test_policy:write': ['owner', 'admin', 'engineer'],
   'test_run:start': ['owner', 'admin', 'engineer'],
@@ -62,6 +63,7 @@ export const PERMISSIONS = {
   'cve_pipeline:read': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
   'cve_pipeline:write': ['owner', 'admin', 'engineer'],
   'supply_chain:authorize': ['owner', 'admin'],
+  'profile:mfa': ['owner', 'admin', 'engineer', 'soc', 'auditor', 'viewer'],
 };
 
 export function roleHasPermission(role, permission) {

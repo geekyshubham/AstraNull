@@ -25,7 +25,7 @@ const RAW_PACKET_FIELD_COMPACT_DENYLIST = new Set(
   [...RAW_PACKET_FIELD_DENYLIST].map((key) => key.replace(/_/g, '')),
 );
 
-export const ALLOWED_EXTERNAL_RESULTS = new Set(['blocked', 'connected', 'timeout', 'error']);
+export const ALLOWED_EXTERNAL_RESULTS = new Set(['blocked', 'connected', 'timeout', 'error', 'not_run']);
 
 const ALLOWED_ATTESTATION_META_KEYS = new Set(['worker_version', 'region', 'completed_at']);
 
@@ -172,7 +172,7 @@ export function validateProbeResultBody(body, constraints, { probeKind } = {}) {
     return {
       error: 'invalid_external_result',
       status: 400,
-      message: 'external_result must be one of: blocked, connected, timeout, error.',
+      message: 'external_result must be one of: blocked, connected, timeout, error, not_run.',
     };
   }
 

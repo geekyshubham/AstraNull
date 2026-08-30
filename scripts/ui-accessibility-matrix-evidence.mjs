@@ -123,8 +123,8 @@ function normalizePage(value) {
 
 function issueCount(issues, severity) {
   const raw = issues?.[severity];
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return null;
-  return Math.trunc(raw);
+  if (!Number.isInteger(raw) || raw < 0) return null;
+  return raw;
 }
 
 export function validateUiAccessibilityMatrixEvidence(evidence) {
@@ -236,6 +236,103 @@ export function validateUiAccessibilityMatrixEvidence(evidence) {
       }, {}),
     },
   };
+}
+
+const UI_ACCESSIBILITY_STATUS_FIELDS = Object.freeze([
+  'axe_status',
+  'keyboard_status',
+  'screen_reader_status',
+]);
+
+function isCanonicalIsoUtcTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) && timestamp.toISOString() === value;
+}
+
+export function validateUiAccessibilityCollectorAcceptance(evidence, options = {}) {
+  const validation = validateUiAccessibilityMatrixEvidence(evidence);
+  const runs = extractMatrixRuns(evidence);
+  const incompleteChecks = [];
+  const runShapeErrors = [];
+  const expectedPairCounts = new Map(
+    REQUIRED_PAGES.flatMap((page) => (
+      REQUIRED_VIEWPORTS.map((viewport) => [`${page}:${viewport}`, 0])
+    )),
+  );
+
+  if (runs.length !== REQUIRED_PAGES.length * REQUIRED_VIEWPORTS.length) {
+    runShapeErrors.push(`runs.length:${runs.length}`);
+  }
+
+  runs.forEach((run, index) => {
+    const pair = `${run?.page ?? ''}:${run?.viewport ?? ''}`;
+    if (!expectedPairCounts.has(pair)) {
+      runShapeErrors.push(`runs[${index}].pair:${pair}`);
+    } else {
+      expectedPairCounts.set(pair, expectedPairCounts.get(pair) + 1);
+    }
+
+    if (run?.browser !== 'chromium') {
+      incompleteChecks.push(`runs[${index}].browser`);
+    }
+    for (const field of UI_ACCESSIBILITY_STATUS_FIELDS) {
+      if (run?.[field] !== 'pass') {
+        incompleteChecks.push(`runs[${index}].${field}`);
+      }
+    }
+    if (!isCanonicalIsoUtcTimestamp(run?.captured_at)) {
+      incompleteChecks.push(`runs[${index}].captured_at`);
+    }
+    for (const severity of REQUIRED_ISSUE_SEVERITIES) {
+      if (issueCount(run?.issues, severity) !== 0) {
+        incompleteChecks.push(`runs[${index}].issues.${severity}`);
+      }
+    }
+  });
+
+  for (const [pair, count] of expectedPairCounts) {
+    if (count === 0) runShapeErrors.push(`missing_pair:${pair}`);
+    if (count > 1) runShapeErrors.push(`duplicate_pair:${pair}`);
+  }
+
+  const sourceErrors = [];
+  if (options.requireRunnerSource === true) {
+    if (options.inputSource !== 'run-live-ui-accessibility-matrix') {
+      sourceErrors.push('input_source');
+    }
+    if (evidence?.schema_version !== 1) sourceErrors.push('schema_version');
+    if (evidence?.artifact_type !== 'ui_accessibility_matrix_input') sourceErrors.push('artifact_type');
+    if (evidence?.environment !== options.environment) sourceErrors.push('environment');
+    if (evidence?.evidence_uri !== `evidence://ui/accessibility-matrix/${options.environment}`) {
+      sourceErrors.push('evidence_uri');
+    }
+  }
+
+  return {
+    ok: validation.ok
+      && incompleteChecks.length === 0
+      && runShapeErrors.length === 0
+      && sourceErrors.length === 0,
+    validation,
+    incomplete_checks: [...new Set(incompleteChecks)].sort(),
+    run_shape_errors: [...new Set(runShapeErrors)].sort(),
+    source_errors: [...new Set(sourceErrors)].sort(),
+  };
+}
+
+export function uiAccessibilityAcceptanceProblems(acceptance) {
+  return [
+    ...acceptance.validation.forbidden_fields.map((field) => `forbidden:${field}`),
+    ...acceptance.validation.missing_pages.map((field) => `missing_page:${field}`),
+    ...acceptance.validation.missing_viewports.map((field) => `missing_viewport:${field}`),
+    ...acceptance.validation.missing_run_fields.map((field) => `missing:${field}`),
+    ...acceptance.validation.invalid_run_fields.map((field) => `invalid:${field}`),
+    ...acceptance.validation.unresolved_critical.map((field) => `critical:${field}`),
+    ...acceptance.run_shape_errors.map((field) => `invalid_shape:${field}`),
+    ...acceptance.incomplete_checks.map((field) => `not_passed:${field}`),
+    ...acceptance.source_errors.map((field) => `invalid_source:${field}`),
+  ];
 }
 
 function fieldSummary(fields) {

@@ -947,6 +947,10 @@ function createRecordingValidationRepositories(overrides = {}) {
     };
   }
   const probeJobs = {
+    getProbeJobByTestRun: async (...args) => {
+      validationCalls.push({ method: 'getProbeJobByTestRun', args });
+      return overrides.getProbeJobByTestRun?.(...args) ?? null;
+    },
     createProbeJob: async (...args) => {
       validationCalls.push({ method: 'createProbeJob', args });
       return overrides.createProbeJob?.(...args);
@@ -966,13 +970,19 @@ function createRecordingValidationRepositories(overrides = {}) {
     killSwitch,
   };
 
-  // Only wired when a test opts in, so the ownership gate's fail-closed branch (no verification
-  // repository at all) stays reachable. Production always constructs this repository.
-  if (overrides.getTargetVerificationCurrent) {
-    repositories.portalRevamp = {
-      getTargetVerificationCurrent: async (...args) => {
-        validationCalls.push({ method: 'portalRevamp.getTargetVerificationCurrent', args });
-        return overrides.getTargetVerificationCurrent(...args);
+  // Production always constructs this repository. Tests model a target-bound proof by default;
+  // the focused fail-closed case explicitly removes it.
+  if (!overrides.ownershipVerificationRepositoryUnavailable) {
+    repositories.ownershipVerifications = {
+      getCurrentTargetVerification: async (...args) => {
+        validationCalls.push({
+          method: 'ownershipVerifications.getCurrentTargetVerification',
+          args,
+        });
+        if (overrides.getCurrentTargetVerification) {
+          return overrides.getCurrentTargetVerification(...args);
+        }
+        return { target_id: args[2], state: 'agent_verified' };
       },
     };
   }
@@ -1798,6 +1808,488 @@ describe('postgres validation service adapters', () => {
     assert.ok(auditEvents.some((a) => a.entry.action === 'probe_job.created'));
   });
 
+
+  it('Postgres signed AXFR jobs exact-bind body and metadata zones to verified target A', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const runtimeConfig = {
+      probeMode: 'signed-worker',
+      probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+    };
+    const start = async ({ metadata, probeProfile }) => {
+      const target = {
+        id: 'tgt_1',
+        kind: 'fqdn',
+        value: 'Owned.Example.',
+        metadata,
+      };
+      let createdRun;
+      let probeJobRecord;
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ targets: [target] }),
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (_ctx, record) => {
+          createdRun = record;
+          return { ...record };
+        },
+        updateTestRun: async (_ctx, id, patch) => ({ ...createdRun, id, ...patch }),
+        createProbeJob: async (_ctx, job) => {
+          probeJobRecord = { ...job, status: 'pending' };
+          return probeJobRecord;
+        },
+      });
+      const result = await createPostgresValidationServices(recorded.repositories, {
+        now: () => FIXED_NOW,
+      }).testRuns.startTestRun(
+        ctx,
+        {
+          check_id: 'dns.zone_transfer_exposure.safe',
+          target_group_id: 'tg_1',
+          target_id: 'tgt_1',
+          probe_profile: probeProfile,
+        },
+        runtimeConfig,
+      );
+      assert.equal(result.error, undefined);
+      assert.ok(result.probe_job);
+      return probeJobRecord;
+    };
+
+    const retargeted = await start({
+      probeProfile: { zone: 'victim-b.example' },
+      metadata: {
+        zone: 'victim-b.example',
+        declared_apex_domain: 'victim-b.example.',
+      },
+    });
+    assert.equal(retargeted.probe_profile.zone, undefined);
+    assert.equal(retargeted.target.metadata?.zone, undefined);
+    assert.equal(retargeted.target.metadata?.declared_apex_domain, undefined);
+    assert.equal(JSON.stringify(retargeted).includes('victim-b.example'), false);
+
+    const exact = await start({
+      probeProfile: { zone: 'owned.example' },
+      metadata: {
+        zone: 'OWNED.EXAMPLE.',
+        declared_apex_domain: 'owned.example',
+      },
+    });
+    assert.equal(exact.probe_profile.zone, 'owned.example');
+    assert.equal(exact.target.metadata.zone, 'owned.example');
+    assert.equal(exact.target.metadata.declared_apex_domain, 'owned.example');
+  });
+
+  it('rejects verified FQDN Host/SNI retargeting before any Postgres queue write', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const worker = {
+      probeMode: 'signed-worker',
+      probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+    };
+    const cases = [
+      {
+        label: 'body direct_ip',
+        target: { id: 'tgt_1', kind: 'fqdn', value: 'owned.example.test' },
+        probe_profile: { direct_ip: '198.51.100.200' },
+      },
+      {
+        label: 'target metadata direct_origin_ip',
+        target: {
+          id: 'tgt_1', kind: 'fqdn', value: 'owned.example.test',
+          metadata: { direct_origin_ip: '198.51.100.201' },
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ targets: [testCase.target] }),
+        listAgents: async () => [baseOnlineAgent()],
+      });
+      const result = await createPostgresValidationServices(recorded.repositories, {
+        now: () => FIXED_NOW,
+      }).testRuns.startTestRun(
+        ctx,
+        {
+          check_id: 'origin.direct_bypass.safe',
+          target_group_id: 'tg_1',
+          target_id: 'tgt_1',
+          ...(testCase.probe_profile ? { probe_profile: testCase.probe_profile } : {}),
+        },
+        worker,
+      );
+
+      assert.equal(result.error, 'missing_target_bound_direct_address', testCase.label);
+      assert.equal(result.status, 400, testCase.label);
+      assert.match(result.message, /verified target itself/, testCase.label);
+      assertNoRunProbeOrAgentSideEffects(recorded.validationCalls);
+      const denialAudit = recorded.auditEvents.find(
+        ({ entry }) => entry.action === 'test_run.destination_binding_denied',
+      );
+      assert.ok(denialAudit, testCase.label);
+      assert.equal(JSON.stringify(denialAudit).includes('198.51.100.200'), false);
+      assert.equal(JSON.stringify(denialAudit).includes('198.51.100.201'), false);
+    }
+  });
+
+  it('queues only an exact literal-IP target and strips body/metadata secondary destinations', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const target = {
+      id: 'tgt_1',
+      kind: 'url',
+      value: 'https://203.0.113.1/origin?bounded=1',
+      metadata: {
+        direct_origin_ip: '198.51.100.201',
+        resolver_host: '8.8.8.8',
+        alert_webhook_url: 'https://webhook-victim.example.test/hook',
+      },
+    };
+    let createdRun;
+    let probeJobRecord;
+    const recorded = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup({ targets: [target] }),
+      listAgents: async () => [baseOnlineAgent()],
+      createTestRun: async (_ctx, record) => {
+        createdRun = record;
+        return { ...record };
+      },
+      updateTestRun: async (_ctx, id, patch) => ({ ...createdRun, id, ...patch }),
+      createProbeJob: async (_ctx, job) => {
+        probeJobRecord = { ...job, status: 'pending' };
+        return probeJobRecord;
+      },
+    });
+    const result = await createPostgresValidationServices(recorded.repositories, {
+      now: () => FIXED_NOW,
+    }).testRuns.startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        probe_profile: {
+          protected_host: 'edge.example.test',
+          direct_ip: '198.51.100.200',
+          resolver_host: '9.9.9.9',
+          secondary_nameservers: ['ns.victim.example.test'],
+        },
+      },
+      {
+        probeMode: 'signed-worker',
+        probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+      },
+    );
+
+    assert.equal(result.error, undefined);
+    assert.ok(result.probe_job);
+    assert.equal(probeJobRecord.target.value, target.value);
+    assert.equal(probeJobRecord.probe_profile.protected_host, 'edge.example.test');
+    assert.equal(probeJobRecord.probe_profile.direct_ip, undefined);
+    assert.equal(probeJobRecord.probe_profile.resolver_host, undefined);
+    assert.equal(probeJobRecord.probe_profile.secondary_nameservers, undefined);
+    assert.equal(probeJobRecord.target.metadata?.direct_origin_ip, undefined);
+    assert.equal(probeJobRecord.target.metadata?.alert_webhook_url, undefined);
+    for (const victim of [
+      '198.51.100.200', '198.51.100.201', '8.8.8.8', '9.9.9.9',
+      'ns.victim.example.test', 'webhook-victim.example.test',
+    ]) {
+      assert.equal(JSON.stringify(probeJobRecord).includes(victim), false, victim);
+    }
+  });
+
+
+  it('repairs a dispatch-bound run committed before its signed probe job was created', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
+    const policy = {
+      id: 'pol_crash', tenant_id: ctx.tenantId, target_group_id: 'tg_1',
+      check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
+      max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
+      lease_token: 'lease_crash', lease_expires_at: '2026-06-01T12:05:00.000Z',
+    };
+    const body = {
+      target_group_id: policy.target_group_id,
+      target_id: 'tgt_1',
+      check_id: policy.check_id,
+      policy_id: policy.id,
+      probe_profile: {
+        protected_host: 'edge.example.test',
+        direct_ip: '198.51.100.210',
+        resolver_host: '9.9.9.9',
+        secondary_nameservers: ['ns.recovery-victim.example.test'],
+      },
+    };
+    const dispatchOptions = {
+      policyDispatch: {
+        dispatch_id: 'dispatch_crash',
+        lease_token: policy.lease_token,
+        idempotency_key: 'idem_crash',
+        scheduled_for: FIXED_NOW.toISOString(),
+      },
+    };
+    let persistedRun = null;
+    let durableProbeJob = null;
+    let createRunCalls = 0;
+    let createProbeCalls = 0;
+    const recorded = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup({
+        targets: [{
+          id: 'tgt_1',
+          kind: 'ip',
+          value: '203.0.113.1',
+          metadata: {
+            direct_origin_ip: '198.51.100.211',
+            resolver_host: '8.8.8.8',
+            webhook_url: 'https://recovery-webhook-victim.example.test/hook',
+          },
+        }],
+      }),
+      listTestRuns: async (_ctx, query = {}) => (
+        persistedRun && query.statuses ? [persistedRun] : []
+      ),
+      listAgents: async () => [baseOnlineAgent()],
+      createTestRun: async (_ctx, record) => {
+        createRunCalls += 1;
+        persistedRun = { ...record, awaiting_external_probe: false };
+        return persistedRun;
+      },
+      updateTestRun: async (_ctx, id, patch) => {
+        persistedRun = { ...persistedRun, id, ...patch };
+        return persistedRun;
+      },
+      getProbeJobByTestRun: async () => durableProbeJob,
+      createProbeJob: async (_ctx, record) => {
+        createProbeCalls += 1;
+        if (createProbeCalls === 1) throw new Error('simulated_dispatch_crash');
+        durableProbeJob = { ...record, status: 'pending' };
+        return durableProbeJob;
+      },
+    });
+    recorded.repositories.validationEvidence.getTestRunByPolicyDispatchId = async (
+      _ctx,
+      dispatchId,
+    ) => (persistedRun?.policy_dispatch_id === dispatchId ? persistedRun : null);
+    recorded.repositories.testPolicies = {
+      getActiveTestPolicy: async () => ({ ...policy }),
+    };
+    const { testRuns } = createPostgresValidationServices(recorded.repositories, {
+      now: () => FIXED_NOW,
+    });
+    const runtimeConfig = {
+      probeMode: 'signed-worker',
+      probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+    };
+
+    await assert.rejects(
+      () => testRuns.startTestRun(ctx, body, runtimeConfig, dispatchOptions),
+      /simulated_dispatch_crash/,
+    );
+    assert.ok(persistedRun, 'the crash fixture must leave the committed run behind');
+    assert.equal(durableProbeJob, null);
+
+    const recovered = await testRuns.startTestRun(ctx, body, runtimeConfig, dispatchOptions);
+    assert.equal(createRunCalls, 1);
+    assert.equal(createProbeCalls, 2);
+    assert.equal(recovered.idempotent_replay, true);
+    assert.equal(recovered.dispatch_repaired, true);
+    assert.equal(recovered.run.id, persistedRun.id);
+    assert.equal(recovered.run.awaiting_external_probe, true);
+    assert.equal(recovered.probe_job.id, durableProbeJob.id);
+    assert.equal(recovered.probe_job.nonce_hash, recovered.run.correlation.nonce_hash);
+    assert.equal(JSON.stringify(recovered).includes(durableProbeJob.nonce), false);
+    assert.equal(durableProbeJob.probe_profile.protected_host, 'edge.example.test');
+    assert.equal(durableProbeJob.probe_profile.direct_ip, undefined);
+    assert.equal(durableProbeJob.probe_profile.resolver_host, undefined);
+    assert.equal(durableProbeJob.probe_profile.secondary_nameservers, undefined);
+    assert.equal(durableProbeJob.target.metadata?.direct_origin_ip, undefined);
+    assert.equal(durableProbeJob.target.metadata?.webhook_url, undefined);
+    for (const victim of [
+      '198.51.100.210', '198.51.100.211', '9.9.9.9', '8.8.8.8',
+      'ns.recovery-victim.example.test', 'recovery-webhook-victim.example.test',
+    ]) {
+      assert.equal(JSON.stringify(durableProbeJob).includes(victim), false, victim);
+    }
+    assert.ok(recorded.auditEvents.some(
+      ({ entry }) => entry.action === 'probe_job.dispatch_recovered',
+    ));
+  });
+  it('rejects mismatched, disabled, and expired policy dispatches before persistence', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
+    const body = {
+      check_id: 'origin.direct_bypass.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      policy_id: 'pol_1',
+    };
+    const policy = {
+      id: 'pol_1',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      check_id: body.check_id,
+      cadence: 'daily',
+      state: 'active',
+      enabled: true,
+      max_concurrent_runs: 1,
+      safe_windows: [],
+      timezone: 'UTC',
+      lease_token: 'lease_1',
+      lease_expires_at: '2026-06-01T12:05:00.000Z',
+    };
+    const dispatchOptions = {
+      policyDispatch: {
+        lease_token: 'lease_1',
+        dispatch_id: 'dispatch_1',
+        idempotency_key: 'idem_1',
+        scheduled_for: '2026-06-01T12:00:00.000Z',
+      },
+    };
+
+    const execute = async (policyOverride) => {
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup(),
+      });
+      recorded.repositories.testPolicies = {
+        getActiveTestPolicy: async () => ({ ...policy, ...policyOverride }),
+      };
+      const result = await createPostgresValidationServices(recorded.repositories, {
+        now: () => FIXED_NOW,
+      }).testRuns.startTestRun(ctx, body, {}, dispatchOptions);
+      return { result, calls: recorded.validationCalls };
+    };
+
+    const mismatch = await execute({ target_group_id: 'tg_other' });
+    assert.deepEqual(mismatch.result, { error: 'test_policy_binding_mismatch', status: 409 });
+    assertNoRunProbeOrAgentSideEffects(mismatch.calls);
+
+    const disabled = await execute({ state: 'paused', enabled: false });
+    assert.deepEqual(disabled.result, { error: 'test_policy_disabled', status: 409 });
+    assertNoRunProbeOrAgentSideEffects(disabled.calls);
+
+    const expired = await execute({ lease_expires_at: '2026-06-01T11:59:59.000Z' });
+    assert.deepEqual(expired.result, { error: 'policy_lease_invalid', status: 409 });
+    assertNoRunProbeOrAgentSideEffects(expired.calls);
+  });
+
+  it('persists policy_id only for a live trusted lease and dispatches after final revalidation', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
+    const policy = {
+      id: 'pol_1', tenant_id: 'ten_demo', target_group_id: 'tg_1',
+      check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
+      max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
+      lease_token: 'lease_1', lease_expires_at: '2026-06-01T12:05:00.000Z',
+    };
+    let policyReads = 0;
+    let createdRun;
+    const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup(),
+      listAgents: async () => [baseOnlineAgent()],
+      createTestRun: async (c, record) => {
+        createdRun = record;
+        return { ...record };
+      },
+      updateTestRun: async (c, id, patch) => ({ ...createdRun, id, ...patch }),
+      createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
+    });
+    repositories.testPolicies = {
+      getActiveTestPolicy: async () => {
+        policyReads += 1;
+        return { ...policy };
+      },
+    };
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const result = await testRuns.startTestRun(
+      ctx,
+      {
+        check_id: policy.check_id,
+        target_group_id: policy.target_group_id,
+        target_id: 'tgt_1',
+        policy_id: policy.id,
+      },
+      { probeMode: 'signed-worker', probeWorkerSecret: 'probe-worker-signing-secret-for-tests' },
+      {
+        policyDispatch: {
+          lease_token: policy.lease_token,
+          dispatch_id: 'dispatch_1',
+          idempotency_key: 'idem_1',
+          scheduled_for: FIXED_NOW.toISOString(),
+        },
+      },
+    );
+
+    assert.equal(result.error, undefined);
+    assert.equal(createdRun.policy_id, policy.id);
+    assert.equal(result.run.policy_id, policy.id);
+    assert.equal(policyReads, 2);
+    assert.ok(validationCalls.some((call) => call.method === 'createProbeJob'));
+    assert.ok(auditEvents.some(
+      (event) => event.entry.action === 'test_run.started'
+        && event.entry.metadata.policy_id === policy.id,
+    ));
+  });
+
+  it('cancels a persisted policy-bound run when the lease changes at the final dispatch boundary', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
+    const policy = {
+      id: 'pol_1', tenant_id: 'ten_demo', target_group_id: 'tg_1',
+      check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
+      max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
+      lease_token: 'lease_1', lease_expires_at: '2026-06-01T12:05:00.000Z',
+    };
+    let policyReads = 0;
+    let createdRun;
+    const updates = [];
+    const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup(),
+      listAgents: async () => [baseOnlineAgent()],
+      createTestRun: async (c, record) => {
+        createdRun = record;
+        return { ...record };
+      },
+      updateTestRun: async (c, id, patch) => {
+        updates.push(patch);
+        return { ...createdRun, id, ...patch };
+      },
+      createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
+    });
+    repositories.testPolicies = {
+      getActiveTestPolicy: async () => {
+        policyReads += 1;
+        return policyReads === 1 ? { ...policy } : { ...policy, lease_token: 'lease_rotated' };
+      },
+    };
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const result = await testRuns.startTestRun(
+      ctx,
+      {
+        check_id: policy.check_id,
+        target_group_id: policy.target_group_id,
+        target_id: 'tgt_1',
+        policy_id: policy.id,
+      },
+      { probeMode: 'signed-worker', probeWorkerSecret: 'probe-worker-signing-secret-for-tests' },
+      {
+        policyDispatch: {
+          lease_token: policy.lease_token,
+          dispatch_id: 'dispatch_1',
+          idempotency_key: 'idem_1',
+          scheduled_for: FIXED_NOW.toISOString(),
+        },
+      },
+    );
+
+    assert.deepEqual(result, { error: 'policy_lease_invalid', status: 409 });
+    assert.equal(createdRun.policy_id, policy.id);
+    assert.equal(policyReads, 2);
+    assert.ok(updates.some(
+      (patch) => patch.status === 'cancelled'
+        && patch.summary?.reason === 'policy_lease_invalid',
+    ));
+    assert.equal(validationCalls.some((call) => call.method === 'createProbeJob'), false);
+    assert.ok(auditEvents.some(
+      (event) => event.entry.action === 'test_run.policy_dispatch_denied'
+        && event.entry.metadata.phase === 'pre_dispatch_revalidation',
+    ));
+  });
+
   it('startTestRun denial gates create no run, probe job, or agent jobs', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
     const startBody = {
@@ -1953,12 +2445,12 @@ describe('postgres validation service adapters', () => {
       probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
     };
     const queriedVerification = (calls) =>
-      calls.some((c) => c.method === 'portalRevamp.getTargetVerificationCurrent');
+      calls.some((c) => c.method === 'ownershipVerifications.getCurrentTargetVerification');
 
     it('denies signed-worker runs when neither the group nor the target is verified', async () => {
       const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
         getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
-        getTargetVerificationCurrent: async () => ({ state: 'pending' }),
+        getCurrentTargetVerification: async (c, groupId, targetId) => ({ target_id: targetId, state: 'pending' }),
         listAgents: async () => [baseOnlineAgent()],
       });
       const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
@@ -1977,8 +2469,9 @@ describe('postgres validation service adapters', () => {
       const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
         getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
         listAgents: async () => [baseOnlineAgent()],
+        ownershipVerificationRepositoryUnavailable: true,
       });
-      assert.equal(repositories.portalRevamp, undefined);
+      assert.equal(repositories.ownershipVerifications, undefined);
       const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
 
       const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
@@ -1989,33 +2482,31 @@ describe('postgres validation service adapters', () => {
       assertNoRunProbeOrAgentSideEffects(validationCalls);
     });
 
-    // Regression: the group path briefly required agent_verified, which would have denied a
-    // Postgres tenant whose DNS proof legitimately lands as a group-level dns_verified.
-    it('allows a dns_verified group without reading the per-target row', async () => {
-      const { repositories, validationCalls } = createRecordingValidationRepositories({
-        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'dns_verified' }),
-        getTargetVerificationCurrent: async () => {
-          throw new Error('per-target row must not be read when the group already proves ownership');
-        },
+    it('denies a verified group summary when the exact target has no current proof', async () => {
+      const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'user_confirmed' }),
+        getCurrentTargetVerification: async () => null,
         listAgents: async () => [baseOnlineAgent()],
-        createTestRun: async (c, record) => ({ ...record }),
-        updateTestRun: async (c, id, patch) => ({ id, ...patch }),
-        createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
       });
       const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
 
       const result = await testRuns.startTestRun(ownershipCtx, startBody, signedWorker);
 
-      assert.equal(result.error, undefined);
-      assert.equal(queriedVerification(validationCalls), false);
-      assert.ok(validationCalls.some((c) => c.method === 'createProbeJob'));
+      assert.deepEqual(result, { error: 'ownership_not_verified', status: 409 });
+      assert.equal(queriedVerification(validationCalls), true);
+      assert.equal(
+        auditEvents.find((event) => event.entry.action === 'test_run.ownership_denied')
+          .entry.metadata.ownership_state,
+        'unverified',
+      );
+      assertNoRunProbeOrAgentSideEffects(validationCalls);
     });
 
     it('allows per-target DNS proof when the group is unverified', async () => {
       const { repositories, validationCalls } = createRecordingValidationRepositories({
         getTargetGroup: async () => baseStartTargetGroup({ ownership_status: 'unverified' }),
-        getTargetVerificationCurrent: async (c, targetId) =>
-          targetId === 'tgt_1' ? { state: 'dns_verified' } : null,
+        getCurrentTargetVerification: async (c, groupId, targetId) =>
+          targetId === 'tgt_1' ? { target_id: targetId, state: 'dns_verified' } : null,
         listAgents: async () => [baseOnlineAgent()],
         createTestRun: async (c, record) => ({ ...record }),
         updateTestRun: async (c, id, patch) => ({ id, ...patch }),
@@ -2028,6 +2519,51 @@ describe('postgres validation service adapters', () => {
       assert.equal(result.error, undefined);
       assert.equal(queriedVerification(validationCalls), true);
       assert.ok(validationCalls.some((c) => c.method === 'createProbeJob'));
+    });
+
+
+    it('denies unverified victim B while verified target A passes both ownership gates', async () => {
+      const group = baseStartTargetGroup({
+        ownership_status: 'agent_verified',
+        targets: [
+          { id: 'tgt_a', kind: 'fqdn', value: 'owned.example' },
+          { id: 'tgt_b', kind: 'fqdn', value: 'victim.example' },
+        ],
+      });
+      const { repositories, validationCalls } = createRecordingValidationRepositories({
+        getTargetGroup: async () => group,
+        getCurrentTargetVerification: async (c, groupId, targetId) =>
+          targetId === 'tgt_a' ? { target_id: 'tgt_a', state: 'agent_verified' } : null,
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (c, record) => ({ ...record }),
+        updateTestRun: async (c, id, patch) => ({ id, ...patch }),
+        createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+      const denied = await testRuns.startTestRun(
+        ownershipCtx,
+        { ...startBody, check_id: 'origin.leak_scan.safe', target_id: 'tgt_b' },
+        signedWorker,
+      );
+      assert.deepEqual(denied, { error: 'ownership_not_verified', status: 409 });
+      assertNoRunProbeOrAgentSideEffects(validationCalls);
+
+      const allowed = await testRuns.startTestRun(
+        ownershipCtx,
+        { ...startBody, check_id: 'origin.leak_scan.safe', target_id: 'tgt_a' },
+        signedWorker,
+      );
+      assert.equal(allowed.error, undefined);
+      assert.ok(validationCalls.some((call) => call.method === 'createProbeJob'));
+      const proofReads = validationCalls.filter(
+        (call) => call.method === 'ownershipVerifications.getCurrentTargetVerification',
+      );
+      assert.deepEqual(proofReads.map((call) => call.args.slice(1)), [
+        ['tg_1', 'tgt_b'],
+        ['tg_1', 'tgt_a'],
+        ['tg_1', 'tgt_a'],
+      ]);
     });
 
     it('leaves in-process simulation runs ungated', async () => {
@@ -7148,8 +7684,13 @@ function createTestPolicyRepositories(overrides = {}) {
     listTestPolicies: async () => overrides.listRows ?? [],
     getActiveTestPolicy: async (ctx, id) =>
       overrides.getActive ? overrides.getActive(ctx, id) : stored.get(id) ?? null,
+    findActivePolicyByGroupCheck: async (ctx, groupId, checkId) =>
+      [...stored.values(), ...(overrides.listRows ?? [])].find(
+        (row) => row.target_group_id === groupId && row.check_id === checkId && !row.archived_at,
+      ) ?? null,
     createTestPolicy: async (ctx, record) => {
       stored.set(record.id, { ...record });
+      auditEvents.push({ action: 'test_policy.created', resource_id: record.id });
       return { ...record };
     },
     updateTestPolicy: async (ctx, id, patch) => {
@@ -7157,15 +7698,25 @@ function createTestPolicyRepositories(overrides = {}) {
       if (!existing) return null;
       const next = { ...existing, ...patch };
       stored.set(id, next);
+      if (patch.changed_fields?.length) auditEvents.push({ action: 'test_policy.updated', resource_id: id });
       return next;
     },
     archiveTestPolicy: async (ctx, id, opts) => {
       const existing = stored.get(id) ?? overrides.getActive?.(ctx, id);
       if (!existing) return null;
-      const next = { ...existing, state: 'archived', archived_at: opts?.now ?? 'now' };
+      const next = { ...existing, state: 'archived', enabled: false, archived_at: opts?.now ?? 'now' };
       stored.set(id, next);
+      auditEvents.push({ action: 'test_policy.archived', resource_id: id });
       return next;
     },
+    listDueTestPolicies: async () => overrides.dueRows ?? [],
+    leaseDueTestPolicies: async () => overrides.leasedRows ?? [],
+    claimPolicyDispatchStart: async (ctx, id, input, options) => overrides.claimDispatch
+      ? overrides.claimDispatch(ctx, id, input, options)
+      : ({ id: input.dispatch_id, policy_id: id, ...input, start_claimed_at: FIXED_NOW.toISOString() }),
+    completePolicyDispatch: async (ctx, id, input, options) => overrides.completeDispatch
+      ? overrides.completeDispatch(ctx, id, input, options)
+      : ({ id: input.dispatch_id, policy_id: id, ...input }),
   };
   const coreCatalog = {
     getTargetGroup: async (ctx, id) =>
@@ -7195,9 +7746,15 @@ describe('postgres test policy service adapter', () => {
   it('exposes stable service method list', () => {
     assert.deepEqual(POSTGRES_TEST_POLICY_SERVICE_METHODS, [
       'listTestPolicies',
+      'getTestPolicyForDispatch',
       'createTestPolicy',
       'patchTestPolicy',
       'archiveTestPolicy',
+      'listDueTestPolicies',
+      'leaseDueTestPolicies',
+      'claimPolicyDispatchStart',
+      'completePolicyDispatch',
+      'dispatchDueTestPolicies',
     ]);
   });
 
@@ -7255,6 +7812,134 @@ describe('postgres test policy service adapter', () => {
     assert.equal(soc.status, 403);
   });
 
+  it('rejects event-driven create and update because no durable event consumer exists', async () => {
+    const existing = {
+      id: 'pol_manual', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass',
+      safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
+      max_concurrent_runs: 1, schedule_revision: 1,
+    };
+    const { repositories } = createTestPolicyRepositories({
+      getTargetGroup: async () => activeGroup,
+      getActive: async (_ctx, id) => (id === existing.id ? existing : null),
+    });
+    const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
+    const created = await svc.createTestPolicy(ctx, {
+      target_group_id: activeGroup.id,
+      check_id: existing.check_id,
+      cadence: 'event_driven',
+      event_trigger: { type: 'finding.created' },
+    });
+    assert.equal(created.error, 'unsupported_policy_cadence');
+    const patched = await svc.patchTestPolicy(ctx, existing.id, {
+      cadence: 'event_driven', event_trigger: { type: 'finding.created' },
+    });
+    assert.equal(patched.error, 'unsupported_policy_cadence');
+  });
+
+  it('claims a dispatch before start and forwards its exact durable binding', async () => {
+    const lease = {
+      id: 'pol_lease', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      check_id: 'dns.authoritative_response.safe', cadence: 'daily', expected_verdict: 'pass',
+      safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
+      max_concurrent_runs: 1, schedule_revision: 1,
+      dispatch_id: 'dispatch_exact', lease_token: 'lease_exact',
+      idempotency_key: 'a'.repeat(64), scheduled_for: '2026-06-01T11:59:00.000Z',
+    };
+    const order = [];
+    let claimedInput;
+    let completedInput;
+    const { repositories } = createTestPolicyRepositories({
+      getTargetGroup: async () => activeGroup,
+      getActive: async (_ctx, id) => (id === lease.id ? lease : null),
+      leasedRows: [lease],
+      claimDispatch: async (_ctx, _id, input) => {
+        order.push('claim');
+        claimedInput = input;
+        return { id: input.dispatch_id, start_claimed_at: FIXED_NOW.toISOString() };
+      },
+      completeDispatch: async (_ctx, _id, input) => {
+        order.push('complete');
+        completedInput = input;
+        return { id: input.dispatch_id, state: input.state, run_id: input.run_id };
+      },
+    });
+    const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
+    let trustedBinding;
+    let startBody;
+    const results = await svc.dispatchDueTestPolicies(ctx, {
+      workerId: 'scheduler-1',
+      async startTestRun(_ctx, body, _runtimeConfig, trusted) {
+        order.push('start');
+        startBody = body;
+        trustedBinding = trusted.policyDispatch;
+        return { run: { id: 'run_exact' } };
+      },
+    });
+    const expectedBinding = {
+      dispatch_id: lease.dispatch_id,
+      lease_token: lease.lease_token,
+      idempotency_key: lease.idempotency_key,
+      scheduled_for: lease.scheduled_for,
+    };
+    assert.deepEqual(order, ['claim', 'start', 'complete']);
+    assert.deepEqual(claimedInput, expectedBinding);
+    assert.deepEqual(trustedBinding, expectedBinding);
+    assert.equal(startBody.policy_dispatch_id, lease.dispatch_id);
+    assert.equal(completedInput.run_id, 'run_exact');
+    assert.equal(results[0].dispatch.state, 'dispatched');
+  });
+
+
+  it('does not settle retryable starts or signed-worker runs missing a probe job', async () => {
+    const lease = {
+      id: 'pol_retry', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      check_id: 'dns.authoritative_response.safe', cadence: 'daily', expected_verdict: 'pass',
+      safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
+      max_concurrent_runs: 1, schedule_revision: 1,
+      dispatch_id: 'dispatch_retry', lease_token: 'lease_retry',
+      idempotency_key: 'b'.repeat(64), scheduled_for: '2026-06-01T11:59:00.000Z',
+    };
+    const cases = [
+      {
+        expectedError: 'probe_job_dispatch_incomplete',
+        startTestRun: async () => ({ run: { id: 'run_without_probe_job' } }),
+      },
+      {
+        expectedError: 'start_test_run_failed',
+        startTestRun: async () => { throw new Error('simulated crash'); },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let completionCalls = 0;
+      const { repositories } = createTestPolicyRepositories({
+        getTargetGroup: async () => activeGroup,
+        getActive: async (_ctx, id) => (id === lease.id ? lease : null),
+        leasedRows: [lease],
+        completeDispatch: async () => {
+          completionCalls += 1;
+          return { state: 'must_not_settle' };
+        },
+      });
+      const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
+      const [result] = await svc.dispatchDueTestPolicies(ctx, {
+        workerId: 'scheduler-1',
+        runtimeConfig: {
+          probeMode: 'signed-worker',
+          probeWorkerSecret: 'probe-worker-signing-secret-for-tests',
+        },
+        startTestRun: testCase.startTestRun,
+      });
+
+      assert.equal(result.error.error, testCase.expectedError);
+      assert.equal(result.error.retryable, true);
+      assert.equal(result.run, null);
+      assert.equal(completionCalls, 0);
+      assert.equal(result.dispatch.id, lease.dispatch_id);
+      assert.equal(result.dispatch.state, undefined);
+    }
+  });
   it('lists only policies whose target group is still active', async () => {
     const rows = [
       { id: 'p1', tenant_id: 'ten_demo', target_group_id: 'tg_1', check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass', safe_windows: [], state: 'active' },

@@ -524,20 +524,18 @@
       "evidence": {
         "created_at": "2026-07-02T00:00:00.000Z",
         "runs": [
-          {
-            "page": "dashboard",
-            "viewport": "desktop",
-            "browser": "chromium",
-            "axe_status": "pass",
-            "keyboard_status": "pass",
-            "screen_reader_status": "pass",
-            "issues": {
-              "critical": 0,
-              "serious": 0,
-              "moderate": 0,
-              "minor": 0
-            }
-          }
+          { "page": "dashboard", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "dashboard", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "test_runs", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "test_runs", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "soc_console", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "soc_console", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "high_scale_request", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "high_scale_request", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "reports_export_custody_preview", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "reports_export_custody_preview", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "findings", "viewport": "desktop", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" },
+          { "page": "findings", "viewport": "mobile", "browser": "chromium", "axe_status": "pass", "keyboard_status": "pass", "screen_reader_status": "pass", "issues": { "critical": 0, "serious": 0, "moderate": 0, "minor": 0 }, "captured_at": "2026-07-02T00:00:00.000Z" }
         ],
         "evidence_uri": "evidence://ux/accessibility-matrix"
       }

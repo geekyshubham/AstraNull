@@ -78,20 +78,20 @@ describe('test policy operator runner', () => {
     assert.equal(failed.message.includes('user:secret'), false);
   });
 
-  it('bounds the external scheduler interval and rejects tight-loop values', () => {
+  it('bounds the external scheduler interval to the heartbeat-safe range', () => {
     assert.equal(resolveTestPolicySchedulerIntervalSeconds({}), 30);
     assert.equal(resolveTestPolicySchedulerIntervalSeconds({
       ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: '5',
     }), 5);
     assert.equal(resolveTestPolicySchedulerIntervalSeconds({
-      ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: '3600',
-    }), 3600);
-    for (const value of ['', '0', '-1', '4', '1.5', 'nope', '3601']) {
+      ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: '30',
+    }), 30);
+    for (const value of ['', '0', '-1', '4', '1.5', 'nope', '31', '3600']) {
       assert.throws(
         () => resolveTestPolicySchedulerIntervalSeconds({
           ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: value,
         }),
-        /integer between 5 and 3600/,
+        /integer between 5 and 30/,
         value,
       );
     }
@@ -99,7 +99,7 @@ describe('test policy operator runner', () => {
     const parsed = parseTestPolicyRunnerArgs(['node', 'runner', '--tenant-id', 'ten_a']);
     const rejected = resolveTestPolicyRunnerConfig({
       ASTRANULL_DATABASE_URL: 'postgres://configured',
-      ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: '0',
+      ASTRANULL_TEST_POLICY_INTERVAL_SECONDS: '31',
     }, parsed, {
       loadRuntimeConfigFn: () => RUNTIME_CONFIG,
     });

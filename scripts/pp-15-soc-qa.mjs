@@ -3,12 +3,13 @@
  * PAGE QA PP-15 — /soc, /internal-soc (SocConsolePage)
  * L1 data fidelity, L2 backend actions, L3 viewport checks (Playwright when available)
  */
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { computeScopeHashFromTargets } from '../src/lib/scopeHash.mjs';
 import {
   acceptRequiredAuthorizationArtifactsOnly,
-  artifactProofBody,
   validHighScaleRequestPayload
 } from '../tests/helpers/highScalePayload.mjs';
 
@@ -84,6 +85,36 @@ function socScheduleWindow() {
   };
 }
 
+function exactArtifactProofBody(type, request, scopeHash, overrides = {}) {
+  return {
+    type,
+    content_sha256: createHash('sha256').update(`pp15-artifact:${type}`).digest('hex'),
+    reference_uri: `metadata://high-scale/${type}/pp15`,
+    approval_reference: 'REF-PP15',
+    approver: 'Customer Approver',
+    valid_window: {
+      valid_from: new Date().toISOString(),
+      valid_to: new Date(Date.now() + 86400000 * 30).toISOString()
+    },
+    approved_targets: [request.target_group_id],
+    approved_scenario_families: [...request.requested_scenario_families],
+    approved_delivery_patterns: [...request.delivery_patterns],
+    approved_limits: { ...request.requested_limits },
+    authorization_binding: {
+      tenant_id: request.tenant_id ?? ENGINEER_HEADERS['x-tenant-id'],
+      target_group_id: request.target_group_id,
+      scope_hash: scopeHash,
+      requested_window: { ...request.requested_window },
+      approved_schedule_window: { ...request.requested_window },
+      delivery_patterns: [...request.delivery_patterns]
+    },
+    emergency_contacts: [{ name: 'On-call', contact: 'ops@example.invalid' }],
+    abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
+    retention_policy: { retain_days: 90, classification: 'governance' },
+    ...overrides
+  };
+}
+
 async function resolveTargetGroupId() {
   const groups = await api('/v1/target-groups', {}, ENGINEER_HEADERS);
   if (groups.status !== 200) return 'tg_demo';
@@ -111,22 +142,26 @@ async function seedHighScaleRequest(targetGroupId) {
 async function acceptProviderArtifactsViaApi(requestId, targetGroupId) {
   const list = await api('/v1/high-scale-requests', {}, SOC_PRIMARY);
   const req = (list.body?.items ?? []).find((item) => getString(item, ['id']) === requestId);
-  for (const item of req?.provider_approval_checklist ?? []) {
+  if (!req) throw new Error(`high-scale request not found: ${requestId}`);
+  const group = await api(`/v1/target-groups/${encodeURIComponent(targetGroupId)}`, {}, ENGINEER_HEADERS);
+  if (group.status !== 200 || !Array.isArray(group.body?.targets) || group.body.targets.length === 0) {
+    throw new Error(`target-group detail missing targets: ${targetGroupId}`);
+  }
+  const scopeHash = computeScopeHashFromTargets(targetGroupId, group.body.targets);
+  for (const item of req.provider_approval_checklist ?? []) {
     const providerName = getString(item, ['provider_name'], '');
     const up = await api(`/v1/high-scale-requests/${requestId}/artifacts`, {
       method: 'POST',
-      body: JSON.stringify({
-        ...artifactProofBody('provider_approval', { approved_targets: [targetGroupId] }),
+      body: JSON.stringify(exactArtifactProofBody('provider_approval', req, scopeHash, {
         type: 'provider_approval',
         provider_name: providerName,
         contact_path: 'provider-war-room@example.invalid',
-        approved_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
         provider_specific_evidence: {
           approval_path: getString(item, ['approval_path'], 'manual_coordination'),
           provider_key: getString(item, ['provider_key'], 'generic')
         },
         emergency_stop_path: 'provider-stop-bridge'
-      })
+      }))
     }, ENGINEER_HEADERS);
     if (up.status !== 201) {
       throw new Error(`provider artifact upload failed (${providerName}): ${up.status}`);

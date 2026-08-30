@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { computeScopeHashFromTargets } from '../src/lib/scopeHash.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE_URL = process.env.ASTRANULL_BASE_URL ?? 'http://127.0.0.1:4320';
@@ -73,8 +74,9 @@ function validRequestPayload(groupId, suffix) {
     objective: `PP14 QA request ${suffix}`,
     environment: 'staging',
     business_criticality: 'high',
-    requested_scenario_families: ['volumetric_metadata'],
-    requested_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
+    requested_scenario_families: ['udp_flood'],
+    delivery_patterns: ['direct'],
+    requested_limits: { max_gbps: 0.5, max_duration_minutes: 45 },
     stop_criteria: { abort_on_customer_signal: true, max_error_rate_pct: 5 },
     abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
     requested_window: {
@@ -88,8 +90,9 @@ function validRequestPayload(groupId, suffix) {
   };
 }
 
-function artifactProofBody(type, groupId) {
-  const { windowStart, windowEnd } = defaultWindow();
+function artifactProofBody(type, groupId, request, scopeHash) {
+  const windowStart = new Date().toISOString();
+  const windowEnd = new Date(Date.now() + 86400000 * 30).toISOString();
   const digest = createHash('sha256').update(`pp14-artifact:${type}`).digest('hex');
   return {
     type,
@@ -100,9 +103,17 @@ function artifactProofBody(type, groupId) {
     approver: 'Customer Approver',
     valid_window: { valid_from: windowStart, valid_to: windowEnd },
     approved_targets: [groupId],
-    approved_scenario_families: ['volumetric_metadata'],
-    max_rate: '500_rps_metadata',
-    max_duration_minutes: 45,
+    approved_scenario_families: [...request.requested_scenario_families],
+    approved_delivery_patterns: [...request.delivery_patterns],
+    approved_limits: { ...request.requested_limits },
+    authorization_binding: {
+      tenant_id: HEADERS['x-tenant-id'],
+      target_group_id: groupId,
+      scope_hash: scopeHash,
+      requested_window: { ...request.requested_window },
+      approved_schedule_window: { ...request.requested_window },
+      delivery_patterns: [...request.delivery_patterns],
+    },
     emergency_contacts: [{ name: 'On-call', contact: 'ops@example.invalid' }],
     abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
     retention_policy: { retain_days: 90, classification: 'governance' }
@@ -156,7 +167,14 @@ async function runL2() {
   }
 
   const suffix = Date.now();
-  const createRes = await api('POST', '/v1/high-scale-requests', validRequestPayload(groupId, suffix));
+  const requestPayload = validRequestPayload(groupId, suffix);
+  const groupDetail = await api('GET', `/v1/target-groups/${encodeURIComponent(groupId)}`);
+  if (groupDetail.status !== 200 || !Array.isArray(groupDetail.json?.targets) || groupDetail.json.targets.length === 0) {
+    fail('l2', `target-group detail missing targets (${groupDetail.status})`);
+    return;
+  }
+  const scopeHash = computeScopeHashFromTargets(groupId, groupDetail.json.targets);
+  const createRes = await api('POST', '/v1/high-scale-requests', requestPayload);
   if (createRes.status !== 201 || !createRes.json?.id) {
     fail('l2', `POST /v1/high-scale-requests failed (${createRes.status} ${createRes.json?.error ?? ''})`);
     return;
@@ -177,7 +195,7 @@ async function runL2() {
   const artRes = await api(
     'POST',
     `/v1/high-scale-requests/${requestId}/artifacts`,
-    artifactProofBody('test_plan', groupId)
+    artifactProofBody('test_plan', groupId, requestPayload, scopeHash)
   );
   if (artRes.status !== 201 || !artRes.json?.id) {
     fail('l2', `POST artifact failed (${artRes.status} ${artRes.json?.error ?? ''})`);

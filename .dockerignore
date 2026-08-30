@@ -17,3 +17,11 @@ temp
 # silently invalidate every token on each deploy. Deployments inject it at runtime via
 # ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON instead.
 ops/staging/bundled-oidc-fixture.json
+
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+ops/aws/.env

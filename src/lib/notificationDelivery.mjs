@@ -1,5 +1,6 @@
 import net from 'node:net';
 import tls from 'node:tls';
+import { pinnedFetch } from './pinnedHttpRequest.mjs';
 import { collectForbiddenEvidenceFields } from './redact.mjs';
 
 const DEFAULT_DELIVERY_MODE = 'metadata_only';
@@ -280,10 +281,22 @@ export function encodeWebhookPayload(body) {
   return encodeProviderPayload(body, WEBHOOK_MAX_PAYLOAD_BYTES);
 }
 
+function notificationFetch(options) {
+  return options.fetchFn ?? ((input, init) => pinnedFetch(input, init, options.transportDeps));
+}
+
+async function discardResponseBody(response) {
+  try {
+    await response?.body?.cancel?.();
+  } catch {
+    // Delivery decisions use status only; body cleanup failures must not mask it.
+  }
+}
+
 /**
  * @param {string} destination
  * @param {string} json
- * @param {{ fetchFn?: typeof fetch, timeoutMs?: number, maxPayloadBytes?: number }} [options]
+ * @param {{ fetchFn?: typeof fetch, timeoutMs?: number, maxPayloadBytes?: number, transportDeps?: Record<string, unknown> }} [options]
  */
 export async function sendProviderHttpsPost(destination, json, options = {}) {
   const destCheck = rejectProviderDestinationWithCredentials(destination);
@@ -291,7 +304,7 @@ export async function sendProviderHttpsPost(destination, json, options = {}) {
     return { ok: false, error: destCheck.error, transport: 'rejected_precheck' };
   }
 
-  const fetchFn = options.fetchFn ?? fetch;
+  const fetchFn = notificationFetch(options);
   const timeoutMs = options.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -304,18 +317,23 @@ export async function sendProviderHttpsPost(destination, json, options = {}) {
       redirect: 'manual',
       signal: controller.signal,
     });
-    if (res.status >= 300 && res.status < 400) {
-      return { ok: false, error: 'provider_redirect_not_allowed', status: res.status, transport: 'http' };
+    try {
+      if (res.status >= 300 && res.status < 400) {
+        return { ok: false, error: 'provider_redirect_not_allowed', status: res.status, transport: 'http' };
+      }
+      const ok = typeof res.ok === 'boolean' ? res.ok : res.status >= 200 && res.status < 300;
+      if (!ok) {
+        return {
+          ok: false,
+          error: 'provider_http_error',
+          status: res.status,
+          transport: 'http',
+        };
+      }
+      return { ok: true, status: res.status, transport: 'http' };
+    } finally {
+      await discardResponseBody(res);
     }
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: 'provider_http_error',
-        status: res.status,
-        transport: 'http',
-      };
-    }
-    return { ok: true, status: res.status, transport: 'http' };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'provider_send_failed';
     return { ok: false, error: message, transport: 'http' };
@@ -327,7 +345,7 @@ export async function sendProviderHttpsPost(destination, json, options = {}) {
 /**
  * @param {string} destination
  * @param {string} json
- * @param {{ fetchFn?: typeof fetch, timeoutMs?: number }} [options]
+ * @param {{ fetchFn?: typeof fetch, timeoutMs?: number, transportDeps?: Record<string, unknown> }} [options]
  */
 export async function sendWebhookNotification(destination, json, options = {}) {
   const destCheck = rejectWebhookDestinationWithCredentials(destination);
@@ -335,7 +353,7 @@ export async function sendWebhookNotification(destination, json, options = {}) {
     return { ok: false, error: destCheck.error, transport: 'rejected_precheck' };
   }
 
-  const fetchFn = options.fetchFn ?? fetch;
+  const fetchFn = notificationFetch(options);
   const timeoutMs = options.timeoutMs ?? WEBHOOK_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -348,18 +366,23 @@ export async function sendWebhookNotification(destination, json, options = {}) {
       redirect: 'manual',
       signal: controller.signal,
     });
-    if (res.status >= 300 && res.status < 400) {
-      return { ok: false, error: 'webhook_redirect_not_allowed', status: res.status, transport: 'http' };
+    try {
+      if (res.status >= 300 && res.status < 400) {
+        return { ok: false, error: 'webhook_redirect_not_allowed', status: res.status, transport: 'http' };
+      }
+      const ok = typeof res.ok === 'boolean' ? res.ok : res.status >= 200 && res.status < 300;
+      if (!ok) {
+        return {
+          ok: false,
+          error: 'webhook_http_error',
+          status: res.status,
+          transport: 'http',
+        };
+      }
+      return { ok: true, status: res.status, transport: 'http' };
+    } finally {
+      await discardResponseBody(res);
     }
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: 'webhook_http_error',
-        status: res.status,
-        transport: 'http',
-      };
-    }
-    return { ok: true, status: res.status, transport: 'http' };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'webhook_send_failed';
     return { ok: false, error: message, transport: 'http' };
@@ -445,12 +468,36 @@ function smtpWrite(socket, command) {
   socket.write(`${command}\r\n`);
 }
 
+function smtpCapabilityLines(response) {
+  return String(response?.text ?? '')
+    .split('\n')
+    .map((line) => line.length > 4 ? line.slice(4).trim().toUpperCase() : '')
+    .filter(Boolean);
+}
+
+function smtpSupportsCapability(response, capability) {
+  const expected = capability.toUpperCase();
+  return smtpCapabilityLines(response).some(
+    (line) => line === expected || line.startsWith(`${expected} `),
+  );
+}
+
+function smtpSupportsAuthMechanism(response, mechanism) {
+  const expected = mechanism.toUpperCase();
+  return smtpCapabilityLines(response).some((line) => {
+    if (!line.startsWith('AUTH ')) return false;
+    return line.slice(5).split(/\s+/).includes(expected);
+  });
+}
+
 /**
  * @param {{ from: string, to: string, subject: string, html_body: string }} envelope
  * @param {{
  *   smtpHost?: string,
  *   smtpPort?: number,
  *   smtpStartTls?: boolean,
+ *   smtpUsername?: string,
+ *   smtpPassword?: string,
  *   connect?: typeof net.connect,
  *   secureConnect?: typeof tls.connect,
  * }} [options]
@@ -470,48 +517,106 @@ export async function deliverEmail(envelope, options = {}) {
     (process.env.ASTRANULL_SMTP_STARTTLS === undefined
       ? true
       : process.env.ASTRANULL_SMTP_STARTTLS !== 'false');
+  const username = String(options.smtpUsername ?? process.env.ASTRANULL_SMTP_USERNAME ?? '');
+  const password = String(options.smtpPassword ?? process.env.ASTRANULL_SMTP_PASSWORD ?? '');
   const connectFn = options.connect ?? net.connect;
   const secureConnectFn = options.secureConnect ?? tls.connect;
 
   let socket;
+  let deadline;
 
   try {
+    if (Boolean(username) !== Boolean(password)) {
+      throw new Error('smtp_auth_config_invalid');
+    }
+
     socket = await new Promise((resolve, reject) => {
-      const connectTimer = setTimeout(() => reject(new Error('smtp_connect_timeout')), SMTP_CONNECT_TIMEOUT_MS);
-      const rawSocket = connectFn({ host, port }, () => {
+      let rawSocket;
+      const connectTimer = setTimeout(() => {
+        const error = new Error('smtp_connect_timeout');
+        rawSocket?.destroy?.(error);
+        reject(error);
+      }, SMTP_CONNECT_TIMEOUT_MS);
+      try {
+        rawSocket = connectFn({ host, port }, () => {
+          clearTimeout(connectTimer);
+          resolve(rawSocket);
+        });
+        rawSocket.once('error', (err) => {
+          clearTimeout(connectTimer);
+          reject(err);
+        });
+      } catch (error) {
         clearTimeout(connectTimer);
-        resolve(rawSocket);
-      });
-      rawSocket.once('error', (err) => {
-        clearTimeout(connectTimer);
-        reject(err);
-      });
+        reject(error);
+      }
     });
 
-    const deadline = setTimeout(() => socket.destroy(new Error('smtp_total_timeout')), SMTP_TOTAL_TIMEOUT_MS);
+    deadline = setTimeout(
+      () => socket?.destroy?.(new Error('smtp_total_timeout')),
+      SMTP_TOTAL_TIMEOUT_MS,
+    );
 
     let reader = createSmtpLineReader(socket);
     await expectSmtpResponse(reader, [220]);
 
     smtpWrite(socket, 'EHLO astranull.local');
-    const ehlo = await expectSmtpResponse(reader, [250]);
+    let ehlo = await expectSmtpResponse(reader, [250]);
+    let tlsEstablished = false;
 
-    if (startTls && ehlo.text.toUpperCase().includes('STARTTLS')) {
+    if (startTls) {
+      if (!smtpSupportsCapability(ehlo, 'STARTTLS')) {
+        // Never fall through to MAIL/DATA when encryption was required. A server
+        // that omits STARTTLS is a hard downgrade failure, not an opt-out signal.
+        throw new Error('smtp_starttls_required');
+      }
       smtpWrite(socket, 'STARTTLS');
       await expectSmtpResponse(reader, [220]);
       socket.removeAllListeners('data');
       socket = await new Promise((resolve, reject) => {
-        const tlsSocket = secureConnectFn({ socket, servername: host }, () => resolve(tlsSocket));
-        tlsSocket.once('error', reject);
+        let tlsSocket;
+        const tlsTimer = setTimeout(() => {
+          const error = new Error('smtp_tls_handshake_timeout');
+          tlsSocket?.destroy?.(error);
+          reject(error);
+        }, SMTP_CONNECT_TIMEOUT_MS);
+        try {
+          tlsSocket = secureConnectFn(
+            { socket, servername: host, rejectUnauthorized: true },
+            () => {
+              clearTimeout(tlsTimer);
+              resolve(tlsSocket);
+            },
+          );
+          tlsSocket.once('error', (error) => {
+            clearTimeout(tlsTimer);
+            reject(error);
+          });
+        } catch (error) {
+          clearTimeout(tlsTimer);
+          reject(error);
+        }
       });
+      tlsEstablished = true;
       reader = createSmtpLineReader(socket);
       smtpWrite(socket, 'EHLO astranull.local');
-      await expectSmtpResponse(reader, [250]);
+      ehlo = await expectSmtpResponse(reader, [250]);
+    }
+
+    if (username) {
+      if (!tlsEstablished) throw new Error('smtp_auth_requires_tls');
+      if (!smtpSupportsAuthMechanism(ehlo, 'PLAIN')) {
+        throw new Error('smtp_auth_plain_not_supported');
+      }
+      const auth = Buffer.from(`\u0000${username}\u0000${password}`, 'utf8').toString('base64');
+      smtpWrite(socket, `AUTH PLAIN ${auth}`);
+      await expectSmtpResponse(reader, [235]);
     }
 
     await runSmtpMailTransaction(reader, socket, envelope);
 
     clearTimeout(deadline);
+    deadline = null;
     smtpWrite(socket, 'QUIT');
     socket.end();
 
@@ -520,6 +625,7 @@ export async function deliverEmail(envelope, options = {}) {
       reason: 'email_delivered',
     };
   } catch (err) {
+    clearTimeout(deadline);
     const message = err instanceof Error ? err.message : 'smtp_send_failed';
     socket?.destroy?.();
     const attempt_number = 1;

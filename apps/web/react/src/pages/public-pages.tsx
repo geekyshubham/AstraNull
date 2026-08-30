@@ -577,7 +577,12 @@ export function PublicLandingPage({ config }: PublicPageProps) {
 
         <section className="public-section public-section--compare" id="compare">
           <h2>Built for teams that can&apos;t hand over the keys.</h2>
-          <div className="public-compare table-wrap">
+          <div
+            className="public-compare table-wrap"
+            tabIndex={0}
+            role="region"
+            aria-label="AstraNull capability comparison, scrollable"
+          >
             <table>
               <thead>
                 <tr>
@@ -591,9 +596,9 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 {LANDING_COMPARE.map(([label, anull, legacy, cloud]) => (
                   <tr key={label}>
                     <th scope="row">{label}</th>
-                    <td className="public-compare-yes">{anull}</td>
-                    <td>{legacy}</td>
-                    <td>{cloud}</td>
+                    <td className="public-compare-yes" data-label="AstraNull">{anull}</td>
+                    <td data-label="Self-run load tests">{legacy}</td>
+                    <td data-label="Provider DDoS dashboards">{cloud}</td>
                   </tr>
                 ))}
               </tbody>
@@ -696,12 +701,25 @@ function passwordPolicyMessages(failures: unknown): string[] {
   return failures.map((code) => PASSWORD_POLICY_LABELS[String(code)] ?? String(code));
 }
 
-export function LoginPage({ config }: PublicPageProps) {
+function passwordResetFlowRequested() {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('flow') === 'password-reset';
+}
+
+export function LoginPage(props: PublicPageProps) {
+  return passwordResetFlowRequested()
+    ? <ResetPasswordPage {...props} />
+    : <CredentialLoginPage {...props} />;
+}
+
+function CredentialLoginPage({ config }: PublicPageProps) {
   usePageMeta({ title: 'Log in · AstraNull Customer Portal' });
 
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [totp, setTotp] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [tenantId, setTenantId] = useState('');
   const [tenantRequired, setTenantRequired] = useState(false);
   const [role, setRole] = useState('admin');
@@ -784,6 +802,7 @@ export function LoginPage({ config }: PublicPageProps) {
     const body: Record<string, unknown> = { email: userId.trim(), password };
     const scopedTenant = tenantId.trim();
     if (scopedTenant) body.tenant_id = scopedTenant;
+    if (mfaRequired) body.totp = totp.trim();
 
     const response = await fetch('/v1/auth/login', {
       method: 'POST',
@@ -796,12 +815,29 @@ export function LoginPage({ config }: PublicPageProps) {
       const code = String(json.error ?? '');
       setErrorCode(code);
       if (code === 'tenant_required') setTenantRequired(true);
+      if (code === 'mfa_required' || code === 'mfa_invalid') {
+        setMfaRequired(true);
+        setTotp('');
+        throw new Error(code === 'mfa_required'
+          ? 'Enter the 6-digit code from your authenticator app to continue.'
+          : 'That authenticator code could not be verified. Enter the current 6-digit code.');
+      }
       throw new Error(passwordLoginErrorMessage(response, code, json));
     }
-    // Never keep the plaintext in component state past a successful exchange.
+    // Never keep plaintext credentials or a one-time code in component state past success.
     setPassword('');
+    setTotp('');
+    setMfaRequired(false);
     saveSession(sessionFromLoginResponse(json));
     window.location.href = config.portalPath;
+  }
+
+  function clearMfaChallenge() {
+    if (!mfaRequired) return;
+    setMfaRequired(false);
+    setTotp('');
+    setError('');
+    setErrorCode('');
   }
 
   async function submit(event: FormEvent) {
@@ -871,7 +907,10 @@ export function LoginPage({ config }: PublicPageProps) {
                     id="login-user-id"
                     type={passwordLane && !stagingBypass ? 'email' : 'text'}
                     value={userId}
-                    onChange={(event) => setUserId(event.target.value)}
+                    onChange={(event) => {
+                      setUserId(event.target.value);
+                      clearMfaChallenge();
+                    }}
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
@@ -888,7 +927,10 @@ export function LoginPage({ config }: PublicPageProps) {
                           id="login-password"
                           type={showPassword ? 'text' : 'password'}
                           value={password}
-                          onChange={(event) => setPassword(event.target.value)}
+                          onChange={(event) => {
+                            setPassword(event.target.value);
+                            clearMfaChallenge();
+                          }}
                           autoComplete="current-password"
                           required
                           maxLength={200}
@@ -911,7 +953,10 @@ export function LoginPage({ config }: PublicPageProps) {
                         <input
                           id="login-tenant-scope"
                           value={tenantId}
-                          onChange={(event) => setTenantId(event.target.value)}
+                          onChange={(event) => {
+                            setTenantId(event.target.value);
+                            clearMfaChallenge();
+                          }}
                           className="mono"
                           autoComplete="off"
                           required
@@ -919,6 +964,28 @@ export function LoginPage({ config }: PublicPageProps) {
                         />
                         <span className="auth-field-help" id="login-tenant-scope-help">
                           This email is registered in more than one workspace. Enter the tenant ID you want to sign in to.
+                        </span>
+                      </label>
+                    ) : null}
+                    {mfaRequired ? (
+                      <label htmlFor="login-totp">
+                        <span>Authenticator code</span>
+                        <input
+                          id="login-totp"
+                          value={totp}
+                          onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                          className="mono"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          pattern="[0-9]{6}"
+                          minLength={6}
+                          maxLength={6}
+                          required
+                          autoFocus
+                          aria-describedby="login-totp-help"
+                        />
+                        <span className="auth-field-help" id="login-totp-help">
+                          Enter the current 6-digit code from your authenticator app.
                         </span>
                       </label>
                     ) : null}
@@ -957,7 +1024,7 @@ export function LoginPage({ config }: PublicPageProps) {
                 ) : null}
                 <div className="auth-form-actions row-actions">
                   <Button type="submit" loading={loading} disabled={loginDisabled}>
-                    Continue to portal
+                    {mfaRequired ? 'Verify and continue' : 'Continue to portal'}
                   </Button>
                   <Button type="button" variant="secondary" disabled={loginDisabled} onClick={() => enterDemoPortal(config.portalPath)}>
                     Try demo
@@ -978,6 +1045,243 @@ export function LoginPage({ config }: PublicPageProps) {
                     </p>
                   </details>
                 ) : null}
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </AuthPageLayout>
+    </PublicShell>
+  );
+}
+
+/**
+ * Consume a one-time password recovery token.
+ *
+ * Recovery is deliberately a distinct `flow=password-reset` mode on the public
+ * login route. Invitation activation below continues to call /v1/auth/set-password.
+ */
+function ResetPasswordPage({ config }: PublicPageProps) {
+  usePageMeta({ title: 'Reset your password · AstraNull', robots: 'noindex, nofollow' });
+
+  const [token, setToken] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('token')?.trim() ?? '';
+  });
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [totp, setTotp] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [policyFailures, setPolicyFailures] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  // The reset token is a live secret. Keep only the flow discriminator in the URL
+  // after React has copied the token into component memory.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('token')) return;
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError('');
+    setPolicyFailures([]);
+
+    if (password !== confirm) {
+      setError('The two passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const body: Record<string, unknown> = { token: token.trim(), password };
+      if (mfaRequired) body.totp = totp.trim();
+      const response = await fetch('/v1/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        const code = String(json.error ?? '');
+        if (code === 'weak_password') {
+          setPolicyFailures(passwordPolicyMessages(json.failures));
+          throw new Error('That password does not meet the password policy.');
+        }
+        if (code === 'mfa_required' || code === 'mfa_invalid') {
+          setMfaRequired(true);
+          setTotp('');
+          throw new Error(code === 'mfa_required'
+            ? 'Enter the 6-digit code from your authenticator app to complete recovery.'
+            : 'That authenticator code could not be verified. Enter the current 6-digit code.');
+        }
+        if (code === 'invalid_reset_token') {
+          throw new Error('This password recovery link is invalid or has already been used. Request a new link.');
+        }
+        if (code === 'reset_token_expired') {
+          throw new Error('This password recovery link has expired. Request a new link.');
+        }
+        if (code === 'rate_limited') {
+          throw new Error(`Too many attempts. Try again ${retryAfterLabel(json, response)}.`);
+        }
+        throw new Error(String(json.message ?? code ?? 'Could not reset the password.'));
+      }
+      setPassword('');
+      setConfirm('');
+      setTotp('');
+      setToken('');
+      setMfaRequired(false);
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reset the password.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl}>
+      <AuthPageLayout
+        aside={(
+          <>
+            <h1 className="auth-title">Recover your account securely.</h1>
+            <p className="auth-lead">
+              Use the one-time recovery link sent to your work email. A completed reset revokes
+              outstanding recovery links, invitations, and existing password sessions.
+            </p>
+            <AuthAsidePoints
+              items={[
+                { icon: LockKeyhole, text: 'Recovery tokens are stored only as one-way digests' },
+                { icon: ShieldCheck, text: 'Enrolled accounts still require their authenticator code' },
+                { icon: FileCheck2, text: 'Credential changes are recorded in the tenant audit log' }
+              ]}
+            />
+          </>
+        )}
+        footer={<p><a href={config.loginUrl}>Back to log in</a></p>}
+      >
+        <Card className="auth-card">
+          <AuthCardHeader
+            badge={<Badge tone="info">Password recovery</Badge>}
+            title={done ? 'Password reset' : 'Choose a new password'}
+            description={done
+              ? 'Your password has been changed and prior password sessions have been revoked.'
+              : 'Enter the recovery token from your email and choose a password of at least 12 characters.'}
+          />
+          <CardContent>
+            {done ? (
+              <div className="success-panel" role="status" aria-live="polite">
+                <div className="callout info">
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                  <p className="success-panel-lead">Your password was reset. Sign in with the new password.</p>
+                </div>
+                <div className="auth-form-actions">
+                  <AnchorButton href={config.loginUrl}>Continue to log in</AnchorButton>
+                </div>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={submit} aria-busy={loading}>
+                <label htmlFor="reset-password-token">
+                  <span>Recovery token</span>
+                  <input
+                    id="reset-password-token"
+                    value={token}
+                    onChange={(event) => {
+                      setToken(event.target.value);
+                      setMfaRequired(false);
+                      setTotp('');
+                    }}
+                    className="mono"
+                    placeholder="pwr_…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    disabled={loading}
+                  />
+                </label>
+                <label htmlFor="reset-password-new">
+                  <span>New password</span>
+                  <span className="auth-password-field">
+                    <input
+                      id="reset-password-new"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={200}
+                      required
+                      disabled={loading}
+                      aria-describedby="reset-password-policy"
+                    />
+                    <button
+                      type="button"
+                      className="auth-password-toggle"
+                      onClick={() => setShowPassword((current) => !current)}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                      <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
+                    </button>
+                  </span>
+                  <span className="auth-field-help" id="reset-password-policy">
+                    At least 12 characters, mixing at least three of: lowercase, uppercase, digits, symbols.
+                  </span>
+                </label>
+                <label htmlFor="reset-password-confirm">
+                  <span>Confirm password</span>
+                  <input
+                    id="reset-password-confirm"
+                    type={showPassword ? 'text' : 'password'}
+                    value={confirm}
+                    onChange={(event) => setConfirm(event.target.value)}
+                    autoComplete="new-password"
+                    required
+                    disabled={loading}
+                  />
+                </label>
+                {mfaRequired ? (
+                  <label htmlFor="reset-password-totp">
+                    <span>Authenticator code</span>
+                    <input
+                      id="reset-password-totp"
+                      value={totp}
+                      onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                      className="mono"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      minLength={6}
+                      maxLength={6}
+                      required
+                      autoFocus
+                      aria-describedby="reset-password-totp-help"
+                    />
+                    <span className="auth-field-help" id="reset-password-totp-help">
+                      Enter the current 6-digit code from your authenticator app.
+                    </span>
+                  </label>
+                ) : null}
+                {error ? (
+                  <div className="form-error" role="alert">
+                    <p>{error}</p>
+                    {policyFailures.length > 0 ? (
+                      <ul>
+                        {policyFailures.map((message) => <li key={message}>{message}</li>)}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="auth-form-actions">
+                  <Button type="submit" loading={loading}>
+                    {mfaRequired ? 'Verify and reset password' : 'Reset password'}
+                  </Button>
+                </div>
               </form>
             )}
           </CardContent>

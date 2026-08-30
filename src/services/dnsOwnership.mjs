@@ -40,7 +40,8 @@ function findTarget(ctx, targetGroupId, targetId) {
       (t) =>
         t.id === targetId
         && t.tenant_id === ctx.tenantId
-        && t.target_group_id === targetGroupId,
+        && t.target_group_id === targetGroupId
+        && !t.deleted_at,
     ) ?? null
   );
 }
@@ -52,7 +53,8 @@ function resolveFqdnDomain(ctx, targetGroupId, targetId) {
         (t) =>
           t.tenant_id === ctx.tenantId
           && t.target_group_id === targetGroupId
-          && t.kind === 'fqdn',
+          && t.kind === 'fqdn'
+          && !t.deleted_at,
       );
   if (!target?.value) return null;
   return String(target.value).trim().toLowerCase();
@@ -88,6 +90,24 @@ function formatChallenge(row) {
     last_check_result: row.last_check_result ?? null,
     audit_entry_id: row.audit_entry_id ?? null,
   };
+}
+
+function expireChallenge(ctx, challenge) {
+  challenge.state = 'expired';
+  challenge.last_checked_at = nowIso();
+  challenge.last_check_result = { matched: false, expired: true };
+  const auditEntry = audit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action: 'dns_ownership.challenge_expired',
+    resource_type: 'dns_challenge',
+    resource_id: challenge.id,
+    metadata: { target_group_id: challenge.target_group_id, target_id: challenge.target_id },
+  });
+  challenge.audit_entry_id = auditEntry.id;
+  persistStore();
+  return { error: 'challenge_expired', status: 409, challenge: formatChallenge(challenge) };
 }
 
 function findPendingChallengeForTarget(ctx, targetGroupId, targetId) {
@@ -142,14 +162,19 @@ async function resolveTxtWithTimeout(recordName, resolveTxt) {
     const dns = await import('node:dns/promises');
     resolveFn = dns.resolveTxt.bind(dns);
   }
+  let timer;
   const timeout = new Promise((_, reject) => {
-    setTimeout(() => {
+    timer = setTimeout(() => {
       const err = new Error('DNS lookup timed out');
       err.code = 'ETIMEOUT';
       reject(err);
     }, DNS_TIMEOUT_MS);
   });
-  return Promise.race([resolveFn(recordName), timeout]);
+  try {
+    return await Promise.race([resolveFn(recordName), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -161,15 +186,17 @@ export function issueChallenge(ctx, groupId, targetId) {
   const group = findActiveTargetGroup(ctx, groupId);
   if (!group) return { error: 'target_group_not_found', status: 404 };
 
-  const resolvedTargetId = targetId ?? findTarget(ctx, groupId, targetId)?.id ?? null;
   const fqdnTarget = targetId
     ? findTarget(ctx, groupId, targetId)
     : getStore().targets.find(
         (t) =>
           t.tenant_id === ctx.tenantId
           && t.target_group_id === groupId
-          && t.kind === 'fqdn',
+          && t.kind === 'fqdn'
+          && !t.deleted_at,
       );
+  if (targetId && !fqdnTarget) return { error: 'target_not_found', status: 404 };
+  if (fqdnTarget?.kind !== 'fqdn') return { error: 'no_fqdn_target', status: 409 };
   const effectiveTargetId = fqdnTarget?.id ?? null;
 
   const domain = resolveFqdnDomain(ctx, groupId, effectiveTargetId);
@@ -230,15 +257,26 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
     (row) => row.id === challengeId && row.tenant_id === ctx.tenantId,
   );
   if (!challenge) return { error: 'challenge_not_found', status: 404 };
+  if (options.targetGroupId && challenge.target_group_id !== options.targetGroupId) {
+    return { error: 'challenge_not_found', status: 404 };
+  }
 
   const group = findActiveTargetGroup(ctx, challenge.target_group_id);
   if (!group) return { error: 'target_group_not_found', status: 404 };
+  if (!challenge.target_id) return { error: 'challenge_target_not_bound', status: 409 };
+  if (!findTarget(ctx, challenge.target_group_id, challenge.target_id)) {
+    return { error: 'target_not_found', status: 404 };
+  }
 
   if (challenge.state !== 'pending') {
     return {
       challenge: formatChallenge(challenge),
       verified: challenge.state === 'resolved',
     };
+  }
+
+  if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+    return expireChallenge(ctx, challenge);
   }
 
   const rateKey = challenge.target_id ?? challenge.id;
@@ -271,6 +309,10 @@ export async function verifyChallenge(ctx, challengeId, options = {}) {
     } else {
       lookup = [];
     }
+  }
+
+  if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+    return expireChallenge(ctx, challenge);
   }
 
   const values = flattenTxtRecords(lookup);
@@ -357,8 +399,12 @@ export function issueDnsOwnershipChallenge(ctx, { target_group_id, target_id }) 
 
 /** Backward-compatible adapter — accepts challenge_id via target_group_id wrapper from server. */
 export async function verifyDnsOwnership(ctx, { target_group_id, challenge_id }, options = {}) {
+  if (!target_group_id) return { error: 'missing_target_group_id', status: 400 };
   if (challenge_id) {
-    const result = await verifyChallenge(ctx, challenge_id, options);
+    const result = await verifyChallenge(ctx, challenge_id, {
+      ...options,
+      targetGroupId: target_group_id,
+    });
     if (result.error) return result;
     return result;
   }
@@ -372,5 +418,5 @@ export async function verifyDnsOwnership(ctx, { target_group_id, challenge_id },
       && row.state === 'pending',
   );
   if (!pending) return { error: 'no_dns_challenge', status: 409 };
-  return verifyChallenge(ctx, pending.id, options);
+  return verifyChallenge(ctx, pending.id, { ...options, targetGroupId: target_group_id });
 }

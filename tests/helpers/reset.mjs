@@ -65,6 +65,7 @@ export function freshStore() {
         signer_name: 'Hardening Signer',
         signer_email: 'signer@example.invalid',
         signed_at: new Date().toISOString(),
+        scope_snapshot: { targets: ['tgt_1'], excluded: [] },
       },
     ],
     auditLog: [],

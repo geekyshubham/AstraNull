@@ -40,7 +40,7 @@ describe('probeJobs capability profile plumbing', () => {
 
   it('resolveJobProbeProfile drops metadata and loopback host overrides', () => {
     const check = getCheckById('origin.host_sni_bypass.safe');
-    for (const unsafe of ['169.254.169.254', '127.0.0.1', '::1', '0.0.0.0', '::ffff:10.0.0.5']) {
+    for (const unsafe of ['169.254.169.254', '127.0.0.1', '::1', '0.0.0.0', '::ffff:10.0.0.5', 'metadata.google.internal']) {
       const profile = resolveJobProbeProfile(check, { direct_ip: unsafe });
       assert.notEqual(profile.direct_ip, unsafe, `accepted ${unsafe}`);
     }
@@ -114,62 +114,197 @@ describe('probeJobs capability profile plumbing', () => {
     assert.equal(JSON.stringify(job.probe_profile).includes('169.254.169.254'), false);
   });
 
-  it('targetDescriptor passes direct_origin_ip in job metadata', () => {
+  it('drops authority-retargeting GraphQL and gRPC path overrides', () => {
+    const check = {
+      probe_profile: {
+        kind: 'graphql_posture_probe',
+        max_requests: 1,
+        timeout_ms: 5_000,
+        graphql_path: '/graphql',
+      },
+    };
+    for (const unsafe of [
+      '//evil.example/graphql',
+      '/@evil.example/graphql',
+      '/graphql?next=//evil.example',
+      '/graphql#fragment',
+      '/\\\\evil.example\\graphql',
+      'https://evil.example/graphql',
+    ]) {
+      const profile = resolveJobProbeProfile(check, {
+        graphql_path: unsafe,
+        grpc_path: unsafe,
+      });
+      assert.equal(profile.graphql_path, '/graphql');
+      assert.equal(profile.grpc_path, undefined);
+    }
+  });
+
+  it('targetDescriptor strips alternate destinations but keeps same-host URLs and Host/SNI labels', () => {
     const descriptor = targetDescriptor({
       id: 'tgt_1',
       kind: 'fqdn',
       value: 'edge.example.test',
-      metadata: { direct_origin_ip: '198.51.100.7' },
+      metadata: {
+        direct_origin_ip: '198.51.100.7',
+        resolver_host: '8.8.8.8',
+        alert_webhook_url: 'https://victim.example.test/alerts',
+        webhook_url: 'https://edge.example.test/alerts?source=astranull',
+        protected_host: 'protected.example.test',
+      },
     });
-    assert.equal(descriptor.metadata.direct_origin_ip, '198.51.100.7');
+    assert.equal(descriptor.metadata.direct_origin_ip, undefined);
+    assert.equal(descriptor.metadata.resolver_host, undefined);
+    assert.equal(descriptor.metadata.alert_webhook_url, undefined);
+    assert.equal(descriptor.metadata.webhook_url, 'https://edge.example.test/alerts?source=astranull');
+    assert.equal(descriptor.metadata.protected_host, 'protected.example.test');
   });
 
-  it('buildSignedProbeJobRecord enriches host_sni_bypass from target metadata', () => {
+  it('binds catalog, body, and target-metadata destinations after every merge', () => {
+    const catalogCheck = getCheckById('origin.host_sni_bypass.safe');
+    const check = {
+      ...catalogCheck,
+      probe_profile: {
+        ...catalogCheck.probe_profile,
+        direct_ip: '198.51.100.40',
+        resolver_host: '8.8.8.8',
+        secondary_nameservers: ['ns.catalog-victim.example.test'],
+      },
+    };
+    const job = buildSignedProbeJobRecord({
+      run: { id: 'run_1', tenant_id: 'ten_1', safety_constraints: { max_requests: 1 } },
+      check,
+      target: {
+        id: 'tgt_1',
+        kind: 'fqdn',
+        value: 'edge.example.test',
+        metadata: {
+          direct_origin_ip: '198.51.100.41',
+          resolver_host: '1.1.1.1',
+          secondary_nameservers: ['ns.metadata-victim.example.test'],
+          alert_webhook_url: 'https://webhook-victim.example.test/alerts',
+          webhook_url: 'https://another-victim.example.test/alerts',
+          protected_host: 'protected.example.test',
+        },
+      },
+      probeProfile: {
+        direct_ip: '198.51.100.42',
+        resolver_host: '9.9.9.9',
+        secondary_nameservers: ['ns.body-victim.example.test'],
+        protected_host: 'customer-protected.example.test',
+      },
+      probeWorkerSecret: SECRET,
+      now: new Date('2026-07-06T00:00:00.000Z'),
+      newId: () => 'pjob_bound',
+    });
+
+    assert.equal(job.probe_profile.direct_ip, undefined);
+    assert.equal(job.probe_profile.resolver_host, undefined);
+    assert.equal(job.probe_profile.secondary_nameservers, undefined);
+    assert.equal(job.probe_profile.protected_host, 'customer-protected.example.test');
+    assert.equal(job.target.metadata?.direct_origin_ip, undefined);
+    assert.equal(job.target.metadata?.resolver_host, undefined);
+    assert.equal(job.target.metadata?.alert_webhook_url, undefined);
+    assert.equal(job.target.metadata?.webhook_url, undefined);
+    for (const victim of [
+      '198.51.100.40', '8.8.8.8', 'ns.catalog-victim.example.test',
+      '198.51.100.41', '1.1.1.1', 'ns.metadata-victim.example.test',
+      'webhook-victim.example.test', 'another-victim.example.test',
+      '198.51.100.42', '9.9.9.9', 'ns.body-victim.example.test',
+    ]) {
+      assert.equal(JSON.stringify(job).includes(victim), false, `signed alternate destination ${victim}`);
+    }
+  });
+
+  it('allows exact literal-IP target destinations with a separate protected Host/SNI label', () => {
     const check = getCheckById('origin.host_sni_bypass.safe');
     const job = buildSignedProbeJobRecord({
-      run: { id: 'run_1', tenant_id: 'ten_1', safety_constraints: { max_requests: 1 } },
+      run: { id: 'run_1', tenant_id: 'ten_1', safety_constraints: { max_requests: 3 } },
       check,
       target: {
         id: 'tgt_1',
-        kind: 'fqdn',
-        value: 'edge.example.test',
+        kind: 'url',
+        value: 'https://198.51.100.7/probe?bounded=1',
         metadata: {
           direct_origin_ip: '198.51.100.7',
-          protected_host: 'edge.example.test',
+          resolver_host: '198.51.100.7',
+          webhook_url: 'https://198.51.100.7/hook?bounded=1',
+          alert_webhook_url: 'https://198.51.100.99/victim',
         },
       },
-      probeProfile: undefined,
+      probeProfile: {
+        protected_host: 'edge.example.test',
+        direct_ip: '198.51.100.7',
+        resolver_host: '198.51.100.99',
+        secondary_nameservers: ['198.51.100.7', '198.51.100.99'],
+      },
       probeWorkerSecret: SECRET,
       now: new Date('2026-07-06T00:00:00.000Z'),
-      newId: () => 'pjob_test',
+      newId: () => 'pjob_literal',
     });
-    assert.equal(job.probe_profile.direct_ip, '198.51.100.7');
+
     assert.equal(job.probe_profile.protected_host, 'edge.example.test');
+    assert.equal(job.probe_profile.direct_ip, '198.51.100.7');
+    assert.equal(job.probe_profile.resolver_host, undefined);
+    assert.deepEqual(job.probe_profile.secondary_nameservers, ['198.51.100.7']);
     assert.equal(job.target.metadata.direct_origin_ip, '198.51.100.7');
+    assert.equal(job.target.metadata.resolver_host, '198.51.100.7');
+    assert.equal(job.target.metadata.webhook_url, 'https://198.51.100.7/hook?bounded=1');
+    assert.equal(job.target.metadata.alert_webhook_url, undefined);
+    assert.equal(JSON.stringify(job).includes('198.51.100.99'), false);
   });
 
-  it('buildSignedProbeJobRecord enriches direct reachability from target metadata', () => {
-    const check = getCheckById('origin.direct_reachability.safe');
-    const job = buildSignedProbeJobRecord({
-      run: { id: 'run_1', tenant_id: 'ten_1', safety_constraints: { max_requests: 1 } },
+  it('exact-binds AXFR zone and declared-domain metadata after canonical comparison', () => {
+    const check = getCheckById('dns.zone_transfer_exposure.safe');
+    const build = ({ probeProfile, metadata }) => buildSignedProbeJobRecord({
+      run: { id: 'run_axfr', tenant_id: 'ten_1', safety_constraints: { max_requests: 1 } },
       check,
       target: {
-        id: 'tgt_1',
+        id: 'tgt_axfr',
         kind: 'fqdn',
-        value: 'edge.example.test',
-        metadata: {
-          direct_origin_ip: '198.51.100.8',
-          protected_host: 'edge.example.test',
-        },
+        value: 'Owned.Example.',
+        metadata,
       },
-      probeProfile: undefined,
+      probeProfile,
       probeWorkerSecret: SECRET,
-      now: new Date('2026-07-06T00:00:00.000Z'),
-      newId: () => 'pjob_direct',
+      now: new Date('2026-08-30T00:00:00.000Z'),
+      newId: () => 'pjob_axfr',
     });
-    assert.equal(job.probe_profile.kind, 'host_sni_bypass');
-    assert.equal(job.probe_profile.direct_ip, '198.51.100.8');
-    assert.equal(job.probe_profile.protected_host, 'edge.example.test');
-    assert.equal(job.target.metadata.direct_origin_ip, '198.51.100.8');
+
+    const retargeted = build({
+      probeProfile: {
+        zone: 'victim.example',
+        recursion_test_name: 'lookup-victim.example',
+        secondary_nameservers: ['ns.victim.example'],
+      },
+      metadata: {
+        zone: 'victim.example',
+        declared_apex_domain: 'victim.example.',
+      },
+    });
+    assert.equal(retargeted.probe_profile.zone, undefined);
+    assert.equal(retargeted.probe_profile.recursion_test_name, undefined);
+    assert.equal(retargeted.probe_profile.secondary_nameservers, undefined);
+    assert.equal(retargeted.target.metadata?.zone, undefined);
+    assert.equal(retargeted.target.metadata?.declared_apex_domain, undefined);
+    assert.equal(JSON.stringify(retargeted).includes('victim.example'), false);
+
+    const exact = build({
+      probeProfile: {
+        zone: 'owned.example',
+        recursion_test_name: 'OWNED.EXAMPLE.',
+        secondary_nameservers: ['Owned.Example.'],
+      },
+      metadata: {
+        zone: 'OWNED.EXAMPLE.',
+        declared_apex_domain: 'owned.example',
+      },
+    });
+    assert.equal(exact.probe_profile.zone, 'owned.example');
+    assert.equal(exact.probe_profile.recursion_test_name, 'owned.example');
+    assert.deepEqual(exact.probe_profile.secondary_nameservers, ['owned.example']);
+    assert.equal(exact.target.metadata.zone, 'owned.example');
+    assert.equal(exact.target.metadata.declared_apex_domain, 'owned.example');
   });
+
 });

@@ -11,7 +11,7 @@ export function computeScopeHashFromTargets(targetGroupId, targets) {
 
 export function computeTargetGroupScopeHash(tenantId, targetGroupId) {
   const targets = getStore().targets.filter(
-    (t) => t.tenant_id === tenantId && t.target_group_id === targetGroupId,
+    (t) => t.tenant_id === tenantId && t.target_group_id === targetGroupId && !t.deleted_at,
   );
   return computeScopeHashFromTargets(targetGroupId, targets);
 }

@@ -111,8 +111,17 @@ describe('aws deploy env contract', () => {
     );
   });
 
-  it('builds the AWS Dockerfile from compose and deploys it over SSH secrets', () => {
-    assert.match(compose, /^\s*dockerfile:\s*ops\/aws\/Dockerfile\s*$/m);
+  it('keeps AWS Compose image-only and delegates the exact-archive build to deploy.sh', () => {
+    const deploy = read('ops/aws/deploy.sh');
+    const dockerfile = read('ops/aws/Dockerfile');
+
+    assert.doesNotMatch(compose, /^\s+(?:build|context|dockerfile):/m);
+    assert.match(deploy, /^build_control_plane_from_commit\(\) \{/m);
+    assert.match(
+      deploy,
+      /git archive "\$commit" \\[\s\S]*\| timeout -k 30 480 docker build -f ops\/aws\/Dockerfile \\[\s\S]*-t "astranull-control-plane:\$commit" -/m,
+    );
+    assert.match(dockerfile, /^FROM\s+/m);
     assert.match(workflow, /secrets\.ASTRANULL_AWS_SSH_KEY/);
     assert.match(workflow, /secrets\.ASTRANULL_AWS_HOST/);
     assert.doesNotMatch(workflow, /AKIA[0-9A-Z]{16}/);

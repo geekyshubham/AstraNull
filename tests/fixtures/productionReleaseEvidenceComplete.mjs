@@ -21,6 +21,30 @@ const AGENT_INSTALL_MATRIX_CHECKS = Object.freeze([
   'signature_verify',
 ]);
 
+const UI_ACCESSIBILITY_PAGES = Object.freeze([
+  'dashboard',
+  'test_runs',
+  'soc_console',
+  'high_scale_request',
+  'reports_export_custody_preview',
+  'findings',
+]);
+
+function uiAccessibilityRuns() {
+  return UI_ACCESSIBILITY_PAGES.flatMap((page) => (
+    ['desktop', 'mobile'].map((viewport) => ({
+      page,
+      viewport,
+      browser: 'chromium',
+      axe_status: 'pass',
+      keyboard_status: 'pass',
+      screen_reader_status: 'pass',
+      issues: { critical: 0, serious: 0, moderate: 0, minor: 0 },
+      captured_at: '2026-07-02T00:00:00.000Z',
+    }))
+  ));
+}
+
 function agentInstallCheckDetail(format, checkName) {
   const detail = {
     status: 'passed',
@@ -292,17 +316,7 @@ export const PRODUCTION_RELEASE_EVIDENCE_COMPLETE = {
   },
   ui_accessibility_matrix: {
     created_at: '2026-07-02T00:00:00.000Z',
-    runs: [
-      {
-        page: 'dashboard',
-        viewport: 'desktop',
-        browser: 'chromium',
-        axe_status: 'pass',
-        keyboard_status: 'pass',
-        screen_reader_status: 'pass',
-        issues: { critical: 0, serious: 0, moderate: 0, minor: 0 },
-      },
-    ],
+    runs: uiAccessibilityRuns(),
     evidence_uri: 'evidence://ux/accessibility-matrix',
   },
   notification_provider_config: {

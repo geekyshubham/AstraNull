@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import {
   buildProbeProfile,
   CAPABILITY_PROFILE_PASSTHROUGH_KEYS,
+  normalizeProbeHttpPath,
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
 import { API_DOC_PATHS, RISKY_ADMIN_PORTS } from './capabilityProbes.mjs';
@@ -56,6 +57,24 @@ const HOST_SHAPED_OVERRIDE_KEYS = new Set([
   'secondary_nameservers',
 ]);
 
+const PROFILE_SOCKET_DESTINATION_KEYS = Object.freeze([
+  'direct_ip',
+  'resolver_host',
+  'scan_host',
+]);
+
+// Domain-shaped fields can trigger DNS work even when they are not the initial worker
+// destination. They may survive catalog, request-body, or target-metadata merges, so bind them
+// only after every merge has completed.
+const PROFILE_EXACT_TARGET_HOST_KEYS = Object.freeze([
+  'zone',
+  'recursion_test_name',
+]);
+const TARGET_METADATA_EXACT_TARGET_HOST_KEYS = new Set([
+  'declared_apex_domain',
+  'zone',
+]);
+
 const OVERRIDE_HOSTNAME_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const RISKY_ADMIN_PORT_SET = new Set(RISKY_ADMIN_PORTS);
 const API_DOC_PATH_SET = new Set(API_DOC_PATHS);
@@ -77,16 +96,18 @@ function isHostShapedValueSafe(value) {
   }
 
   const lower = candidate.toLowerCase();
+  const hostname = lower.endsWith('.') ? lower.slice(0, -1) : lower;
   if (
-    lower.includes('://')
-    || lower.includes('@')
-    || lower.includes('/')
-    || lower.includes(':')
-    || /\s/.test(lower)
+    !hostname
+    || hostname.includes('://')
+    || hostname.includes('@')
+    || hostname.includes('/')
+    || hostname.includes(':')
+    || /\s/.test(hostname)
   ) {
     return false;
   }
-  const labels = lower.split('.');
+  const labels = hostname.split('.');
   return labels.every((label) => label.length > 0 && OVERRIDE_HOSTNAME_LABEL.test(label));
 }
 
@@ -140,8 +161,16 @@ function mergeCapabilityOverride(merged, key, override) {
     if (typeof override.use_https === 'boolean') merged.use_https = override.use_https;
     return;
   }
+  if (key === 'graphql_path' || key === 'grpc_path') {
+    const path = normalizeProbeHttpPath(override[key]);
+    if (path) merged[key] = path;
+    return;
+  }
   if (override[key] == null) return;
   if (HOST_SHAPED_OVERRIDE_KEYS.has(key)) {
+    // direct_ip is an address override, never a second hostname. Requiring a
+    // classified literal also removes DNS rebinding from Host/SNI jobs.
+    if (key === 'direct_ip' && (typeof override[key] !== 'string' || isIP(override[key].trim()) === 0)) return;
     // Drop unsafe destinations entirely so the curated default (or nothing) applies.
     if (!isHostShapedValueSafe(override[key])) return;
     merged[key] = String(override[key]).trim().slice(0, 128);
@@ -181,6 +210,104 @@ function enrichProbeProfileFromTarget(profile, target) {
   return buildProbeProfile(merged);
 }
 
+function unbracketHost(value) {
+  return String(value ?? '').trim().replace(/^\[|\]$/g, '');
+}
+
+function comparableHost(value) {
+  const candidate = unbracketHost(value);
+  if (!candidate) return null;
+  return isIP(candidate) !== 0
+    ? candidate.toLowerCase()
+    : candidate.toLowerCase().replace(/\.$/, '');
+}
+
+function targetLogicalHost(target) {
+  const value = String(target?.value ?? '').trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      return unbracketHost(new URL(value).hostname) || null;
+    } catch {
+      return null;
+    }
+  }
+  const bracketed = value.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1];
+  if (isIP(value) !== 0) return value;
+  const hostPort = value.match(/^([^:]+):(\d+)$/);
+  return (hostPort ? hostPort[1] : value.split('/')[0]) || null;
+}
+
+export function targetLiteralIpAddress(target) {
+  const value = String(target?.value ?? '').trim();
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const host = unbracketHost(new URL(value).hostname);
+      return isIP(host) !== 0 ? host : null;
+    } catch {
+      return null;
+    }
+  }
+  if (target?.kind !== 'ip') return null;
+  const host = unbracketHost(value);
+  return isIP(host) !== 0 ? host : null;
+}
+
+export function validateHostSniTargetBinding(check, target) {
+  if (check?.probe_profile?.kind !== 'host_sni_bypass' || targetLiteralIpAddress(target)) {
+    return null;
+  }
+  return {
+    error: 'missing_target_bound_direct_address',
+    status: 400,
+    check_id: check.check_id,
+    message:
+      'Signed-worker Host/SNI checks require the verified target itself to be an IP literal or a URL with an IP-literal host; probe_profile.direct_ip and target metadata direct_origin_ip cannot select another destination.',
+  };
+}
+
+function isExactTargetHost(value, targetHost) {
+  const candidate = comparableHost(value);
+  return candidate != null && candidate === comparableHost(targetHost);
+}
+
+/**
+ * Final signed-job destination boundary. This runs after catalog, request, and target metadata
+ * merges so no earlier profile source can retarget a normal worker job away from its verified
+ * target. Host/SNI labels and HTTP path fields are intentionally unaffected: they do not select
+ * a socket or DNS destination.
+ */
+function bindProbeProfileDestinationsToTarget(profile, target) {
+  const bound = { ...profile };
+  const targetHost = targetLogicalHost(target);
+  const canonicalTargetHost = comparableHost(targetHost);
+  const targetIp = targetLiteralIpAddress(target);
+
+  for (const key of PROFILE_SOCKET_DESTINATION_KEYS) {
+    if (!targetIp || !isExactTargetHost(bound[key], targetIp)) delete bound[key];
+  }
+
+  for (const key of PROFILE_EXACT_TARGET_HOST_KEYS) {
+    if (canonicalTargetHost && isExactTargetHost(bound[key], canonicalTargetHost)) {
+      bound[key] = canonicalTargetHost;
+    } else {
+      delete bound[key];
+    }
+  }
+
+  if (Array.isArray(bound.secondary_nameservers) && canonicalTargetHost) {
+    const hasExactTarget = bound.secondary_nameservers.some((value) =>
+      isExactTargetHost(value, canonicalTargetHost));
+    if (hasExactTarget) bound.secondary_nameservers = [canonicalTargetHost];
+    else delete bound.secondary_nameservers;
+  } else {
+    delete bound.secondary_nameservers;
+  }
+
+  return buildProbeProfile(bound);
+}
+
 export function normalizeJobConstraints(safetyConstraints, probeProfile) {
   const src = safetyConstraints ?? {};
   const out = {};
@@ -217,11 +344,35 @@ function safeTargetMetadata(target) {
   const raw = target.metadata_json ?? target.metadata;
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const metadata = {};
+  const targetHost = targetLogicalHost(target);
+  const canonicalTargetHost = comparableHost(targetHost);
+  const targetIp = targetLiteralIpAddress(target);
   for (const key of SAFE_TARGET_METADATA_KEYS) {
     const value = raw[key];
-    if (typeof value === 'string' && value.trim()) {
-      metadata[key] = value.trim().slice(0, 512);
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const candidate = value.trim();
+    if (TARGET_METADATA_EXACT_TARGET_HOST_KEYS.has(key)) {
+      if (canonicalTargetHost && isExactTargetHost(candidate, canonicalTargetHost)) {
+        metadata[key] = canonicalTargetHost;
+      }
+      continue;
     }
+    if (key === 'direct_origin_ip' || key === 'resolver_host') {
+      if (targetIp && isExactTargetHost(candidate, targetIp)) metadata[key] = candidate.slice(0, 512);
+      continue;
+    }
+    if (key === 'alert_webhook_url' || key === 'webhook_url') {
+      try {
+        const webhookHost = unbracketHost(new URL(candidate).hostname);
+        if (targetHost && isExactTargetHost(webhookHost, targetHost)) {
+          metadata[key] = candidate.slice(0, 512);
+        }
+      } catch {
+        // Invalid URLs cannot become signed worker destinations.
+      }
+      continue;
+    }
+    metadata[key] = candidate.slice(0, 512);
   }
   return Object.keys(metadata).length > 0 ? metadata : null;
 }
@@ -297,8 +448,11 @@ export function buildSignedProbeJobRecord({
 }) {
   const nonce = generateNonce();
   const nonce_hash = hashNonce(nonce);
-  const resolvedProbeProfile = enrichProbeProfileFromTarget(
-    resolveJobProbeProfile(check, probeProfile),
+  const resolvedProbeProfile = bindProbeProfileDestinationsToTarget(
+    enrichProbeProfileFromTarget(
+      resolveJobProbeProfile(check, probeProfile),
+      target,
+    ),
     target,
   );
   const constraints = normalizeJobConstraints(run.safety_constraints, resolvedProbeProfile);

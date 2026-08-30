@@ -38,8 +38,49 @@ read_control_plane_image_tag() {
   printf '%s\n' "$tag"
 }
 
+read_control_plane_image_id() {
+  local image_id line_count
+  [[ -f "$CONTROL_PLANE_IMAGE_TAG_FILE" && ! -L "$CONTROL_PLANE_IMAGE_TAG_FILE" ]] || {
+    echo "restore: missing or invalid persisted control-plane state $CONTROL_PLANE_IMAGE_TAG_FILE" >&2
+    return 1
+  }
+  line_count=$(awk 'END { print NR }' "$CONTROL_PLANE_IMAGE_TAG_FILE")
+  [[ "$line_count" == 2 ]] || {
+    echo 'restore: persisted control-plane state must contain exactly a tag and image ID' >&2
+    return 1
+  }
+  image_id=$(sed -n '2p' "$CONTROL_PLANE_IMAGE_TAG_FILE")
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'restore: persisted control-plane image ID is invalid' >&2
+    return 1
+  }
+  printf '%s\n' "$image_id"
+}
+
 image_id_for_ref() {
   timeout -k 5 30 docker image inspect --format '{{.Id}}' "$1"
+}
+
+rebind_control_plane_image_tag() {
+  local ref available_image_id rebound_image_id
+  ref="astranull-control-plane:$control_plane_tag"
+  available_image_id=$(image_id_for_ref "$control_plane_image_id") || {
+    echo "restore: expected control-plane image $control_plane_image_id is unavailable" >&2
+    return 1
+  }
+  [[ "$available_image_id" == "$control_plane_image_id" ]] || {
+    echo 'restore: expected control-plane image resolved to an unexpected identity' >&2
+    return 1
+  }
+  timeout -k 5 30 docker image tag "$control_plane_image_id" "$ref" || {
+    echo "restore: could not rebind $ref to its expected image identity" >&2
+    return 1
+  }
+  rebound_image_id=$(image_id_for_ref "$ref") || return 1
+  [[ "$rebound_image_id" == "$control_plane_image_id" ]] || {
+    echo "restore: rebound control-plane tag $control_plane_tag has the wrong image identity" >&2
+    return 1
+  }
 }
 
 load_restore_image_identity() {
@@ -49,18 +90,19 @@ load_restore_image_identity() {
     return 1
   }
   control_plane_tag=$(read_control_plane_image_tag)
+  control_plane_image_id=$(read_control_plane_image_id)
 
-  control_plane_image_id=$(image_id_for_ref "astranull-control-plane:$control_plane_tag") || {
-    echo "restore: persisted control-plane image astranull-control-plane:$control_plane_tag is unavailable" >&2
-    return 1
-  }
+  # The tag is mutable and may have been clobbered by a same-SHA build. Resolve the
+  # persisted immutable ID itself and repair the tag before inspecting worker semantics.
+  # If control-plane and orchestration share a tag, workers intentionally follow the
+  # now-rebound orchestration tag; hybrid releases keep their independent worker tag.
+  rebind_control_plane_image_tag
   worker_image_id=$(image_id_for_ref "astranull-control-plane:$orchestration_tag") || {
     echo "restore: current worker image astranull-control-plane:$orchestration_tag is unavailable" >&2
     return 1
   }
-  [[ "$control_plane_image_id" =~ ^sha256:[0-9a-f]{64}$ \
-    && "$worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo 'restore: one or more release image identities are invalid' >&2
+  [[ "$worker_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo 'restore: current worker image identity is invalid' >&2
     return 1
   }
 
@@ -71,7 +113,7 @@ load_restore_image_identity() {
 
 verify_service_image_tag() {
   local service=$1 expected_tag=$2 expected_image_id=$3
-  local cid image_ref container_image_id
+  local cid image_ref container_image_id tagged_image_id
   cid=$(compose_timeout 30 ps -q "$service")
   [[ -n "$cid" ]] || {
     echo "restore: $service has no running container" >&2
@@ -84,7 +126,15 @@ verify_service_image_tag() {
     return 1
   }
   [[ "$container_image_id" == "$expected_image_id" ]] || {
-    echo "restore: $service image identity does not match tag $expected_tag" >&2
+    echo "restore: $service container did not use expected image ID $expected_image_id" >&2
+    return 1
+  }
+  tagged_image_id=$(image_id_for_ref "astranull-control-plane:$expected_tag") || {
+    echo "restore: $service expected image tag $expected_tag is unavailable" >&2
+    return 1
+  }
+  [[ "$tagged_image_id" == "$expected_image_id" ]] || {
+    echo "restore: $service tag $expected_tag changed before identity verification" >&2
     return 1
   }
 }
@@ -163,7 +213,8 @@ main() {
   compose_timeout 30 --profile ops config --format json \
     | timeout -k 5 30 node scripts/validate-aws-compose-secrets.mjs
   # A running stack must agree with persisted state before any destructive operation.
-  # A fully stopped stack is allowed; the immutable local image tags were checked above.
+  # A fully stopped stack is allowed because the persisted immutable ID was resolved and
+  # rebound to the control-plane tag above; a mutable tag alone is never trusted.
   verify_running_control_plane_state
   compose_timeout 120 stop caddy probe-worker password-recovery-worker test-policy-runner control-plane
   compose_timeout 90 --profile ops run --rm --no-deps \
@@ -194,7 +245,8 @@ SQL
   check_control_plane
   check_workers
   verify_restored_image_identity
-  [[ "$(read_control_plane_image_tag)" == "$control_plane_tag" ]] || {
+  [[ "$(read_control_plane_image_tag)" == "$control_plane_tag" \
+    && "$(read_control_plane_image_id)" == "$control_plane_image_id" ]] || {
     echo 'restore: persisted control-plane state changed during restore' >&2
     return 1
   }

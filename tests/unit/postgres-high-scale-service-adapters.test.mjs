@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createPostgresHighScaleServices } from '../../src/persistence/postgres/highScaleServiceAdapters.mjs';
-import { validHighScaleRequestPayload, artifactProofBody } from '../helpers/highScalePayload.mjs';
+import { validHighScaleRequestPayload } from '../helpers/highScalePayload.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/lib/highScalePolicy.mjs';
+import { sha256Hex } from '../../src/lib/authorizationArtifactLedger.mjs';
+import { computeScopeHashFromTargets } from '../../src/lib/scopeHash.mjs';
 
 const CTX_A = { tenantId: 'ten_demo', userId: 'soc_a', role: 'soc' };
 const CTX_B = { tenantId: 'ten_demo', userId: 'soc_b', role: 'soc' };
 const CTX_ENG = { tenantId: 'ten_demo', userId: 'eng_1', role: 'engineer' };
+const TARGET_GROUP_TARGETS = [
+  { id: 'tgt_1', kind: 'fqdn', value: 'app.example' },
+];
 
 function memoryRepositories(overrides = {}) {
   const state = {
@@ -22,7 +27,7 @@ function memoryRepositories(overrides = {}) {
 
   let targetGroupSnapshot = {
     id: 'tg_1',
-    targets: [{ id: 'tgt_1', kind: 'fqdn', value: 'app.example' }],
+    targets: TARGET_GROUP_TARGETS.map((target) => ({ ...target })),
   };
   const coreCatalog = {
     async getTargetGroup(ctx, id) {
@@ -155,9 +160,49 @@ function memoryRepositories(overrides = {}) {
       validationEvidence,
       audit,
       probeJobs,
+      portalRevamp: overrides.portalRevamp ?? {
+        async getActiveLoaByGroup() {
+          return {
+            id: 'loa_active',
+            state: 'signed',
+            expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+            scope_snapshot: { targets: TARGET_GROUP_TARGETS.map((target) => target.id) },
+          };
+        },
+      },
       notifications: overrides.notifications ?? null,
     },
     probeJobs,
+  };
+}
+
+function exactArtifactProofBody(type, request, overrides = {}) {
+  return {
+    type,
+    content_sha256: sha256Hex(`postgres-high-scale-artifact:${type}`),
+    reference_uri: `metadata://pack/${type}`,
+    approval_reference: 'REF-DEMO-001',
+    approver: 'Customer Approver',
+    valid_window: {
+      valid_from: request.requested_window.window_start,
+      valid_to: request.requested_window.window_end,
+    },
+    approved_targets: [request.target_group_id],
+    approved_scenario_families: [...request.requested_scenario_families],
+    approved_delivery_patterns: [...request.delivery_patterns],
+    approved_limits: { ...request.requested_limits },
+    authorization_binding: {
+      tenant_id: request.tenant_id,
+      target_group_id: request.target_group_id,
+      scope_hash: computeScopeHashFromTargets(request.target_group_id, TARGET_GROUP_TARGETS),
+      requested_window: { ...request.requested_window },
+      approved_schedule_window: { ...request.requested_window },
+      delivery_patterns: [...request.delivery_patterns],
+    },
+    emergency_contacts: [{ name: 'On-call', contact: 'ops@example.invalid' }],
+    abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
+    retention_policy: { retain_days: 90, classification: 'governance' },
+    ...overrides,
   };
 }
 
@@ -173,30 +218,28 @@ async function scheduleReadyForStart(svc, hsId) {
 }
 
 async function acceptPack(svc, hsId) {
+  const beforeArtifacts = await svc.listHighScaleRequests(CTX_A);
+  const request = beforeArtifacts.find((row) => row.id === hsId);
+  assert.ok(request, `missing high-scale request ${hsId}`);
   for (const type of REQUIRED_ARTIFACT_TYPES) {
-    const art = await svc.addArtifact(CTX_ENG, hsId, artifactProofBody(type));
+    const art = await svc.addArtifact(CTX_ENG, hsId, exactArtifactProofBody(type, request));
     await svc.reviewArtifact(CTX_A, hsId, art.id, { status: 'accepted' });
   }
   const req = await svc.listHighScaleRequests(CTX_A);
   const hs = req.find((r) => r.id === hsId);
   for (const item of hs?.provider_approval_checklist ?? []) {
-    const art = await svc.addArtifact(CTX_ENG, hsId, {
-      ...artifactProofBody('provider_approval'),
+    const art = await svc.addArtifact(CTX_ENG, hsId, exactArtifactProofBody('provider_approval', hs, {
       type: 'provider_approval',
       provider_name: item.provider_name,
       reference_uri: 'metadata://pack/provider',
       approval_reference: 'PROV-REF-001',
-      valid_window: artifactProofBody('test_plan').valid_window,
-      approved_targets: ['tg_1'],
-      approved_scenario_families: ['volumetric_metadata'],
       contact_path: 'provider-war-room@example.invalid',
-      approved_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
       provider_specific_evidence: {
         approval_path: item.approval_path ?? 'manual_coordination',
         provider_key: item.provider_key ?? 'generic',
       },
       emergency_stop_path: 'provider-stop-bridge',
-    });
+    }));
     await svc.reviewArtifact(CTX_A, hsId, art.id, { status: 'accepted' });
   }
 }
@@ -227,6 +270,21 @@ describe('postgres high-scale service adapters', () => {
     const second = await svc.transitionHighScale(CTX_B, created.id, 'approve');
     assert.equal(second.state, 'approved');
     assert.ok(second.scope_hash);
+  });
+
+  it('rejects second SOC approval when an accepted artifact no longer matches exact target scope', async () => {
+    const { repositories, state } = memoryRepositories();
+    const svc = createPostgresHighScaleServices(repositories);
+    const created = await svc.createHighScaleRequest(CTX_ENG, validHighScaleRequestPayload());
+    await acceptPack(svc, created.id);
+    const request = state.requests.find((row) => row.id === created.id);
+    const authoritative = request.artifacts.find((artifact) => artifact.type === 'test_plan');
+    authoritative.approved_targets = ['tg_other'];
+    const first = await svc.transitionHighScale(CTX_A, created.id, 'approve');
+    assert.equal(first.state, 'under_review');
+    const second = await svc.transitionHighScale(CTX_B, created.id, 'approve');
+    assert.equal(second.error, 'governed_authorization_mismatch');
+    assert.ok(second.invalid_fields.some((field) => field.endsWith('.approved_targets')));
   });
 
   it('ingests governed adapter telemetry snapshots with provenance metadata', async () => {

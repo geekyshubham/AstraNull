@@ -1,252 +1,180 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  detectEdgeForHostname,
-  normalizeDetectionHostname,
+  validateEdgeDetectionRequest,
+  WAF_EDGE_DETECTION_CHECK_ID,
 } from '../../src/lib/edgeDetection.mjs';
-import { EDGE_SIGNATURE_CORPUS_VERSION } from '../../src/lib/edgeFingerprint.mjs';
+import { runEdgeDetection } from '../../src/services/wafEdgeDetection.mjs';
 
-function mockResponse(status, headers = {}) {
-  const normalized = Object.fromEntries(
-    Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
-  );
-  return {
-    status,
-    headers: {
-      get: (name) => normalized[String(name).toLowerCase()] ?? null,
-    },
-    async text() {
-      return normalized.__body ?? '';
-    },
-  };
-}
-
-/** Native-fetch-like headers: `get` is a receiver-bound prototype method, not a closure. */
-class PrototypeHeaders {
-  constructor(entries) {
-    this.entries = entries;
-  }
-
-  get(name) {
-    return this.entries[String(name).toLowerCase()] ?? null;
-  }
-}
-
-function prototypeResponse(status, headers = {}) {
-  const normalized = Object.fromEntries(
-    Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]),
-  );
-  return {
-    status,
-    headers: new PrototypeHeaders(normalized),
-    async text() {
-      return normalized.__body ?? '';
-    },
-  };
-}
-
-function cloudflareFetch(requestLog = []) {
-  return async (url, init) => {
-    requestLog.push({ url, init });
-    return mockResponse(200, {
-      server: 'cloudflare',
-      'cf-ray': '8a1b2c3d4e5f',
-      'set-cookie': '__cfduid=abc; Path=/',
-    });
-  };
-}
-
-const CLOUDFLARE_DNS = {
-  resolveCname: async () => ['edge.cdn.cloudflare.net'],
-  resolve4: async () => ['108.138.5.5'],
-  resolve6: async () => [],
+const RUNTIME_CONFIG = {
+  probeMode: 'signed-worker',
+  featureFlags: { wafPostureEnabled: true },
 };
 
-describe('edge detection hostname normalization', () => {
-  it('accepts bare hostnames and IP literals', () => {
-    assert.deepEqual(normalizeDetectionHostname('Shop.Example.com.'), { hostname: 'shop.example.com' });
-    assert.deepEqual(normalizeDetectionHostname('198.51.100.10'), { hostname: '198.51.100.10' });
-    assert.deepEqual(normalizeDetectionHostname('[2001:db8::1]'), { hostname: '2001:db8::1' });
+function edgeRun(overrides = {}) {
+  return {
+    id: 'run_edge_1',
+    tenant_id: 'ten_demo',
+    target_group_id: 'tg_1',
+    target_id: 'tgt_1',
+    check_id: WAF_EDGE_DETECTION_CHECK_ID,
+    status: 'running',
+    ...overrides,
+  };
+}
+
+describe('edge-detection target binding validation', () => {
+  it('accepts only opaque target group and target identifiers', () => {
+    assert.deepEqual(
+      validateEdgeDetectionRequest({ target_group_id: 'tg_1', target_id: 'target-123' }),
+      { target_group_id: 'tg_1', target_id: 'target-123' },
+    );
   });
 
-  it('rejects URLs, credentials, paths, ports, and junk', () => {
-    for (const bad of [
-      'https://example.com',
-      'example.com/path',
-      'user:pass@example.com',
-      'example.com:443',
-      'example com',
-      '',
-      'not_a_hostname!!',
-      '-leadingdash.example.com',
-    ]) {
-      assert.ok(normalizeDetectionHostname(bad).error, `expected rejection: ${bad}`);
+  it('rejects raw destinations and arbitrary probe controls', () => {
+    assert.equal(
+      validateEdgeDetectionRequest({
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        hostname: '127.0.0.1',
+      }).error,
+      'raw_hostname_not_allowed',
+    );
+    for (const targetId of ['10.0.0.7', '169.254.169.254', '[::1]', 'https://internal.example']) {
+      assert.equal(
+        validateEdgeDetectionRequest({ target_group_id: 'tg_1', target_id: targetId }).error,
+        'invalid_target_id',
+      );
     }
+    assert.equal(
+      validateEdgeDetectionRequest({ target_group_id: 'https://internal.example', target_id: 'tgt_1' }).error,
+      'invalid_target_group_id',
+    );
+    assert.deepEqual(
+      validateEdgeDetectionRequest({
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        timeout_ms: 60_000,
+        probe_profile: { direct_ip: '127.0.0.1' },
+      }),
+      { error: 'unsupported_fields', status: 400, fields: ['probe_profile', 'timeout_ms'] },
+    );
+  });
+
+  it('rejects non-object and incomplete requests', () => {
+    assert.deepEqual(validateEdgeDetectionRequest(null), { error: 'invalid_request', status: 400 });
+    assert.deepEqual(validateEdgeDetectionRequest([]), { error: 'invalid_request', status: 400 });
+    assert.deepEqual(validateEdgeDetectionRequest({ target_group_id: 'tg_1' }), {
+      error: 'invalid_target_id',
+      status: 400,
+    });
   });
 });
 
-describe('hostname → edge detection', () => {
-  it('detects a Cloudflare WAF + CDN from one passive request and DNS metadata', async () => {
-    const requestLog = [];
-    const result = await detectEdgeForHostname({
-      hostname: 'shop.example.test',
-      fetchFn: cloudflareFetch(requestLog),
-      ...CLOUDFLARE_DNS,
-    });
-
-    assert.equal(result.error, undefined);
-    assert.equal(result.detection, 'host_edge_detection');
-    assert.equal(result.tier, 'passive_only');
-    assert.equal(result.corpus_version, EDGE_SIGNATURE_CORPUS_VERSION);
-    assert.equal(result.waf_present, true);
-    assert.equal(result.best_vendor.vendor, 'cloudflare');
-    assert.deepEqual(result.address_matches, [{ family: 'cdn', provider: 'cloudfront' }]);
-    assert.equal(result.cdn_detected, true);
-    assert.equal(result.requests_sent, 1);
-    assert.ok(result.dns_chain.includes('edge.cdn.cloudflare.net'));
-    assert.ok(result.dns_chain.includes('108.138.5.5'));
-  });
-
-  it('handles native receiver-bound Headers.get (regression: unbound method)', async () => {
-    const result = await detectEdgeForHostname({
-      hostname: 'shop.example.test',
-      fetchFn: async () => prototypeResponse(200, {
-        server: 'cloudflare',
-        'cf-ray': 'abc123',
-      }),
-      ...CLOUDFLARE_DNS,
-    });
-    assert.equal(result.waf_present, true, 'prototype-bound headers.get must still be readable');
-    assert.equal(result.best_vendor?.vendor, 'cloudflare');
-    assert.ok(result.best_vendor.confidence >= 0.65, 'both server and cf-ray signals should match');
-  });
-
-  it('sends exactly one benign GET with no redirects followed', async () => {
-    const requestLog = [];
-    await detectEdgeForHostname({
-      hostname: 'shop.example.test',
-      fetchFn: async (url, init) => {
-        requestLog.push({ url, init });
-        return mockResponse(302, { location: 'https://elsewhere.example.test/' });
+describe('edge-detection service delegation', () => {
+  it('passes only the bound target and fixed safe check to awaited startTestRun', async () => {
+    const calls = [];
+    let startFinished = false;
+    const testRuns = {
+      async startTestRun(ctx, body, runtimeConfig) {
+        calls.push({ ctx, body, runtimeConfig });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        startFinished = true;
+        return { run: edgeRun() };
       },
-      ...CLOUDFLARE_DNS,
+    };
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+
+    const result = await runEdgeDetection(ctx, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    }, { testRuns, runtimeConfig: RUNTIME_CONFIG });
+
+    assert.equal(startFinished, true, 'the durable test-run/audit path must finish before acceptance');
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].body, {
+      check_id: WAF_EDGE_DETECTION_CHECK_ID,
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
     });
-    assert.equal(requestLog.length, 1);
-    assert.ok(requestLog[0].url.startsWith('https://'));
-    assert.equal(requestLog[0].init.redirect, 'manual');
+    assert.strictEqual(calls[0].runtimeConfig, RUNTIME_CONFIG);
+    assert.deepEqual(result.request, {
+      status: 'pending',
+      test_run_id: 'run_edge_1',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: WAF_EDGE_DETECTION_CHECK_ID,
+      run_status: 'running',
+      test_run_url: '/v1/test-runs/run_edge_1',
+      events_url: '/v1/test-runs/run_edge_1/events',
+    });
   });
 
-  it('classifies an IP-literal host by address ranges without DNS', async () => {
-    const requestLog = [];
-    const result = await detectEdgeForHostname({
-      hostname: '108.138.5.5',
-      fetchFn: cloudflareFetch(requestLog),
-    });
-    assert.deepEqual(result.address_matches, [{ family: 'cdn', provider: 'cloudfront' }]);
-    assert.equal(result.cdn_detected, true);
-    assert.deepEqual(result.resolved_ips, ['108.138.5.5']);
-  });
+  it('rejects raw host/private-IP input before startTestRun can run', async () => {
+    let starts = 0;
+    const testRuns = { startTestRun: async () => { starts += 1; } };
 
-  it('reports no edge for a plain origin host', async () => {
-    const result = await detectEdgeForHostname({
-      hostname: 'origin.internal.example.test',
-      fetchFn: async () => mockResponse(200, { server: 'nginx/1.24.0' }),
-      resolveCname: async () => { throw Object.assign(new Error('no data'), { code: 'ENODATA' }); },
-      resolve4: async () => ['198.51.100.10'],
-      resolve6: async () => { throw Object.assign(new Error('no data'), { code: 'ENODATA' }); },
-    });
-    assert.equal(result.waf_present, false);
-    assert.equal(result.cdn_detected, false);
-    assert.equal(result.best_vendor, null);
-    assert.deepEqual(result.address_matches, []);
-  });
-
-  it('returns a request error class when the host is unreachable', async () => {
-    const result = await detectEdgeForHostname({
-      hostname: 'blackhole.example.test',
-      fetchFn: async () => {
-        throw Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED' });
-      },
-      resolveCname: async () => [],
-      resolve4: async () => ['198.51.100.10'],
-      resolve6: async () => [],
-    });
-    assert.equal(result.request_error_class, 'ECONNREFUSED');
-    assert.equal(result.waf_present, false);
-    assert.equal(result.best_vendor, null);
-  });
-
-  it('caps timeout input and reports probe timeouts distinctly', async () => {
-    const result = await detectEdgeForHostname({
-      hostname: 'slow.example.test',
-      timeoutMs: 999_999,
-      fetchFn: async (_url, init) => {
-        await new Promise((resolve) => {
-          init.signal.addEventListener('abort', resolve, { once: true });
-        });
-        const err = new Error('This operation was aborted');
-        err.name = 'AbortError';
-        throw err;
-      },
-      resolveCname: async () => [],
-      resolve4: async () => ['198.51.100.10'],
-      resolve6: async () => [],
-    });
-    assert.equal(result.request_error_class, 'probe_timeout');
-  });
-
-  it('rejects invalid hostnames before any network activity', async () => {
-    let networkTouched = false;
-    const result = await detectEdgeForHostname({
-      hostname: 'https://evil.example/path',
-      fetchFn: async () => {
-        networkTouched = true;
-        return mockResponse(200, {});
-      },
-    });
-    assert.equal(result.error, 'invalid_hostname');
-    assert.equal(result.status, 400);
-    assert.equal(networkTouched, false);
-  });
-
-  it('never includes header values or body text in the result', async () => {
-    const secretRay = 'ray-never-leak-42';
-    const result = await detectEdgeForHostname({
-      hostname: 'shop.example.test',
-      fetchFn: async () => mockResponse(200, {
-        'cf-ray': secretRay,
-        __body: '<html>body-never-leak-42</html>',
-      }),
-      ...CLOUDFLARE_DNS,
-    });
-    const serialized = JSON.stringify(result);
-    assert.ok(!serialized.includes(secretRay));
-    assert.ok(!serialized.includes('body-never-leak-42'));
-  });
-
-  it('uses http only for loopback hosts', async () => {
-    const requestLog = [];
-    await detectEdgeForHostname({
+    const hostname = await runEdgeDetection({}, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       hostname: 'localhost',
-      fetchFn: async (url, init) => {
-        requestLog.push({ url, init });
-        return mockResponse(200, {});
-      },
-      resolveCname: async () => [],
-      resolve4: async () => ['127.0.0.1'],
-      resolve6: async () => [],
-    });
-    assert.ok(requestLog[0].url.startsWith('http://localhost/'));
+    }, { testRuns, runtimeConfig: RUNTIME_CONFIG });
+    const privateIp = await runEdgeDetection({}, {
+      target_group_id: 'tg_1',
+      target_id: '192.168.1.20',
+    }, { testRuns, runtimeConfig: RUNTIME_CONFIG });
 
-    const secure = [];
-    await detectEdgeForHostname({
-      hostname: 'shop.example.test',
-      fetchFn: async (url, init) => {
-        secure.push({ url, init });
-        return mockResponse(200, {});
-      },
-      ...CLOUDFLARE_DNS,
+    assert.equal(hostname.error, 'raw_hostname_not_allowed');
+    assert.equal(privateIp.error, 'invalid_target_id');
+    assert.equal(starts, 0);
+  });
+
+  it('preserves feature failure and missing-runtime fail-closed behavior', async () => {
+    let starts = 0;
+    const disabled = await runEdgeDetection({}, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    }, {
+      runtimeConfig: { ...RUNTIME_CONFIG, featureFlags: { wafPostureEnabled: false } },
+      testRuns: { startTestRun: async () => { starts += 1; } },
     });
-    assert.ok(secure[0].url.startsWith('https://'));
+    const unavailable = await runEdgeDetection({}, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    }, { runtimeConfig: RUNTIME_CONFIG });
+
+    assert.deepEqual(disabled, { skipped: true, reason: 'waf_feature_disabled' });
+    assert.deepEqual(unavailable, { error: 'edge_detection_test_runs_unavailable', status: 503 });
+    assert.equal(starts, 0);
+  });
+
+  it('passes through governed start denials unchanged', async () => {
+    const denial = { error: 'ownership_not_verified', status: 409 };
+    const result = await runEdgeDetection({}, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    }, {
+      runtimeConfig: RUNTIME_CONFIG,
+      testRuns: { startTestRun: async () => denial },
+    });
+    assert.strictEqual(result, denial);
+  });
+
+  it('fails closed when the injected service returns a mismatched run binding', async () => {
+    for (const run of [
+      null,
+      edgeRun({ check_id: 'http.baseline.safe' }),
+      edgeRun({ target_group_id: 'tg_other' }),
+      edgeRun({ target_id: 'tgt_other' }),
+    ]) {
+      const result = await runEdgeDetection({}, {
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      }, {
+        runtimeConfig: RUNTIME_CONFIG,
+        testRuns: { startTestRun: async () => ({ run }) },
+      });
+      assert.deepEqual(result, { error: 'edge_detection_dispatch_invalid_response', status: 502 });
+    }
   });
 });

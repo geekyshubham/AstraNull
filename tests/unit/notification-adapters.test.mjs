@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import { collectForbiddenEvidenceFields } from '../../src/lib/redact.mjs';
 import {
@@ -13,6 +15,7 @@ import {
   isDeliveryChannelActive,
   parseNotificationDeliveryModes,
   resolveNotificationDeliveryMode,
+  sendProviderHttpsPost,
   sendWebhookNotification,
 } from '../../src/lib/notificationDelivery.mjs';
 
@@ -31,6 +34,46 @@ const sampleRule = {
 };
 
 const forbiddenExtra = new Set(['raw_payload', 'credentials', 'tokens', 'secrets']);
+
+class ScriptedSmtpSocket extends EventEmitter {
+  constructor(responder) {
+    super();
+    this.responder = responder;
+    this.writes = [];
+    this.destroyed = false;
+    this.ended = false;
+  }
+
+  write(value) {
+    const command = String(value).replace(/\r\n$/, '');
+    this.writes.push(command);
+    const response = this.responder(command);
+    if (response) queueMicrotask(() => this.emit('data', Buffer.from(response)));
+    return true;
+  }
+
+  destroy() {
+    this.destroyed = true;
+  }
+
+  end() {
+    this.ended = true;
+  }
+
+  greet() {
+    this.emit('data', Buffer.from('220 smtp.example.test ready\r\n'));
+  }
+}
+
+function smtpConnect(socket) {
+  return (_options, connected) => {
+    queueMicrotask(() => {
+      connected();
+      queueMicrotask(() => socket.greet());
+    });
+    return socket;
+  };
+}
 
 function assertNoForbiddenFields(value, label) {
   const findings = collectForbiddenEvidenceFields(value, '', { extraForbiddenKeys: forbiddenExtra });
@@ -95,6 +138,63 @@ describe('notification delivery adapters', () => {
     const result = await deliverEmail(envelope);
     assert.equal(result.status, 'queued_provider_not_configured');
     assert.equal(result.reason, 'smtp_host_not_configured');
+  });
+
+  it('fails closed before MAIL or DATA when STARTTLS is required but not advertised', async () => {
+    const plaintext = new ScriptedSmtpSocket((command) => {
+      if (command === 'EHLO astranull.local') return '250 smtp.example.test\r\n';
+      return null;
+    });
+    const result = await deliverEmail(buildEmailPayload(sampleEvent, sampleRule), {
+      smtpHost: 'smtp.example.test',
+      smtpStartTls: true,
+      connect: smtpConnect(plaintext),
+    });
+
+    assert.equal(result.status, 'provider_retry_scheduled');
+    assert.equal(result.reason, 'smtp_starttls_required');
+    assert.deepEqual(plaintext.writes, ['EHLO astranull.local']);
+    assert.equal(plaintext.writes.some((line) => /^(MAIL FROM|RCPT TO|DATA|AUTH )/.test(line)), false);
+    assert.equal(plaintext.destroyed, true);
+  });
+
+  it('performs SMTP auth only on verified TLS and completes the bounded mail transaction', async () => {
+    const plaintext = new ScriptedSmtpSocket((command) => {
+      if (command === 'EHLO astranull.local') return '250-smtp.example.test\r\n250 STARTTLS\r\n';
+      if (command === 'STARTTLS') return '220 begin TLS\r\n';
+      return null;
+    });
+    const secure = new ScriptedSmtpSocket((command) => {
+      if (command === 'EHLO astranull.local') return '250-smtp.example.test\r\n250 AUTH PLAIN\r\n';
+      if (command.startsWith('AUTH PLAIN ')) return '235 authenticated\r\n';
+      if (command.startsWith('MAIL FROM:')) return '250 sender ok\r\n';
+      if (command.startsWith('RCPT TO:')) return '250 recipient ok\r\n';
+      if (command === 'DATA') return '354 send data\r\n';
+      if (command.startsWith('From: ')) return '250 queued\r\n';
+      return null;
+    });
+    let tlsOptions;
+    const result = await deliverEmail(buildEmailPayload(sampleEvent, sampleRule), {
+      smtpHost: 'smtp.example.test',
+      smtpStartTls: true,
+      smtpUsername: 'smtp-user',
+      smtpPassword: 'smtp-password',
+      connect: smtpConnect(plaintext),
+      secureConnect(options, connected) {
+        tlsOptions = options;
+        queueMicrotask(connected);
+        return secure;
+      },
+    });
+
+    assert.equal(result.status, 'delivered_provider');
+    assert.equal(tlsOptions.servername, 'smtp.example.test');
+    assert.equal(tlsOptions.rejectUnauthorized, true);
+    assert.equal(plaintext.writes.some((line) => /^(MAIL FROM|RCPT TO|DATA|AUTH )/.test(line)), false);
+    assert.ok(secure.writes[0] === 'EHLO astranull.local');
+    assert.ok(secure.writes[1].startsWith('AUTH PLAIN '));
+    assert.ok(secure.writes.indexOf('DATA') > secure.writes.findIndex((line) => line.startsWith('AUTH PLAIN ')));
+    assert.equal(secure.ended, true);
   });
 
   it('deliverSlack rejects non-HTTPS destination except localhost/invalid', async () => {
@@ -336,5 +436,82 @@ describe('notification delivery adapters', () => {
     assert.equal(failed[0].status, 'provider_retry_scheduled');
     assert.equal(failed[0].attempt_number, 1);
     assert.equal(failed[0].max_attempts, 3);
+  });
+});
+
+
+describe('notification HTTP destination safety', () => {
+  function successfulHttpsRequest(captured) {
+    return (options, callback) => {
+      captured.push(options);
+      const request = new EventEmitter();
+      request.write = () => true;
+      request.end = () => queueMicrotask(() => {
+        const response = Readable.from([]);
+        response.statusCode = 204;
+        response.headers = {};
+        callback(response);
+      });
+      request.destroy = (error) => {
+        if (error) queueMicrotask(() => request.emit('error', error));
+      };
+      return request;
+    };
+  }
+
+  it('rejects private and zero-answer webhook/provider destinations before opening a socket', async () => {
+    let socketAttempts = 0;
+    const httpsRequestFn = () => {
+      socketAttempts += 1;
+      throw new Error('socket must not open');
+    };
+
+    const privateResult = await sendWebhookNotification('https://127.0.0.1/hook', '{}', {
+      transportDeps: { httpsRequestFn },
+    });
+    assert.equal(privateResult.ok, false);
+    assert.match(privateResult.error, /private|loopback|destination/i);
+
+    const unresolvedResult = await sendProviderHttpsPost('https://hooks.example.test/provider', '{}', {
+      transportDeps: {
+        resolve4Fn: async () => [],
+        resolve6Fn: async () => [],
+        httpsRequestFn,
+      },
+    });
+    assert.equal(unresolvedResult.ok, false);
+    assert.match(unresolvedResult.error, /did not resolve/i);
+    assert.equal(socketAttempts, 0);
+  });
+
+  it('pins webhook and provider sockets to the classified public address while preserving Host and SNI', async () => {
+    for (const sender of [sendWebhookNotification, sendProviderHttpsPost]) {
+      const requests = [];
+      let resolve4Calls = 0;
+      let resolve6Calls = 0;
+      const result = await sender('https://hooks.example.test:8443/notify', '{}', {
+        transportDeps: {
+          resolve4Fn: async (host) => {
+            resolve4Calls += 1;
+            assert.equal(host, 'hooks.example.test');
+            return ['93.184.216.34'];
+          },
+          resolve6Fn: async (host) => {
+            resolve6Calls += 1;
+            assert.equal(host, 'hooks.example.test');
+            return [];
+          },
+          httpsRequestFn: successfulHttpsRequest(requests),
+        },
+      });
+
+      assert.deepEqual(result, { ok: true, status: 204, transport: 'http' });
+      assert.equal(resolve4Calls, 1);
+      assert.equal(resolve6Calls, 1);
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].hostname, '93.184.216.34');
+      assert.equal(requests[0].servername, 'hooks.example.test');
+      assert.equal(requests[0].headers.Host, 'hooks.example.test:8443');
+    }
   });
 });

@@ -83,11 +83,11 @@ describe('postgres probe job repository', () => {
     assert.equal(job.worker_metadata.check_title, 'Safe');
   });
 
-  it('leases pending jobs with tenant context, bounded limit, and SKIP LOCKED', async () => {
+  it('leases one pending job with tenant context and SKIP LOCKED', async () => {
     const pool = createRecordingPool((sql, params) => {
       if (sql.includes('WITH picked AS')) {
         // $5-$8 are the stale-lease TTL tunables; asserted in the reclaim test below.
-        assert.deepEqual(params.slice(0, 4), [CTX.tenantId, 25, FIXED_NOW, WORKER_ID]);
+        assert.deepEqual(params.slice(0, 4), [CTX.tenantId, 1, FIXED_NOW, WORKER_ID]);
         return { rows: [sampleRow({ status: 'leased', leased_by: WORKER_ID })] };
       }
       return { rows: [] };
@@ -157,27 +157,24 @@ describe('postgres probe job repository', () => {
     assert.equal(metricsSnapshot().probe_job_leases_reclaimed_total - before, 1);
   });
 
-  it('derives a lease TTL that cannot fire under a live worker', () => {
-    // A check may legally declare max_duration_seconds as low as 1; the floor stops that from
-    // becoming a seconds-long TTL that would steal a live worker's job mid-probe.
-    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 1 }), 900);
+  it('derives a lease TTL that outlives one bounded worker cycle', () => {
+    // A check may legally declare max_duration_seconds as low as 1; the floor still exceeds
+    // the worker's 110-second whole-cycle deadline and leaves restart/clock-skew allowance.
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 1 }), 180);
     // Malformed or absent constraints fall back rather than deriving something tiny.
     assert.equal(probeJobLeaseTtlSeconds({}), probeJobLeaseTtlSeconds({ max_duration_seconds: 120 }));
     assert.equal(
       probeJobLeaseTtlSeconds({ max_duration_seconds: 'nonsense' }),
       probeJobLeaseTtlSeconds({}),
     );
-    // The TTL must cover a whole serially-drained batch, not one probe: 120s of per-probe
-    // budget across a max batch is far more than 120s of wall clock.
-    const ttl = probeJobLeaseTtlSeconds({ max_duration_seconds: 120 });
-    assert.ok(ttl >= 120 * 100, `expected batch-sized TTL, got ${ttl}`);
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 120 }), 180);
   });
 
   it('keeps the JS lease-TTL mirror in step with the SQL predicate at the edges', () => {
     // These two must agree, or the lease query could reclaim a job while the ingest guard
     // still believed the old lease live — rejecting the new holder and re-wedging the slot.
     // '0' is accepted by the SQL regex and so must NOT fall back to the default here.
-    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 0 }), 900);
+    assert.equal(probeJobLeaseTtlSeconds({ max_duration_seconds: 0 }), 180);
     // Values the SQL regex rejects must fall back on BOTH sides. Number() coercion disagrees
     // with the regex on every one of these, which is the whole reason this test exists.
     const fallback = probeJobLeaseTtlSeconds({ max_duration_seconds: 120 });
@@ -189,7 +186,7 @@ describe('postgres probe job repository', () => {
     // Fractional values are accepted by the regex and honoured on both sides.
     assert.equal(
       probeJobLeaseTtlSeconds({ max_duration_seconds: 30.5 }),
-      Math.max(900, 30.5 * 100 + 300),
+      Math.max(180, 30.5 + 60),
     );
   });
 
@@ -277,6 +274,50 @@ describe('postgres probe job repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+
+  it('finds at most one durable probe job for a tenant-scoped test run', async () => {
+    const pool = createRecordingPool((sql, params) => {
+      if (sql.includes('WHERE tenant_id = $1 AND test_run_id = $2')) {
+        assert.deepEqual(params, [CTX.tenantId, 'run_1']);
+        assert.match(sql, /LIMIT 2/);
+        return { rows: [sampleRow()] };
+      }
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+    const job = await repo.getProbeJobByTestRun(CTX, 'run_1');
+    assert.equal(job.id, 'pjob_1');
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('serializes create by tenant/run and reuses a previously committed probe job', async () => {
+    let insertCalls = 0;
+    const pool = createRecordingPool((sql, params) => {
+      if (sql.includes('pg_advisory_xact_lock')) {
+        assert.equal(params[0], JSON.stringify([CTX.tenantId, 'run_1']));
+        return { rows: [{}] };
+      }
+      if (sql.includes('WHERE tenant_id = $1 AND test_run_id = $2')) {
+        return { rows: [sampleRow()] };
+      }
+      if (sql.includes('INSERT INTO probe_jobs')) insertCalls += 1;
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+    const job = await repo.createProbeJob(CTX, {
+      id: 'pjob_retry_candidate',
+      test_run_id: 'run_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_bypass.safe',
+      nonce_hash: 'different_retry_nonce',
+      nonce: 'different-retry-nonce',
+      created_at: FIXED_NOW,
+    });
+    assert.equal(job.id, 'pjob_1');
+    assert.equal(job.nonce_hash, 'nh_abc');
+    assert.equal(insertCalls, 0);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
   it('createProbeJob inserts tenant-scoped row with nonce and signature columns', async () => {
     const pool = createRecordingPool((sql, params) => {
       if (sql.includes('INSERT INTO probe_jobs')) {

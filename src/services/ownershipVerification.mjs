@@ -1,7 +1,11 @@
 import { audit } from '../audit.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { newId } from '../lib/ids.mjs';
-import { VERIFICATION_RANK, ownershipProofFromStates } from '../lib/ownershipPolicy.mjs';
+import {
+  VERIFICATION_RANK,
+  ownershipProofFromStates,
+  ownershipSummaryFromTargetStates,
+} from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { createOwnershipChallengeJob } from './probeCoordinator.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
@@ -14,12 +18,16 @@ function findTargetGroup(ctx, targetGroupId) {
   ) ?? null;
 }
 
-function groupFqdnTargets(tenantId, targetGroupId) {
-  return getStore().targets
-    .filter(
-      (t) => t.tenant_id === tenantId && t.target_group_id === targetGroupId && t.kind === 'fqdn',
-    )
-    .map((t) => String(t.value).trim().toLowerCase());
+function findActiveFqdnTarget(ctx, targetGroupId, declaredFqdn) {
+  const normalized = String(declaredFqdn ?? '').trim().toLowerCase();
+  return getStore().targets.find(
+    (target) =>
+      target.tenant_id === ctx.tenantId
+      && target.target_group_id === targetGroupId
+      && target.kind === 'fqdn'
+      && !target.deleted_at
+      && String(target.normalized_value ?? target.value).trim().toLowerCase() === normalized,
+  ) ?? null;
 }
 
 function findVerification(ctx, id) {
@@ -37,7 +45,7 @@ function findOpenVerificationByNonce(tenantId, nonce_hash) {
   ) ?? null;
 }
 
-function auditVerification(ctx, id, action) {
+function auditVerification(ctx, id, action, metadata) {
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId ?? null,
@@ -45,7 +53,49 @@ function auditVerification(ctx, id, action) {
     action,
     resource_type: 'ownership_verification',
     resource_id: id,
+    ...(metadata ? { metadata } : {}),
   });
+}
+
+function refreshGroupOwnershipSummary(ctx, group) {
+  const targets = getStore().targets.filter(
+    (target) =>
+      target.tenant_id === ctx.tenantId
+      && target.target_group_id === group.id
+      && !target.deleted_at,
+  );
+  const latest = latestVerificationByTarget(ctx, targets.map((target) => target.id));
+  group.ownership_status = ownershipSummaryFromTargetStates(
+    targets.map((target) => latest.get(target.id)?.state ?? 'unverified'),
+  );
+}
+
+function activeTargetBoundToVerification(ctx, record) {
+  if (!record.target_id) return null;
+  const target = getStore().targets.find(
+    (candidate) =>
+      candidate.id === record.target_id
+      && candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === record.target_group_id
+      && candidate.kind === 'fqdn'
+      && !candidate.deleted_at,
+  );
+  if (!target) return null;
+  const value = String(target.normalized_value ?? target.value).trim().toLowerCase();
+  if (value !== String(record.declared_fqdn ?? '').trim().toLowerCase()) return null;
+
+  // Current challenges carry the exact target id. Retain the creation-time guard used by
+  // PostgreSQL as defense in depth against a hand-edited dev store reusing that identity.
+  const targetCreatedAt = Date.parse(String(target.created_at ?? ''));
+  const challengeCreatedAt = Date.parse(String(record.created_at ?? ''));
+  if (
+    Number.isFinite(targetCreatedAt)
+    && Number.isFinite(challengeCreatedAt)
+    && targetCreatedAt > challengeCreatedAt
+  ) {
+    return null;
+  }
+  return target;
 }
 
 function applyOwnershipSignal(ctx, record, { source, nonce_hash }) {
@@ -55,23 +105,64 @@ function applyOwnershipSignal(ctx, record, { source, nonce_hash }) {
   if (nonce_hash !== record.challenge_nonce_hash) {
     return { error: 'nonce_mismatch', status: 400 };
   }
-
-  if (source === 'probe') {
-    record.probe_observed = true;
-  } else if (source === 'agent') {
-    record.agent_observed = true;
-  } else {
+  if (source !== 'probe' && source !== 'agent') {
     return { error: 'invalid_source', status: 400 };
   }
 
-  if (record.probe_observed && record.agent_observed && record.status === 'challenge_sent') {
+  const probeObserved = record.probe_observed || source === 'probe';
+  const agentObserved = record.agent_observed || source === 'agent';
+  const completesChallenge =
+    probeObserved && agentObserved && record.status === 'challenge_sent';
+
+  let target = null;
+  if (completesChallenge) {
+    target = activeTargetBoundToVerification(ctx, record);
+    if (!target) return { error: 'ownership_target_not_active', status: 409 };
+  }
+
+  record.probe_observed = probeObserved;
+  record.agent_observed = agentObserved;
+
+  if (completesChallenge) {
     const now = new Date().toISOString();
+    const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+    if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.agent_verified) {
+      const auditEntry = audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId ?? null,
+        actor_role: ctx.role ?? 'system',
+        action: 'target_verification.agent_verified',
+        resource_type: 'target',
+        resource_id: target.id,
+        metadata: {
+          target_group_id: record.target_group_id,
+          ownership_verification_id: record.id,
+          agent_id: record.agent_id,
+        },
+      });
+      if (!getStore().targetVerifications) getStore().targetVerifications = [];
+      getStore().targetVerifications.push({
+        id: newId('tv'),
+        tenant_id: ctx.tenantId,
+        target_id: target.id,
+        state: 'agent_verified',
+        source_kind: 'agent_observation',
+        source_ref: {
+          ownership_verification_id: record.id,
+          agent_id: record.agent_id,
+          declared_fqdn: record.declared_fqdn,
+        },
+        transitioned_at: now,
+        transitioned_by: ctx.userId ?? 'system',
+        audit_entry_id: auditEntry.id,
+      });
+      target.verify_state = 'agent_verified';
+    }
+
     record.status = 'verified';
     record.verified_at = now;
     const group = findTargetGroup(ctx, record.target_group_id);
-    if (group) {
-      group.ownership_status = 'agent_verified';
-    }
+    if (group) refreshGroupOwnershipSummary(ctx, group);
     auditVerification(ctx, record.id, 'ownership_verification.agent_verified');
   }
 
@@ -106,12 +197,12 @@ function validateOwnershipChallengeInputs(ctx, body) {
     return { error: 'agent_probe_endpoint_missing', status: 409 };
   }
   const declaredFqdn = String(declaredFqdnRaw).trim().toLowerCase();
-  const fqdnSet = new Set(groupFqdnTargets(ctx.tenantId, group.id));
-  if (!fqdnSet.has(declaredFqdn)) {
+  const target = findActiveFqdnTarget(ctx, group.id, declaredFqdn);
+  if (!target) {
     return { error: 'declared_fqdn_not_in_target_group', status: 400 };
   }
 
-  return { group, agent, targetGroupId, agentId, declaredFqdn };
+  return { group, agent, targetGroupId, agentId, declaredFqdn, targetId: target.id };
 }
 
 /**
@@ -163,20 +254,29 @@ function simulateAgentVerification(ctx, body) {
   const agent = findOnlineBoundAgent(ctx, group.id);
   if (!agent) return null;
 
-  const groupTargets = getStore().targets.filter(
-    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === group.id,
-  );
-  let targets = groupTargets;
-  if (body?.target_id) {
-    const scoped = groupTargets.find((t) => t.id === body.target_id);
-    if (!scoped) {
-      return { dry_run: false, simulated: true, ready: false, error: 'target_not_found', status: 404 };
-    }
-    targets = [scoped];
+  const declaredFqdn = String(agent.probe_endpoint?.declared_fqdn ?? '').trim().toLowerCase();
+  const target = body?.target_id
+    ? getStore().targets.find(
+        (candidate) =>
+          candidate.id === body.target_id
+          && candidate.tenant_id === ctx.tenantId
+          && candidate.target_group_id === group.id
+          && !candidate.deleted_at,
+      )
+    : findActiveFqdnTarget(ctx, group.id, declaredFqdn);
+  if (!target) {
+    return {
+      dry_run: false,
+      simulated: true,
+      ready: false,
+      error: body?.target_id ? 'target_not_found' : 'target_binding_required',
+      status: body?.target_id ? 404 : 409,
+    };
   }
-  if (targets.length === 0) {
-    return { dry_run: false, simulated: true, ready: false, error: 'no_targets_in_group', status: 409 };
+  if (declaredFqdn && String(target.normalized_value ?? target.value).trim().toLowerCase() !== declaredFqdn) {
+    return { dry_run: false, simulated: true, ready: false, error: 'declared_fqdn_not_in_target_group', status: 400 };
   }
+  const targets = [target];
 
   if (!getStore().targetVerifications) getStore().targetVerifications = [];
   const now = new Date().toISOString();
@@ -224,11 +324,7 @@ function simulateAgentVerification(ctx, body) {
     });
   }
 
-  // Mirror applyOwnershipSignal's group-level rollup without downgrading a
-  // customer-confirmed group.
-  if (group.ownership_status !== 'user_confirmed') {
-    group.ownership_status = 'agent_verified';
-  }
+  refreshGroupOwnershipSummary(ctx, group);
   persistStore();
 
   return {
@@ -291,7 +387,7 @@ export function createOwnershipChallenge(ctx, body, runtimeConfig) {
     return { error: validated.error, status: validated.status };
   }
 
-  const { group, targetGroupId, agentId, declaredFqdn } = validated;
+  const { group, targetGroupId, agentId, declaredFqdn, targetId } = validated;
 
   const nonce = generateNonce();
   const challenge_nonce_hash = hashNonce(nonce);
@@ -301,6 +397,7 @@ export function createOwnershipChallenge(ctx, body, runtimeConfig) {
     id,
     tenant_id: ctx.tenantId,
     target_group_id: targetGroupId,
+    target_id: targetId,
     agent_id: agentId,
     declared_fqdn: declaredFqdn,
     status: 'challenge_sent',
@@ -347,16 +444,68 @@ export function confirmOwnership(ctx, id) {
     return { error: 'ownership_not_verified', status: 409 };
   }
 
-  const now = new Date().toISOString();
-  record.confirmed_by_user_id = ctx.userId;
-  record.confirmed_at = now;
   const group = findTargetGroup(ctx, record.target_group_id);
-  if (group) {
-    group.ownership_status = 'user_confirmed';
+  const target = activeTargetBoundToVerification(ctx, record);
+  if (!group || !target) {
+    return { error: 'ownership_target_not_active', status: 409 };
   }
-  auditVerification(ctx, id, 'ownership_verification.user_confirmed');
+
+  const now = new Date().toISOString();
+  const actorUserId = ctx.userId ?? 'system';
+  const current = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+  let targetVerification = current ?? null;
+
+  if ((VERIFICATION_RANK[current?.state] ?? 0) < VERIFICATION_RANK.user_confirmed) {
+    const auditEntry = audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId ?? null,
+      actor_role: ctx.role ?? 'system',
+      action: 'target_verification.user_confirmed',
+      resource_type: 'target',
+      resource_id: target.id,
+      metadata: {
+        target_group_id: record.target_group_id,
+        ownership_verification_id: record.id,
+      },
+    });
+    targetVerification = {
+      id: newId('tv'),
+      tenant_id: ctx.tenantId,
+      target_id: target.id,
+      state: 'user_confirmed',
+      source_kind: 'user_attestation',
+      source_ref: {
+        ownership_verification_id: record.id,
+        agent_id: record.agent_id,
+        declared_fqdn: record.declared_fqdn,
+        confirmed_by_user_id: actorUserId,
+      },
+      transitioned_at: now,
+      transitioned_by: actorUserId,
+      audit_entry_id: auditEntry.id,
+    };
+    if (!getStore().targetVerifications) getStore().targetVerifications = [];
+    getStore().targetVerifications.push(targetVerification);
+    target.verify_state = 'user_confirmed';
+  }
+
+  if (!record.confirmed_at) {
+    record.confirmed_by_user_id = actorUserId;
+    record.confirmed_at = now;
+    auditVerification(ctx, id, 'ownership_verification.user_confirmed', {
+      target_group_id: record.target_group_id,
+      target_id: target.id,
+    });
+  }
+
+  refreshGroupOwnershipSummary(ctx, group);
   persistStore();
-  return { verification: record };
+  return {
+    verification: record,
+    target_id: target.id,
+    target_verification: targetVerification,
+    ownership_status: group.ownership_status,
+  };
 }
 
 export function listOwnershipVerifications(ctx) {
@@ -412,26 +561,45 @@ function getActiveLoa(ctx, groupId) {
     (row) =>
       row.tenant_id === ctx.tenantId
       && row.target_group_id === groupId
-      && row.state === 'signed',
+      && row.state === 'signed'
+      && (!row.expires_at || new Date(row.expires_at).getTime() > Date.now()),
   ) ?? null;
+}
+
+function loaScopeTargetIds(loa) {
+  const targets = loa?.scope_snapshot?.targets;
+  if (!Array.isArray(targets)) return new Set();
+  return new Set(
+    targets
+      .map((target) => (target && typeof target === 'object' ? target.target_id : target))
+      .map((targetId) => String(targetId ?? '').trim())
+      .filter(Boolean),
+  );
 }
 
 /**
  * Whether ownership of `targetId` has been proven well enough to aim live traffic at it.
  *
- * Reads both places developer-validation mode records ownership — the latest
- * `target_verifications` row and the group's `ownership_status` — and defers the threshold to
- * `ownershipProofFromStates`, which the Postgres adapters share.
+ * Reads only the latest target-bound verification. The group's status is a presentation
+ * summary and is deliberately excluded from authorization.
  *
  * @param {import('../context.mjs').TenantScope} ctx
- * @param {{ id: string, ownership_status?: string }} group
+ * @param {{ id: string }} group
  * @param {string} targetId
- * @returns {{ verified: boolean, state: string, source: 'target'|'group'|null }}
+ * @returns {{ verified: boolean, state: string, source: 'target'|null }}
  */
 export function targetOwnershipProof(ctx, group, targetId) {
+  const target = getStore().targets.find(
+    (candidate) =>
+      candidate.id === targetId
+      && candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === group?.id
+      && !candidate.deleted_at,
+  );
   return ownershipProofFromStates({
-    groupState: group?.ownership_status,
-    targetState: latestVerificationByTarget(ctx, [targetId]).get(targetId)?.state,
+    targetState: target
+      ? latestVerificationByTarget(ctx, [target.id]).get(target.id)?.state
+      : null,
   });
 }
 
@@ -446,7 +614,7 @@ export function getLadder(ctx, groupId) {
   if (!group) return { error: 'target_group_not_found', status: 404 };
 
   const targets = getStore().targets.filter(
-    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === groupId,
+    (t) => t.tenant_id === ctx.tenantId && t.target_group_id === groupId && !t.deleted_at,
   );
   const latestByTarget = latestVerificationByTarget(
     ctx,
@@ -496,7 +664,8 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
     (t) =>
       t.id === targetId
       && t.tenant_id === ctx.tenantId
-      && t.target_group_id === groupId,
+      && t.target_group_id === groupId
+      && !t.deleted_at,
   );
   if (!target) return { error: 'target_not_found', status: 404 };
 
@@ -506,13 +675,11 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
   const latestByTarget = latestVerificationByTarget(ctx, [targetId]);
   const current = latestByTarget.get(targetId);
   const currentState = current?.state ?? 'pending';
-  if (!VERIFY_PREREQ_STATES.has(currentState) && currentState !== 'agent_verified') {
-    if (currentState === 'pending' || currentState === 'unverified' || currentState === 'dns_verified') {
-      return { error: 'verify_prereq_not_met', status: 409 };
-    }
-  }
   if (!VERIFY_PREREQ_STATES.has(currentState)) {
     return { error: 'verify_prereq_not_met', status: 409 };
+  }
+  if (!loaScopeTargetIds(activeLoa).has(targetId)) {
+    return { error: 'target_not_in_loa_scope', status: 409 };
   }
 
   const now = new Date().toISOString();
@@ -523,9 +690,10 @@ export function confirmTarget(ctx, groupId, targetId, signer = {}) {
     state: 'user_confirmed',
     source_kind: 'user_attestation',
     source_ref: {
-      signer: signer.signer ?? ctx.userId,
+      signer: ctx.userId ?? 'system',
       note: signer.note ?? null,
       loa_id: activeLoa.id,
+      loa_custody_digest_sha256: activeLoa.custody_digest_sha256,
     },
     transitioned_at: now,
     transitioned_by: ctx.userId ?? 'system',

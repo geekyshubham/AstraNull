@@ -182,11 +182,41 @@ export function resolvePostgresAppRoleConfig(env = process.env) {
   return { adminUrl, appPassword, backupPassword, password: appPassword };
 }
 
-export async function main(env = process.env) {
-  const { adminUrl, appPassword, backupPassword } = resolvePostgresAppRoleConfig(env);
-  const pool = createPgPool({ ...env, ASTRANULL_DATABASE_URL: adminUrl });
+export function resolvePostgresBackupRoleConfig(env = process.env) {
+  const adminUrl = String(env.ASTRANULL_ADMIN_DATABASE_URL ?? '').trim();
+  if (!adminUrl) throw new Error('postgres-grant-app-role: ASTRANULL_ADMIN_DATABASE_URL is required.');
+  const backupPassword = validatePostgresBackupRolePassword(env.ASTRANULL_DATABASE_BACKUP_PASSWORD);
+  let parsed;
   try {
-    const result = await provisionPostgresDatabaseRoles(pool, { appPassword, backupPassword });
+    parsed = new URL(adminUrl);
+  } catch {
+    throw new Error('postgres-grant-app-role: ASTRANULL_ADMIN_DATABASE_URL must be a valid PostgreSQL URL.');
+  }
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+    throw new Error('postgres-grant-app-role: ASTRANULL_ADMIN_DATABASE_URL must be a valid PostgreSQL URL.');
+  }
+  const adminPassword = decodeURIComponent(parsed.password);
+  if (!adminPassword || adminPassword === backupPassword) {
+    throw new Error('postgres-grant-app-role: admin and backup database passwords must be distinct.');
+  }
+  return { adminUrl, backupPassword };
+}
+
+export async function main(env = process.env, { backupOnly = false } = {}) {
+  const config = backupOnly
+    ? resolvePostgresBackupRoleConfig(env)
+    : resolvePostgresAppRoleConfig(env);
+  const pool = createPgPool({ ...env, ASTRANULL_DATABASE_URL: config.adminUrl });
+  try {
+    if (backupOnly) {
+      const result = await provisionPostgresBackupRole(pool, { password: config.backupPassword });
+      console.log(`postgres-grant-app-role: ok backup_role=${result.role} backup_created=${result.created}`);
+      return;
+    }
+    const result = await provisionPostgresDatabaseRoles(pool, {
+      appPassword: config.appPassword,
+      backupPassword: config.backupPassword,
+    });
     console.log(
       `postgres-grant-app-role: ok app_role=${result.app.role} app_created=${result.app.created} `
       + `backup_role=${result.backup.role} backup_created=${result.backup.created}`,
@@ -198,8 +228,15 @@ export async function main(env = process.env) {
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
-  main().catch((error) => {
-    console.error(redactDatabaseUrlInMessage(error, process.env));
-    process.exitCode = 1;
-  });
+  const args = process.argv.slice(2);
+  const backupOnly = args.length === 1 && args[0] === '--backup-only';
+  if (args.length > (backupOnly ? 1 : 0)) {
+    console.error('postgres-grant-app-role: only --backup-only is supported.');
+    process.exitCode = 2;
+  } else {
+    main(process.env, { backupOnly }).catch((error) => {
+      console.error(redactDatabaseUrlInMessage(error, process.env));
+      process.exitCode = 1;
+    });
+  }
 }

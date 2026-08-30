@@ -20,6 +20,7 @@ export function simulateProbeResult(check, target, overrideProfile) {
   if (simulationProfile === 'external_blocked') external_result = 'blocked';
 
   const probeProfileKind = check.probe_profile?.kind ?? 'metadata_marker';
+  if (probeProfileKind === 'metadata_marker') external_result = 'not_run';
   const baseMetadata = {
     simulation: 'SAFE_PROBE_SIMULATION',
     check_id: check.check_id,
@@ -198,6 +199,16 @@ export function simulateProbeResult(check, target, overrideProfile) {
       upgrade_denied: external_result === 'blocked',
       status_code: external_result === 'connected' ? 101 : 403,
       note: 'Simulated WebSocket upgrade posture probe.',
+    });
+  } else if (probeProfileKind === 'grpc_reflection_probe') {
+    Object.assign(baseMetadata, {
+      probe_kind: 'grpc_reflection_probe',
+      grpc_endpoint_reachable: external_result === 'connected',
+      reflection_service_routed: external_result === 'connected',
+      status_code: external_result === 'connected' ? 200 : 502,
+      grpc_status: external_result === 'connected' ? '0' : null,
+      response_body_retained: false,
+      note: 'Simulated gRPC health/reflection reachability probe (one bounded request class).',
     });
   } else {
     baseMetadata.note = 'Metadata-only safe probe simulation — no live traffic to customer targets.';

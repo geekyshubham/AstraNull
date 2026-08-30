@@ -28,6 +28,20 @@ describe('Targets portal contract', () => {
     assert.match(source, /ownership evidence and safety policy/);
   });
 
+  it('uses explicit Open target links instead of focusable or clickable native rows', () => {
+    const targets = readPage('targets-page.tsx');
+    const targetGroup = readPage('target-group-detail-view.tsx');
+    const finding = readPage('finding-detail-view.tsx');
+
+    for (const source of [targets, targetGroup, finding]) {
+      assert.match(source, /aria-label={`Open target \$\{getString\(item,/);
+    }
+    assert.doesNotMatch(targets, /function rowProps|getRowProps=\{\(item\) => rowProps/);
+    assert.doesNotMatch(targetGroup, /targetRowNavProps|tg-target-row|isNestedInteractiveTarget/);
+    assert.doesNotMatch(finding, /targetRowNavProps/);
+    assert.match(targetGroup, />\s*Verify\s*<\/Button>[\s\S]*>\s*Run test\s*<\/Button>[\s\S]*Remove/m);
+  });
+
   it('keeps target-group scheduling and removal on bounded, real APIs', () => {
     const source = readPage('target-group-detail-view.tsx');
 
@@ -47,7 +61,10 @@ describe('Targets portal contract', () => {
     }
     assert.match(source, /\+ Add single domain/);
     assert.match(source, /handleAddSingleDomain/);
-    assert.match(source, /\/v1\/target-groups\/\$\{encodeURIComponent\(effectiveDomainTargetGroupId\)\}\/targets/);
+    assert.match(source, /\/v1\/target-groups\/\$\{encodeURIComponent\(groupId\)\}\/targets/);
+    assert.match(source, /requestJson\(config, session, '\/v1\/target-groups', \{/);
+    assert.match(source, /source_app: 'AstraNull portal'/);
+    assert.match(source, /provider_access: 'none'/);
     assert.match(source, /kind: 'fqdn'/);
   });
 });

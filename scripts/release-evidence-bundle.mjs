@@ -12,6 +12,10 @@ import {
 } from '../src/contracts/releaseEvidenceProvenance.mjs';
 import { redactObject, redactString } from '../src/lib/redact.mjs';
 import {
+  uiAccessibilityAcceptanceProblems,
+  validateUiAccessibilityCollectorAcceptance,
+} from './ui-accessibility-matrix-evidence.mjs';
+import {
   isRehearsalOrSampleEvidenceInput,
 } from './staging-readiness-attestation.mjs';
 
@@ -53,6 +57,8 @@ export function parseInputJson(inputPath) {
       records: parsed.records,
       release_id: parsed.release_id ?? null,
       rehearsal_only: parsed.rehearsal_only === true ? true : undefined,
+      dry_run: parsed.dry_run === true ? true : undefined,
+      submittable: parsed.submittable === false ? false : undefined,
       createdAt: parsed.created_at ?? null,
       notes: parsed.notes ?? null,
     };
@@ -107,6 +113,14 @@ export function validateEvidenceRecord(record) {
   if (invalidFields.length > 0) {
     throw new Error(`${kind} contains invalid field(s): ${invalidFieldSummary(invalidFields)}`);
   }
+  if (kind === 'ui_accessibility_matrix') {
+    const acceptance = validateUiAccessibilityCollectorAcceptance(evidence);
+    if (!acceptance.ok) {
+      throw new Error(
+        `${kind} requires completed, passed live checks (${uiAccessibilityAcceptanceProblems(acceptance).join(', ')})`,
+      );
+    }
+  }
   return {
     kind,
     evidence: redactObject(evidence),
@@ -160,6 +174,8 @@ export async function main(argv = process.argv.slice(2)) {
   const bundle = createReleaseEvidenceBundle({
     releaseId: opts.releaseId ?? parsed.release_id ?? null,
     rehearsal_only: parsed.rehearsal_only,
+    dry_run: parsed.dry_run,
+    submittable: parsed.submittable,
     records: parsed.records,
     createdAt: parsed.createdAt ?? undefined,
     notes: parsed.notes ?? undefined,

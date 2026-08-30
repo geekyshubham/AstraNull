@@ -141,7 +141,7 @@
   --signal: oklch(52% 0.12 220);                 /* deepened so the instrument reads on white */
   --signal-soft: oklch(52% 0.12 220 / 0.12);
   --success: oklch(52% 0.15 152);
-  --warn: oklch(60% 0.15 65);
+  --warn: oklch(54% 0.15 65);                 /* AA for raw warning text on white and raised surfaces */
   --danger: oklch(53% 0.21 25);                  /* bright enough for danger text/dots on white */
   --danger-fill:       oklch(45% 0.19 25);        /* solid destructive-button fill — AA (≥4.5:1) with white label */
   --danger-fill-hover: oklch(41% 0.19 25);
@@ -1037,14 +1037,17 @@ th {
   color: var(--info);
 }
 
-/* Light theme: darken success/info badge text to clear WCAG AA 4.5:1 on the pale
-   status tint. At 11px, bare --success is ~3.04:1 and --info/orange ~2.25:1 there
-   (verified via OKLab contrast calc); the mixes below land ~6.0:1 / ~5.8:1.
-   .badge-warn (~4.6:1), .badge-danger (~4.6:1), .badge-muted already pass, so only
-   success + info are overridden. Fill/border unchanged; dark theme keeps the vivid
-   text (very high contrast on near-black). */
+/* Light theme: darken status badge text to clear WCAG AA 4.5:1 on pale
+   status tints. Shared semantic tokens remain the source of truth; fill,
+   border, and dark-theme colors stay unchanged. */
 :root[data-theme="light"] .badge-success {
   color: color-mix(in oklab, var(--success), var(--fg) 35%);
+}
+:root[data-theme="light"] .badge-warn {
+  color: color-mix(in oklab, var(--warn), var(--fg) 30%);
+}
+:root[data-theme="light"] .badge-danger {
+  color: color-mix(in oklab, var(--danger), var(--fg) 15%);
 }
 :root[data-theme="light"] .badge-info {
   color: color-mix(in oklab, var(--info), var(--fg) 42%);
@@ -1278,6 +1281,10 @@ select.select:focus,
   font-weight: 400;
 }
 
+.select-menu[hidden] {
+  display: none;
+}
+
 .select-menu {
   position: absolute;
   left: 0;
@@ -1417,6 +1424,12 @@ select.select:focus,
   width: fit-content;
   max-width: 100%;
   flex: none;
+}
+
+/* The dark dashboard row and badge tints compound; lift only this small danger
+   label toward the existing foreground token while preserving its semantic hue. */
+:root:not([data-theme="light"]) .dashboard-link-meta > .badge-danger.badge.badge-sans {
+  color: color-mix(in oklab, var(--danger), var(--fg) 5%);
 }
 
 .onboarding-heartbeat-panel {
@@ -1827,6 +1840,17 @@ select.select:focus,
 .heatmap-danger {
   background: color-mix(in oklab, var(--danger), transparent 91%);
   color: var(--danger);
+}
+
+/* Light status text is mixed toward the Observatory ink token, not replaced
+   with a new hue. The 15% mix clears 4.5:1 on both white and raised surfaces
+   after each semantic tint is composited into the cell background. */
+:root[data-theme="light"] .heatmap-warn {
+  color: color-mix(in oklab, var(--warn), var(--fg) 15%);
+}
+
+:root[data-theme="light"] .heatmap-danger {
+  color: color-mix(in oklab, var(--danger), var(--fg) 15%);
 }
 
 .heatmap-muted {
@@ -4490,8 +4514,9 @@ td .row-actions {
     left: -290px;
     z-index: 50;
     width: 280px;
+    visibility: hidden;
     box-shadow: var(--elev-raised);
-    transition: left var(--motion-ui) var(--motion-ease);
+    transition: left var(--motion-ui) var(--motion-ease), visibility 0s linear var(--motion-ui);
   }
 
   .sidebar-collapse {
@@ -4539,11 +4564,25 @@ td .row-actions {
 
   .sidebar.open {
     left: 0;
+    visibility: visible;
+    transition-delay: 0s;
   }
 
   .sidebar-close,
   .menu-btn {
     display: inline-flex !important;
+  }
+
+  .menu-btn,
+  .theme-toggle,
+  .sidebar-close {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .sidebar-foot .field.sidebar-role .select-display {
+    min-height: 44px;
   }
 
   .scrim.open {
@@ -4624,6 +4663,17 @@ td .row-actions {
 
   .auth-form--grid {
     grid-template-columns: 1fr;
+  }
+
+  .card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .card-header > .badge,
+  .card-header > .btn,
+  .card-header > a.btn {
+    align-self: flex-start;
   }
 }
 
@@ -4763,6 +4813,26 @@ td .row-actions {
     font-size: var(--text-xl);
   }
 
+  .card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .card-header > .badge,
+  .card-header > .btn,
+  .card-header > a.btn {
+    align-self: flex-start;
+  }
+
+  button,
+  .btn,
+  .select-display,
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
   .card {
     padding: var(--space-4);
   }
@@ -4822,6 +4892,7 @@ td .row-actions {
   }
 
   .btn-sm {
+    min-width: 44px;
     min-height: 44px;
     padding-top: 10px;
     padding-bottom: 10px;

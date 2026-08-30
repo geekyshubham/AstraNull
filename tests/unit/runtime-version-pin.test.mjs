@@ -139,20 +139,24 @@ describe('node runtime version pin', () => {
    * assertion below becomes a vacuous loop over an empty array and this file would keep
    * reporting green while guarding nothing.
    *
-   * The anchor is the Dockerfile the deploy workflow actually builds, read out of the
-   * workflow rather than hard-coded here, so the two cannot drift. A plain count would be
-   * the weaker choice: deleting a legacy image is legitimate, and a failing count invites
-   * lowering the number, which quietly shrinks the guard instead of fixing the walk.
+   * The anchor is the Dockerfile the exact-archive deploy helper actually builds, read out
+   * of deploy.sh rather than hard-coded here, so the two cannot drift. AWS Compose is
+   * intentionally image-only. A plain count would be the weaker choice: deleting a legacy
+   * image is legitimate, and a failing count invites lowering the number, which quietly
+   * shrinks the guard instead of fixing the walk.
    */
   it('discovers the Dockerfiles and workflows it claims to guard', () => {
-    const compose = read('ops/aws/docker-compose.yml');
-    const built = /^\s*dockerfile:\s*(\S+)/m.exec(compose);
-    assert.ok(built, 'ops/aws/docker-compose.yml declares no `dockerfile:` for the image build.');
+    const deploy = read('ops/aws/deploy.sh');
+    const helper = /^build_control_plane_from_commit\(\) \{[\s\S]*?^\}/m.exec(deploy)?.[0] ?? '';
+    const built = /docker build -f (\S+)/.exec(helper);
+    assert.match(helper, /git archive "\$commit"/);
+    assert.match(helper, /-t "astranull-control-plane:\$commit" -/);
+    assert.ok(built, 'ops/aws/deploy.sh declares no Dockerfile in its exact-archive build helper.');
     assert.ok(
       dockerfiles.includes(built[1]),
       `the walk found ${dockerfiles.length} Dockerfile(s) (${dockerfiles.join(', ') || 'none'}) `
-      + `but not ${built[1]}, the one ops/aws/docker-compose.yml builds and ships. Fix the walk: a `
-      + 'scan that misses the production image makes every assertion below vacuous.',
+      + `but not ${built[1]}, the one ops/aws/deploy.sh builds from the exact commit archive. `
+      + 'Fix the walk: a scan that misses the production image makes every assertion below vacuous.',
     );
     assert.ok(WORKFLOW_PATHS.length > 0, 'the workflow walk found nothing to pin-check.');
     // NODE_WORKFLOW_PATHS is derived by filtering, so a broken node-version regex would

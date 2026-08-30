@@ -218,15 +218,26 @@ async function applyOutsideTransactionMigration(client, sql, version) {
 
 /**
  * @param {import('pg').Pool} pool
- * @param {{ migrationsDir: string, files?: ReturnType<typeof listMigrationFiles> }} options
+ * @param {{ migrationsDir: string, files?: ReturnType<typeof listMigrationFiles>, lockTimeoutMs?: number, statementTimeoutMs?: number }} options
  */
-export async function runMigrations(pool, { migrationsDir, files: filesOverride }) {
+export async function runMigrations(pool, {
+  migrationsDir,
+  files: filesOverride,
+  lockTimeoutMs,
+  statementTimeoutMs,
+}) {
   const files = filesOverride ?? listMigrationFiles(migrationsDir);
   const client = await pool.connect();
   const results = [];
   let inTransaction = false;
 
   try {
+    if (Number.isInteger(lockTimeoutMs) && lockTimeoutMs > 0) {
+      await client.query(`SET lock_timeout = '${lockTimeoutMs}ms'`);
+    }
+    if (Number.isInteger(statementTimeoutMs) && statementTimeoutMs > 0) {
+      await client.query(`SET statement_timeout = '${statementTimeoutMs}ms'`);
+    }
     await beginTransactionalMigrationBatch(client);
     inTransaction = true;
     let appliedBefore = await fetchAppliedMigrationVersions(client);

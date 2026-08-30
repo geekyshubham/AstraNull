@@ -29,6 +29,13 @@ import {
   createStagingE2eMatrixArtifact,
   validateStagingE2eMatrixEvidence,
 } from './staging-e2e-matrix-evidence.mjs';
+import {
+  createUiAccessibilityMatrixArtifact,
+  uiAccessibilityAcceptanceProblems,
+  validateUiAccessibilityCollectorAcceptance,
+} from './ui-accessibility-matrix-evidence.mjs';
+
+export { validateUiAccessibilityCollectorAcceptance };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -171,7 +178,7 @@ export function collectorProcessEnv(kind) {
 export function buildCollectorCommand(collector, context) {
   const scriptPath = path.resolve(REPO_ROOT, collector.script);
   const artifactPath = artifactPathForKind(collector.kind, context);
-  const { input, extraArgs = [] } = buildCollectorScriptInput(collector.kind, {
+  const { input, extraArgs = [], inputSource = null } = buildCollectorScriptInput(collector.kind, {
     ...context,
     outDir: context.outDir,
   });
@@ -188,7 +195,7 @@ export function buildCollectorCommand(collector, context) {
     args.push('--release-id', context.releaseId);
   }
   args.push(...extraArgs);
-  return { command: process.execPath, args, artifactPath, input };
+  return { command: process.execPath, args, artifactPath, input, inputSource };
 }
 
 export function extractProductionReleaseRecord(kind, artifact, context) {
@@ -320,14 +327,17 @@ export function extractProductionReleaseRecord(kind, artifact, context) {
   }
 
   if (kind === 'ui_accessibility_matrix') {
+    const evidence = {
+      created_at: artifact.created_at,
+      runs: artifact.runs,
+      evidence_uri: context.evidenceUri(kind),
+    };
+    const acceptance = validateUiAccessibilityCollectorAcceptance(evidence);
     return {
       kind,
-      evidence: {
-        created_at: artifact.created_at,
-        runs: artifact.runs,
-        evidence_uri: context.evidenceUri(kind),
-      },
-      status: 'accepted',
+      evidence,
+      status: acceptance.ok ? 'accepted' : 'draft',
+      ...(acceptance.ok ? {} : { submittable: false }),
       release_id: context.releaseId,
     };
   }
@@ -353,6 +363,14 @@ export function validateCollectedRecord(record, options = {}) {
   if (record.rehearsal_only === true) {
     throw new Error(`${record.kind} record must not include rehearsal_only=true`);
   }
+  if (record.kind === 'ui_accessibility_matrix') {
+    const acceptance = validateUiAccessibilityCollectorAcceptance(record.evidence);
+    if (!acceptance.ok && (record.status === 'accepted' || options.requireSubmittable === true)) {
+      throw new Error(
+        `${record.kind} record requires completed, passed live checks (${uiAccessibilityAcceptanceProblems(acceptance).join(', ')})`,
+      );
+    }
+  }
   if (options.requireSubmittable === true && isNonSubmittableEvidenceRecord(record)) {
     throw new Error(`${record.kind} record is non-submittable dry-run or draft evidence`);
   }
@@ -360,20 +378,35 @@ export function validateCollectedRecord(record, options = {}) {
 }
 
 export function buildRecordsPayload(records, context) {
+  const acceptedKinds = new Set(
+    records
+      .filter((record) => record?.status === 'accepted'
+        && !isNonSubmittableEvidenceRecord(record)
+        && (record.kind !== 'ui_accessibility_matrix'
+          || validateUiAccessibilityCollectorAcceptance(record.evidence).ok))
+      .map((record) => record.kind),
+  );
+  const collectionComplete = records.length === PRODUCTION_RELEASE_EVIDENCE_KINDS.length
+    && PRODUCTION_RELEASE_EVIDENCE_KINDS.every((kind) => acceptedKinds.has(kind));
+  const submittable = context.dryRun !== true && collectionComplete;
+
   return {
     schema_version: 1,
     artifact_type: 'production_release_evidence_records',
     created_at: context.createdAt,
     release_id: context.releaseId,
     environment: context.environment,
+    collection_complete: collectionComplete,
     dry_run: context.dryRun === true,
-    submittable: context.dryRun !== true,
+    submittable,
     records,
     caveats: [
       'Collected via scripts/collect-release-evidence.mjs invoking metadata-only evidence CLIs.',
       context.dryRun === true
         ? 'Dry-run records are contract-shaped previews only; they are non-submittable and cannot satisfy production readiness.'
-        : 'Staging-sim inventory for local gap audit only; submit operator-attested staging records via scripts/submit-staging-evidence.mjs.',
+        : !collectionComplete
+          ? 'Collection is incomplete or contains non-accepted evidence; this payload is non-submittable and cannot satisfy production readiness.'
+          : 'Submit operator-attested staging records via scripts/submit-staging-evidence.mjs.',
       'External staging, security, SOC, and legal signoff gates remain required beyond this bundle.',
     ],
   };
@@ -381,22 +414,39 @@ export function buildRecordsPayload(records, context) {
 
 export function runCollector(collector, context, options = {}) {
   const runCommand = options.runCommand ?? defaultRunCommand;
-  const { command, args, artifactPath, input } = buildCollectorCommand(collector, context);
+  const { command, args, artifactPath, input, inputSource } = buildCollectorCommand(collector, context);
 
   if (input !== null && input !== undefined) {
     mkdirSync(context.inputsDir, { recursive: true });
     writeFileSync(inputPathForKind(collector.kind, context), `${JSON.stringify(input, null, 2)}\n`);
   }
 
+  if (!context.dryRun && collector.kind === 'ui_accessibility_matrix') {
+    const acceptance = validateUiAccessibilityCollectorAcceptance(input, {
+      requireRunnerSource: true,
+      inputSource,
+      environment: context.environment,
+    });
+    if (!acceptance.ok) {
+      const error = new Error(
+        `ui_accessibility_matrix collector requires completed, passed output from run-live-ui-accessibility-matrix (${uiAccessibilityAcceptanceProblems(acceptance).join(', ')})`,
+      );
+      if (!context.continueOnError) throw error;
+      return { kind: collector.kind, ok: false, artifactPath, error: error.message };
+    }
+  }
+
   if (context.dryRun) {
-    const dryArtifact = collector.kind === 'staging_e2e_matrix' && input
-      ? createStagingE2eMatrixArtifact({
+    const dryArtifact = collector.kind === 'ui_accessibility_matrix' && input
+      ? createUiAccessibilityMatrixArtifact({ evidence: input, createdAt: context.createdAt })
+      : collector.kind === 'staging_e2e_matrix' && input
+        ? createStagingE2eMatrixArtifact({
         evidence: input,
         validation: validateStagingE2eMatrixEvidence(input, { releaseId: context.releaseId }),
-        releaseId: context.releaseId,
-        createdAt: context.createdAt,
-      })
-      : {
+          releaseId: context.releaseId,
+          createdAt: context.createdAt,
+        })
+        : {
         schema_version: 1,
         artifact_type: `${collector.kind}_dry_run`,
         created_at: context.createdAt,
@@ -432,7 +482,12 @@ export function runCollector(collector, context, options = {}) {
 
   const artifact = JSON.parse(readFileSync(artifactPath, 'utf8'));
   const record = extractProductionReleaseRecord(collector.kind, artifact, context);
-  validateCollectedRecord(record);
+  try {
+    validateCollectedRecord(record, { requireSubmittable: true });
+  } catch (error) {
+    if (!context.continueOnError) throw error;
+    return { kind: collector.kind, ok: false, artifactPath, error: error.message };
+  }
   return { kind: collector.kind, ok: true, artifactPath, record };
 }
 

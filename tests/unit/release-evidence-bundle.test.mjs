@@ -109,6 +109,83 @@ describe('release evidence bundle utility', () => {
     }
   });
 
+  it('rejects forged accepted accessibility matrices with incomplete or issue-bearing runs', () => {
+    const validEvidence = PRODUCTION_RELEASE_EVIDENCE_COMPLETE.ui_accessibility_matrix;
+    assert.equal(validEvidence.runs.length, 12);
+    assert.equal(new Set(validEvidence.runs.map((run) => `${run.page}:${run.viewport}`)).size, 12);
+    assert.ok(validEvidence.runs.every((run) => run.browser === 'chromium'));
+    assert.ok(validEvidence.runs.every((run) => Object.values(run.issues).every((count) => count === 0)));
+    assert.doesNotThrow(() => createReleaseEvidenceBundle({
+      releaseId: 'rel_valid_ui_matrix',
+      records: [{ kind: 'ui_accessibility_matrix', evidence: validEvidence, status: 'accepted' }],
+    }));
+
+    const cases = [
+      {
+        name: 'duplicate 13th pair',
+        expectedProblem: 'duplicate_pair:dashboard:desktop',
+        evidence: (() => {
+          const evidence = structuredClone(validEvidence);
+          evidence.runs.push(structuredClone(evidence.runs[0]));
+          return evidence;
+        })(),
+      },
+      {
+        name: 'not_run browser',
+        expectedProblem: 'not_passed:runs[0].browser',
+        evidence: (() => {
+          const evidence = structuredClone(validEvidence);
+          evidence.runs[0].browser = 'not_run';
+          return evidence;
+        })(),
+      },
+      ...['moderate', 'minor'].map((severity) => ({
+        name: `${severity} issue`,
+        expectedProblem: `not_passed:runs[0].issues.${severity}`,
+        evidence: (() => {
+          const evidence = structuredClone(validEvidence);
+          evidence.runs[0].issues[severity] = 1;
+          return evidence;
+        })(),
+      })),
+      ...[
+        ['invalid date text', 'not-a-date'],
+        ['impossible date', '2026-02-30T12:00:00.000Z'],
+        ['timestamp without milliseconds', '2026-08-30T12:00:00Z'],
+        ['timestamp with offset', '2026-08-30T08:00:00.000-04:00'],
+        ['numeric capture time', 1788091200000],
+        ['null capture time', null],
+      ].map(([name, capturedAt]) => ({
+        name,
+        expectedProblem: 'not_passed:runs[0].captured_at',
+        evidence: (() => {
+          const evidence = structuredClone(validEvidence);
+          evidence.runs[0].captured_at = capturedAt;
+          return evidence;
+        })(),
+      })),
+    ];
+
+    for (const testCase of cases) {
+      assert.throws(
+        () => createReleaseEvidenceBundle({
+          releaseId: 'rel_forged_ui_matrix',
+          records: [{
+            kind: 'ui_accessibility_matrix',
+            evidence: testCase.evidence,
+            status: 'accepted',
+          }],
+        }),
+        (error) => {
+          assert.match(error.message, /ui_accessibility_matrix requires completed, passed live checks/);
+          assert.ok(error.message.includes(testCase.expectedProblem));
+          return true;
+        },
+        testCase.name,
+      );
+    }
+  });
+
   it('loads JSON samples for newly added evidence kinds', () => {
     for (const kind of NEW_PRODUCTION_RELEASE_EVIDENCE_KINDS) {
       const sample = loadSampleJson(`${kind}.json`);
@@ -338,12 +415,32 @@ describe('release evidence bundle utility', () => {
     writeJson(input, {
       release_id: 'rel_from_file',
       rehearsal_only: false,
+      dry_run: true,
+      submittable: false,
       records: [{ kind: 'third_party_security_review', evidence: SECURITY_REVIEW }],
     });
     const parsed = parseInputJson(input);
     assert.equal(parsed.release_id, 'rel_from_file');
     assert.equal(parsed.rehearsal_only, undefined);
+    assert.equal(parsed.dry_run, true);
+    assert.equal(parsed.submittable, false);
     assert.equal(parsed.records.length, 1);
+  });
+
+  it('CLI rejects an incomplete collector payload marked non-submittable', async () => {
+    const dir = tempDir();
+    const input = path.join(dir, 'records.json');
+    writeJson(input, {
+      release_id: 'rel_missing_ui',
+      collection_complete: false,
+      dry_run: false,
+      submittable: false,
+      records: [{ kind: 'third_party_security_review', evidence: SECURITY_REVIEW }],
+    });
+    await assert.rejects(
+      () => main(['--input', input, '--out', path.join(dir, 'bundle.json')]),
+      /non-submittable/,
+    );
   });
 
   it('validateEvidenceRecord rejects strict contract invalid fields', () => {

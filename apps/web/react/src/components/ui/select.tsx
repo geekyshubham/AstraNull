@@ -49,17 +49,9 @@ export function Select({ label, name, value, options, onChange, className, disab
     function onPointerDown(event: PointerEvent) {
       if (!shellRef.current?.contains(event.target as Node)) setOpen(false);
     }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    }
     document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, []);
 
@@ -162,6 +154,14 @@ export function Select({ label, name, value, options, onChange, className, disab
         )}
         ref={shellRef}
         aria-disabled={disabled || undefined}
+        onKeyDown={(event) => {
+          if (open && event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+            triggerRef.current?.focus();
+          }
+        }}
       >
         <select
           className="select-native"
@@ -201,6 +201,7 @@ export function Select({ label, name, value, options, onChange, className, disab
               aria-selected={option.value === value}
               className={cn('select-option', option.value === value && 'active')}
               key={option.value}
+              tabIndex={open && !disabled ? 0 : -1}
               onClick={() => choose(option.value)}
               onKeyDown={(event) => onOptionKeyDown(event, option.value, index)}
             >

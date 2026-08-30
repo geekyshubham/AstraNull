@@ -53,6 +53,7 @@ import {
   formatPlacementStatus,
   placementStatusHint,
 } from '../lib/agent-helpers';
+import { resolveAgentReleaseMetadata } from '../lib/agent-release-metadata';
 import { formatRequiredSetupList } from '../lib/capability-probe-labels';
 import {
   CHECK_SAFETY_SCOPE_TABS,
@@ -430,6 +431,10 @@ const CHECK_FAMILY_FILTER_OPTIONS: { value: CheckFamilyTabId; label: string }[] 
   { value: 'dns', label: 'DNS' },
   { value: 'l7api', label: 'L7 / API' },
   { value: 'protocols', label: 'Protocols / TLS' },
+  { value: 'reflection-amplification', label: 'Reflection / amplification' },
+  { value: 'exploit', label: 'Exploit-based DoS' },
+  { value: 'delivery-pattern', label: 'Delivery patterns' },
+  { value: 'operations', label: 'Operations' },
   { value: 'high-scale', label: 'High-scale (SOC)' }
 ];
 
@@ -498,6 +503,8 @@ type SurfaceTableCardProps<T> = {
   loadingLabel?: string;
   loadingRows?: number;
   contentClassName?: string;
+  loadError?: string | null;
+  onRetry?: () => void;
   getRowProps?: (item: T, index: number) => Omit<HTMLAttributes<HTMLTableRowElement>, 'key'>;
   getRowId?: (item: T, index: number) => string | number;
 };
@@ -512,6 +519,8 @@ function SurfaceTableCard<T>({
   loadingLabel = 'Loading table',
   loadingRows = 3,
   contentClassName,
+  loadError,
+  onRetry,
   getRowProps,
   getRowId
 }: SurfaceTableCardProps<T>) {
@@ -525,7 +534,15 @@ function SurfaceTableCard<T>({
         {loading ? (
           <TableSkeleton rows={loadingRows} label={loadingLabel} />
         ) : (
-          <DataTable columns={columns} items={items} empty={empty} getRowProps={getRowProps} getRowId={getRowId} />
+          <DataTable
+            columns={columns}
+            items={items}
+            empty={empty}
+            loadError={loadError}
+            onRetry={onRetry}
+            getRowProps={getRowProps}
+            getRowId={getRowId}
+          />
         )}
       </CardContent>
     </Card>
@@ -544,7 +561,6 @@ function buildDetailHashRowProps(
   if (!id) return {};
   const hash = `${detailRoute}?id=${encodeURIComponent(id)}`;
   return {
-    role: 'link',
     tabIndex: 0,
     style: { cursor: 'pointer' },
     'aria-label': ariaLabel,
@@ -793,11 +809,56 @@ export function AgentsPage({
   const [copyNotice, setCopyNotice] = useState('');
   const [updateReleases, setUpdateReleases] = useState<DataItem[]>([]);
   const [trustKeys, setTrustKeys] = useState<DataItem[]>([]);
+  const [releaseLoadError, setReleaseLoadError] = useState('');
+  const [trustKeyLoadError, setTrustKeyLoadError] = useState('');
   const [auxLoading, setAuxLoading] = useState(false);
   const [agentsTab, setAgentsTab] = useState<'fleet' | 'install' | 'operations'>('fleet');
+  const [selectedTargetGroupId, setSelectedTargetGroupId] = useState('');
+  const [tokenScope, setTokenScope] = useState<{ id: string; label: string } | null>(null);
 
+  const agentsLoadError = data.loadErrors.agents ?? '';
+  const targetGroupsLoadError = data.loadErrors.targetGroups ?? '';
+  const coreDatasetError = [
+    agentsLoadError ? `Agent fleet unavailable — ${agentsLoadError}` : '',
+    targetGroupsLoadError ? `Target groups unavailable — ${targetGroupsLoadError}` : ''
+  ].filter(Boolean).join(' ');
   const onlineAgents = data.agents.filter((agent) => getString(agent, ['status']) === 'online').length;
-  const firstGroup = data.targetGroups[0] ?? null;
+  const selectedTargetGroup = data.targetGroups.find(
+    (group) => getString(group, ['id'], '') === selectedTargetGroupId
+  ) ?? null;
+  const selectedTargetGroupLabel = selectedTargetGroup
+    ? getString(selectedTargetGroup, ['name', 'title', 'id'])
+    : '';
+  const targetGroupOptions = [
+    {
+      value: '',
+      label: targetGroupsLoadError
+        ? 'Target groups unavailable'
+        : data.targetGroups.length > 0 ? 'Select a target group' : 'No target groups declared',
+      description: targetGroupsLoadError
+        ? 'Refresh the failed target-group dataset before creating a token.'
+        : data.targetGroups.length > 0
+          ? 'Required — AstraNull will not choose one automatically.'
+          : 'Declare target scope before creating a token.'
+    },
+    ...data.targetGroups.flatMap((group) => {
+      const id = getString(group, ['id'], '');
+      if (!id) return [];
+      return [{
+        value: id,
+        label: getString(group, ['name', 'title'], id),
+        description: `Target group ${id}`
+      }];
+    })
+  ];
+  const installRelease = useMemo(
+    () => resolveAgentReleaseMetadata(data.releaseEvidence),
+    [data.releaseEvidence]
+  );
+  const installReleaseMetadataComplete = installRelease.version !== '—'
+    && installRelease.digest !== '—'
+    && !['—', 'metadata recorded'].includes(installRelease.cosignStatus.toLowerCase());
+  const auxiliaryError = [releaseLoadError, trustKeyLoadError].filter(Boolean).join(' ');
 
   // Load agent update releases + update-signing trust keys for the rollout / trust-key
   // panels. Both GET /v1/agent-updates and GET /v1/agent-update-trust-keys return
@@ -805,25 +866,27 @@ export function AgentsPage({
   useEffect(() => {
     let cancelled = false;
     setAuxLoading(true);
-    Promise.all([
+    setReleaseLoadError('');
+    setTrustKeyLoadError('');
+    Promise.allSettled([
       requestJson(config, session, '/v1/agent-updates'),
       requestJson(config, session, '/v1/agent-update-trust-keys')
     ])
-      .then(([releasesPayload, trustPayload]) => {
+      .then(([releasesResult, trustResult]) => {
         if (cancelled) return;
-        const releases = Array.isArray((releasesPayload as { items?: unknown }).items)
-          ? (releasesPayload as { items: DataItem[] }).items
-          : [];
-        const keys = Array.isArray((trustPayload as { items?: unknown }).items)
-          ? (trustPayload as { items: DataItem[] }).items
-          : [];
-        setUpdateReleases(releases);
-        setTrustKeys(keys);
-      })
-      .catch(() => {
-        if (!cancelled) {
+        if (releasesResult.status === 'fulfilled') {
+          const releasesPayload = releasesResult.value as { items?: unknown };
+          setUpdateReleases(Array.isArray(releasesPayload.items) ? releasesPayload.items as DataItem[] : []);
+        } else {
           setUpdateReleases([]);
+          setReleaseLoadError(apiErrorMessage(releasesResult.reason, 'Agent release rollouts are unavailable.'));
+        }
+        if (trustResult.status === 'fulfilled') {
+          const trustPayload = trustResult.value as { items?: unknown };
+          setTrustKeys(Array.isArray(trustPayload.items) ? trustPayload.items as DataItem[] : []);
+        } else {
           setTrustKeys([]);
+          setTrustKeyLoadError(apiErrorMessage(trustResult.reason, 'Agent update trust keys are unavailable.'));
         }
       })
       .finally(() => {
@@ -841,6 +904,16 @@ export function AgentsPage({
       )
     },
     { key: 'hostname', label: 'Hostname', render: (item) => <span className="muted">{getString(item, ['hostname', 'name'], '—')}</span> },
+    {
+      key: 'target-group',
+      label: 'Target group',
+      render: (item) => {
+        const targetGroupId = getString(item, ['target_group_id'], '');
+        return targetGroupId
+          ? <span title={targetGroupId}>{resolveTargetGroupName(data.targetGroups, targetGroupId)}</span>
+          : <span className="muted">Unbound</span>;
+      }
+    },
     { key: 'environment', label: 'Env', render: (item) => <code className="traffic-path-label">{getString(item, ['environment_id'], 'tenant scope')}</code> },
     { key: 'version', label: 'Version', render: (item) => <code className="traffic-path-label">{getString(item, ['version', 'agent_version'], '—')}</code> },
     { key: 'heartbeat', label: 'Heartbeat', render: (item) => <span className="muted">{formatDate(item.last_heartbeat_at)}</span> },
@@ -874,7 +947,8 @@ export function AgentsPage({
           <div className="row-actions">
             <Button
               size="sm"
-              variant="danger"
+              variant="secondary"
+              className="agents-revoke-action"
               loading={busy === `revoke-${id}`}
               disabled={busy !== ''}
               aria-label={`Revoke agent ${getString(item, ['hostname', 'name', 'id'], id)}`}
@@ -890,9 +964,27 @@ export function AgentsPage({
 
   const releaseColumns: TableColumn<DataItem>[] = [
     { key: 'version', label: 'Version', render: (item) => <code className="traffic-path-label">{getString(item, ['version'])}</code> },
-    { key: 'channel', label: 'Channel', render: (item) => <span className="muted">{getString(item, ['channel'], 'stable')}</span> },
-    { key: 'state', label: 'State', render: (item) => <Badge tone="info" title="Release rollout state from agent-updates">{formatSnakeLabel(getString(item, ['state'], 'active'))}</Badge> },
-    { key: 'rollout', label: 'Rollout', render: (item) => <span className="num tabular-nums">{getNestedNumber(item, ['rollout', 'percentage'], 100)}%</span> },
+    { key: 'channel', label: 'Channel', render: (item) => <span className="muted">{getString(item, ['channel'])}</span> },
+    {
+      key: 'state',
+      label: 'State',
+      render: (item) => {
+        const state = getString(item, ['state'], '');
+        if (!state) return <span className="muted">—</span>;
+        const tone: BadgeTone = state === 'active' ? 'success' : state.includes('rollback') ? 'warn' : 'info';
+        return <Badge tone={tone} title="Release rollout state from agent-updates">{formatSnakeLabel(state)}</Badge>;
+      }
+    },
+    {
+      key: 'rollout',
+      label: 'Rollout',
+      render: (item) => {
+        const percentage = getNestedNumber(item, ['rollout', 'percentage'], -1);
+        return percentage >= 0
+          ? <span className="num tabular-nums">{percentage}%</span>
+          : <span className="muted">—</span>;
+      }
+    },
     { key: 'created', label: 'Created', render: (item) => <span className="muted">{formatDate(item.created_at)}</span> },
     {
       key: 'actions',
@@ -937,7 +1029,8 @@ export function AgentsPage({
         return active ? (
           <Button
             size="sm"
-            variant="danger"
+            variant="secondary"
+            className="agents-revoke-action"
             loading={busy === `trust-revoke-${id}`}
             disabled={busy !== ''}
             aria-label={`Revoke trust key ${getString(item, ['name'], id)}`}
@@ -951,6 +1044,18 @@ export function AgentsPage({
   ];
 
   async function createBootstrapToken() {
+    if (targetGroupsLoadError) {
+      setMessage('');
+      setError('Target groups could not be refreshed. Retry before choosing scope or creating a bootstrap token.');
+      return;
+    }
+    if (!selectedTargetGroup) {
+      setMessage('');
+      setError(data.targetGroups.length > 0
+        ? 'Select the target group this agent will observe before creating a token.'
+        : 'Declare a target group before creating an agent bootstrap token.');
+      return;
+    }
     const minutes = Number(tokenExpiryMinutes);
     const expiryMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
     const body: DataItem = {
@@ -959,12 +1064,11 @@ export function AgentsPage({
       // to a 24h default (see src/services/tokens.mjs). Send both so the chosen TTL applies.
       expires_at: new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString(),
       expires_in_minutes: expiryMinutes,
-      max_registrations: 1
+      max_registrations: 1,
+      target_group_id: getString(selectedTargetGroup, ['id'], '')
     };
-    const environmentId = getString(firstGroup, ['environment_id'], '');
-    const targetGroupId = getString(firstGroup, ['id'], '');
+    const environmentId = getString(selectedTargetGroup, ['environment_id'], '');
     if (environmentId) body.environment_id = environmentId;
-    if (targetGroupId) body.target_group_id = targetGroupId;
     const created = await runAction(setBusy, setError, setMessage, 'create-bootstrap-token', () => requestJson(config, session, '/v1/bootstrap-tokens', {
       method: 'POST',
       body
@@ -978,6 +1082,10 @@ export function AgentsPage({
       setTokenRevealed(false);
       setTokenRevoked(false);
       setCopyNotice('');
+      setTokenScope({
+        id: getString(selectedTargetGroup, ['id'], ''),
+        label: selectedTargetGroupLabel
+      });
     }
   }
 
@@ -1013,13 +1121,29 @@ export function AgentsPage({
   }
 
   async function refreshAgentReleases() {
-    const payload = await requestJson(config, session, '/v1/agent-updates') as { items?: DataItem[] };
-    setUpdateReleases(Array.isArray(payload.items) ? payload.items : []);
+    setReleaseLoadError('');
+    try {
+      const payload = await requestJson(config, session, '/v1/agent-updates') as { items?: DataItem[] };
+      setUpdateReleases(Array.isArray(payload.items) ? payload.items : []);
+      return true;
+    } catch (err) {
+      setUpdateReleases([]);
+      setReleaseLoadError(apiErrorMessage(err, 'Agent release rollouts are unavailable.'));
+      return false;
+    }
   }
 
   async function refreshTrustKeys() {
-    const payload = await requestJson(config, session, '/v1/agent-update-trust-keys') as { items?: DataItem[] };
-    setTrustKeys(Array.isArray(payload.items) ? payload.items : []);
+    setTrustKeyLoadError('');
+    try {
+      const payload = await requestJson(config, session, '/v1/agent-update-trust-keys') as { items?: DataItem[] };
+      setTrustKeys(Array.isArray(payload.items) ? payload.items : []);
+      return true;
+    } catch (err) {
+      setTrustKeys([]);
+      setTrustKeyLoadError(apiErrorMessage(err, 'Agent update trust keys are unavailable.'));
+      return false;
+    }
   }
 
   async function revokeAgent(id: string) {
@@ -1101,6 +1225,7 @@ export function AgentsPage({
   // portal fleet data plus the separately-loaded release rollout / trust-key panels.
   async function handleAgentsRefresh() {
     setBusy('refresh');
+    setAuxLoading(true);
     setError('');
     setMessage('');
     try {
@@ -1109,12 +1234,35 @@ export function AgentsPage({
       setError(err instanceof Error ? err.message : 'Refresh failed.');
     } finally {
       setBusy('');
+      setAuxLoading(false);
     }
   }
 
   return (
     <div className="content agents-page">
       <style>{`
+.agents-page,
+.agents-page > *,
+.agents-page [role='tabpanel'],
+.agents-page .agents-panel-stack,
+.agents-page .card,
+.agents-page .card-content,
+.agents-page .table-wrap,
+.agents-page .codeblock {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.agents-page .tabs {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  padding-inline: 0;
+}
+.agents-page .tabs .tab {
+  width: auto;
+  flex: 0 0 auto;
+}
 .agents-page .agents-boundary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1197,8 +1345,9 @@ export function AgentsPage({
   border-radius: var(--radius-md);
   background: var(--border-soft);
 }
-.agents-page .agents-summary-grid > div {
+.agents-page .agents-summary-grid > dl {
   min-width: 0;
+  margin: 0;
   padding: var(--space-3) var(--space-4);
   background: var(--surface);
 }
@@ -1228,7 +1377,7 @@ export function AgentsPage({
 .agents-page .agents-fleet-table .traffic-path-label,
 .agents-page .agents-trust-table .traffic-path-label {
   display: inline-block;
-  max-width: 24ch;
+  max-width: min(24ch, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: middle;
@@ -1278,6 +1427,7 @@ export function AgentsPage({
   align-items: end;
 }
 .agents-page .agents-bootstrap-controls .field {
+  min-width: 0;
   margin: 0;
 }
 .agents-page .agents-bootstrap-facts {
@@ -1288,11 +1438,12 @@ export function AgentsPage({
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
 }
-.agents-page .agents-bootstrap-facts > div {
+.agents-page .agents-bootstrap-facts > dl {
   min-width: 0;
+  margin: 0;
   padding: var(--space-3);
 }
-.agents-page .agents-bootstrap-facts > div + div {
+.agents-page .agents-bootstrap-facts > dl + dl {
   border-left: 1px solid var(--border-soft);
 }
 .agents-page .agents-bootstrap-facts dt {
@@ -1328,6 +1479,20 @@ export function AgentsPage({
 .agents-page .agents-secret-panel .codeblock,
 .agents-page .agents-secret-panel .muted {
   margin: 0;
+}
+.agents-page .agents-secret-panel .row-actions {
+  flex-direction: row;
+  align-items: center;
+}
+.agents-page .agents-revoke-action {
+  border-color: color-mix(in oklab, var(--danger), transparent 65%);
+  background: color-mix(in oklab, var(--danger), transparent 96%);
+  color: var(--danger);
+}
+.agents-page .agents-revoke-action:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--danger), transparent 45%);
+  background: color-mix(in oklab, var(--danger), transparent 91%);
+  color: var(--danger);
 }
 .agents-page .agents-operations-note {
   display: grid;
@@ -1374,7 +1539,7 @@ export function AgentsPage({
     grid-template-columns: minmax(0, 1fr);
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 840px) {
   .agents-page .agents-boundary,
   .agents-page .agents-install-flow {
     grid-template-columns: minmax(0, 1fr);
@@ -1401,13 +1566,29 @@ export function AgentsPage({
   .agents-page .agents-bootstrap-facts {
     grid-template-columns: minmax(0, 1fr);
   }
-  .agents-page .agents-bootstrap-facts > div + div {
+  .agents-page .agents-bootstrap-facts > dl + dl {
     border-top: 1px solid var(--border-soft);
     border-left: 0;
   }
   .agents-page .agents-card-header,
   .agents-page .agents-secret-heading {
     flex-direction: column;
+  }
+}
+@media (max-width: 420px) {
+  .agents-page .agents-boundary-item,
+  .agents-page .agents-install-flow li,
+  .agents-page .agents-operations-note {
+    padding: var(--space-3);
+  }
+  .agents-page .table-wrap tbody tr:not(.table-empty-row) td {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+    white-space: normal;
+  }
+  .agents-page .table-wrap tbody tr:not(.table-empty-row) td > * {
+    min-width: 0;
+    max-width: 100%;
   }
 }
       `}</style>
@@ -1428,37 +1609,31 @@ export function AgentsPage({
         )}
       />
       <PageContextSummary>
-        <span className="tabular-nums">{data.targetGroups.length}</span>{` ${pluralize(data.targetGroups.length, 'declared group')} · `}
-        <span className="tabular-nums">{data.agents.length}</span>{` ${pluralize(data.agents.length, 'registered agent')} · `}
-        <span className="tabular-nums">{onlineAgents}</span> reported online
+        {targetGroupsLoadError ? (
+          'Declared groups unavailable'
+        ) : (
+          <><span className="tabular-nums">{data.targetGroups.length}</span>{` ${pluralize(data.targetGroups.length, 'declared group')}`}</>
+        )}
+        {' · '}
+        {agentsLoadError ? (
+          'Agent inventory unavailable'
+        ) : (
+          <>
+            <span className="tabular-nums">{data.agents.length}</span>{` ${pluralize(data.agents.length, 'registered agent')} · `}
+            <span className="tabular-nums">{onlineAgents}</span> reported online
+          </>
+        )}
       </PageContextSummary>
-      <MutationFeedbackBanner message={message} error={error} />
-
-      <section className="agents-boundary" aria-label="Agent network and placement boundaries">
-        <div className="agents-boundary-item">
-          <span className="agents-boundary-icon" aria-hidden="true"><Network size={17} /></span>
-          <div className="agents-boundary-copy">
-            <strong>Outbound-only control</strong>
-            <p>Agents initiate the HTTPS control channel to AstraNull. No inbound management port or firewall rule is required.</p>
-          </div>
-        </div>
-        <div className="agents-boundary-item">
-          <span className="agents-boundary-icon" aria-hidden="true"><Target size={17} /></span>
-          <div className="agents-boundary-copy">
-            <strong>Placement is evidence</strong>
-            <p>Place each agent inside the observation zone for its declared target group. Registration alone does not prove protected-path visibility.</p>
-          </div>
-        </div>
-      </section>
+      <MutationFeedbackBanner message={message} error={error || coreDatasetError || auxiliaryError} />
 
       <Tabs
         value={agentsTab}
         options={AGENT_SURFACE_TABS.map((tab) => ({
           ...tab,
-          count: tab.id === 'fleet' ? data.agents.length : undefined
+          count: tab.id === 'fleet' && !agentsLoadError ? data.agents.length : undefined
         }))}
         onChange={setAgentsTab}
-        className="tabs-wrap"
+        className="tabs-wrap agents-surface-tabs"
         ariaLabel="Agents sections"
         getTabId={(id) => `agents-tab-${id}`}
         getPanelId={(id) => `agents-panel-${id}`}
@@ -1466,48 +1641,13 @@ export function AgentsPage({
 
       {agentsTab === 'fleet' ? (
         <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
-          <Card density="compact" className="agents-fleet-summary">
-            <CardHeader className="agents-card-header">
-              <div className="agents-card-heading">
-                <CardTitle>Fleet snapshot</CardTitle>
-                <CardDescription>Counts reflect registered records and returned fields. They are not a readiness verdict.</CardDescription>
-              </div>
-              <Badge tone="muted">Reported data</Badge>
-            </CardHeader>
-            <CardContent>
-              <dl className="agents-summary-grid" aria-label="Agent fleet summary">
-                <div>
-                  <dt>Registered</dt>
-                  <dd>{data.agents.length}</dd>
-                  <span>Agent records</span>
-                </div>
-                <div>
-                  <dt>Reported online</dt>
-                  <dd>{onlineAgents}</dd>
-                  <span>API status is online</span>
-                </div>
-                <div>
-                  <dt>Group-bound</dt>
-                  <dd>{data.agents.filter((agent) => Boolean(getString(agent, ['target_group_id'], ''))).length}</dd>
-                  <span>Target group id present</span>
-                </div>
-                <div>
-                  <dt>Placement declared</dt>
-                  <dd>{data.agents.filter((agent) => {
-                    const placement = getString(agent, ['placement_type', 'placement'], '').toLowerCase();
-                    return Boolean(placement && !['unbound', 'unknown', 'none'].includes(placement));
-                  }).length}</dd>
-                  <span>Placement type present</span>
-                </div>
-              </dl>
-            </CardContent>
-          </Card>
-
           <SurfaceTableCard
             title="Registered agents"
-            description="Outbound-only observation agents. Status is shown exactly as reported; readiness requires correlated probe and agent evidence. Select a row for details."
+            description="Outbound-only observation agents and their reported evidence context. Readiness still requires correlated probe and agent evidence. Select a row for details."
             columns={fleetColumns}
             items={data.agents}
+            loadError={agentsLoadError}
+            onRetry={() => void handleAgentsRefresh()}
             contentClassName="agents-fleet-table"
             getRowId={(item, index) => getString(item, ['id'], '') || index}
             getRowProps={(item) => {
@@ -1528,6 +1668,58 @@ export function AgentsPage({
               />
             )}
           />
+
+          {!agentsLoadError ? (
+            <Card density="compact" className="agents-fleet-summary">
+            <CardHeader className="agents-card-header">
+              <div className="agents-card-heading">
+                <CardTitle>Fleet snapshot</CardTitle>
+                <CardDescription>Counts reflect registered records and returned fields. They are not a readiness verdict.</CardDescription>
+              </div>
+              <Badge tone="muted">Reported data</Badge>
+            </CardHeader>
+            <CardContent>
+              <div className="agents-summary-grid" role="group" aria-label="Agent fleet summary">
+                <dl>
+                  <dt>Registered</dt>
+                  <dd>{data.agents.length}<span>Agent records</span></dd>
+                </dl>
+                <dl>
+                  <dt>Reported online</dt>
+                  <dd>{onlineAgents}<span>API status is online</span></dd>
+                </dl>
+                <dl>
+                  <dt>Group-bound</dt>
+                  <dd>{data.agents.filter((agent) => Boolean(getString(agent, ['target_group_id'], ''))).length}<span>Target group id present</span></dd>
+                </dl>
+                <dl>
+                  <dt>Placement declared</dt>
+                  <dd>{data.agents.filter((agent) => {
+                    const placement = getString(agent, ['placement_type', 'placement'], '').toLowerCase();
+                    return Boolean(placement && !['unbound', 'unknown', 'none'].includes(placement));
+                  }).length}<span>Placement type present</span></dd>
+                </dl>
+              </div>
+            </CardContent>
+            </Card>
+          ) : null}
+
+          <section className="agents-boundary" aria-label="Agent network and placement boundaries">
+            <div className="agents-boundary-item">
+              <span className="agents-boundary-icon" aria-hidden="true"><Network size={17} /></span>
+              <div className="agents-boundary-copy">
+                <strong>Outbound-only control</strong>
+                <p>Agents initiate the HTTPS control channel to AstraNull. No inbound management port or firewall rule is required.</p>
+              </div>
+            </div>
+            <div className="agents-boundary-item">
+              <span className="agents-boundary-icon" aria-hidden="true"><Target size={17} /></span>
+              <div className="agents-boundary-copy">
+                <strong>Placement is evidence</strong>
+                <p>Place each agent inside the observation zone for its declared target group. Registration alone does not prove protected-path visibility.</p>
+              </div>
+            </div>
+          </section>
         </div>
       ) : null}
 
@@ -1537,8 +1729,8 @@ export function AgentsPage({
             <li>
               <span className="agents-step-index" aria-hidden="true">1</span>
               <div>
-                <strong>Choose a short lifetime</strong>
-                <p>The registration secret is limited to one agent and expires at the selected time.</p>
+                <strong>Choose scope and a short lifetime</strong>
+                <p>Select the target group this agent will observe. The one-registration secret expires at the selected time.</p>
               </div>
             </li>
             <li>
@@ -1562,7 +1754,7 @@ export function AgentsPage({
               <div className="agents-card-heading">
                 <CardTitle>Bootstrap registration</CardTitle>
                 <CardDescription>
-                  This lifetime applies to the next token created from the deployment panel. The secret is returned only once.
+                  Choose an explicit target group and lifetime for the next token. The secret is returned only once.
                 </CardDescription>
               </div>
               <Badge tone="muted">1 registration</Badge>
@@ -1576,19 +1768,37 @@ export function AgentsPage({
                   onChange={setTokenExpiryMinutes}
                   disabled={busy !== ''}
                 />
-                <dl className="agents-bootstrap-facts" aria-label="Bootstrap token scope">
-                  <div>
-                    <dt>Registration limit</dt>
-                    <dd>1 agent</dd>
-                  </div>
-                  <div>
-                    <dt>Target scope</dt>
-                    <dd title={firstGroup ? getString(firstGroup, ['name', 'title', 'id']) : 'Tenant only'}>
-                      {firstGroup ? getString(firstGroup, ['name', 'title', 'id']) : 'Tenant only'}
-                    </dd>
-                  </div>
+                <Select
+                  label="Target group"
+                  value={selectedTargetGroup ? selectedTargetGroupId : ''}
+                  options={targetGroupOptions}
+                  onChange={setSelectedTargetGroupId}
+                  disabled={busy !== '' || Boolean(targetGroupsLoadError) || data.targetGroups.length === 0}
+                />
+              </div>
+              <div className="agents-bootstrap-facts" role="group" aria-label="Bootstrap token scope">
+                <dl>
+                  <dt>Registration limit</dt>
+                  <dd>1 agent</dd>
+                </dl>
+                <dl>
+                  <dt>Next token scope</dt>
+                  <dd title={selectedTargetGroupLabel || 'No target group selected'}>
+                    {selectedTargetGroupLabel || 'No target group selected'}
+                  </dd>
                 </dl>
               </div>
+              {targetGroupsLoadError ? (
+                <div className="form-banner error" role="alert">
+                  Target groups could not be refreshed. Previously loaded choices may be stale; retry before creating a token.
+                </div>
+              ) : !selectedTargetGroup ? (
+                <div className="form-banner neutral" role="note">
+                  {data.targetGroups.length > 0
+                    ? 'Select a target group to enable one-time token creation.'
+                    : 'Declare a target group before creating or deploying an agent.'}
+                </div>
+              ) : null}
 
               {tokenSecret ? (
                 <section className="agents-secret-panel secret-card" aria-labelledby="bootstrap-secret-title">
@@ -1598,6 +1808,7 @@ export function AgentsPage({
                       <p>
                         It is not returned by list APIs and will not be visible after refresh.
                         {tokenId ? <> Token id <code className="traffic-path-label">{tokenId}</code>.</> : null}
+                        {tokenScope ? <> Scoped to <strong>{tokenScope.label}</strong> (<code className="traffic-path-label">{tokenScope.id}</code>).</> : null}
                       </p>
                     </div>
                     <Badge tone={tokenRevoked ? 'danger' : 'warn'}>{tokenRevoked ? 'Revoked' : 'Shown once'}</Badge>
@@ -1624,8 +1835,9 @@ export function AgentsPage({
                       Copy
                     </Button>
                     <Button
-                      variant="danger"
+                      variant="secondary"
                       size="sm"
+                      className="agents-revoke-action"
                       loading={busy === `revoke-bootstrap-${tokenId}`}
                       disabled={!tokenId || tokenRevoked || (busy !== '' && busy !== `revoke-bootstrap-${tokenId}`)}
                       onClick={() => void revokeBootstrapToken()}
@@ -1639,12 +1851,17 @@ export function AgentsPage({
             </CardContent>
           </Card>
 
+          {!installReleaseMetadataComplete ? (
+            <div className="form-banner neutral" role="note">
+              Signed agent release metadata is incomplete. Treat the install commands below as templates until a concrete version, digest, and signature status are published.
+            </div>
+          ) : null}
           <AgentInstallMatrix
             data={data}
-            tokenSecret={tokenSecret}
+            tokenSecret={tokenRevoked ? '' : tokenSecret}
             onCreateToken={() => void createBootstrapToken()}
             createBusy={busy === 'create-bootstrap-token'}
-            actionsDisabled={busy !== ''}
+            actionsDisabled={busy !== '' || Boolean(targetGroupsLoadError) || !selectedTargetGroup}
           />
         </div>
       ) : null}
@@ -1662,10 +1879,16 @@ export function AgentsPage({
                 <Badge tone="muted">Loading controls</Badge>
               ) : (
                 <>
-                  <Badge tone="muted">{updateReleases.length} {pluralize(updateReleases.length, 'release')}</Badge>
-                  <Badge tone="muted">
-                    {trustKeys.filter((key) => getString(key, ['status']) === 'active').length} active {pluralize(trustKeys.filter((key) => getString(key, ['status']) === 'active').length, 'key')}
-                  </Badge>
+                  {releaseLoadError
+                    ? <Badge tone="danger">Releases unavailable</Badge>
+                    : <Badge tone="muted">{updateReleases.length} {pluralize(updateReleases.length, 'release')}</Badge>}
+                  {trustKeyLoadError ? (
+                    <Badge tone="danger">Trust keys unavailable</Badge>
+                  ) : (
+                    <Badge tone="muted">
+                      {trustKeys.filter((key) => getString(key, ['status']) === 'active').length} active {pluralize(trustKeys.filter((key) => getString(key, ['status']) === 'active').length, 'key')}
+                    </Badge>
+                  )}
                 </>
               )}
             </div>
@@ -1678,6 +1901,8 @@ export function AgentsPage({
             items={updateReleases}
             loading={auxLoading}
             loadingLabel="Loading agent releases"
+            loadError={releaseLoadError}
+            onRetry={() => void handleAgentsRefresh()}
             getRowId={(item, index) => getString(item, ['id'], '') || index}
             empty={(
               <EmptyState
@@ -1710,6 +1935,8 @@ export function AgentsPage({
                   <DataTable
                     columns={trustKeyColumns}
                     items={trustKeys}
+                    loadError={trustKeyLoadError}
+                    onRetry={() => void handleAgentsRefresh()}
                     getRowId={(item, index) => getString(item, ['id'], '') || index}
                     empty={(
                       <EmptyState

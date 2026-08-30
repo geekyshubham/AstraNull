@@ -109,33 +109,6 @@ function evidenceRowNavProps(artifactId: string): Omit<HTMLAttributes<HTMLTableR
   };
 }
 
-/**
- * Whole-row click-through props to a declared target's target-detail route (§4.6.3 "rows deep-link").
- * Same `role="link"` + hash `?id=` convention as the evidence rows; nested link/button clicks
- * (e.g. the Target cell anchor) fall through to their own handler.
- */
-function targetRowNavProps(targetId: string): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
-  if (!targetId) return {};
-  const navigate = () => {
-    window.location.hash = `target-detail?id=${encodeURIComponent(targetId)}`;
-  };
-  return {
-    role: 'link',
-    tabIndex: 0,
-    style: { cursor: 'pointer' },
-    'aria-label': `Open target detail for ${targetId}`,
-    onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
-      if ((event.target as HTMLElement).closest('a, button')) return;
-      navigate();
-    },
-    onKeyDown: (event: ReactKeyboardEvent<HTMLTableRowElement>) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      navigate();
-    }
-  };
-}
-
 function DetailStatusBanners({ loadError, message, error }: { loadError: string; message: string; error: string }) {
   return (
     <>
@@ -288,7 +261,12 @@ export function FindingDetailView({
     {
       key: 'target',
       label: 'Target',
-      render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', getString(item, ['id'], ''))}>{getString(item, ['value', 'id'], '')}</AnchorButton>
+      render: (item) => <AnchorButton
+        size="sm"
+        variant="ghost"
+        href={buildDetailHref('target-detail', getString(item, ['id'], ''))}
+        aria-label={`Open target ${getString(item, ['value', 'id'], 'target')}`}
+      >{getString(item, ['value', 'id'], '')}</AnchorButton>
     },
     { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
     { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
@@ -432,7 +410,6 @@ export function FindingDetailView({
               columns={affectedColumns}
               items={affectedTargets}
               getRowId={(item) => getString(item, ['id'], '')}
-              getRowProps={(item) => targetRowNavProps(getString(item, ['id'], ''))}
               empty={<span className="muted">No affected targets returned.</span>}
             />
           )}
@@ -520,7 +497,7 @@ export function FindingDetailView({
       <Card>
         <CardHeader><CardTitle>Custody chain</CardTitle><CardDescription>Scoped YAML preview from evidence hydrator.</CardDescription></CardHeader>
         <CardContent>
-          <pre className="code">{custodyYaml}</pre>
+          <pre className="code" tabIndex={0} role="region" aria-label="Finding custody chain YAML">{custodyYaml}</pre>
         </CardContent>
       </Card>
     </div>

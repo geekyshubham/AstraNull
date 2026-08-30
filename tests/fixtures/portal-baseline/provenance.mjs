@@ -282,7 +282,9 @@ export function applyPortalProvenanceSocQueueExpanded(store) {
       window_end: '2026-07-02T14:00:00.000Z',
       timezone: 'UTC',
     },
-    requested_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
+    requested_scenario_families: ['udp_flood'],
+    delivery_patterns: ['direct'],
+    requested_limits: { max_gbps: 0.5, max_duration_minutes: 45 },
     authorization_pack_status: { overall: 'missing' },
     artifacts: [],
   });

@@ -53,11 +53,11 @@ function dbRow(overrides = {}) {
   };
 }
 
-function buildServices(pool, handler) {
+function buildServices(pool, audit = { appendAuditEvent: async () => ({ id: 'audit_1' }) }) {
   const ownershipVerifications = createOwnershipVerificationRepository(pool);
   return createPostgresOwnershipVerificationServices({
     repositories: { ownershipVerifications },
-    audit: { appendAuditEvent: async () => {} },
+    audit,
   });
 }
 
@@ -100,7 +100,7 @@ function buildServicesWithAgent(pool, agent) {
   return createPostgresOwnershipVerificationServices({
     repositories: { ownershipVerifications },
     agentControl: { getAgentById: async () => agent },
-    audit: { appendAuditEvent: async () => {} },
+    audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
   });
 }
 
@@ -148,55 +148,135 @@ describe('postgres ownership verification service adapters', () => {
     assert.deepEqual(getQuery.params, ['own_1', CTX.tenantId]);
   });
 
-  it('recordOwnershipSignalByNonce verifies and updates target group ownership_status', async () => {
+  it('atomically completes against the exact active target and writes target-bound evidence', async () => {
+    const auditCalls = [];
     const verifiedAt = '2026-06-01T12:05:00.000Z';
     const pool = createRecordingPool((text, params) => {
       if (/FROM ownership_verifications/i.test(text) && /challenge_nonce_hash/.test(text)) {
         return { rows: [dbRow({ probe_observed: true, agent_observed: false })] };
       }
-      if (/UPDATE ownership_verifications/i.test(text) && /verified_at/.test(text)) {
-        return {
-          rows: [
-            dbRow({
-              probe_observed: true,
-              agent_observed: true,
-              status: 'verified',
-              verified_at: verifiedAt,
-            }),
-          ],
-        };
+      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
+        return { rows: [{
+          id: 'tgt_1', tenant_id: CTX.tenantId, target_group_id: 'tg_1',
+          kind: 'fqdn', value: 'app.example.com', normalized_value: 'app.example.com',
+        }] };
+      }
+      if (/FROM target_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [] };
+      }
+      if (/INSERT INTO target_verifications/i.test(text)) {
+        return { rows: [{
+          id: params[0], tenant_id: params[1], target_id: params[2],
+          state: 'agent_verified', source_kind: 'agent_observation',
+          source_ref: JSON.parse(params[3]), transitioned_at: new Date(params[4]),
+          transitioned_by: params[5], audit_entry_id: params[6],
+        }] };
+      }
+      if (/UPDATE ownership_verifications/i.test(text) && /status = 'verified'/i.test(text)) {
+        return { rows: [dbRow({
+          probe_observed: true,
+          agent_observed: true,
+          status: 'verified',
+          verified_at: verifiedAt,
+        })] };
+      }
+      if (/SELECT t\.id AS target_id/i.test(text)) {
+        return { rows: [{ target_id: 'tgt_1', state: 'agent_verified' }] };
       }
       if (/UPDATE target_groups/i.test(text) && /ownership_status/.test(text)) {
         return { rows: [] };
       }
-      if (/UPDATE ownership_verifications/i.test(text)) {
-        return { rows: [dbRow({ agent_observed: true })] };
-      }
       return { rows: [] };
     });
-    const services = buildServices(pool);
+    const audit = {
+      async appendAuditEvent(entry, options) {
+        auditCalls.push({ entry, options });
+        return { id: `audit_${auditCalls.length}` };
+      },
+    };
+    const services = buildServices(pool, audit);
+
     const result = await services.recordOwnershipSignalByNonce(
       { tenantId: CTX.tenantId },
       { source: 'agent', nonce_hash: 'nonce_hash_1' },
     );
+
     assert.equal(result.verification.status, 'verified');
+    assert.equal(result.target_id, 'tgt_1');
+    assert.equal(result.target_verification.target_id, 'tgt_1');
+    assert.equal(result.target_verification.state, 'agent_verified');
+    assert.equal(result.ownership_status, 'agent_verified');
+    const queries = dataQueries(pool.client);
+    const targetInsert = queries.find((q) => /INSERT INTO target_verifications/i.test(q.text));
+    assert.ok(targetInsert);
+    assert.equal(targetInsert.params[2], 'tgt_1');
+    assert.deepEqual(JSON.parse(targetInsert.params[3]), {
+      ownership_verification_id: 'own_1',
+      agent_id: 'agt_1',
+      declared_fqdn: 'app.example.com',
+    });
+    const groupUpdate = queries.find((q) => /UPDATE target_groups/i.test(q.text));
+    assert.deepEqual(groupUpdate.params, [CTX.tenantId, 'tg_1', 'agent_verified']);
+    assert.deepEqual(auditCalls.map(({ entry }) => entry.action), [
+      'target_verification.agent_verified',
+      'ownership_verification.agent_verified',
+    ]);
+    assert.ok(auditCalls.every(({ options }) => options.client === pool.client));
+    assert.equal(pool.client.queries[0].text, 'BEGIN');
+    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
+  });
 
-    const nonceQuery = dataQueries(pool.client).find(
-      (q) => /challenge_nonce_hash/.test(q.text) && /tenant_id = \$1/.test(q.text),
-    );
-    assert.ok(nonceQuery);
-    assert.deepEqual(nonceQuery.params[0], CTX.tenantId);
+  it('rolls back challenge completion when target evidence cannot be inserted', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/FROM ownership_verifications/i.test(text) && /WHERE tenant_id = \$1 AND id = \$2/.test(text)) {
+        return { rows: [dbRow({ probe_observed: true, agent_observed: false })] };
+      }
+      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
+        return { rows: [{
+          id: 'tgt_1', tenant_id: CTX.tenantId, target_group_id: 'tg_1',
+          kind: 'fqdn', value: 'app.example.com', normalized_value: 'app.example.com',
+        }] };
+      }
+      if (/FROM target_verifications/i.test(text) && /FOR UPDATE/i.test(text)) return { rows: [] };
+      if (/INSERT INTO target_verifications/i.test(text)) throw new Error('target evidence failed');
+      return { rows: [] };
+    });
+    const services = buildServices(pool);
 
-    const verifyUpdate = dataQueries(pool.client).find(
-      (q) => /UPDATE ownership_verifications/i.test(q.text) && /status = COALESCE/.test(q.text),
+    await assert.rejects(
+      services.recordOwnershipSignal(CTX, 'own_1', {
+        source: 'agent', nonce_hash: 'nonce_hash_1',
+      }),
+      /target evidence failed/,
     );
-    assert.ok(verifyUpdate);
 
-    const groupUpdate = dataQueries(pool.client).find(
-      (q) => /UPDATE target_groups/i.test(q.text) && /ownership_status/.test(q.text),
-    );
-    assert.ok(groupUpdate);
-    assert.match(groupUpdate.text, /tenant_id = \$1/);
+    assert.equal(pool.client.queries.at(-1).text, 'ROLLBACK');
+    assert.equal(pool.client.queries.some((query) => query.text === 'COMMIT'), false);
+  });
+
+  it('reads current ownership proof by tenant, group, and target', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/FROM target_groups tg/i.test(text) && /JOIN LATERAL/i.test(text)) {
+        return { rows: [{
+          id: 'tv_1', tenant_id: CTX.tenantId, target_id: 'tgt_1',
+          state: 'dns_verified', source_kind: 'dns_txt', source_ref: {},
+          transitioned_at: new Date('2026-06-01T12:00:00.000Z'),
+          transitioned_by: 'system', audit_entry_id: 'audit_1',
+        }] };
+      }
+      return { rows: [] };
+    });
+    const repo = createOwnershipVerificationRepository(pool);
+
+    const current = await repo.getCurrentTargetVerification(CTX, 'tg_1', 'tgt_1');
+
+    assert.equal(current.target_id, 'tgt_1');
+    assert.equal(current.state, 'dns_verified');
+    const query = dataQueries(pool.client).find((entry) => /JOIN LATERAL/i.test(entry.text));
+    assert.deepEqual(query.params, [CTX.tenantId, 'tg_1', 'tgt_1']);
+    assert.match(query.text, /tg\.tenant_id = \$1 AND tg\.id = \$2 AND t\.id = \$3/);
+    assert.match(query.text, /t\.deleted_at IS NULL/);
+    assert.match(query.text, /WHEN 'user_confirmed' THEN 4/);
   });
 
   it('verifyOwnershipSetup returns ready without INSERT or UPDATE', async () => {
@@ -234,6 +314,151 @@ describe('postgres ownership verification service adapters', () => {
     assert.equal(result.error, 'agent_not_online');
     assert.equal(result.status, 409);
     assertSelectOnlyDataQueries(pool.client);
+  });
+
+  it('atomically confirms only A, keeps unverified B in the summary, and is idempotent', async () => {
+    const auditCalls = [];
+    let ownership = dbRow({
+      status: 'verified',
+      agent_observed: true,
+      verified_at: '2026-06-01T12:05:00.000Z',
+    });
+    let current = {
+      id: 'tv_agent',
+      tenant_id: CTX.tenantId,
+      target_id: 'tgt_1',
+      state: 'agent_verified',
+      source_kind: 'agent_observation',
+      source_ref: { ownership_verification_id: 'own_1' },
+      transitioned_at: new Date('2026-06-01T12:05:00.000Z'),
+      transitioned_by: 'system',
+      audit_entry_id: 'audit_agent',
+    };
+    const pool = createRecordingPool((text, params) => {
+      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [ownership] };
+      }
+      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
+        return { rows: [{
+          id: 'tgt_1', tenant_id: CTX.tenantId, target_group_id: 'tg_1',
+          kind: 'fqdn', value: 'app.example.com', normalized_value: 'app.example.com',
+        }] };
+      }
+      if (/FROM target_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [current] };
+      }
+      if (/INSERT INTO target_verifications/i.test(text) && /user_confirmed/i.test(text)) {
+        current = {
+          id: params[0], tenant_id: params[1], target_id: params[2],
+          state: 'user_confirmed', source_kind: 'user_attestation',
+          source_ref: JSON.parse(params[3]), transitioned_at: new Date(params[4]),
+          transitioned_by: params[5], audit_entry_id: params[6],
+        };
+        return { rows: [current] };
+      }
+      if (/UPDATE ownership_verifications/i.test(text) && /confirmed_at = COALESCE/i.test(text)) {
+        ownership = {
+          ...ownership,
+          confirmed_by_user_id: ownership.confirmed_by_user_id ?? params[2],
+          confirmed_at: ownership.confirmed_at ?? params[3],
+        };
+        return { rows: [ownership] };
+      }
+      if (/SELECT t\.id AS target_id/i.test(text)) {
+        return { rows: [
+          { target_id: 'tgt_1', state: current.state },
+          { target_id: 'tgt_2', state: null },
+        ] };
+      }
+      if (/UPDATE target_groups/i.test(text) && /ownership_status/.test(text)) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const audit = {
+      async appendAuditEvent(entry, options) {
+        auditCalls.push({ entry, options });
+        return { id: `audit_confirm_${auditCalls.length}` };
+      },
+    };
+    const services = buildServices(pool, audit);
+
+    const first = await services.confirmOwnership(CTX, 'own_1');
+    const second = await services.confirmOwnership(CTX, 'own_1');
+
+    assert.equal(first.target_id, 'tgt_1');
+    assert.equal(first.target_verification.state, 'user_confirmed');
+    assert.equal(first.target_verification.source_kind, 'user_attestation');
+    assert.deepEqual(first.target_verification.source_ref, {
+      ownership_verification_id: 'own_1',
+      agent_id: 'agt_1',
+      declared_fqdn: 'app.example.com',
+      confirmed_by_user_id: CTX.userId,
+    });
+    assert.equal(first.verification.confirmed_by_user_id, CTX.userId);
+    assert.ok(first.verification.confirmed_at);
+    assert.equal(first.ownership_status, 'unverified');
+    assert.equal(second.target_verification.id, first.target_verification.id);
+    assert.equal(second.verification.confirmed_at, first.verification.confirmed_at);
+    assert.equal(second.ownership_status, 'unverified');
+
+    const queries = dataQueries(pool.client);
+    assert.equal(
+      queries.filter((query) => /INSERT INTO target_verifications/i.test(query.text)).length,
+      1,
+    );
+    const groupUpdates = queries.filter((query) => /UPDATE target_groups/i.test(query.text));
+    assert.equal(groupUpdates.length, 2);
+    assert.ok(groupUpdates.every((query) => query.params[2] === 'unverified'));
+    const bindingQueries = queries.filter(
+      (query) => /FROM target_groups tg/i.test(query.text) && /JOIN targets t/i.test(query.text),
+    );
+    assert.equal(bindingQueries.length, 2);
+    assert.ok(bindingQueries.every((query) => /t\.created_at <= \$4::timestamptz/.test(query.text)));
+    assert.deepEqual(auditCalls.map(({ entry }) => entry.action), [
+      'target_verification.user_confirmed',
+      'ownership_verification.user_confirmed',
+    ]);
+    assert.ok(auditCalls.every(({ options }) => options.client === pool.client));
+    assert.equal(pool.client.queries.filter((query) => query.text === 'BEGIN').length, 2);
+    assert.equal(pool.client.queries.filter((query) => query.text === 'COMMIT').length, 2);
+  });
+
+  it('fails closed when the challenge-bound target was deleted or replaced', async () => {
+    const auditCalls = [];
+    const pool = createRecordingPool((text) => {
+      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [dbRow({
+          status: 'verified',
+          agent_observed: true,
+          verified_at: '2026-06-01T12:05:00.000Z',
+        })] };
+      }
+      if (/FROM target_groups tg/i.test(text) && /JOIN targets t/i.test(text)) {
+        // A same-FQDN replacement is newer than the challenge and therefore excluded by SQL.
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const services = buildServices(pool, {
+      async appendAuditEvent(entry) {
+        auditCalls.push(entry);
+        return { id: 'unexpected_audit' };
+      },
+    });
+
+    const result = await services.confirmOwnership(CTX, 'own_1');
+
+    assert.deepEqual(result, { error: 'ownership_target_not_active', status: 409 });
+    const queries = dataQueries(pool.client);
+    const binding = queries.find(
+      (query) => /FROM target_groups tg/i.test(query.text) && /JOIN targets t/i.test(query.text),
+    );
+    assert.ok(binding);
+    assert.match(binding.text, /t\.deleted_at IS NULL/);
+    assert.match(binding.text, /t\.created_at <= \$4::timestamptz/);
+    assert.equal(queries.some((query) => /^\s*(INSERT|UPDATE)/i.test(query.text)), false);
+    assert.deepEqual(auditCalls, []);
   });
 
   it('confirmOwnership rejects non-verified rows', async () => {

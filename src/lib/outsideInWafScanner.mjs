@@ -10,6 +10,7 @@ import { resolve4, resolveCname } from 'node:dns/promises';
 import tls from 'node:tls';
 import { classifyWafPosture } from '../contracts/wafPosture.mjs';
 import { classifyWafProductFromSignals } from './wafProductCatalog.mjs';
+import { pinnedFetch } from './pinnedHttpRequest.mjs';
 import {
   EDGE_SIGNATURE_CORPUS_VERSION,
   classifyEdgeFingerprint,
@@ -490,11 +491,12 @@ export async function resolveOutsideInTlsHints(url, deps = {}) {
   const timeoutMs = Number.isInteger(deps.timeoutMs) && deps.timeoutMs > 0 ? deps.timeoutMs : 3000;
   const port = parsed.port ? Number(parsed.port) : 443;
   const host = parsed.hostname;
+  const connectHost = deps.connectHost ?? host;
 
   return new Promise((resolve) => {
     let settled = false;
     const socket = tlsConnectFn({
-      host,
+      host: connectHost,
       port,
       servername: host,
       rejectUnauthorized: false,
@@ -591,8 +593,49 @@ async function runBaselineGet(url, headers, { followRedirects = false, timeoutMs
   }
 }
 
+export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTES) {
+  const reader = res?.body?.getReader?.();
+  if (!reader) return '';
+
+  const chunks = [];
+  let total = 0;
+  let complete = false;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) {
+        complete = true;
+        break;
+      }
+      if (!(value instanceof Uint8Array) || value.byteLength === 0) continue;
+      const remaining = maxBytes - total;
+      const chunk = value.byteLength <= remaining ? value : value.subarray(0, remaining);
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      if (value.byteLength > remaining) break;
+    }
+  } finally {
+    if (!complete) {
+      try {
+        await reader.cancel('response_body_limit_reached');
+      } catch {
+        // The transport may already be closed; the copied evidence remains bounded.
+      }
+    }
+    reader.releaseLock?.();
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder('utf-8', { fatal: false }).decode(body);
+}
+
 async function boundedRequest(url, { method = 'GET', headers = {}, body = null }, timeoutMs, deps) {
-  const fetchFn = deps.fetchFn ?? fetch;
+  const fetchFn = deps.fetchFn ?? ((input, init) => pinnedFetch(input, init, deps));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -603,11 +646,7 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
       redirect: 'manual',
       signal: controller.signal,
     });
-    let bodyText = '';
-    if (res && typeof res.text === 'function') {
-      const full = await res.text();
-      bodyText = String(full).slice(0, MAX_BODY_READ_BYTES);
-    }
+    const bodyText = await readBoundedResponseBody(res);
     return { res, bodyText, error: null };
   } catch (err) {
     return { res: null, bodyText: '', error: err };
@@ -665,6 +704,7 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
  *   resolveCname?: typeof resolveCname,
  *   resolve4?: typeof resolve4,
  *   tlsConnect?: typeof tls.connect,
+ *   tlsHost?: string,
  *   originBypassFn?: (args: object) => Promise<{ res: object|null, error: Error|null }>,
  * }} options
  */
@@ -684,6 +724,7 @@ export async function runOutsideInWafScan(options = {}) {
     resolveCname: options.resolveCname,
     resolve4: options.resolve4,
     tlsConnect: options.tlsConnect,
+    tlsHost: options.tlsHost,
   };
   const started = Date.now();
   let requestsSent = 0;
@@ -699,7 +740,11 @@ export async function runOutsideInWafScan(options = {}) {
 
   const [initialDnsHints, tlsHints] = await Promise.all([
     hostname ? resolveOutsideInDnsHints(hostname, deps) : Promise.resolve({ dns_chain: null }),
-    resolveOutsideInTlsHints(url, { tlsConnect: deps.tlsConnect, timeoutMs: Math.min(timeoutMs, 3000) }),
+    resolveOutsideInTlsHints(url, {
+      tlsConnect: deps.tlsConnect,
+      connectHost: deps.tlsHost,
+      timeoutMs: Math.min(timeoutMs, 3000),
+    }),
   ]);
 
   let redirectHops = 0;

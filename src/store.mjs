@@ -28,6 +28,7 @@ function emptyStore() {
     targetGroups: [],
     targets: [],
     testPolicies: [],
+    testPolicyDispatches: [],
     bootstrapTokens: [],
     serviceAccounts: [],
     agents: [],

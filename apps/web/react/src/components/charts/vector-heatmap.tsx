@@ -34,30 +34,6 @@ const COVERAGE_LABEL: Record<FamilyCoverageStatus, string> = {
   'no-data': 'No data',
 };
 
-const HEATMAP_CELL_STYLE: Record<FamilyCoverageStatus, CSSProperties> = {
-  evidence: {
-    background: 'color-mix(in oklab, var(--success), transparent 90%)',
-    color: 'var(--success)',
-  },
-  run: {
-    background: 'color-mix(in oklab, var(--warn), transparent 90%)',
-    color: 'var(--warn)',
-  },
-  policy: {
-    background: 'color-mix(in oklab, var(--warn), transparent 90%)',
-    color: 'var(--warn)',
-  },
-  none: {
-    background: 'color-mix(in oklab, var(--danger), transparent 91%)',
-    color: 'var(--danger)',
-  },
-  'no-data': {
-    border: '1px solid var(--border)',
-    background: 'color-mix(in oklab, var(--fg), transparent 94%)',
-    color: 'var(--fg-2)',
-  },
-};
-
 function coverageTitle(coverage: FamilyCoverage) {
   if (coverage.status === 'no-data') {
     return 'No checks mapped to this vector family for this target group.';
@@ -70,7 +46,6 @@ function HeatmapCell({ coverage }: { coverage: FamilyCoverage }) {
   return (
     <span
       className={`heatmap-cell heatmap-${tone}`}
-      style={HEATMAP_CELL_STYLE[coverage.status]}
       title={coverageTitle(coverage)}
     >
       {COVERAGE_LABEL[coverage.status]}
@@ -105,7 +80,12 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
   const gridStyle = { '--heatmap-cols': VECTOR_FAMILIES.length } as CSSProperties;
 
   return (
-    <div className="heatmap">
+    <div
+      className="heatmap"
+      tabIndex={0}
+      role="region"
+      aria-label="Vector coverage matrix, scrollable"
+    >
       <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
         <span className="heatmap-head">Target group</span>
         {VECTOR_FAMILIES.map((family) => (

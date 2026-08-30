@@ -1,3 +1,7 @@
+import {
+  normalizeTargetInput,
+  targetValidationResponse,
+} from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
@@ -50,6 +54,18 @@ function mapEnvironmentRow(row) {
 }
 
 const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'running', 'collecting']);
+
+async function appendMutationAudit(auditRepository, client, ctx, event, now) {
+  if (!auditRepository?.appendAuditEvent) {
+    throw new Error('Postgres target management requires transactional audit persistence.');
+  }
+  return auditRepository.appendAuditEvent({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    ...event,
+  }, { client, now: new Date(now) });
+}
 
 function mapTargetGroupRow(row) {
   if (!row) return null;
@@ -185,33 +201,20 @@ function mapTargetRow(row) {
     target_group_id: row.target_group_id,
     kind: row.kind,
     value: row.value,
+    normalized_value: row.normalized_value ?? row.value,
     expected_behavior: row.expected_behavior ?? undefined,
     created_at: toIso(row.created_at),
+    ...(row.deleted_at ? { deleted_at: toIso(row.deleted_at), deleted_by: row.deleted_by ?? null } : {}),
   };
   const metadata = asObject(row.metadata_json);
   if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
   return mapped;
 }
 
-/**
- * Target as the group-detail payload renders it.
- *
- * `targets` has no verification_state column, so the value rides in metadata when it exists.
- * dev-json stamps the same field with the same 'unverified' fallback
- * (src/services/targetGroups.mjs `getTargetGroup`); Postgres omitted it entirely, so the
- * portal's verify chip fell back to its own default on one backend and read a real state on
- * the other. Applied only on the detail path, matching dev-json — add/patch responses carry
- * no such field on either backend.
- */
 function mapDetailTargetRow(row) {
   const mapped = mapTargetRow(row);
   if (!mapped) return null;
-  const metadata = asObject(row.metadata_json);
-  return {
-    ...mapped,
-    verification_state:
-      row.verification_state ?? metadata.verification_state ?? metadata.verify_state ?? 'unverified',
-  };
+  return { ...mapped, verification_state: row.verification_state ?? 'unverified' };
 }
 
 function optionalString(...values) {
@@ -227,46 +230,24 @@ function mapTargetInventoryRow(row) {
   const mapped = mapTargetRow(row);
   if (!mapped) return null;
   const metadata = asObject(row.metadata_json);
-  const verificationState = optionalString(
-    row.verification_state,
-    metadata.verification_state,
-    metadata.verify_state,
-  ) ?? 'unverified';
-  const sourceKind = optionalString(
-    row.verification_source_kind,
-    metadata.verification_source_kind,
-  );
-  const sourceRef = row.verification_source_ref
-    ?? metadata.verification_source_ref
-    ?? null;
-  const transitionedAt = toIso(
-    row.verification_transitioned_at ?? metadata.verification_transitioned_at,
-  ) ?? null;
-  const importIntegration = optionalString(
-    row.import_integration,
-    row.import_source,
-    metadata.import_integration,
-    metadata.import_source,
-    asObject(sourceRef).bulk_import ? asObject(sourceRef).source : null,
-  );
-  const source = optionalString(
-    row.source,
-    metadata.source,
-    metadata.target_source,
-  ) ?? (importIntegration ? 'import' : 'manual');
+  const verificationState = optionalString(row.verification_state) ?? 'unverified';
+  const sourceKind = optionalString(row.verification_source_kind);
+  const sourceRef = row.verification_source_ref ?? null;
+  const transitionedAt = toIso(row.verification_transitioned_at) ?? null;
+  const managedProvenance = asObject(metadata.managed_provenance);
+  const declaredImport = asObject(metadata.declared_import);
+  const importIntegration = optionalString(managedProvenance.connector_id, declaredImport.label);
+  const source = managedProvenance.connector_id
+    ? 'connector_inventory'
+    : declaredImport.label
+      ? 'customer_declared_import'
+      : 'manual';
   const proof = ownershipProofFromStates({
     groupState: row.ownership_status,
     targetState: verificationState,
   });
-  const explicitEligibility = row.eligibility ?? metadata.eligibility;
-  const eligibility = explicitEligibility == null
-    ? proof.verified ? 'eligible' : 'not_eligible'
-    : typeof explicitEligibility === 'boolean'
-      ? explicitEligibility ? 'eligible' : 'not_eligible'
-      : String(explicitEligibility).trim().toLowerCase() || 'not_eligible';
-  const eligibilityReason = row.eligibility_reason
-    ?? metadata.eligibility_reason
-    ?? (eligibility === 'eligible' ? null : 'verification_required');
+  const eligibility = proof.verified ? 'eligible' : 'not_eligible';
+  const eligibilityReason = proof.verified ? null : 'verification_required';
 
   return {
     ...mapped,
@@ -293,7 +274,8 @@ function mapTargetInventoryRow(row) {
 /**
  * @param {import('pg').Pool} pool
  */
-export function createCoreCatalogRepository(pool) {
+export function createCoreCatalogRepository(pool, options = {}) {
+  const auditRepository = options.auditRepository;
   return {
     async getCurrentTenant(ctx) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
@@ -489,6 +471,7 @@ export function createCoreCatalogRepository(pool) {
              LIMIT 1
            ) verification ON TRUE
            WHERE t.tenant_id = $1
+             AND t.deleted_at IS NULL
              AND tg.tenant_id = $1
              AND tg.deleted_at IS NULL
              AND tg.archived_at IS NULL
@@ -516,7 +499,7 @@ export function createCoreCatalogRepository(pool) {
            LEFT JOIN (
              SELECT target_group_id, COUNT(*)::int AS target_count
              FROM targets
-             WHERE tenant_id = $1
+             WHERE tenant_id = $1 AND deleted_at IS NULL
              GROUP BY target_group_id
            ) tc ON tc.target_group_id = tg.id
            LEFT JOIN LATERAL (
@@ -553,10 +536,14 @@ export function createCoreCatalogRepository(pool) {
           const group = mapTargetGroupRow(rows[0] ?? null);
           if (!group) return null;
           const targets = await client.query(
-            `SELECT id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at
-             FROM targets
-             WHERE target_group_id = $1 AND tenant_id = $2
-             ORDER BY created_at`,
+            `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
+                    t.expected_behavior, t.metadata_json, t.created_at,
+                    verification.state AS verification_state
+             FROM targets t
+             LEFT JOIN target_verification_current verification
+               ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
+             WHERE t.target_group_id = $1 AND t.tenant_id = $2 AND t.deleted_at IS NULL
+             ORDER BY t.created_at`,
             [id, ctx.tenantId],
           );
           const mapped = targets.rows.map(mapTargetRow);
@@ -589,6 +576,7 @@ export function createCoreCatalogRepository(pool) {
              SELECT jsonb_agg(
                       jsonb_build_object(
                         'id', run.id,
+                        'policy_id', run.policy_id,
                         'check_id', run.check_id,
                         'status', run.status,
                         'started_at', run.started_at
@@ -596,7 +584,7 @@ export function createCoreCatalogRepository(pool) {
                       ORDER BY run.started_at DESC, run.id
                     ) AS items
              FROM (
-               SELECT id, check_id, status,
+               SELECT id, policy_id, check_id, status,
                       to_char(
                         COALESCE(started_at, created_at) AT TIME ZONE 'UTC',
                         'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
@@ -643,10 +631,14 @@ export function createCoreCatalogRepository(pool) {
         if (!group) return null;
 
         const targets = await client.query(
-          `SELECT id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at
-           FROM targets
-           WHERE target_group_id = $1 AND tenant_id = $2
-           ORDER BY created_at`,
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
+                  t.expected_behavior, t.metadata_json, t.created_at,
+                  verification.state AS verification_state
+           FROM targets t
+           LEFT JOIN target_verification_current verification
+             ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
+           WHERE t.target_group_id = $1 AND t.tenant_id = $2 AND t.deleted_at IS NULL
+           ORDER BY t.created_at`,
           [id, ctx.tenantId],
         );
         return {
@@ -656,24 +648,22 @@ export function createCoreCatalogRepository(pool) {
       });
     },
 
-    async createTargetGroup(ctx, body, options = {}) {
+    async createTargetGroup(ctx, body = {}, options = {}) {
       const id = options.id ?? newId('tg');
       const now = options.now ?? new Date().toISOString();
-      const rawEnvironmentId =
-        typeof body.environment_id === 'string' ? body.environment_id.trim() : body.environment_id;
+      const rawEnvironmentId = typeof body.environment_id === 'string' ? body.environment_id.trim() : body.environment_id;
       const record = {
         environment_id: rawEnvironmentId || 'env_demo',
-        name: body.name ?? 'New target group',
-        description: body.description ?? '',
+        name: String(body.name ?? 'New target group').trim() || 'New target group',
+        description: String(body.description ?? ''),
         expected_behavior_default: body.expected_behavior_default ?? null,
-        timezone: body.timezone ?? 'UTC',
+        timezone: String(body.timezone ?? 'UTC').trim() || 'UTC',
         safe_test_windows: Array.isArray(body.safe_test_windows) ? body.safe_test_windows : [],
         safety_policy: normalizeSafetyPolicy(body.safety_policy),
+        validation_mode: body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted',
       };
 
       return withTenantContext(pool, ctx.tenantId, async (client) => {
-        // The (tenant_id, environment_id) FK requires the environment to exist for this tenant.
-        // Validate up front so callers get an actionable 400 instead of a raw FK 500.
         const envCheck = await client.query(
           `SELECT id FROM environments WHERE tenant_id = $1 AND id = $2`,
           [ctx.tenantId, record.environment_id],
@@ -686,134 +676,182 @@ export function createCoreCatalogRepository(pool) {
             field: 'environment_id',
           };
         }
-
-        const { rows } = await client.query(
-          `INSERT INTO target_groups (
-             id, tenant_id, environment_id, name, description, expected_behavior_default,
-             timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
-             dns_ownership, created_at
-           )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb, $13::timestamptz)
-           RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
-                     timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
-                     dns_ownership, created_at`,
-          [
-            id,
-            ctx.tenantId,
-            record.environment_id,
-            record.name,
-            record.description,
-            record.expected_behavior_default,
-            record.timezone,
-            JSON.stringify(record.safe_test_windows),
-            JSON.stringify(record.safety_policy),
-            body.validation_mode ?? 'agent_assisted',
-            body.ownership_status ?? 'unverified',
-            body.dns_ownership == null ? null : JSON.stringify(body.dns_ownership),
-            now,
-          ],
+        const duplicate = await client.query(
+          `SELECT id FROM target_groups
+           WHERE tenant_id = $1 AND environment_id = $2 AND lower(name) = lower($3)
+             AND deleted_at IS NULL AND archived_at IS NULL
+           LIMIT 1`,
+          [ctx.tenantId, record.environment_id, record.name],
         );
-        return mapTargetGroupRow(rows[0]);
+        if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
+
+        try {
+          const { rows } = await client.query(
+            `INSERT INTO target_groups (
+               id, tenant_id, environment_id, name, description, expected_behavior_default,
+               timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
+               dns_ownership, created_at
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, 'unverified', NULL, $11::timestamptz)
+             RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
+                       timezone, safe_test_windows, safety_policy, validation_mode, ownership_status,
+                       dns_ownership, created_at`,
+            [
+              id, ctx.tenantId, record.environment_id, record.name, record.description,
+              record.expected_behavior_default, record.timezone, JSON.stringify(record.safe_test_windows),
+              JSON.stringify(record.safety_policy), record.validation_mode, now,
+            ],
+          );
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target_group.created',
+            resource_type: 'target_group',
+            resource_id: id,
+            metadata: { changed_fields: ['environment_id', 'name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
+          }, now);
+          return mapTargetGroupRow(rows[0]);
+        } catch (error) {
+          if (error?.code === '23505') return { error: 'target_group_exists', status: 409 };
+          throw error;
+        }
       });
     },
 
-    async addTarget(ctx, groupId, body, options = {}) {
+    async addTarget(ctx, groupId, body = {}, options = {}) {
       const id = options.id ?? newId('target');
       const now = options.now ?? new Date().toISOString();
+      let normalized;
+      try {
+        normalized = normalizeTargetInput(body);
+      } catch (error) {
+        return targetValidationResponse(error);
+      }
 
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const groupResult = await client.query(
-          `SELECT id, expected_behavior_default
-           FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL`,
+          `SELECT id FROM target_groups
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [groupId, ctx.tenantId],
         );
-        const group = groupResult.rows[0];
-        if (!group) return null;
-
-        const kind = body.kind ?? 'fqdn';
-        const expectedBehavior = body.expected_behavior ?? null;
-        const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
-
-        const { rows } = await client.query(
-          `INSERT INTO targets (id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::timestamptz)
-           RETURNING id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at`,
-          [
-            id,
-            ctx.tenantId,
-            groupId,
-            kind,
-            body.value,
-            expectedBehavior,
-            JSON.stringify(metadata),
-            now,
-          ],
+        if (!groupResult.rows[0]) return null;
+        const duplicate = await client.query(
+          `SELECT id FROM targets
+           WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
+             AND normalized_value = $4 AND deleted_at IS NULL
+           LIMIT 1`,
+          [ctx.tenantId, groupId, normalized.kind, normalized.normalized_value],
         );
-        return mapTargetRow(rows[0]);
+        if (duplicate.rows[0]) return { error: 'target_exists', status: 409, existing_id: duplicate.rows[0].id };
+
+        try {
+          const { rows } = await client.query(
+            `INSERT INTO targets (
+               id, tenant_id, target_group_id, kind, value, normalized_value,
+               expected_behavior, metadata_json, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+             RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
+                       expected_behavior, metadata_json, created_at`,
+            [id, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
+              body.expected_behavior ?? null, JSON.stringify(normalized.metadata), now],
+          );
+          await client.query(
+            `UPDATE target_groups
+             SET ownership_status = 'unverified'
+             WHERE tenant_id = $1 AND id = $2
+               AND deleted_at IS NULL AND archived_at IS NULL`,
+            [ctx.tenantId, groupId],
+          );
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target.added',
+            resource_type: 'target',
+            resource_id: id,
+            metadata: {
+              target_group_id: groupId,
+              changed_fields: ['kind', 'value', 'expected_behavior', ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
+              dropped_untrusted_fields: normalized.dropped_fields,
+            },
+          }, now);
+          return mapTargetRow(rows[0]);
+        } catch (error) {
+          if (error?.code === '23505') return { error: 'target_exists', status: 409 };
+          throw error;
+        }
       });
     },
 
-    async patchTargetGroup(ctx, id, body, options = {}) {
+    async patchTargetGroup(ctx, id, body = {}, options = {}) {
+      const now = options.now ?? new Date().toISOString();
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const existing = await client.query(
           `SELECT id, tenant_id, environment_id, name, description, expected_behavior_default,
-                  timezone, safe_test_windows, safety_policy, archived_at, validation_mode,
+                  timezone, safe_test_windows, safety_policy, archived_at, deleted_at, validation_mode,
                   ownership_status, dns_ownership, created_at
            FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL`,
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [id, ctx.tenantId],
         );
         if (!existing.rows[0]) return null;
-
         const current = existing.rows[0];
+        if (body.safe_test_windows !== undefined && !Array.isArray(body.safe_test_windows)) {
+          return { error: 'invalid_target_group', status: 400, field: 'safe_test_windows' };
+        }
+
+        const nextName = body.name === undefined ? current.name : String(body.name).trim() || current.name;
+        const nextEnvironmentId = body.environment_id === undefined
+          ? current.environment_id
+          : String(body.environment_id ?? '').trim() || null;
+        if (nextName !== current.name || nextEnvironmentId !== current.environment_id) {
+          const duplicate = await client.query(
+            `SELECT id FROM target_groups
+             WHERE tenant_id = $1 AND COALESCE(environment_id, '') = COALESCE($2, '')
+               AND lower(name) = lower($3)
+               AND id <> $4 AND deleted_at IS NULL AND archived_at IS NULL
+             LIMIT 1`,
+            [ctx.tenantId, nextEnvironmentId, nextName, id],
+          );
+          if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
+        }
+
         const sets = [];
         const params = [];
+        const changedFields = [];
         let n = 1;
-
-        if (body.name !== undefined) {
-          sets.push(`name = $${n++}`);
-          params.push(String(body.name).trim() || current.name);
-        }
-        if (body.description !== undefined) {
-          sets.push(`description = $${n++}`);
-          params.push(String(body.description ?? ''));
-        }
-        if (body.environment_id !== undefined) {
-          sets.push(`environment_id = $${n++}`);
-          params.push(String(body.environment_id).trim());
-        }
-        if (body.timezone !== undefined) {
-          sets.push(`timezone = $${n++}`);
-          params.push(String(body.timezone).trim() || 'UTC');
-        }
-        if (Array.isArray(body.safe_test_windows)) {
-          sets.push(`safe_test_windows = $${n++}::jsonb`);
-          params.push(JSON.stringify(body.safe_test_windows));
-        }
-        if (body.safety_policy !== undefined) {
-          sets.push(`safety_policy = $${n++}::jsonb`);
-          params.push(JSON.stringify(normalizeSafetyPolicy(body.safety_policy)));
-        }
-
-        if (sets.length === 0) {
-          return mapTargetGroupRow(current);
-        }
+        const add = (field, value, cast = '') => {
+          sets.push(`${field} = $${n++}${cast}`);
+          params.push(value);
+          changedFields.push(field);
+        };
+        if (body.name !== undefined) add('name', nextName);
+        if (body.description !== undefined) add('description', String(body.description ?? ''));
+        if (body.environment_id !== undefined) add('environment_id', nextEnvironmentId);
+        if (body.timezone !== undefined) add('timezone', String(body.timezone).trim() || 'UTC');
+        if (body.safe_test_windows !== undefined) add('safe_test_windows', JSON.stringify(body.safe_test_windows), '::jsonb');
+        if (body.safety_policy !== undefined) add('safety_policy', JSON.stringify(normalizeSafetyPolicy(body.safety_policy)), '::jsonb');
+        if (body.validation_mode !== undefined) add('validation_mode', body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted');
+        if (sets.length === 0) return mapTargetGroupRow(current);
 
         params.push(id, ctx.tenantId);
         const idParam = n++;
         const tenantParam = n++;
-
-        const { rows } = await client.query(
-          `UPDATE target_groups
-           SET ${sets.join(', ')}
-           WHERE id = $${idParam} AND tenant_id = $${tenantParam} AND archived_at IS NULL
-           RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
-                     timezone, safe_test_windows, safety_policy, archived_at, validation_mode,
-                     ownership_status, dns_ownership, created_at`,
-          params,
-        );
-        return mapTargetGroupRow(rows[0] ?? null);
+        try {
+          const { rows } = await client.query(
+            `UPDATE target_groups SET ${sets.join(', ')}
+             WHERE id = $${idParam} AND tenant_id = $${tenantParam}
+               AND deleted_at IS NULL AND archived_at IS NULL
+             RETURNING id, tenant_id, environment_id, name, description, expected_behavior_default,
+                       timezone, safe_test_windows, safety_policy, archived_at, validation_mode,
+                       ownership_status, dns_ownership, created_at`,
+            params,
+          );
+          if (!rows[0]) return null;
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target_group.updated', resource_type: 'target_group', resource_id: id,
+            metadata: { changed_fields: changedFields },
+          }, now);
+          return mapTargetGroupRow(rows[0]);
+        } catch (error) {
+          if (error?.code === '23505') return { error: 'target_group_exists', status: 409 };
+          throw error;
+        }
       });
     },
 
@@ -832,80 +870,274 @@ export function createCoreCatalogRepository(pool) {
           return { error: 'target_group_active_run', status: 409 };
         }
 
-        await client.query(
+        const { rows } = await client.query(
           `UPDATE target_groups
            SET deleted_at = $3::timestamptz,
                deleted_by = $4,
                archived_at = $3::timestamptz
-           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL
+           RETURNING id`,
           [id, ctx.tenantId, now, deletedBy],
         );
+        if (!rows[0]) return null;
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'target_group.archived', resource_type: 'target_group', resource_id: id,
+          metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
+        }, now);
         return { archived: true, id, deleted_at: now, deleted_by: deletedBy };
       });
     },
 
-    async patchTarget(ctx, groupId, targetId, body, options = {}) {
+    async patchTarget(ctx, groupId, targetId, body = {}, options = {}) {
+      const now = options.now ?? new Date().toISOString();
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const groupResult = await client.query(
-          `SELECT id
-           FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL`,
+          `SELECT id FROM target_groups
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [groupId, ctx.tenantId],
         );
         if (!groupResult.rows[0]) return null;
 
         const existing = await client.query(
-          `SELECT id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at
+          `SELECT id, tenant_id, target_group_id, kind, value, normalized_value,
+                  expected_behavior, metadata_json, created_at
            FROM targets
-           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3`,
+           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL`,
           [targetId, ctx.tenantId, groupId],
         );
         if (!existing.rows[0]) return null;
-
         const current = existing.rows[0];
+        let normalized;
+        try {
+          normalized = normalizeTargetInput(body, { current });
+        } catch (error) {
+          return targetValidationResponse(error);
+        }
+
+        if (
+          (body.kind !== undefined || body.value !== undefined)
+          && (
+            normalized.kind !== current.kind
+            || normalized.normalized_value !== current.normalized_value
+          )
+        ) {
+          return {
+            error: 'target_identity_immutable',
+            status: 409,
+            message: 'Target kind and value are immutable; create a new target so ownership must be proven again.',
+          };
+        }
+
+        if (body.kind !== undefined || body.value !== undefined) {
+          const duplicate = await client.query(
+            `SELECT id FROM targets
+             WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
+               AND normalized_value = $4 AND id <> $5 AND deleted_at IS NULL
+             LIMIT 1`,
+            [ctx.tenantId, groupId, normalized.kind, normalized.normalized_value, targetId],
+          );
+
+          if (duplicate.rows[0]) return { error: 'target_exists', status: 409, existing_id: duplicate.rows[0].id };
+        }
+
         const sets = [];
         const params = [];
+        const changedFields = [];
         let n = 1;
-
-        if (body.value !== undefined) {
-          sets.push(`value = $${n++}`);
-          params.push(String(body.value).trim());
+        const add = (field, value, cast = '') => {
+          sets.push(`${field} = $${n++}${cast}`);
+          params.push(value);
+          changedFields.push(field);
+        };
+        if (body.kind !== undefined || body.value !== undefined) {
+          add('kind', normalized.kind);
+          add('value', normalized.value);
+          add('normalized_value', normalized.normalized_value);
         }
-        if (body.kind !== undefined) {
-          sets.push(`kind = $${n++}`);
-          params.push(String(body.kind).trim() || current.kind);
-        }
-        if (body.metadata !== undefined && typeof body.metadata === 'object' && !Array.isArray(body.metadata)) {
-          sets.push(`metadata_json = $${n++}::jsonb`);
-          params.push(JSON.stringify(body.metadata));
-        }
-
-        if (sets.length === 0) {
-          return mapTargetRow(current);
-        }
+        if (body.metadata !== undefined || body.metadata_json !== undefined) add('metadata_json', JSON.stringify(normalized.metadata), '::jsonb');
+        if (body.expected_behavior !== undefined) add('expected_behavior', body.expected_behavior ?? null);
+        if (sets.length === 0) return mapTargetRow(current);
 
         params.push(targetId, ctx.tenantId, groupId);
         const idParam = n++;
         const tenantParam = n++;
         const groupParam = n++;
-
-        const { rows } = await client.query(
-          `UPDATE targets
-           SET ${sets.join(', ')}
-           WHERE id = $${idParam} AND tenant_id = $${tenantParam} AND target_group_id = $${groupParam}
-           RETURNING id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at`,
-          params,
-        );
-        return mapTargetRow(rows[0] ?? null);
+        try {
+          const { rows } = await client.query(
+            `UPDATE targets SET ${sets.join(', ')}
+             WHERE id = $${idParam} AND tenant_id = $${tenantParam}
+               AND target_group_id = $${groupParam} AND deleted_at IS NULL
+             RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
+                       expected_behavior, metadata_json, created_at`,
+            params,
+          );
+          if (!rows[0]) return null;
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target.updated', resource_type: 'target', resource_id: targetId,
+            metadata: { target_group_id: groupId, changed_fields: changedFields, dropped_untrusted_fields: normalized.dropped_fields },
+          }, now);
+          return mapTargetRow(rows[0]);
+        } catch (error) {
+          if (error?.code === '23505') return { error: 'target_exists', status: 409 };
+          throw error;
+        }
       });
     },
 
-    async deleteTarget(ctx, groupId, targetId) {
+    async restoreTargetGroup(ctx, groupId, options = {}) {
+      const now = options.now ?? new Date().toISOString();
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT id, environment_id, name
+           FROM target_groups
+           WHERE id = $1 AND tenant_id = $2
+             AND (deleted_at IS NOT NULL OR archived_at IS NOT NULL)
+           FOR UPDATE`,
+          [groupId, ctx.tenantId],
+        );
+        const group = rows[0];
+        if (!group) return { error: 'not_found', status: 404 };
+        const duplicate = await client.query(
+          `SELECT id FROM target_groups
+           WHERE tenant_id = $1 AND environment_id = $2 AND lower(name) = lower($3)
+             AND id <> $4 AND deleted_at IS NULL AND archived_at IS NULL
+           LIMIT 1`,
+          [ctx.tenantId, group.environment_id, group.name, groupId],
+        );
+        if (duplicate.rows[0]) return { error: 'target_group_exists', status: 409, existing_id: duplicate.rows[0].id };
+
+        await client.query(
+          `UPDATE target_groups SET deleted_at = NULL, deleted_by = NULL, archived_at = NULL
+           WHERE id = $1 AND tenant_id = $2`,
+          [groupId, ctx.tenantId],
+        );
+        const auditEntry = await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'target_group.restored', resource_type: 'target_group', resource_id: groupId,
+          metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
+        }, now);
+        return { restored: true, id: groupId, audit_entry_id: auditEntry.id };
+      });
+    },
+
+    async bulkImportTargets(ctx, groupId, body = {}, options = {}) {
+      const now = options.now ?? new Date().toISOString();
+      const items = Array.isArray(body.items) ? body.items : [];
+      const connector = options.trustedConnector ?? null;
+      const connectorKeys = options.connectorInventoryKeys instanceof Set
+        ? options.connectorInventoryKeys
+        : new Set(options.connectorInventoryKeys ?? []);
+      if (body.connector_id && (!connector || connector.id !== body.connector_id)) {
+        return { error: 'connector_inventory_not_verified', status: 400 };
+      }
+
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const groupResult = await client.query(
-          `SELECT id
-           FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND archived_at IS NULL`,
+          `SELECT id FROM target_groups
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+          [groupId, ctx.tenantId],
+        );
+        if (!groupResult.rows[0]) return { error: 'target_group_not_found', status: 404 };
+
+        const imported = [];
+        const skipped = [];
+        for (const item of items) {
+          let normalized;
+          try {
+            normalized = normalizeTargetInput(item);
+          } catch (error) {
+            const response = targetValidationResponse(error);
+            skipped.push({ value: String(item?.value ?? ''), reason: response.error, field: response.field, message: response.message });
+            continue;
+          }
+          const key = `${normalized.kind}\u0000${normalized.normalized_value}`;
+          if (connector && !connectorKeys.has(key)) {
+            skipped.push({ value: normalized.value, reason: 'connector_item_not_found' });
+            continue;
+          }
+          const duplicate = await client.query(
+            `SELECT id FROM targets
+             WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
+               AND normalized_value = $4 AND deleted_at IS NULL
+             LIMIT 1`,
+            [ctx.tenantId, groupId, normalized.kind, normalized.normalized_value],
+          );
+          if (duplicate.rows[0]) {
+            skipped.push({ value: normalized.value, reason: 'already_imported' });
+            continue;
+          }
+
+          const targetId = newId('target');
+          const verifyState = ['fqdn', 'dns_zone'].includes(normalized.kind) ? 'pending' : 'awaiting_heartbeat';
+          const declaredSource = String(body.source ?? 'customer').trim() || 'customer';
+          const metadata = {
+            ...normalized.metadata,
+            ...(connector
+              ? { managed_provenance: { kind: 'connector_inventory', connector_id: connector.id, provider: connector.provider ?? null } }
+              : { declared_import: { label: declaredSource, trusted: false } }),
+          };
+          try {
+            const inserted = await client.query(
+              `INSERT INTO targets (
+                 id, tenant_id, target_group_id, kind, value, normalized_value,
+                 expected_behavior, metadata_json, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+               ON CONFLICT (tenant_id, target_group_id, kind, normalized_value)
+                 WHERE deleted_at IS NULL
+               DO NOTHING
+               RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
+                         expected_behavior, metadata_json, created_at`,
+              [targetId, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
+                item.expected_behavior ?? null, JSON.stringify(metadata), now],
+            );
+            if (!inserted.rows[0]) {
+              skipped.push({ value: normalized.value, reason: 'already_imported' });
+              continue;
+            }
+            const auditEntry = await appendMutationAudit(auditRepository, client, ctx, {
+              action: 'target.bulk_imported', resource_type: 'target', resource_id: targetId,
+              metadata: {
+                target_group_id: groupId,
+                changed_fields: ['kind', 'value', 'expected_behavior', 'metadata'],
+                provenance_trust: connector ? 'connector_inventory' : 'customer_declared',
+                connector_id: connector?.id ?? null,
+                dropped_untrusted_fields: normalized.dropped_fields,
+              },
+            }, now);
+            await client.query(
+              `INSERT INTO target_verifications (
+                 id, tenant_id, target_id, state, source_kind, source_ref,
+                 transitioned_at, transitioned_by, audit_entry_id
+               ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz, $8, $9)`,
+              [newId('tv'), ctx.tenantId, targetId, verifyState === 'pending' ? 'pending' : 'unverified',
+                connector ? 'connector_inventory' : 'customer_declaration',
+                JSON.stringify(connector ? { connector_id: connector.id } : { declared_source: declaredSource }),
+                now, ctx.userId ?? 'system', auditEntry.id],
+            );
+            imported.push({ ...mapTargetRow(inserted.rows[0]), verify_state: verifyState });
+          } catch (error) {
+            throw error;
+          }
+        }
+        if (imported.length > 0) {
+          await client.query(
+            `UPDATE target_groups
+             SET ownership_status = 'unverified'
+             WHERE tenant_id = $1 AND id = $2
+               AND deleted_at IS NULL AND archived_at IS NULL`,
+            [ctx.tenantId, groupId],
+          );
+        }
+        return { imported, skipped, count: imported.length };
+      });
+    },
+
+    async deleteTarget(ctx, groupId, targetId, options = {}) {
+      const now = options.now ?? new Date().toISOString();
+      const deletedBy = options.deletedBy ?? ctx.userId ?? 'system';
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const groupResult = await client.query(
+          `SELECT id FROM target_groups
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
           [groupId, ctx.tenantId],
         );
         if (!groupResult.rows[0]) return null;
@@ -914,13 +1146,18 @@ export function createCoreCatalogRepository(pool) {
         }
 
         const { rows } = await client.query(
-          `DELETE FROM targets
-           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3
+          `UPDATE targets
+           SET deleted_at = $4::timestamptz, deleted_by = $5
+           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL
            RETURNING id`,
-          [targetId, ctx.tenantId, groupId],
+          [targetId, ctx.tenantId, groupId, now, deletedBy],
         );
         if (!rows[0]) return null;
-        return { deleted: true, id: targetId };
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'target.archived', resource_type: 'target', resource_id: targetId,
+          metadata: { target_group_id: groupId, changed_fields: ['deleted_at', 'deleted_by'] },
+        }, now);
+        return { deleted: true, archived: true, id: targetId, deleted_at: now, deleted_by: deletedBy };
       });
     },
   };

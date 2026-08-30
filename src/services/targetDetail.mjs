@@ -196,7 +196,7 @@ function buildLoa(ctx, groupId) {
  */
 export function getTargetDetail(ctx, targetId, query = {}) {
   const target = getStore().targets.find(
-    (t) => t.id === targetId && t.tenant_id === ctx.tenantId,
+    (t) => t.id === targetId && t.tenant_id === ctx.tenantId && !t.deleted_at,
   );
   if (!target) {
     return {

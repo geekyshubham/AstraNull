@@ -1,4 +1,9 @@
 import { audit } from '../audit.mjs';
+import {
+  normalizeTargetInput,
+  targetDedupeKey,
+  targetValidationResponse,
+} from '../contracts/targetManagement.mjs';
 import { newId } from '../lib/ids.mjs';
 import { ownershipProofFromStates, VERIFICATION_RANK } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
@@ -50,52 +55,24 @@ function latestTargetVerifications(tenantId) {
 
 function targetInventoryItem(target, group, environment, verification) {
   const metadata = asObject(target.metadata ?? target.metadata_json);
-  const verificationState = optionalString(
-    verification?.state,
-    target.verification_state,
-    target.verify_state,
-    metadata.verification_state,
-    metadata.verify_state,
-  ) ?? 'unverified';
-  const sourceKind = optionalString(
-    verification?.source_kind,
-    target.verification_source_kind,
-    metadata.verification_source_kind,
-  );
-  const sourceRef = verification?.source_ref
-    ?? target.verification_source_ref
-    ?? metadata.verification_source_ref
-    ?? null;
-  const transitionedAt = toIso(
-    verification?.transitioned_at
-      ?? target.verification_transitioned_at
-      ?? metadata.verification_transitioned_at,
-  );
-  const importIntegration = optionalString(
-    target.import_integration,
-    target.import_source,
-    metadata.import_integration,
-    metadata.import_source,
-    asObject(sourceRef).bulk_import ? asObject(sourceRef).source : null,
-  );
-  const source = optionalString(
-    target.source,
-    metadata.source,
-    metadata.target_source,
-  ) ?? (importIntegration ? 'import' : 'manual');
+  const verificationState = optionalString(verification?.state) ?? 'unverified';
+  const sourceKind = optionalString(verification?.source_kind);
+  const sourceRef = verification?.source_ref ?? null;
+  const transitionedAt = toIso(verification?.transitioned_at);
+  const managedProvenance = asObject(metadata.managed_provenance);
+  const declaredImport = asObject(metadata.declared_import);
+  const importIntegration = optionalString(managedProvenance.connector_id, declaredImport.label);
+  const source = managedProvenance.connector_id
+    ? 'connector_inventory'
+    : declaredImport.label
+      ? 'customer_declared_import'
+      : 'manual';
   const proof = ownershipProofFromStates({
     groupState: group.ownership_status,
     targetState: verificationState,
   });
-  const explicitEligibility = target.eligibility ?? metadata.eligibility;
-  const eligibility = explicitEligibility == null
-    ? proof.verified ? 'eligible' : 'not_eligible'
-    : typeof explicitEligibility === 'boolean'
-      ? explicitEligibility ? 'eligible' : 'not_eligible'
-      : String(explicitEligibility).trim().toLowerCase() || 'not_eligible';
-  const eligibilityReason = target.eligibility_reason
-    ?? metadata.eligibility_reason
-    ?? (eligibility === 'eligible' ? null : 'verification_required');
+  const eligibility = proof.verified ? 'eligible' : 'not_eligible';
+  const eligibilityReason = proof.verified ? null : 'verification_required';
 
   return {
     id: target.id,
@@ -140,7 +117,7 @@ export function listTargets(ctx) {
   const verifications = latestTargetVerifications(ctx.tenantId);
 
   return store.targets
-    .filter((target) => target.tenant_id === ctx.tenantId && groups.has(target.target_group_id))
+    .filter((target) => target.tenant_id === ctx.tenantId && !isArchivedTarget(target) && groups.has(target.target_group_id))
     .map((target) => {
       const group = groups.get(target.target_group_id);
       return targetInventoryItem(
@@ -169,6 +146,10 @@ export function listTargetsEnvelope(ctx) {
 
 export function isArchivedTargetGroup(group) {
   return Boolean(group?.deleted_at ?? group?.archived_at);
+}
+
+export function isArchivedTarget(target) {
+  return Boolean(target?.deleted_at);
 }
 
 export function activeTargetGroupsForTenant(tenantId) {
@@ -200,7 +181,7 @@ function activeRunForTarget(tenantId, targetGroupId, targetId) {
 function targetGroupSummaryJoins(tenantId) {
   const targetCounts = new Map();
   for (const target of getStore().targets) {
-    if (target.tenant_id !== tenantId) continue;
+    if (target.tenant_id !== tenantId || isArchivedTarget(target)) continue;
     targetCounts.set(target.target_group_id, (targetCounts.get(target.target_group_id) ?? 0) + 1);
   }
   const loaStates = new Map();
@@ -245,11 +226,12 @@ export function getTargetGroup(ctx, id) {
     (x) => x.id === id && x.tenant_id === ctx.tenantId && !isArchivedTargetGroup(x),
   );
   if (!g) return null;
+  const verifications = latestTargetVerifications(ctx.tenantId);
   const targets = getStore().targets
-    .filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId)
+    .filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId && !isArchivedTarget(t))
     .map((target) => ({
       ...target,
-      verification_state: target.verification_state ?? target.verify_state ?? 'unverified',
+      verification_state: verifications.get(target.id)?.state ?? 'unverified',
     }));
   const runsRecent = (getStore().testRuns ?? [])
     .filter((run) => run.tenant_id === ctx.tenantId && run.target_group_id === id)
@@ -312,21 +294,31 @@ export function getTargetGroup(ctx, id) {
   };
 }
 
-export function createTargetGroup(ctx, body) {
+export function createTargetGroup(ctx, body = {}) {
+  const environmentId = String(body.environment_id ?? 'env_demo').trim();
+  const name = String(body.name ?? 'New target group').trim() || 'New target group';
+  const duplicate = getStore().targetGroups.find(
+    (group) => group.tenant_id === ctx.tenantId
+      && !isArchivedTargetGroup(group)
+      && String(group.environment_id ?? '') === environmentId
+      && String(group.name).trim().toLowerCase() === name.toLowerCase(),
+  );
+  if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
+
   const id = newId('tg');
   const record = {
     id,
     tenant_id: ctx.tenantId,
-    environment_id: body.environment_id ?? 'env_demo',
-    name: body.name ?? 'New target group',
-    description: body.description ?? '',
+    environment_id: environmentId,
+    name,
+    description: String(body.description ?? ''),
     expected_behavior_default: body.expected_behavior_default ?? null,
-    timezone: body.timezone ?? 'UTC',
+    timezone: String(body.timezone ?? 'UTC').trim() || 'UTC',
     safe_test_windows: Array.isArray(body.safe_test_windows) ? body.safe_test_windows : [],
     safety_policy: normalizeSafetyPolicy(body.safety_policy),
     ownership_status: 'unverified',
-    validation_mode:
-      body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted',
+    dns_ownership: null,
+    validation_mode: body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted',
     created_at: new Date().toISOString(),
   };
   getStore().targetGroups.push(record);
@@ -337,32 +329,49 @@ export function createTargetGroup(ctx, body) {
     action: 'target_group.created',
     resource_type: 'target_group',
     resource_id: id,
+    metadata: { changed_fields: ['environment_id', 'name', 'description', 'expected_behavior_default', 'timezone', 'safe_test_windows', 'safety_policy', 'validation_mode'] },
   });
   persistStore();
   return record;
 }
 
-export function addTarget(ctx, groupId, body) {
+export function addTarget(ctx, groupId, body = {}) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+    (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
+
+  let normalized;
+  try {
+    normalized = normalizeTargetInput(body);
+  } catch (error) {
+    return targetValidationResponse(error);
+  }
+  const duplicateKey = `${normalized.kind}\u0000${normalized.normalized_value}`;
+  const duplicate = getStore().targets.find(
+    (target) => target.tenant_id === ctx.tenantId
+      && target.target_group_id === groupId
+      && !isArchivedTarget(target)
+      && targetDedupeKey(target) === duplicateKey,
+  );
+  if (duplicate) return { error: 'target_exists', status: 409, existing_id: duplicate.id };
+
   const id = newId('target');
-  const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
   const record = {
     id,
     tenant_id: ctx.tenantId,
     target_group_id: groupId,
-    kind: body.kind ?? 'fqdn',
-    value: body.value,
+    kind: normalized.kind,
+    value: normalized.value,
+    normalized_value: normalized.normalized_value,
     expected_behavior: body.expected_behavior ?? null,
     created_at: new Date().toISOString(),
   };
-  // Mirror the Postgres adapter: persist optional onboard metadata
-  // (e.g. agent_id binding, IP notes) under `metadata` so both backends
-  // round-trip the same shape. Only attach when non-empty.
-  if (Object.keys(metadata).length > 0) record.metadata = metadata;
+  if (Object.keys(normalized.metadata).length > 0) record.metadata = normalized.metadata;
   getStore().targets.push(record);
+  // A new target has no proof. Reset only the presentation rollup; existing per-target
+  // verification rows remain intact and continue to authorize their exact targets.
+  group.ownership_status = 'unverified';
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
@@ -370,7 +379,11 @@ export function addTarget(ctx, groupId, body) {
     action: 'target.added',
     resource_type: 'target',
     resource_id: id,
-    metadata: { target_group_id: groupId },
+    metadata: {
+      target_group_id: groupId,
+      changed_fields: ['kind', 'value', 'expected_behavior', ...(Object.keys(normalized.metadata).length ? ['metadata'] : [])],
+      dropped_untrusted_fields: normalized.dropped_fields,
+    },
   });
   persistStore();
   return record;
@@ -378,19 +391,36 @@ export function addTarget(ctx, groupId, body) {
 
 export function patchTargetGroup(ctx, id, body = {}) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+    (candidate) => candidate.id === id && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
+  const changedFields = [];
 
-  if (body.name !== undefined) group.name = String(body.name).trim() || group.name;
-  if (body.description !== undefined) group.description = String(body.description ?? '');
-  if (body.environment_id !== undefined) group.environment_id = String(body.environment_id).trim();
-  if (body.timezone !== undefined) group.timezone = String(body.timezone).trim() || 'UTC';
-  if (Array.isArray(body.safe_test_windows)) group.safe_test_windows = body.safe_test_windows;
-  if (body.safety_policy !== undefined) group.safety_policy = normalizeSafetyPolicy(body.safety_policy);
+  if (body.name !== undefined) {
+    const name = String(body.name).trim() || group.name;
+    const duplicate = getStore().targetGroups.find(
+      (candidate) => candidate.id !== id
+        && candidate.tenant_id === ctx.tenantId
+        && !isArchivedTargetGroup(candidate)
+        && String(candidate.environment_id ?? '') === String(body.environment_id ?? group.environment_id ?? '')
+        && String(candidate.name).trim().toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
+    group.name = name;
+    changedFields.push('name');
+  }
+  if (body.description !== undefined) { group.description = String(body.description ?? ''); changedFields.push('description'); }
+  if (body.environment_id !== undefined) { group.environment_id = String(body.environment_id).trim(); changedFields.push('environment_id'); }
+  if (body.timezone !== undefined) { group.timezone = String(body.timezone).trim() || 'UTC'; changedFields.push('timezone'); }
+  if (body.safe_test_windows !== undefined) {
+    if (!Array.isArray(body.safe_test_windows)) return { error: 'invalid_target_group', status: 400, field: 'safe_test_windows' };
+    group.safe_test_windows = body.safe_test_windows;
+    changedFields.push('safe_test_windows');
+  }
+  if (body.safety_policy !== undefined) { group.safety_policy = normalizeSafetyPolicy(body.safety_policy); changedFields.push('safety_policy'); }
   if (body.validation_mode !== undefined) {
-    group.validation_mode =
-      body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted';
+    group.validation_mode = body.validation_mode === 'external_only' ? 'external_only' : 'agent_assisted';
+    changedFields.push('validation_mode');
   }
 
   audit({
@@ -400,6 +430,7 @@ export function patchTargetGroup(ctx, id, body = {}) {
     action: 'target_group.updated',
     resource_type: 'target_group',
     resource_id: id,
+    metadata: { changed_fields: changedFields },
   });
   persistStore();
   return group;
@@ -407,12 +438,10 @@ export function patchTargetGroup(ctx, id, body = {}) {
 
 export function archiveTargetGroup(ctx, id) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === id && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+    (candidate) => candidate.id === id && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
-  if (activeRunForGroup(ctx.tenantId, id)) {
-    return { error: 'target_group_active_run', status: 409 };
-  }
+  if (activeRunForGroup(ctx.tenantId, id)) return { error: 'target_group_active_run', status: 409 };
 
   const now = new Date().toISOString();
   group.deleted_at = now;
@@ -425,7 +454,7 @@ export function archiveTargetGroup(ctx, id) {
     action: 'target_group.archived',
     resource_type: 'target_group',
     resource_id: id,
-    metadata: { deleted_at: now, deleted_by: ctx.userId },
+    metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
   });
   persistStore();
   return { archived: true, id, deleted_at: now, deleted_by: ctx.userId };
@@ -433,19 +462,57 @@ export function archiveTargetGroup(ctx, id) {
 
 export function patchTarget(ctx, groupId, targetId, body = {}) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+    (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
-
   const target = getStore().targets.find(
-    (t) => t.id === targetId && t.target_group_id === groupId && t.tenant_id === ctx.tenantId,
+    (candidate) => candidate.id === targetId
+      && candidate.target_group_id === groupId
+      && candidate.tenant_id === ctx.tenantId
+      && !isArchivedTarget(candidate),
   );
   if (!target) return null;
 
-  if (body.value !== undefined) target.value = String(body.value).trim();
-  if (body.kind !== undefined) target.kind = String(body.kind).trim() || target.kind;
-  if (body.metadata !== undefined && typeof body.metadata === 'object' && !Array.isArray(body.metadata)) {
-    target.metadata = body.metadata;
+  let normalized;
+  try {
+    normalized = normalizeTargetInput(body, { current: target });
+  } catch (error) {
+    return targetValidationResponse(error);
+  }
+  const duplicateKey = `${normalized.kind}\u0000${normalized.normalized_value}`;
+  if (
+    (body.kind !== undefined || body.value !== undefined)
+    && duplicateKey !== targetDedupeKey(target)
+  ) {
+    return {
+      error: 'target_identity_immutable',
+      status: 409,
+      message: 'Target kind and value are immutable; create a new target so ownership must be proven again.',
+    };
+  }
+  const duplicate = getStore().targets.find(
+    (candidate) => candidate.id !== targetId
+      && candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === groupId
+      && !isArchivedTarget(candidate)
+      && targetDedupeKey(candidate) === duplicateKey,
+  );
+  if (duplicate) return { error: 'target_exists', status: 409, existing_id: duplicate.id };
+
+  const changedFields = [];
+  if (body.kind !== undefined || body.value !== undefined) {
+    target.kind = normalized.kind;
+    target.value = normalized.value;
+    target.normalized_value = normalized.normalized_value;
+    changedFields.push('kind', 'value');
+  }
+  if (body.metadata !== undefined || body.metadata_json !== undefined) {
+    target.metadata = normalized.metadata;
+    changedFields.push('metadata');
+  }
+  if (body.expected_behavior !== undefined) {
+    target.expected_behavior = body.expected_behavior ?? null;
+    changedFields.push('expected_behavior');
   }
 
   audit({
@@ -455,7 +522,7 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
     action: 'target.updated',
     resource_type: 'target',
     resource_id: targetId,
-    metadata: { target_group_id: groupId },
+    metadata: { target_group_id: groupId, changed_fields: changedFields, dropped_untrusted_fields: normalized.dropped_fields },
   });
   persistStore();
   return target;
@@ -463,30 +530,32 @@ export function patchTarget(ctx, groupId, targetId, body = {}) {
 
 export function deleteTarget(ctx, groupId, targetId) {
   const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+    (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
   if (!group) return null;
-
-  const index = getStore().targets.findIndex(
-    (t) => t.id === targetId && t.target_group_id === groupId && t.tenant_id === ctx.tenantId,
+  const target = getStore().targets.find(
+    (candidate) => candidate.id === targetId
+      && candidate.target_group_id === groupId
+      && candidate.tenant_id === ctx.tenantId
+      && !isArchivedTarget(candidate),
   );
-  if (index < 0) return null;
-  if (activeRunForTarget(ctx.tenantId, groupId, targetId)) {
-    return { error: 'target_active_run', status: 409 };
-  }
+  if (!target) return null;
+  if (activeRunForTarget(ctx.tenantId, groupId, targetId)) return { error: 'target_active_run', status: 409 };
 
-  getStore().targets.splice(index, 1);
+  const now = new Date().toISOString();
+  target.deleted_at = now;
+  target.deleted_by = ctx.userId;
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
     actor_role: ctx.role,
-    action: 'target.deleted',
+    action: 'target.archived',
     resource_type: 'target',
     resource_id: targetId,
-    metadata: { target_group_id: groupId },
+    metadata: { target_group_id: groupId, changed_fields: ['deleted_at', 'deleted_by'] },
   });
   persistStore();
-  return { deleted: true, id: targetId };
+  return { deleted: true, archived: true, id: targetId, deleted_at: now, deleted_by: ctx.userId };
 }
 
 /**
@@ -505,6 +574,14 @@ export function restoreArchived(ctx, groupId) {
   if (!isArchivedTargetGroup(group)) {
     return { error: 'not_archived', status: 404 };
   }
+  const duplicate = getStore().targetGroups.find(
+    (candidate) => candidate.id !== groupId
+      && candidate.tenant_id === ctx.tenantId
+      && !isArchivedTargetGroup(candidate)
+      && String(candidate.environment_id ?? '') === String(group.environment_id ?? '')
+      && String(candidate.name).trim().toLowerCase() === String(group.name).trim().toLowerCase(),
+  );
+  if (duplicate) return { error: 'target_group_exists', status: 409, existing_id: duplicate.id };
 
   delete group.deleted_at;
   delete group.deleted_by;
@@ -517,6 +594,7 @@ export function restoreArchived(ctx, groupId) {
     action: 'target_group.restored',
     resource_type: 'target_group',
     resource_id: groupId,
+    metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
   });
   persistStore();
   return { target_group: group, audit_entry_id: auditEntry.id };
@@ -530,73 +608,110 @@ export function restoreArchived(ctx, groupId) {
  * @param {{ source?: string, items?: unknown[] }} _body
  */
 export function bulkImportTargets(ctx, groupId, body = {}) {
-  const group = getStore().targetGroups.find(
-    (g) => g.id === groupId && g.tenant_id === ctx.tenantId && !isArchivedTargetGroup(g),
+  const store = getStore();
+  const group = store.targetGroups.find(
+    (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
   );
-  if (!group) {
-    return { error: 'target_group_not_found', status: 404 };
+  if (!group) return { error: 'target_group_not_found', status: 404 };
+
+  const source = String(body.source ?? 'customer').trim() || 'customer';
+  const connectorId = String(body.connector_id ?? '').trim() || null;
+  const connector = connectorId
+    ? (store.wafConnectors ?? []).find((item) => item.id === connectorId && item.tenant_id === ctx.tenantId && !['disabled', 'revoked'].includes(item.status))
+    : null;
+  if (connectorId && !connector) return { error: 'connector_not_found', status: 404 };
+
+  const rawInventory = connector
+    ? (Array.isArray(connector.inventory_items)
+      ? connector.inventory_items
+      : Array.isArray(connector.inventory_cache?.items) ? connector.inventory_cache.items : [])
+    : [];
+  const connectorKeys = new Set();
+  for (const item of rawInventory) {
+    try { connectorKeys.add(targetDedupeKey(item)); } catch { /* ignore malformed connector snapshots */ }
   }
 
-  const source = String(body.source ?? 'connector').trim();
   const items = Array.isArray(body.items) ? body.items : [];
   const imported = [];
   const skipped = [];
-
   for (const item of items) {
-    const kind = String(item.kind ?? 'fqdn').trim().toLowerCase();
-    const value = String(item.value ?? '').trim();
-    if (!value) {
-      skipped.push({ value: '', reason: 'missing_value' });
+    let normalized;
+    try {
+      normalized = normalizeTargetInput(item);
+    } catch (error) {
+      const response = targetValidationResponse(error);
+      skipped.push({ value: String(item?.value ?? ''), reason: response.error, field: response.field, message: response.message });
       continue;
     }
-    const existing = getStore().targets.find(
-      (t) =>
-        t.tenant_id === ctx.tenantId
-        && t.target_group_id === groupId
-        && t.kind === kind
-        && String(t.value).trim().toLowerCase() === value.toLowerCase(),
+    const key = `${normalized.kind}\u0000${normalized.normalized_value}`;
+    if (connector && !connectorKeys.has(key)) {
+      skipped.push({ value: normalized.value, reason: 'connector_item_not_found' });
+      continue;
+    }
+    const existing = store.targets.find(
+      (target) => target.tenant_id === ctx.tenantId
+        && target.target_group_id === groupId
+        && !isArchivedTarget(target)
+        && targetDedupeKey(target) === key,
     );
     if (existing) {
-      skipped.push({ value, reason: 'already_imported' });
+      skipped.push({ value: normalized.value, reason: 'already_imported' });
       continue;
     }
 
-    const verify_state = kind === 'fqdn' ? 'pending' : 'awaiting_heartbeat';
+    const verifyState = normalized.kind === 'fqdn' || normalized.kind === 'dns_zone' ? 'pending' : 'awaiting_heartbeat';
+    const metadata = {
+      ...normalized.metadata,
+      ...(connector
+        ? { managed_provenance: { kind: 'connector_inventory', connector_id: connector.id, provider: connector.provider ?? null } }
+        : { declared_import: { label: source, trusted: false } }),
+    };
     const target = {
       id: newId('target'),
       tenant_id: ctx.tenantId,
       target_group_id: groupId,
-      kind,
-      value,
+      kind: normalized.kind,
+      value: normalized.value,
+      normalized_value: normalized.normalized_value,
       expected_behavior: item.expected_behavior ?? null,
-      verify_state,
-      import_source: source,
+      verify_state: verifyState,
+      metadata,
       created_at: new Date().toISOString(),
     };
-    getStore().targets.push(target);
-    if (!getStore().targetVerifications) getStore().targetVerifications = [];
-    getStore().targetVerifications.push({
+    store.targets.push(target);
+    if (!store.targetVerifications) store.targetVerifications = [];
+    const auditEntry = audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target.bulk_imported',
+      resource_type: 'target',
+      resource_id: target.id,
+      metadata: {
+        target_group_id: groupId,
+        changed_fields: ['kind', 'value', 'expected_behavior', 'metadata'],
+        provenance_trust: connector ? 'connector_inventory' : 'customer_declared',
+        connector_id: connector?.id ?? null,
+        dropped_untrusted_fields: normalized.dropped_fields,
+      },
+    });
+    store.targetVerifications.push({
       id: newId('tv'),
       tenant_id: ctx.tenantId,
       target_id: target.id,
-      state: verify_state === 'pending' ? 'pending' : 'unverified',
-      source_kind: 'manual_override',
-      source_ref: { source, bulk_import: true },
+      state: verifyState === 'pending' ? 'pending' : 'unverified',
+      source_kind: connector ? 'connector_inventory' : 'customer_declaration',
+      source_ref: connector ? { connector_id: connector.id } : { declared_source: source },
       transitioned_at: target.created_at,
       transitioned_by: ctx.userId ?? 'system',
-      audit_entry_id: audit({
-        tenant_id: ctx.tenantId,
-        actor_user_id: ctx.userId,
-        actor_role: ctx.role,
-        action: 'target.bulk_imported',
-        resource_type: 'target',
-        resource_id: target.id,
-        metadata: { target_group_id: groupId, source },
-      }).id,
+      audit_entry_id: auditEntry.id,
     });
     imported.push(target);
   }
 
-  if (imported.length) persistStore();
+  if (imported.length) {
+    group.ownership_status = 'unverified';
+    persistStore();
+  }
   return { imported, skipped, count: imported.length };
 }

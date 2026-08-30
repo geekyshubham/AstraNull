@@ -13,6 +13,7 @@ import {
   NON_DDOS_AVAILABILITY_THREATS,
   RESOURCE_EXHAUSTION_TASKS,
   WAF_VULNERABILITY_REGISTRY,
+  buildResourceExhaustionCheckMetadata,
   collectMappedCheckIds,
   getAttackIdsByFamily,
   summarizeCoverage,
@@ -69,21 +70,70 @@ export function validateResourceExhaustionTaxonomy() {
         errors.push(`FAMILY_BUILD_SPECS ${spec.id}: unknown registry_attack_ids entry ${listed}`);
       }
       if (!expected.has(listed)) {
-        warnings.push(`FAMILY_BUILD_SPECS ${spec.id}: ${listed} not in ATTACK_VECTOR_REGISTRY for family ${spec.id}`);
+        errors.push(`FAMILY_BUILD_SPECS ${spec.id}: ${listed} not in ATTACK_VECTOR_REGISTRY for family ${spec.id}`);
       }
     }
     for (const id of expected) {
       if (!(spec.registry_attack_ids ?? []).includes(id)) {
-        warnings.push(`FAMILY_BUILD_SPECS ${spec.id}: missing registry_attack_ids entry for ${id}`);
+        errors.push(`FAMILY_BUILD_SPECS ${spec.id}: missing registry_attack_ids entry for ${id}`);
       }
     }
   }
 
   const mappedCheckIds = collectMappedCheckIds();
-  for (const checkId of catalogIds) {
-    if (!mappedCheckIds.has(checkId)) {
-      errors.push(`orphan catalog check_id not mapped to ATT/ND/WV registry: ${checkId}`);
+  const orphanCatalogChecks = [...catalogIds]
+    .filter((checkId) => !mappedCheckIds.has(checkId))
+    .sort();
+  for (const checkId of orphanCatalogChecks) {
+    errors.push(`orphan catalog check_id not mapped to ATT/ND/WV registry: ${checkId}`);
+  }
+
+  // DET-016: every catalog entry must carry metadata exactly derived from the registries.
+  const familyIdSet = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id));
+  const expectedMetadata = buildResourceExhaustionCheckMetadata();
+  const metadataFields = [
+    'attack_vector_ids',
+    'delivery_patterns',
+    'waf_vulnerability_ids',
+    'non_ddos_threat_ids',
+  ];
+  const emptyMetadata = {
+    exhausted_resource: null,
+    attack_vector_ids: [],
+    delivery_patterns: [],
+    waf_vulnerability_ids: [],
+    non_ddos_threat_ids: [],
+  };
+  const catalogWithoutMetadata = [];
+  for (const check of CHECK_CATALOG) {
+    const hasMetadata = 'exhausted_resource' in check
+      && metadataFields.every((field) => Array.isArray(check[field]));
+    if (!hasMetadata) {
+      catalogWithoutMetadata.push(check.check_id);
+      continue;
     }
+    if (check.exhausted_resource !== null && !familyIdSet.has(check.exhausted_resource)) {
+      errors.push(`${check.check_id}: exhausted_resource ${check.exhausted_resource} is not a known family id`);
+    }
+    const expected = expectedMetadata.get(check.check_id) ?? emptyMetadata;
+    if (check.exhausted_resource !== expected.exhausted_resource) {
+      errors.push(`${check.check_id}: exhausted_resource does not match registry-derived metadata`);
+    }
+    for (const field of metadataFields) {
+      if (JSON.stringify(check[field]) !== JSON.stringify(expected[field])) {
+        errors.push(`${check.check_id}: ${field} does not match registry-derived metadata`);
+      }
+    }
+    if (
+      check.exhausted_resource === null
+      && check.waf_vulnerability_ids.length === 0
+      && check.non_ddos_threat_ids.length === 0
+    ) {
+      errors.push(`${check.check_id}: exhausted_resource is null without WAF or non-DDoS threat mapping`);
+    }
+  }
+  if (catalogWithoutMetadata.length) {
+    errors.push(`${catalogWithoutMetadata.length} catalog checks missing resource-exhaustion metadata (run applyResourceExhaustionMetadata): ${catalogWithoutMetadata.slice(0, 10).join(', ')}`);
   }
 
   for (const threat of NON_DDOS_AVAILABILITY_THREATS) {
@@ -120,6 +170,33 @@ export function validateResourceExhaustionTaxonomy() {
   const summary = summarizeCoverage();
   const pendingEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'pending');
   const implementedEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'implemented');
+  if (pendingEntries.length > 0) {
+    errors.push(`pending attack vectors remain: ${pendingEntries.map((entry) => entry.id).join(', ')}`);
+  }
+
+  const ddosCatalogChecks = CHECK_CATALOG.filter((check) => check.exhausted_resource != null);
+  const nonDdosOnlyChecks = CHECK_CATALOG.filter((check) => (
+    check.exhausted_resource == null
+    && check.non_ddos_threat_ids.length > 0
+    && check.waf_vulnerability_ids.length === 0
+  ));
+  const wafOnlyChecks = CHECK_CATALOG.filter((check) => (
+    check.exhausted_resource == null
+    && check.waf_vulnerability_ids.length > 0
+    && check.non_ddos_threat_ids.length === 0
+  ));
+  const mixedUnscoredChecks = CHECK_CATALOG.filter((check) => (
+    check.exhausted_resource == null
+    && check.waf_vulnerability_ids.length > 0
+    && check.non_ddos_threat_ids.length > 0
+  ));
+  const classifiedCatalogCount = ddosCatalogChecks.length
+    + nonDdosOnlyChecks.length
+    + wafOnlyChecks.length
+    + mixedUnscoredChecks.length;
+  if (classifiedCatalogCount !== CHECK_CATALOG.length) {
+    errors.push(`catalog metadata counts do not partition all checks: ${classifiedCatalogCount}/${CHECK_CATALOG.length}`);
+  }
 
   const payload = {
     schema: 'astranull.resource_exhaustion_taxonomy_validation.v1',
@@ -152,7 +229,18 @@ export function validateResourceExhaustionTaxonomy() {
     })),
     non_ddos_threats: NON_DDOS_AVAILABILITY_THREATS.length,
     waf_vulnerability_entries: WAF_VULNERABILITY_REGISTRY.length,
-    orphan_catalog_checks: [],
+    catalog_metadata: {
+      checks_with_ddos_family: ddosCatalogChecks.length,
+      checks_non_ddos_only: nonDdosOnlyChecks.length,
+      checks_waf_only: wafOnlyChecks.length,
+      checks_mixed_unscored: mixedUnscoredChecks.length,
+      classified_total: classifiedCatalogCount,
+      by_exhausted_resource: CHECK_CATALOG.reduce((acc, c) => {
+        if (c.exhausted_resource != null) acc[c.exhausted_resource] = (acc[c.exhausted_resource] ?? 0) + 1;
+        return acc;
+      }, {}),
+    },
+    orphan_catalog_checks: orphanCatalogChecks,
     pending_attack_ids: pendingEntries.map((e) => e.id),
     implemented_attack_ids: implementedEntries.map((e) => e.id),
     errors,

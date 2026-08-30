@@ -1,3 +1,4 @@
+import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import type { PortalConfig, PortalData, RouteId, Session } from '../lib/types';
 import { DetailRoutePage, ReportDetailPage } from './detail-pages';
 import { AgentsPage, ValidationSurfacePage } from './functional-surfaces';
@@ -33,15 +34,23 @@ const DETAIL_ROUTES = new Set<RouteId>([
 
 const VALIDATION_LIST_ROUTES = new Set<RouteId>(['checks', 'runs', 'findings']);
 
+function routeHydrationLabel(route: RouteId) {
+  return `Loading ${route.replaceAll('-', ' ')}`;
+}
+
 type RouteViewProps = {
   route: RouteId;
   data: PortalData;
   config: PortalConfig;
   session: Session;
   onRefresh: () => Promise<void>;
+  hydrating: boolean;
 };
 
-export function RouteView({ route, data, config, session, onRefresh }: RouteViewProps) {
+export function RouteView({ route, data, config, session, onRefresh, hydrating }: RouteViewProps) {
+  if (hydrating) {
+    return <PortalLoadingSkeleton rows={4} label={routeHydrationLabel(route)} />;
+  }
   if (route === 'dashboard') return <DashboardPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'environments') return <EnvironmentsPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   if (route === 'target-groups') {

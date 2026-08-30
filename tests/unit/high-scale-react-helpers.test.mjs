@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   AUTHORIZATION_ARTIFACT_CATALOG,
+  GOVERNED_HIGH_SCALE_SCENARIOS,
   REQUIRED_AUTHORIZATION_ARTIFACT_TYPES,
   authorizationArtifactTypesForRequest,
   buildLifecycleTimeline,
@@ -17,6 +18,14 @@ describe('high-scale react helpers', () => {
       .filter((entry) => entry.artifact_type !== 'provider_approval')
       .map((entry) => entry.artifact_type);
     assert.deepEqual(catalogTypes, [...REQUIRED_AUTHORIZATION_ARTIFACT_TYPES]);
+  });
+
+  it('describes UDP authorization with exact governed IDs and numeric limit units', () => {
+    const udp = GOVERNED_HIGH_SCALE_SCENARIOS.find((scenario) => scenario.id === 'udp_flood');
+    assert.ok(udp);
+    assert.equal(udp.limit.field, 'max_gbps');
+    assert.equal(udp.limit.unit, 'Gbps');
+    assert.deepEqual(udp.deliveryPatterns.map((pattern) => pattern.id), ['direct', 'spoofed']);
   });
 
   it('builds lifecycle timeline only from audit_trail entries', () => {
@@ -67,13 +76,16 @@ describe('high-scale react helpers', () => {
   it('builds metadata-only artifact upload bodies from request context', () => {
     const body = buildMetadataArtifactUploadBody({
       id: 'hs_1',
+      tenant_id: 'tenant_1',
       target_group_id: 'tg_1',
+      scope_hash: 'scope_hash_1',
       requested_window: {
         window_start: '2026-01-01T00:00:00.000Z',
         window_end: '2026-01-02T00:00:00.000Z'
       },
-      requested_scenario_families: ['volumetric_metadata'],
-      requested_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
+      requested_scenario_families: ['udp_flood'],
+      delivery_patterns: ['direct'],
+      requested_limits: { max_gbps: 0.5, max_duration_minutes: 45 },
       emergency_contacts: [{ name: 'On-call', contact: 'ops@example.invalid' }],
       abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
       provider_context: { provider_name: 'Cloudflare' }
@@ -88,7 +100,37 @@ describe('high-scale react helpers', () => {
     assert.equal(body.content_sha256, 'a'.repeat(64));
     assert.equal(body.custody_uri, 'custody://cust_customer_ref');
     assert.equal(body.provider_name, 'Cloudflare');
+    assert.deepEqual(body.approved_scenario_families, ['udp_flood']);
+    assert.deepEqual(body.approved_delivery_patterns, ['direct']);
+    assert.deepEqual(body.approved_limits, { max_gbps: 0.5, max_duration_minutes: 45 });
+    assert.equal(Object.hasOwn(body, 'max_rate'), false);
+    assert.deepEqual(body.authorization_binding, {
+      tenant_id: 'tenant_1',
+      target_group_id: 'tg_1',
+      scope_hash: 'scope_hash_1',
+      requested_window: {
+        window_start: '2026-01-01T00:00:00.000Z',
+        window_end: '2026-01-02T00:00:00.000Z'
+      },
+      approved_schedule_window: {
+        window_start: '2026-01-01T00:00:00.000Z',
+        window_end: '2026-01-02T00:00:00.000Z'
+      },
+      delivery_patterns: ['direct']
+    });
     assert.equal(body.reference_uri, 'metadata://high-scale/provider_approval/hs_1');
+  });
+
+  it('does not invent scenario, pattern, or numeric limit authorization defaults', () => {
+    const body = buildMetadataArtifactUploadBody({ id: 'hs_empty' }, 'test_plan', {
+      filename: 'test-plan.json',
+      content_sha256: 'b'.repeat(64)
+    });
+
+    assert.deepEqual(body.approved_scenario_families, []);
+    assert.deepEqual(body.approved_delivery_patterns, []);
+    assert.deepEqual(body.approved_limits, {});
+    assert.equal(Object.hasOwn(body, 'max_duration_minutes'), false);
   });
 
   it('keeps customer high-scale surfaces free of SOC execution endpoints', () => {

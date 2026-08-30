@@ -106,6 +106,8 @@
     "notification:retry:worker": "node scripts/notification-retry-worker.mjs",
     "notification:retry:runner": "node scripts/notification-retry-runner.mjs",
     "notification:retry:scheduler": "node scripts/notification-retry-scheduler.mjs",
+    "password-recovery:runner": "node scripts/password-recovery-runner.mjs",
+    "test-policy:runner": "node scripts/test-policy-runner.mjs",
     "waf:orchestrator:runner": "node scripts/waf-orchestrator-runner.mjs",
     "cve:feed:ingest": "node scripts/cve-feed-ingest.mjs",
     "waf:drift:runner": "node scripts/waf-drift-runner.mjs",

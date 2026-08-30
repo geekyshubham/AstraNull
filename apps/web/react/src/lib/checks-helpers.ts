@@ -8,6 +8,10 @@ export type CheckFamilyTabId =
   | 'dns'
   | 'l7api'
   | 'protocols'
+  | 'reflection-amplification'
+  | 'exploit'
+  | 'delivery-pattern'
+  | 'operations'
   | 'high-scale'
   | 'custom';
 
@@ -83,6 +87,18 @@ export function filterChecksByFamilyTab(checks: DataItem[], familyTab: CheckFami
   if (familyTab === 'l7api') return checks.filter((check) => isL7ApiCheck(check));
   if (familyTab === 'protocols') {
     return checks.filter((check) => ['protocol', 'tls'].includes(getString(check, ['vector_family'])));
+  }
+  if (familyTab === 'reflection-amplification') {
+    return checks.filter((check) => ['reflection', 'amplification'].includes(getString(check, ['vector_family'])));
+  }
+  if (familyTab === 'exploit') {
+    return checks.filter((check) => getString(check, ['vector_family']) === 'exploit');
+  }
+  if (familyTab === 'delivery-pattern') {
+    return checks.filter((check) => getString(check, ['vector_family']) === 'pattern');
+  }
+  if (familyTab === 'operations') {
+    return checks.filter((check) => getString(check, ['vector_family']) === 'operations');
   }
   if (familyTab === 'high-scale') return checks.filter((check) => isSocGatedCheck(check));
   return checks;

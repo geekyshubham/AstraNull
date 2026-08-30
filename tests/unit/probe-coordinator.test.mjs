@@ -42,16 +42,30 @@ function completeActiveRuns() {
 }
 
 function seedAgent() {
-  getStore().agents.push({
+  const store = getStore();
+  store.agents.push({
     id: 'ag_probe',
     tenant_id: 'ten_demo',
     status: 'online',
     capabilities: ['canary', 'packet', 'heartbeat'],
     target_group_id: 'tg_1',
   });
-  const target = getStore().targets.find((t) => t.id === 'tgt_1');
+  if (!Array.isArray(store.targetVerifications)) store.targetVerifications = [];
+  store.targetVerifications.push({
+    id: 'tv_probe_tgt_1',
+    tenant_id: 'ten_demo',
+    target_id: 'tgt_1',
+    state: 'agent_verified',
+    source_kind: 'agent_observation',
+    source_ref: { ownership_verification_id: 'ov_probe' },
+    transitioned_at: new Date().toISOString(),
+    transitioned_by: 'system',
+  });
+  const target = store.targets.find((t) => t.id === 'tgt_1');
   if (target) {
-    target.metadata = { direct_origin_ip: '198.51.100.7' };
+    target.kind = 'url';
+    target.value = 'https://198.51.100.7/';
+    target.metadata = { protected_host: 'origin.test' };
   }
 }
 
@@ -286,7 +300,7 @@ describe('signed probe coordinator', () => {
     const check = getCheckById('origin.direct_bypass.safe');
     assert.deepEqual(job.probe_profile, {
       ...check.probe_profile,
-      direct_ip: '198.51.100.7',
+      protected_host: 'origin.test',
     });
     assert.equal(job.constraints.max_requests, check.probe_profile.max_requests);
     assert.equal(job.constraints.timeout_ms, 5000);
@@ -313,6 +327,102 @@ describe('signed probe coordinator', () => {
     assert.deepEqual(probeEvent.metadata.safety_attestation, body.safety_attestation);
     assert.ok(getStore().evidenceVault.some((e) => e.label === 'probe_worker_evidence'));
     assert.ok(getStore().auditLog.some((a) => a.action === 'probe_job.result_ingested'));
+  });
+
+  it('developer API never signs AXFR victim B and preserves canonical exact target A', async () => {
+    freshStore();
+    seedAgent();
+    const target = getStore().targets.find((row) => row.id === 'tgt_1');
+    target.kind = 'fqdn';
+    target.value = 'Owned.Example.';
+    target.metadata = {
+      zone: 'victim-b.example',
+      declared_apex_domain: 'victim-b.example.',
+    };
+    const headers = demoHeaders('engineer');
+
+    const retargeted = await request(baseUrl, 'POST', '/v1/test-runs', {
+      headers,
+      body: {
+        check_id: 'dns.zone_transfer_exposure.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        probe_profile: { zone: 'victim-b.example' },
+      },
+    });
+    assert.equal(retargeted.status, 201);
+
+    const workerHeaders = probeWorkerAuthHeaders(
+      'worker-axfr-binding',
+      { method: 'GET', path: '/internal/probe/jobs', tenantId: 'ten_demo' },
+      WORKER_SECRET,
+    );
+    const listedRetargeted = await request(baseUrl, 'GET', '/internal/probe/jobs', {
+      headers: workerHeaders,
+    });
+    assert.equal(listedRetargeted.status, 200);
+    const retargetedJob = listedRetargeted.json.jobs.find(
+      (candidate) => candidate.test_run_id === retargeted.json.run.id,
+    );
+    assert.ok(retargetedJob);
+    assert.equal(verifyProbeJobSignature(retargetedJob, WORKER_SECRET), true);
+    assert.equal(retargetedJob.probe_profile.zone, undefined);
+    assert.equal(retargetedJob.target.metadata?.zone, undefined);
+    assert.equal(retargetedJob.target.metadata?.declared_apex_domain, undefined);
+    assert.equal(JSON.stringify(retargetedJob).includes('victim-b.example'), false);
+
+    const cancelledRetarget = await request(
+      baseUrl,
+      'POST',
+      `/v1/test-runs/${retargeted.json.run.id}/cancel`,
+      { headers },
+    );
+    assert.equal(cancelledRetarget.status, 200);
+
+    target.metadata = {
+      zone: 'OWNED.EXAMPLE.',
+      declared_apex_domain: 'owned.example',
+    };
+    const exact = await request(baseUrl, 'POST', '/v1/test-runs', {
+      headers,
+      body: {
+        check_id: 'dns.zone_transfer_exposure.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        probe_profile: { zone: 'owned.example' },
+      },
+    });
+    assert.equal(exact.status, 201);
+
+    const listedExact = await request(baseUrl, 'GET', '/internal/probe/jobs', {
+      headers: probeWorkerAuthHeaders(
+        'worker-axfr-binding',
+        { method: 'GET', path: '/internal/probe/jobs', tenantId: 'ten_demo' },
+        WORKER_SECRET,
+      ),
+    });
+    assert.equal(listedExact.status, 200);
+    const exactJob = listedExact.json.jobs.find(
+      (candidate) => candidate.test_run_id === exact.json.run.id,
+    );
+    assert.ok(exactJob);
+    assert.equal(verifyProbeJobSignature(exactJob, WORKER_SECRET), true);
+    assert.equal(exactJob.probe_profile.zone, 'owned.example');
+    assert.equal(exactJob.target.metadata.zone, 'owned.example');
+    assert.equal(exactJob.target.metadata.declared_apex_domain, 'owned.example');
+
+    const cancelledExact = await request(
+      baseUrl,
+      'POST',
+      `/v1/test-runs/${exact.json.run.id}/cancel`,
+      { headers },
+    );
+    assert.equal(cancelledExact.status, 200);
+
+    // This describe uses one server and shared dev store; restore its normal literal-IP
+    // Host/SNI fixture so later coordinator cases remain independent of this AXFR target.
+    freshStore();
+    seedAgent();
   });
 
   it('rejects raw packet fields in worker result', async () => {

@@ -1,39 +1,19 @@
 import { audit } from '../audit.mjs';
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
+import {
+  nextPolicyRunAt,
+  normalizePolicyInput,
+  policyDispatchIdempotencyKey,
+  policyValidationResponse,
+} from '../contracts/testPolicyManagement.mjs';
 import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
-import { activeTargetGroupsForTenant } from './targetGroups.mjs';
-
-const CADENCES = new Set(['manual', 'daily', 'weekly', 'monthly', 'event_driven']);
-const EXPECTED_VERDICTS = new Set(['pass', 'warn', 'fail', 'manual_review']);
+import { activeTargetGroupsForTenant, isArchivedTarget } from './targetGroups.mjs';
 
 function ensureStoreShape() {
   const store = getStore();
   if (!Array.isArray(store.testPolicies)) store.testPolicies = [];
-}
-
-function normalizeCadence(value) {
-  const cadence = String(value ?? 'manual').trim();
-  return CADENCES.has(cadence) ? cadence : 'manual';
-}
-
-function normalizeExpectedVerdict(value) {
-  const verdict = String(value ?? 'pass').trim();
-  return EXPECTED_VERDICTS.has(verdict) ? verdict : 'pass';
-}
-
-function normalizeSafeWindows(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
-    .map((item) => ({
-      day: String(item.day ?? '').trim(),
-      start: String(item.start ?? '').trim(),
-      end: String(item.end ?? '').trim(),
-      timezone: String(item.timezone ?? 'UTC').trim() || 'UTC',
-    }))
-    .filter((item) => item.day && item.start && item.end)
-    .slice(0, 14);
+  if (!Array.isArray(store.testPolicyDispatches)) store.testPolicyDispatches = [];
 }
 
 function activeTargetGroup(ctx, id) {
@@ -42,7 +22,9 @@ function activeTargetGroup(ctx, id) {
 
 function targetsForGroup(ctx, targetGroupId) {
   return getStore().targets.filter(
-    (target) => target.tenant_id === ctx.tenantId && target.target_group_id === targetGroupId,
+    (target) => target.tenant_id === ctx.tenantId
+      && target.target_group_id === targetGroupId
+      && !isArchivedTarget(target),
   );
 }
 
@@ -84,21 +66,54 @@ function activePolicy(ctx, id) {
   ) ?? null;
 }
 
+function policyMaxConcurrency(check) {
+  return Math.max(1, Math.min(1, Number(check?.safety_constraints?.max_concurrent_runs_per_target_group) || 1));
+}
+
+function unsupportedEventDrivenPolicy(body, current = null) {
+  const cadence = String(body?.cadence ?? current?.cadence ?? 'manual').trim().toLowerCase();
+  if (cadence !== 'event_driven') return null;
+  return {
+    error: 'unsupported_policy_cadence',
+    status: 400,
+    field: 'cadence',
+    message: 'event_driven policies are unavailable because no durable event consumer is configured.',
+  };
+}
+
+function mutationAudit(ctx, policy, action, changedFields) {
+  return audit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action,
+    resource_type: 'test_policy',
+    resource_id: policy.id,
+    metadata: {
+      target_group_id: policy.target_group_id,
+      check_id: policy.check_id,
+      changed_fields: changedFields,
+    },
+  });
+}
+
 export function listTestPolicies(ctx) {
   ensureStoreShape();
   const activeGroupIds = new Set(activeTargetGroupsForTenant(ctx.tenantId).map((group) => group.id));
   return getStore().testPolicies
-    .filter(
-      (policy) =>
-        policy.tenant_id === ctx.tenantId &&
-        !policy.archived_at &&
-        activeGroupIds.has(policy.target_group_id),
-    )
+    .filter((policy) => policy.tenant_id === ctx.tenantId && !policy.archived_at && activeGroupIds.has(policy.target_group_id))
     .map((policy) => enrichPolicy(ctx, policy));
 }
 
-export function createTestPolicy(ctx, body = {}) {
+export function getTestPolicyForDispatch(ctx, id) {
+  const policy = activePolicy(ctx, id);
+  return policy ? enrichPolicy(ctx, policy) : null;
+}
+
+export function createTestPolicy(ctx, body = {}, options = {}) {
   ensureStoreShape();
+  const unsupported = unsupportedEventDrivenPolicy(body);
+  if (unsupported) return unsupported;
   const targetGroupId = String(body.target_group_id ?? '').trim();
   if (!targetGroupId) return { error: 'missing_target_group_id', status: 400 };
   const targetGroup = activeTargetGroup(ctx, targetGroupId);
@@ -114,17 +129,35 @@ export function createTestPolicy(ctx, body = {}) {
       message: 'This check requires a SOC-governed high-scale request, not a customer-runnable policy.',
     };
   }
+  const duplicate = getStore().testPolicies.find(
+    (policy) => policy.tenant_id === ctx.tenantId
+      && policy.target_group_id === targetGroupId
+      && policy.check_id === check.check_id
+      && !policy.archived_at,
+  );
+  if (duplicate) return { error: 'test_policy_exists', status: 409, existing_id: duplicate.id };
 
-  const now = new Date().toISOString();
+  let normalized;
+  try {
+    normalized = normalizePolicyInput(body, { maxConcurrency: policyMaxConcurrency(check) });
+  } catch (error) {
+    return policyValidationResponse(error);
+  }
+  const now = options.now ?? new Date().toISOString();
   const record = {
-    id: newId('policy'),
+    id: options.id ?? newId('policy'),
     tenant_id: ctx.tenantId,
     target_group_id: targetGroup.id,
     check_id: check.check_id,
-    cadence: normalizeCadence(body.cadence),
-    expected_verdict: normalizeExpectedVerdict(body.expected_verdict),
-    safe_windows: normalizeSafeWindows(body.safe_windows),
-    state: 'active',
+    ...normalized,
+    next_run_at: nextPolicyRunAt(normalized, { from: new Date(now), initial: true }),
+    last_scheduled_at: null,
+    last_dispatched_at: null,
+    last_run_id: null,
+    lease_token: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    schedule_revision: 1,
     safety_policy_snapshot: {
       target_group_safety_policy: targetGroup.safety_policy ?? null,
       check_safety_constraints: check.safety_constraints ?? null,
@@ -134,59 +167,289 @@ export function createTestPolicy(ctx, body = {}) {
     updated_at: now,
   };
   getStore().testPolicies.push(record);
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'test_policy.created',
-    resource_type: 'test_policy',
-    resource_id: record.id,
-    metadata: { target_group_id: targetGroup.id, check_id: check.check_id },
-  });
+  mutationAudit(ctx, record, 'test_policy.created', [
+    'target_group_id', 'check_id', 'cadence', 'expected_verdict', 'safe_windows', 'timezone',
+    'event_trigger', 'enabled', 'max_concurrent_runs', 'next_run_at', 'safety_policy_snapshot',
+  ]);
   persistStore();
   return enrichPolicy(ctx, record);
 }
 
-export function patchTestPolicy(ctx, id, body = {}) {
+export function patchTestPolicy(ctx, id, body = {}, options = {}) {
   const policy = activePolicy(ctx, id);
   if (!policy) return null;
+  const unsupported = unsupportedEventDrivenPolicy(body, policy);
+  if (unsupported) return unsupported;
+  const check = getCheckById(policy.check_id);
+  let normalized;
+  try {
+    normalized = normalizePolicyInput(body, { current: policy, maxConcurrency: policyMaxConcurrency(check) });
+  } catch (error) {
+    return policyValidationResponse(error);
+  }
 
-  if (body.cadence !== undefined) policy.cadence = normalizeCadence(body.cadence);
-  if (body.expected_verdict !== undefined) {
-    policy.expected_verdict = normalizeExpectedVerdict(body.expected_verdict);
+  const mutableFields = ['cadence', 'expected_verdict', 'safe_windows', 'timezone', 'event_trigger', 'state', 'enabled', 'max_concurrent_runs'];
+  const changedFields = mutableFields.filter((field) => JSON.stringify(policy[field] ?? null) !== JSON.stringify(normalized[field] ?? null));
+  for (const field of mutableFields) policy[field] = normalized[field];
+  const now = options.now ?? new Date().toISOString();
+  if (changedFields.some((field) => ['cadence', 'safe_windows', 'timezone', 'event_trigger', 'state', 'enabled'].includes(field))) {
+    policy.next_run_at = nextPolicyRunAt(policy, { from: new Date(now), initial: true });
+    policy.lease_token = null;
+    policy.lease_owner = null;
+    policy.lease_expires_at = null;
+    policy.schedule_revision = Number(policy.schedule_revision ?? 0) + 1;
+    changedFields.push('next_run_at', 'schedule_revision');
   }
-  if (body.safe_windows !== undefined) policy.safe_windows = normalizeSafeWindows(body.safe_windows);
-  if (body.state !== undefined) {
-    const state = String(body.state).trim();
-    if (['active', 'paused'].includes(state)) policy.state = state;
-  }
-  policy.updated_at = new Date().toISOString();
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'test_policy.updated',
-    resource_type: 'test_policy',
-    resource_id: policy.id,
-  });
+  policy.updated_at = now;
+  if (changedFields.length) mutationAudit(ctx, policy, 'test_policy.updated', [...new Set(changedFields)]);
   persistStore();
   return enrichPolicy(ctx, policy);
 }
 
-export function archiveTestPolicy(ctx, id) {
+export function archiveTestPolicy(ctx, id, options = {}) {
   const policy = activePolicy(ctx, id);
   if (!policy) return null;
+  const now = options.now ?? new Date().toISOString();
   policy.state = 'archived';
-  policy.archived_at = new Date().toISOString();
-  policy.updated_at = policy.archived_at;
-  audit({
-    tenant_id: ctx.tenantId,
-    actor_user_id: ctx.userId,
-    actor_role: ctx.role,
-    action: 'test_policy.archived',
-    resource_type: 'test_policy',
-    resource_id: policy.id,
-  });
+  policy.enabled = false;
+  policy.archived_at = now;
+  policy.updated_at = now;
+  policy.next_run_at = null;
+  policy.lease_token = null;
+  policy.lease_owner = null;
+  policy.lease_expires_at = null;
+  mutationAudit(ctx, policy, 'test_policy.archived', ['state', 'enabled', 'archived_at', 'next_run_at']);
   persistStore();
   return { archived: true, id };
+}
+
+export function listDueTestPolicies(ctx, options = {}) {
+  ensureStoreShape();
+  const now = new Date(options.now ?? Date.now());
+  if (Number.isNaN(now.getTime())) return { error: 'invalid_now', status: 400 };
+  const limit = Math.max(1, Math.min(100, Number(options.limit) || 25));
+  return getStore().testPolicies
+    .filter((policy) => policy.tenant_id === ctx.tenantId
+      && !policy.archived_at
+      && policy.state === 'active'
+      && policy.enabled === true
+      && ['daily', 'weekly', 'monthly'].includes(policy.cadence)
+      && policy.next_run_at
+      && new Date(policy.next_run_at) <= now
+      && (!policy.lease_expires_at || new Date(policy.lease_expires_at) <= now))
+    .sort((left, right) => String(left.next_run_at).localeCompare(String(right.next_run_at)) || left.id.localeCompare(right.id))
+    .slice(0, limit)
+    .map((policy) => enrichPolicy(ctx, policy));
+}
+
+export function leaseDueTestPolicies(ctx, options = {}) {
+  ensureStoreShape();
+  const workerId = String(options.workerId ?? '').trim();
+  if (!workerId) return { error: 'missing_worker_id', status: 400 };
+  const now = new Date(options.now ?? Date.now());
+  if (Number.isNaN(now.getTime())) return { error: 'invalid_now', status: 400 };
+  const leaseMs = Math.max(1_000, Math.min(15 * 60_000, Number(options.leaseMs) || 60_000));
+  const due = listDueTestPolicies(ctx, { now, limit: options.limit });
+  if (!Array.isArray(due)) return due;
+  const leased = [];
+
+  for (const enriched of due) {
+    const policy = activePolicy(ctx, enriched.id);
+    if (!policy) continue;
+    const scheduledFor = new Date(policy.next_run_at).toISOString();
+    const idempotencyKey = policyDispatchIdempotencyKey(ctx.tenantId, policy.id, scheduledFor);
+    let dispatch = getStore().testPolicyDispatches.find(
+      (row) => row.tenant_id === ctx.tenantId && row.idempotency_key === idempotencyKey,
+    );
+    if (
+      dispatch
+      && !(
+        dispatch.state === 'leased'
+        && new Date(dispatch.lease_expires_at) <= now
+      )
+    ) continue;
+
+    const leaseToken = newId('policy_lease');
+    const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
+    if (!dispatch) {
+      dispatch = {
+        id: newId('policy_dispatch'),
+        tenant_id: ctx.tenantId,
+        policy_id: policy.id,
+        scheduled_for: scheduledFor,
+        idempotency_key: idempotencyKey,
+        state: 'leased',
+        created_at: now.toISOString(),
+      };
+      getStore().testPolicyDispatches.push(dispatch);
+    }
+    Object.assign(dispatch, {
+      state: 'leased', lease_token: leaseToken, lease_owner: workerId,
+      lease_expires_at: leaseExpiresAt, updated_at: now.toISOString(),
+    });
+    Object.assign(policy, {
+      lease_token: leaseToken, lease_owner: workerId, lease_expires_at: leaseExpiresAt,
+      last_scheduled_at: scheduledFor, updated_at: now.toISOString(),
+    });
+    leased.push({
+      ...enrichPolicy(ctx, policy),
+      dispatch_id: dispatch.id,
+      scheduled_for: scheduledFor,
+      idempotency_key: idempotencyKey,
+      lease_token: leaseToken,
+      lease_expires_at: leaseExpiresAt,
+    });
+  }
+  if (leased.length) persistStore();
+  return leased;
+}
+
+export function claimPolicyDispatchStart(ctx, policyId, input = {}, options = {}) {
+  ensureStoreShape();
+  const dispatch = getStore().testPolicyDispatches.find(
+    (row) => row.id === input.dispatch_id && row.policy_id === policyId && row.tenant_id === ctx.tenantId,
+  );
+  if (!dispatch) return { error: 'policy_dispatch_not_found', status: 404 };
+  if (dispatch.idempotency_key !== input.idempotency_key) {
+    return { error: 'policy_dispatch_key_mismatch', status: 409 };
+  }
+  const now = new Date(options.now ?? Date.now());
+  if (dispatch.start_claimed_at) {
+    if (
+      dispatch.state === 'leased'
+      && dispatch.lease_token === input.lease_token
+      && new Date(dispatch.lease_expires_at) > now
+    ) return { ...dispatch };
+    return { error: 'policy_dispatch_start_claimed', status: 409 };
+  }
+  if (
+    dispatch.state !== 'leased'
+    || dispatch.lease_token !== input.lease_token
+    || new Date(dispatch.lease_expires_at) <= now
+  ) {
+    return { error: 'policy_lease_lost', status: 409 };
+  }
+  const policy = activePolicy(ctx, policyId);
+  if (
+    !policy
+    || policy.state !== 'active'
+    || policy.enabled !== true
+    || policy.lease_token !== input.lease_token
+    || !policy.lease_expires_at
+    || new Date(policy.lease_expires_at) <= now
+  ) {
+    return { error: 'policy_lease_lost', status: 409 };
+  }
+  dispatch.start_claimed_at = now.toISOString();
+  dispatch.updated_at = now.toISOString();
+  mutationAudit(ctx, policy, 'test_policy.dispatch_start_claimed', ['start_claimed_at']);
+  persistStore();
+  return { ...dispatch };
+}
+
+export function completePolicyDispatch(ctx, policyId, input = {}, options = {}) {
+  ensureStoreShape();
+  const dispatch = getStore().testPolicyDispatches.find(
+    (row) => row.id === input.dispatch_id && row.policy_id === policyId && row.tenant_id === ctx.tenantId,
+  );
+  if (!dispatch) return { error: 'policy_dispatch_not_found', status: 404 };
+  if (dispatch.idempotency_key !== input.idempotency_key) return { error: 'policy_dispatch_key_mismatch', status: 409 };
+  const runId = input.run_id == null ? null : String(input.run_id).trim();
+  const state = input.state ?? (runId ? 'dispatched' : 'skipped');
+  if (!['dispatched', 'skipped', 'failed'].includes(state)) return { error: 'invalid_policy_dispatch_state', status: 400 };
+  if (state === 'dispatched' && !runId) return { error: 'missing_policy_run_id', status: 400 };
+  if (state !== 'dispatched' && runId) return { error: 'invalid_policy_run_binding', status: 400 };
+  if (state === 'dispatched') {
+    const boundRun = getStore().testRuns.find(
+      (run) => run.id === runId
+        && run.tenant_id === ctx.tenantId
+        && run.policy_id === policyId
+        && run.policy_dispatch_id === dispatch.id
+        && run.target_group_id === activePolicy(ctx, policyId)?.target_group_id
+        && run.check_id === activePolicy(ctx, policyId)?.check_id,
+    );
+    if (!boundRun) return { error: 'policy_run_binding_mismatch', status: 409 };
+  }
+  if (dispatch.state !== 'leased') {
+    if (
+      dispatch.state === state
+      && (dispatch.run_id ?? null) === (runId ?? null)
+      && (dispatch.error_code ?? null) === (input.error_code ?? null)
+    ) return { ...dispatch };
+    return { error: 'policy_dispatch_already_settled', status: 409 };
+  }
+  const now = new Date(options.now ?? Date.now());
+  if (dispatch.lease_token !== input.lease_token) return { error: 'policy_lease_lost', status: 409 };
+  if (!dispatch.start_claimed_at) return { error: 'policy_dispatch_start_not_claimed', status: 409 };
+  const policy = activePolicy(ctx, policyId);
+  if (!policy || policy.lease_token !== input.lease_token) return { error: 'policy_lease_lost', status: 409 };
+  Object.assign(dispatch, {
+    state,
+    run_id: runId ?? null,
+    error_code: input.error_code ?? null,
+    completed_at: now.toISOString(),
+    updated_at: now.toISOString(),
+    lease_token: null,
+    lease_owner: null,
+    lease_expires_at: null,
+  });
+  Object.assign(policy, {
+    next_run_at: nextPolicyRunAt(policy, { from: new Date(dispatch.scheduled_for), initial: false }),
+    last_dispatched_at: state === 'dispatched' ? now.toISOString() : policy.last_dispatched_at ?? null,
+    last_run_id: runId ?? policy.last_run_id ?? null,
+    lease_token: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    updated_at: now.toISOString(),
+  });
+  mutationAudit(ctx, policy, `test_policy.dispatch_${state}`, ['next_run_at', 'last_dispatched_at', 'last_run_id', 'lease_token']);
+  persistStore();
+  return { ...dispatch };
+}
+
+export async function dispatchDueTestPolicies(ctx, options = {}) {
+  if (typeof options.startTestRun !== 'function') throw new Error('dispatchDueTestPolicies requires startTestRun().');
+  const leases = leaseDueTestPolicies(ctx, options);
+  if (!Array.isArray(leases)) return leases;
+  const results = [];
+  for (const lease of leases) {
+    const binding = {
+      dispatch_id: lease.dispatch_id,
+      lease_token: lease.lease_token,
+      idempotency_key: lease.idempotency_key,
+      scheduled_for: lease.scheduled_for,
+    };
+    const claimed = claimPolicyDispatchStart(ctx, lease.id, binding, options);
+    if (claimed?.error) {
+      results.push({ policy_id: lease.id, run: null, error: claimed, dispatch: claimed });
+      continue;
+    }
+    let started;
+    try {
+      started = await options.startTestRun(ctx, {
+        target_group_id: lease.target_group_id,
+        check_id: lease.check_id,
+        policy_id: lease.id,
+        policy_dispatch_id: lease.dispatch_id,
+      }, options.runtimeConfig, { policyDispatch: binding });
+    } catch {
+      started = { error: 'start_test_run_failed', status: 500 };
+    }
+    const failed = started?.error;
+    const runId = failed ? null : (started.run?.id ?? started.id);
+    const missingRunId = !failed && !runId;
+    const completion = completePolicyDispatch(ctx, lease.id, {
+      ...binding,
+      run_id: runId,
+      state: failed ? 'skipped' : missingRunId ? 'failed' : 'dispatched',
+      error_code: failed ? started.error : missingRunId ? 'missing_run_id' : null,
+    }, options);
+    results.push({
+      policy_id: lease.id,
+      run: failed || missingRunId ? null : started,
+      error: failed ? started : missingRunId ? { error: 'missing_run_id', status: 500 } : null,
+      dispatch: completion,
+    });
+  }
+  return results;
 }

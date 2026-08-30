@@ -130,8 +130,9 @@ describe('postgres high-scale repository', () => {
       risk_review_json: {
         environment: 'staging',
         business_criticality: 'high',
-        requested_scenario_families: ['meta'],
-        requested_limits: { max_rate: '1' },
+        requested_scenario_families: ['udp_flood'],
+        delivery_patterns: ['direct'],
+        requested_limits: { max_gbps: 0.5, max_duration_minutes: 45 },
         stop_criteria: { a: 1 },
         abort_criteria: { b: 2 },
       },
@@ -140,6 +141,9 @@ describe('postgres high-scale repository', () => {
     });
     assert.equal(mapped.adapter.traffic_generated, false);
     assert.equal(mapped.environment, 'staging');
+    assert.deepEqual(mapped.requested_scenario_families, ['udp_flood']);
+    assert.deepEqual(mapped.delivery_patterns, ['direct']);
+    assert.deepEqual(mapped.requested_limits, { max_gbps: 0.5, max_duration_minutes: 45 });
     assert.equal(mapped.provider_context.provider_name, 'Edge');
   });
 
@@ -486,7 +490,7 @@ describe('postgres high-scale repository', () => {
 
   it('artifactFromRow and artifactToMetadata round-trip provider evidence metadata', () => {
     const providerFields = {
-      approved_limits: { max_rate: '500_rps_metadata', max_duration_minutes: 45 },
+      approved_limits: { max_gbps: 0.5, max_duration_minutes: 45 },
       provider_specific_evidence: { provider_ticket: 'CF-1001' },
       emergency_stop_path: 'provider-stop-bridge',
     };

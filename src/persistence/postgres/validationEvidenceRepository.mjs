@@ -1,6 +1,6 @@
 import { withTenantContext } from './tenantContext.mjs';
 
-const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, check_id, created_by, initiated_by,
+const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, check_id, created_by, initiated_by,
   risk_class, safety_class, vector_family, status, probe_external_result, awaiting_external_probe,
   remediation_template, safety_constraints, correlation_json, collection_deadline_at, started_at,
   completed_at, summary_json, created_at`;
@@ -106,6 +106,8 @@ function mapTestRunRow(row) {
     tenant_id: row.tenant_id,
     target_group_id: row.target_group_id,
     target_id: row.target_id ?? undefined,
+    policy_id: row.policy_id ?? null,
+    policy_dispatch_id: row.policy_dispatch_id ?? null,
     check_id: row.check_id,
     created_by: row.created_by ?? undefined,
     initiated_by: row.initiated_by ?? undefined,
@@ -288,6 +290,19 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
+    async getTestRunByPolicyDispatchId(ctx, policyDispatchId) {
+      return withTenantContext(pool, ctx.tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${TEST_RUN_COLUMNS}
+           FROM test_runs
+           WHERE tenant_id = $1 AND policy_dispatch_id = $2
+           LIMIT 1`,
+          [ctx.tenantId, policyDispatchId],
+        );
+        return mapTestRunRow(rows[0] ?? null);
+      });
+    },
+
     async createTestRun(ctx, record) {
       const tenantId = ctx.tenantId;
       const safetyConstraints = JSON.stringify(asObject(record.safety_constraints));
@@ -299,14 +314,14 @@ export function createValidationEvidenceRepository(pool) {
       return withTenantContext(pool, tenantId, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO test_runs (
-             id, tenant_id, target_group_id, target_id, check_id, created_by, initiated_by,
+             id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, check_id, created_by, initiated_by,
              risk_class, safety_class, vector_family, status, probe_external_result,
              awaiting_external_probe, remediation_template, safety_constraints, correlation_json,
              collection_deadline_at, started_at, completed_at, summary_json, created_at
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb,
-             $17::timestamptz, $18::timestamptz, $19::timestamptz, $20::jsonb, $21::timestamptz
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb,
+             $19::timestamptz, $20::timestamptz, $21::timestamptz, $22::jsonb, $23::timestamptz
            )
            RETURNING ${TEST_RUN_COLUMNS}`,
           [
@@ -314,6 +329,8 @@ export function createValidationEvidenceRepository(pool) {
             tenantId,
             record.target_group_id,
             record.target_id ?? null,
+            record.policy_id ?? null,
+            record.policy_dispatch_id ?? null,
             record.check_id,
             record.created_by ?? null,
             record.initiated_by ?? null,

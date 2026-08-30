@@ -4,15 +4,29 @@ export const PASSWORD_AUTH_REPOSITORY_METHODS = Object.freeze([
   'findUsersByEmail',
   'recordLoginFailure',
   'recordLoginSuccess',
+  'completeLogin',
   'findPasswordInviteByTokenHash',
   'setPasswordFromInvite',
   'createPasswordInvite',
+  'findCredential',
+  'createPasswordReset',
+  'findPasswordResetByTokenHash',
+  'consumePasswordReset',
+  'beginMfaEnrollment',
+  'confirmMfaEnrollment',
+  'disableMfa',
 ]);
 
 export const POSTGRES_PASSWORD_AUTH_SERVICE_METHODS = Object.freeze([
   'loginWithPassword',
   'setPasswordWithInvite',
   'issuePasswordInvite',
+  'requestPasswordReset',
+  'resetPasswordWithToken',
+  'beginMfaEnrollment',
+  'confirmMfaEnrollment',
+  'disableMfa',
+  'validatePasswordSession',
 ]);
 
 export function createPostgresPasswordAuthServices(repositories) {

@@ -1,4 +1,3 @@
-import { isIP } from 'node:net';
 import { audit } from '../audit.mjs';
 import {
   customerSelectableChecks,
@@ -19,9 +18,12 @@ import { upsertFindingFromVerdict } from './findings.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
+import { getTestPolicyForDispatch } from './testPolicies.mjs';
+import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs';
+import { validateHostSniTargetBinding } from '../lib/probeJobs.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { computeReadiness } from './readiness.mjs';
-import { isArchivedTargetGroup } from './targetGroups.mjs';
+import { isArchivedTarget, isArchivedTargetGroup } from './targetGroups.mjs';
 import {
   countCustomerRunnableRunsLastHour,
   effectiveSafetyConstraints,
@@ -243,6 +245,67 @@ function activeRunForGroup(tenantId, targetGroupId) {
   );
 }
 
+function validatePolicyBinding(ctx, body, group, check, options = {}) {
+  const policyId = String(body.policy_id ?? '').trim();
+  if (!policyId) return { policy: null };
+  const policy = getTestPolicyForDispatch(ctx, policyId);
+  if (!policy) return { error: 'test_policy_not_found', status: 404 };
+  if (policy.state !== 'active' || policy.enabled !== true || policy.archived_at) {
+    return { error: 'test_policy_disabled', status: 409 };
+  }
+  if (policy.target_group_id !== group.id || policy.check_id !== check.check_id) {
+    return { error: 'test_policy_binding_mismatch', status: 409 };
+  }
+  if (policy.max_concurrent_runs !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
+  if (policy.safe_windows?.length && !isWithinPolicySafeWindow(policy)) {
+    return { error: 'policy_safe_window_closed', status: 429 };
+  }
+
+  const trustedDispatch = options.policyDispatch;
+  if (policy.cadence !== 'manual' && !trustedDispatch && !options.policyEvent) {
+    return { error: 'trusted_policy_dispatch_required', status: 409 };
+  }
+  if (trustedDispatch) {
+    const dispatch = (getStore().testPolicyDispatches ?? []).find(
+      (row) => row.id === trustedDispatch.dispatch_id
+        && row.tenant_id === ctx.tenantId
+        && row.policy_id === policy.id,
+    );
+    if (!dispatch
+      || dispatch.state !== 'leased'
+      || dispatch.lease_token !== trustedDispatch.lease_token
+      || dispatch.idempotency_key !== trustedDispatch.idempotency_key
+      || policy.lease_token !== trustedDispatch.lease_token
+      || new Date(dispatch.lease_expires_at) <= new Date()) {
+      return { error: 'policy_lease_invalid', status: 409 };
+    }
+  }
+  return { policy };
+}
+
+function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThisHost, options = {}) {
+  const group = getStore().targetGroups.find(
+    (candidate) => candidate.id === body.target_group_id
+      && candidate.tenant_id === ctx.tenantId
+      && !isArchivedTargetGroup(candidate),
+  );
+  if (!group) return { error: 'target_group_not_found', status: 404 };
+  const target = getStore().targets.find(
+    (candidate) => candidate.id === targetId
+      && candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === group.id
+      && !isArchivedTarget(candidate),
+  );
+  if (!target) return { error: 'target_not_found', status: 404 };
+  const binding = validatePolicyBinding(ctx, body, group, check, options);
+  if (binding.error) return binding;
+  if (probeWillLeaveThisHost) {
+    const ownership = targetOwnershipProof(ctx, group, target.id);
+    if (!ownership.verified) return { error: 'ownership_not_verified', status: 409, ownership_state: ownership.state };
+  }
+  return { group, target, policy: binding.policy };
+}
+
 const CANCELLABLE_STATUSES = new Set(['planned', 'running', 'collecting']);
 
 function denySafeStart(ctx, action, resourceId, metadata, error, status = 429) {
@@ -270,35 +333,9 @@ function denyEventCap(ctx, run, metadata = {}) {
   );
 }
 
-function normalizedUrlHostname(value) {
-  try {
-    return new URL(String(value)).hostname.replace(/^\[|\]$/g, '');
-  } catch {
-    return null;
-  }
-}
-
 function effectiveTargetKind(target) {
   if (/^https?:\/\//i.test(String(target?.value ?? ''))) return 'url';
   return target?.kind;
-}
-
-function hasDirectOriginForHostSni(target, body = {}) {
-  const overrideDirectIp =
-    body?.probe_profile != null && typeof body.probe_profile === 'object' && !Array.isArray(body.probe_profile)
-      ? body.probe_profile.direct_ip
-      : null;
-  const metadata = target?.metadata_json ?? target?.metadata ?? {};
-  const directIp = overrideDirectIp ?? metadata.direct_origin_ip;
-  if (typeof directIp === 'string' && directIp.trim()) return true;
-  if (target?.kind === 'ip' && isIP(String(target.value ?? '').replace(/^\[|\]$/g, '')) !== 0) {
-    return true;
-  }
-  if (/^https?:\/\//i.test(String(target?.value ?? ''))) {
-    const host = normalizedUrlHostname(target.value);
-    if (host && isIP(host) !== 0) return true;
-  }
-  return false;
 }
 
 export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
@@ -336,7 +373,7 @@ export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
   return null;
 }
 
-export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }) {
+export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation' }, options = {}) {
   const check = getCheckById(body.check_id);
   if (!check) return { error: 'unknown_check', status: 400 };
   if (!isCustomerRunnable(check)) {
@@ -399,11 +436,28 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     return { error: 'concurrent_run_blocked', status: 409 };
   }
 
-  const targetId = body.target_id ?? getStore().targets.find((t) => t.target_group_id === targetGroupId)?.id;
+  const targetId = body.target_id ?? getStore().targets.find(
+    (candidate) => candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === targetGroupId
+      && !isArchivedTarget(candidate),
+  )?.id;
   const target = getStore().targets.find(
-    (t) => t.id === targetId && t.tenant_id === ctx.tenantId && t.target_group_id === targetGroupId,
+    (candidate) => candidate.id === targetId
+      && candidate.tenant_id === ctx.tenantId
+      && candidate.target_group_id === targetGroupId
+      && !isArchivedTarget(candidate),
   );
   if (!target) return { error: 'target_not_found', status: 404 };
+
+  const policyBinding = validatePolicyBinding(ctx, body, group, check, options);
+  if (policyBinding.error) return policyBinding;
+  const policyDispatchId = options.policyDispatch?.dispatch_id ?? null;
+  if (policyDispatchId) {
+    const existingRun = getStore().testRuns.find(
+      (run) => run.tenant_id === ctx.tenantId && run.policy_dispatch_id === policyDispatchId,
+    );
+    if (existingRun) return { run: getTestRun(ctx, existingRun.id), idempotent_replay: true };
+  }
 
   const kind = effectiveTargetKind(target);
   if (Array.isArray(check.supported_targets) && check.supported_targets.length > 0) {
@@ -418,18 +472,24 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     }
   }
 
-  if (
-    runtimeConfig.probeMode === 'signed-worker'
-    && check.probe_profile?.kind === 'host_sni_bypass'
-    && !hasDirectOriginForHostSni(target, body)
-  ) {
-    return {
-      error: 'missing_direct_origin_ip',
-      status: 400,
-      check_id: check.check_id,
-      message:
-        'Signed-worker Host/SNI bypass checks require an IP target, literal-IP URL, probe_profile.direct_ip, or target.metadata.direct_origin_ip.',
-    };
+  if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
+    const targetBindingError = validateHostSniTargetBinding(check, target);
+    if (targetBindingError) {
+      const denied = denySafeStart(
+        ctx,
+        'test_run.destination_binding_denied',
+        targetGroupId,
+        {
+          check_id: check.check_id,
+          target_group_id: targetGroupId,
+          target_id: target.id,
+          reason: targetBindingError.error,
+        },
+        targetBindingError.error,
+        targetBindingError.status,
+      );
+      return { ...denied, check_id: targetBindingError.check_id, message: targetBindingError.message };
+    }
   }
 
   // Ownership gate — the last check before this run can put packets on the wire.
@@ -528,6 +588,34 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     }
   }
 
+  const finalValidation = revalidateBeforeDispatch(
+    ctx,
+    { ...body, target_group_id: targetGroupId },
+    check,
+    target.id,
+    probeWillLeaveThisHost,
+    options,
+  );
+  if (finalValidation.error) {
+    if (finalValidation.error === 'ownership_not_verified') {
+      return denySafeStart(
+        ctx,
+        'test_run.ownership_denied',
+        targetGroupId,
+        {
+          check_id: check.check_id,
+          target_group_id: targetGroupId,
+          target_id: target.id,
+          ownership_state: finalValidation.ownership_state,
+          phase: 'pre_dispatch_revalidation',
+        },
+        finalValidation.error,
+        finalValidation.status,
+      );
+    }
+    return finalValidation;
+  }
+
   const safetyConstraints = effectiveSafetyConstraints(check, group);
   const runId = newId('run');
   const run = {
@@ -535,6 +623,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     tenant_id: ctx.tenantId,
     target_group_id: targetGroupId,
     target_id: target.id,
+    policy_id: policyBinding.policy?.id ?? null,
+    policy_dispatch_id: options.policyDispatch?.dispatch_id ?? null,
     check_id: check.check_id,
     vector_family: check.vector_family,
     safety_class: check.safety_class ?? check.risk_class,
@@ -557,7 +647,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     action: 'test_run.started',
     resource_type: 'test_run',
     resource_id: runId,
-    metadata: { check_id: check.check_id },
+    metadata: { check_id: check.check_id, policy_id: run.policy_id },
   });
 
   const probeMode = runtimeConfig.probeMode ?? 'simulation';

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { closePgPool, createPgPool, pingPostgres } from './pool.mjs';
+import { checkRoleRlsPosture, closePgPool, createPgPool, pingPostgres } from './pool.mjs';
 import {
   assertLatestMigrationApplied,
   getLatestMigrationVersion,
@@ -11,6 +11,7 @@ import { createCoreCatalogRepository } from './coreCatalogRepository.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { createAuthTokenRepository } from './authTokenRepository.mjs';
 import { createPasswordAuthRepository } from './passwordAuthRepository.mjs';
+import { createPasswordRecoveryDelivery } from './passwordRecoveryDelivery.mjs';
 import { createAgentControlRepository } from './agentControlRepository.mjs';
 import { createValidationEvidenceRepository } from './validationEvidenceRepository.mjs';
 import { createReportRepository } from './reportRepository.mjs';
@@ -93,6 +94,7 @@ export const POSTGRES_RUNTIME_REPOSITORY_KEYS = Object.freeze([
   'wafOrchestrator',
   'internalManagement',
   'portalRevamp',
+  'testPolicies',
 ]);
 
 /**
@@ -123,6 +125,7 @@ const DEFAULT_REPOSITORY_FACTORIES = {
   wafOrchestrator: createWafOrchestratorRepository,
   internalManagement: createInternalManagementRepository,
   portalRevamp: createPortalRevampRepository,
+  testPolicies: createPostgresTestPolicyRepository,
 };
 
 /**
@@ -133,6 +136,7 @@ const DEFAULT_REPOSITORY_FACTORIES = {
  *   createPool?: (env: NodeJS.ProcessEnv | Record<string, string | undefined>) => import('pg').Pool,
  *   closePool?: (pool: import('pg').Pool) => Promise<void>,
  *   ping?: (pool: import('pg').Pool) => Promise<unknown>,
+ *   checkRoleRlsPosture?: typeof checkRoleRlsPosture,
  *   listMigrationFiles?: typeof listMigrationFiles,
  *   getLatestMigrationVersion?: typeof getLatestMigrationVersion,
  *   assertLatestMigrationApplied?: typeof assertLatestMigrationApplied,
@@ -147,6 +151,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
   const createPoolFn = options.createPool ?? createPgPool;
   const closePoolFn = options.closePool ?? closePgPool;
   const pingFn = options.ping ?? pingPostgres;
+  const checkRoleRlsPostureFn = options.checkRoleRlsPosture ?? checkRoleRlsPosture;
   const listFilesFn = options.listMigrationFiles ?? listMigrationFiles;
   const latestVersionFn = options.getLatestMigrationVersion ?? getLatestMigrationVersion;
   const assertLatestFn = options.assertLatestMigrationApplied ?? assertLatestMigrationApplied;
@@ -177,6 +182,15 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
 
     await pingFn(pool);
 
+    if (String(env.ASTRANULL_ENFORCE_DATABASE_ROLE ?? '').trim() === '1') {
+      const posture = await checkRoleRlsPostureFn(pool);
+      if (posture.bypassesRls !== false || posture.ownsTables !== false) {
+        throw new Error(
+          `Refusing to start: PostgreSQL runtime role ${posture.role ?? 'unknown'} must be a non-owner NOSUPERUSER NOBYPASSRLS role.`,
+        );
+      }
+    }
+
     if (autoMigrate) {
       await runMigrationsFn(pool, { migrationsDir, files });
     }
@@ -185,13 +199,19 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
 
     /** @type {Record<string, unknown>} */
     const repositories = {};
+    const auditRepository = repositoryFactories.audit(pool);
     for (const key of POSTGRES_RUNTIME_REPOSITORY_KEYS) {
       const factory = repositoryFactories[key];
       if (!factory) {
         throw new Error(`Missing repository factory for "${key}".`);
       }
-      repositories[key] = factory(pool);
+      if (key === 'audit') repositories[key] = auditRepository;
+      else if (key === 'coreCatalog' || key === 'testPolicies') {
+        repositories[key] = factory(pool, { auditRepository });
+      } else repositories[key] = factory(pool);
     }
+
+    const testPolicyRepository = repositories.testPolicies;
 
     const retentionServices = createPostgresRetentionServices(repositories);
     const catalogServices = createPostgresCatalogServices(repositories);
@@ -241,7 +261,6 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const wafCoverageRollupServices = createPostgresWafCoverageRollupServices(repositories);
     const internalManagementServices = createPostgresInternalManagementServices(repositories);
     const subscriptionServices = createPostgresSubscriptionServices(repositories);
-    const testPolicyRepository = createPostgresTestPolicyRepository(pool);
     const testPolicyServices = createPostgresTestPolicyServices({
       testPolicies: testPolicyRepository,
       coreCatalog: repositories.coreCatalog,
@@ -270,6 +289,10 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       ...catalogServices,
       ...authServices,
       passwordAuth: passwordAuthServices,
+      passwordRecoveryDelivery: createPasswordRecoveryDelivery(pool, {
+        env,
+        ...(options.passwordRecoveryDeliveryOptions ?? {}),
+      }),
       ...agentServices,
       ...validationServices,
       ...reportServices,
@@ -280,7 +303,14 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       placement: placementServices,
       probeJobs: probeJobServices,
       highScale: highScaleServices,
-      testPolicies: testPolicyServices,
+      testPolicies: {
+        ...testPolicyServices,
+        dispatchDueTestPolicies: (ctx, dispatchOptions = {}) =>
+          testPolicyServices.dispatchDueTestPolicies(ctx, {
+            ...dispatchOptions,
+            startTestRun: validationServices.testRuns.startTestRun,
+          }),
+      },
       subscriptions: subscriptionServices,
       productionReleaseEvidence: productionReleaseEvidenceServices,
       retention: retentionServices,
