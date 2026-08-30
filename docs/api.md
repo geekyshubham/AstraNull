@@ -166,6 +166,8 @@ Unauthenticated, enumeration-safe, feature-gated with the password lane. Request
 
 Eligible requests audit `auth.password.reset_requested`; missing or failed durable delivery enqueue audits `auth.password.reset_delivery_enqueue_failed`. Audit metadata never contains the token.
 
+The always-on Postgres delivery runner still requires its database URL, 32-byte envelope key, valid HTTPS public base URL, explicit tenant scope, and bounded poll interval. `ASTRANULL_SMTP_HOST` is intentionally optional: blank or missing keeps the worker in truthful queue-only provider-unconfigured mode, where encrypted outbox items remain nondelivered and receive retryable `smtp_not_configured` metadata under the existing lease, retry, and max-attempt bounds. Setting a real SMTP host enables delivery; queue-only mode never fabricates a successful send.
+
 ### `POST /v1/auth/reset-password`
 
 Unauthenticated, feature-gated. Request: `{ "token": "pwr_<one-time-secret>", "password": "a policy-compliant password" }`.

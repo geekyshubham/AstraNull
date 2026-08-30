@@ -14,12 +14,16 @@ export const PASSWORD_RECOVERY_CYCLE_TIMEOUT_CODE = 'password_recovery_cycle_tim
 
 const USAGE = `password-recovery-runner: deliver explicitly scoped encrypted password reset outboxes.
 
-Environment (all required):
-  ASTRANULL_DATABASE_URL
-  ASTRANULL_SECRET_ENCRYPTION_KEY
-  ASTRANULL_PUBLIC_BASE_URL
-  ASTRANULL_SMTP_HOST
-  ASTRANULL_PASSWORD_RECOVERY_TENANT_IDS (comma-separated; optional when --tenant-id is used)
+Environment:
+  Required:
+    ASTRANULL_DATABASE_URL
+    ASTRANULL_SECRET_ENCRYPTION_KEY
+    ASTRANULL_PUBLIC_BASE_URL
+  Tenant scope:
+    ASTRANULL_PASSWORD_RECOVERY_TENANT_IDS (comma-separated; optional when --tenant-id is used)
+  SMTP delivery:
+    ASTRANULL_SMTP_HOST (blank/unset keeps retryable queue-only provider-unconfigured mode;
+                         a real host enables delivery)
 
 Options:
   --tenant-id <id>      Explicit tenant scope (repeatable; overrides the environment list)
@@ -134,9 +138,6 @@ export function resolvePasswordRecoveryRunnerConfig(env, parsed) {
       ok: false,
       message: 'password-recovery-runner: ASTRANULL_PUBLIC_BASE_URL must be a valid HTTPS URL.',
     };
-  }
-  if (!String(env.ASTRANULL_SMTP_HOST ?? '').trim()) {
-    return { ok: false, message: 'password-recovery-runner: ASTRANULL_SMTP_HOST must be set.' };
   }
   let tenantIds;
   try {

@@ -52,5 +52,10 @@ describe('password recovery Compose contract', () => {
     const envExample = read('ops/aws/env.example');
     assert.match(envExample, /ASTRANULL_PASSWORD_RECOVERY_TENANT_IDS=ten_demo/);
     assert.match(envExample, /ASTRANULL_PASSWORD_RECOVERY_INTERVAL_MS=5000/);
+    assert.match(envExample, /^ASTRANULL_SMTP_HOST=$/m);
+    assert.match(
+      envExample,
+      /blank for queue-only provider-unconfigured mode[\s\S]*real SMTP host to enable delivery/i,
+    );
   });
 });

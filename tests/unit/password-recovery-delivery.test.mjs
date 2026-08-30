@@ -184,6 +184,14 @@ describe('password recovery delivery outbox', () => {
       errorCode: null,
     });
     assert.deepEqual(classifyPasswordRecoveryDeliveryResult({
+      status: 'queued_provider_not_configured',
+      reason: 'smtp_host_not_configured',
+    }), {
+      delivered: false,
+      retryable: true,
+      errorCode: 'smtp_not_configured',
+    });
+    assert.deepEqual(classifyPasswordRecoveryDeliveryResult({
       status: 'provider_retry_scheduled',
       reason: 'may contain a provider secret',
     }), {
@@ -219,7 +227,6 @@ describe('password recovery runner configuration', () => {
       'ASTRANULL_DATABASE_URL',
       'ASTRANULL_SECRET_ENCRYPTION_KEY',
       'ASTRANULL_PUBLIC_BASE_URL',
-      'ASTRANULL_SMTP_HOST',
     ]) {
       const env = runnerEnv();
       delete env[name];
@@ -234,6 +241,16 @@ describe('password recovery runner configuration', () => {
     );
     assert.equal(noTenant.ok, false);
     assert.match(noTenant.message, /explicit tenant scope/);
+  });
+
+  it('accepts blank or missing SMTP host for queue-only provider-unconfigured processing', () => {
+    const missingSmtp = runnerEnv();
+    delete missingSmtp.ASTRANULL_SMTP_HOST;
+    for (const env of [runnerEnv({ ASTRANULL_SMTP_HOST: '   ' }), missingSmtp]) {
+      const config = resolvePasswordRecoveryRunnerConfig(env, parsed);
+      assert.equal(config.ok, true);
+      assert.deepEqual(config.tenantIds, ['ten_1']);
+    }
   });
 
   it('accepts --once and rejects poll intervals outside the bounded range', () => {
