@@ -172,17 +172,11 @@ export async function loginCustomer(page, baseUrl, env = process.env) {
     (url) => url.origin === expectedOrigin && url.pathname === '/app',
     { timeout: 30000 },
   ).then(() => null, (error) => error);
-  try {
-    await page.getByRole('button', { name: 'Continue to portal', exact: true }).click({ timeout: 30000 });
-    const outcome = credentialGuardFailure
-      ? await Promise.race([portalArrival, credentialGuardFailure])
-      : await portalArrival;
-    if (outcome instanceof Error) throw outcome;
-  } finally {
-    if (credentialRoutePattern && credentialRouteHandler) {
-      await page.unroute(credentialRoutePattern, credentialRouteHandler);
-    }
-  }
+  await page.getByRole('button', { name: 'Continue to portal', exact: true }).click({ timeout: 30000 });
+  const outcome = credentialGuardFailure
+    ? await Promise.race([portalArrival, credentialGuardFailure])
+    : await portalArrival;
+  if (outcome instanceof Error) throw outcome;
   await page.waitForSelector('main.main', { state: 'visible', timeout: 30000 });
 }
 

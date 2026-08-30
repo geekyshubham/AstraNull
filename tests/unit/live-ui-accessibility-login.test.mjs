@@ -123,6 +123,7 @@ test('loginCustomer uses the injected password and never opens the advertised st
 
   assert.ok(events.indexOf(`fill:${ACCESSIBILITY_RUNNER_IDENTITY}`) < events.indexOf(`password:${injected}`));
   assert.ok(events.indexOf(`password:${injected}`) < events.indexOf('click:continue'));
+  assert.equal(events.some((event) => event.startsWith('unroute:')), false);
   assert.ok(events.includes('reached:/app'));
 });
 

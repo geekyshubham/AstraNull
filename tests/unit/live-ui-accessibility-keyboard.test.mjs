@@ -61,6 +61,7 @@ describe('canonical live UI accessibility runner', () => {
       RUNNER,
       /const runnerPassword = process\.env\[ACCESSIBILITY_RUNNER_PASSWORD_ENV\];\s*delete process\.env\[ACCESSIBILITY_RUNNER_PASSWORD_ENV\];\s*ensurePlaywrightCore\(\);/m,
     );
+    assert.doesNotMatch(RUNNER, /page\.unroute\(/);
   });
 
   it('starts at a temporary first-DOM sentinel and treats document or sentinel wrap as exhaustion', async () => {
