@@ -3,6 +3,13 @@ import { STAFF_ROLES } from '../contracts/staffRoles.mjs';
 import { mintBundledStagingOidcJwt } from '../lib/bundledStagingOidc.mjs';
 
 const BUNDLED_STAGING_DEMO_TENANT = 'ten_demo';
+const PASSWORD_PROTECTED_CUSTOMER_IDS = new Set([
+  'accessibility-runner@astranull.invalid',
+]);
+
+export function isPasswordProtectedBundledStagingCustomerId(userId) {
+  return PASSWORD_PROTECTED_CUSTOMER_IDS.has(String(userId ?? '').trim().toLowerCase());
+}
 
 /**
  * Mint a bundled-fixture principal for demo/staging sign-in.
@@ -13,8 +20,9 @@ const BUNDLED_STAGING_DEMO_TENANT = 'ten_demo';
  * attacker-controlled — `role` and `staff_role` below are inputs, not assertions.
  *
  * The two branches are gated differently on purpose. Customer tokens are pinned to the ten_demo
- * tenant, and this is currently the portal's only working login. Staff tokens carry platform
- * authority over /internal/admin (tenants, signup approvals, subscriptions), which is not scoped to
+ * tenant and remain available for general staging walkthrough identities; explicitly protected
+ * customer IDs are refused below and must use the credentialed password lane. Staff tokens carry
+ * platform authority over /internal/admin (tenants, signup approvals, subscriptions), which is not scoped to
  * a demo tenant — so the staff branch requires `bundledStagingStaffLogin`, which never arms under
  * NODE_ENV=production. Before that gate existed, an anonymous POST to the live deployment returned
  * an `internal_admin` bearer that read /internal/admin successfully.
@@ -73,6 +81,13 @@ export function loginBundledStagingPrincipal(body, runtimeConfig) {
     return { error: 'validation_failed', status: 400, fields: ['tenant_id'] };
   }
   const userId = String(body?.user_id ?? 'usr_admin').trim() || 'usr_admin';
+  if (isPasswordProtectedBundledStagingCustomerId(userId)) {
+    return {
+      error: 'password_required',
+      status: 403,
+      message: 'This account must sign in with its password.',
+    };
+  }
   let role = String(body?.role ?? 'admin').trim().toLowerCase();
   if (!ROLES.includes(role)) role = 'viewer';
 

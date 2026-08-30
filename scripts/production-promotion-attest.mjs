@@ -9,12 +9,14 @@ import { readFileSync } from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
+const ACCESSIBILITY_RUNNER_PASSWORD_ENV = 'ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD';
 
-function defaultShell(command, inherit = false) {
+function defaultShell(command, inherit = false, envOverrides = {}) {
   execSync(command, {
     cwd: REPO_ROOT,
     stdio: inherit ? 'inherit' : 'pipe',
     encoding: 'utf8',
+    env: { ...process.env, ...envOverrides },
   });
 }
 
@@ -35,6 +37,8 @@ export function parseArgs(argv = []) {
 
 export async function runProductionPromotionAttest(opts = {}, deps = {}) {
   const shell = deps.shell ?? defaultShell;
+  const accessibilityRunnerPassword = process.env[ACCESSIBILITY_RUNNER_PASSWORD_ENV];
+  delete process.env[ACCESSIBILITY_RUNNER_PASSWORD_ENV];
   const baseUrl = String(opts.baseUrl || process.env.ASTRANULL_HOSTED_STAGING_BASE_URL || '').replace(/\/$/, '');
   if (!baseUrl) throw new Error('ASTRANULL_HOSTED_STAGING_BASE_URL or --base-url is required');
 
@@ -47,7 +51,13 @@ export async function runProductionPromotionAttest(opts = {}, deps = {}) {
   process.env.ASTRANULL_RELEASE_ID = 'rel-hosted-staging-2026-07-03';
 
   shell(`node scripts/run-live-oidc-staging-login.mjs --base-url ${JSON.stringify(baseUrl)}`);
-  shell(`node scripts/run-live-ui-accessibility-matrix.mjs --base-url ${JSON.stringify(baseUrl)}`);
+  shell(
+    `node scripts/run-live-ui-accessibility-matrix.mjs --base-url ${JSON.stringify(baseUrl)}`,
+    false,
+    accessibilityRunnerPassword
+      ? { [ACCESSIBILITY_RUNNER_PASSWORD_ENV]: accessibilityRunnerPassword }
+      : {},
+  );
   shell(`node scripts/run-operator-runbook-exercise.mjs --base-url ${JSON.stringify(baseUrl)}`);
 
   shell(`ASTRANULL_HOSTED_STAGING_BASE_URL=${JSON.stringify(baseUrl)} npm run staging:hosted:attest`, true);

@@ -55,8 +55,24 @@ function ensurePlaywrightCore() {
 }
 
 export const ACCESSIBILITY_RUNNER_IDENTITY = 'accessibility-runner@astranull.invalid';
+export const ACCESSIBILITY_RUNNER_PASSWORD_ENV = 'ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD';
 
-export async function loginCustomer(page, baseUrl) {
+function credentialTargetOrigin(baseUrl) {
+  let target;
+  try {
+    target = new URL(baseUrl);
+  } catch {
+    throw new Error('Accessibility runner requires a valid absolute base URL before loading credentials.');
+  }
+  const loopback = ['127.0.0.1', '::1', 'localhost'].includes(target.hostname);
+  if (target.username || target.password || (target.protocol !== 'https:' && !(loopback && target.protocol === 'http:'))) {
+    throw new Error('Accessibility runner sends credentials only to HTTPS origins or an explicit HTTP loopback target.');
+  }
+  return target.origin;
+}
+
+export async function loginCustomer(page, baseUrl, env = process.env) {
+  const expectedOrigin = credentialTargetOrigin(baseUrl);
   const configUrl = `${baseUrl}/v1/public/site-config`;
   let response;
   try {
@@ -87,26 +103,86 @@ export async function loginCustomer(page, baseUrl) {
 
   const authMode = String(config.auth_mode ?? '').trim();
   const bundledStaging = authMode === 'oidc-jwt' && config.bundled_staging_login_enabled === true;
-  if (authMode !== 'dev-headers' && !bundledStaging) {
+  const credentialedPasswordMode = bundledStaging || authMode === 'signed-session';
+  const password = String(env?.[ACCESSIBILITY_RUNNER_PASSWORD_ENV] ?? '');
+  if (authMode !== 'dev-headers' && (
+    !credentialedPasswordMode
+    || config.password_login_enabled !== true
+  )) {
     throw new Error(
-      `Accessibility runner refuses credentialless login for auth_mode=${authMode || 'unknown'} with bundled_staging_login_enabled=${config.bundled_staging_login_enabled === true}; use dev-headers or the explicitly enabled bundled staging bypass. Enterprise password and real IdP login require a credentialed harness.`,
+      `Accessibility runner cannot use password login for auth_mode=${authMode || 'unknown'} with bundled_staging_login_enabled=${config.bundled_staging_login_enabled === true} and password_login_enabled=${config.password_login_enabled === true}; enterprise IdP login requires a separate credentialed harness.`,
+    );
+  }
+  if (credentialedPasswordMode && !password) {
+    throw new Error(
+      `Accessibility runner requires ${ACCESSIBILITY_RUNNER_PASSWORD_ENV} for ${ACCESSIBILITY_RUNNER_IDENTITY}; refusing credentialless login.`,
     );
   }
 
   await page.goto(`${baseUrl}/login`, { waitUntil: 'networkidle', timeout: 60000 });
+  let loadedOrigin;
+  try {
+    loadedOrigin = new URL(page.url()).origin;
+  } catch {
+    loadedOrigin = '';
+  }
+  if (loadedOrigin !== expectedOrigin) {
+    throw new Error('Accessibility runner login navigation left the configured origin; refusing to send credentials.');
+  }
 
-  if (bundledStaging && config.password_login_enabled === true) {
-    try {
-      await page.locator('details.auth-bypass > summary').click({ timeout: 30000 });
-      await page.locator('#login-password').waitFor({ state: 'detached', timeout: 30000 });
-    } catch {
-      throw new Error('Bundled staging login was advertised, but its credentialless staging bypass control was unavailable.');
-    }
+  let credentialGuardFailure;
+  let resolveCredentialGuardFailure;
+  let credentialRoutePattern;
+  let credentialRouteHandler;
+  if (credentialedPasswordMode) {
+    credentialGuardFailure = new Promise((resolve) => {
+      resolveCredentialGuardFailure = resolve;
+    });
+    credentialRoutePattern = `${expectedOrigin}/v1/auth/login`;
+    credentialRouteHandler = async (route) => {
+      try {
+        const response = await route.fetch({ maxRedirects: 0 });
+        if (response.status() >= 300 && response.status() < 400) {
+          await route.fulfill({
+            status: 502,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'login_redirect_refused' }),
+          });
+          resolveCredentialGuardFailure(
+            new Error('Accessibility runner refused a redirect from the credential-bearing login endpoint.'),
+          );
+          return;
+        }
+        await route.fulfill({ response });
+      } catch {
+        await route.abort('failed').catch(() => {});
+        resolveCredentialGuardFailure(
+          new Error('Accessibility runner could not complete the guarded credential request.'),
+        );
+      }
+    };
+    await page.route(credentialRoutePattern, credentialRouteHandler);
   }
 
   await page.locator('#login-user-id').fill(ACCESSIBILITY_RUNNER_IDENTITY, { timeout: 30000 });
-  await page.getByRole('button', { name: 'Continue to portal', exact: true }).click({ timeout: 30000 });
-  await page.waitForURL((url) => url.pathname === '/app', { timeout: 30000 });
+  if (credentialedPasswordMode) {
+    await page.locator('#login-password').fill(password, { timeout: 30000 });
+  }
+  const portalArrival = page.waitForURL(
+    (url) => url.origin === expectedOrigin && url.pathname === '/app',
+    { timeout: 30000 },
+  ).then(() => null, (error) => error);
+  try {
+    await page.getByRole('button', { name: 'Continue to portal', exact: true }).click({ timeout: 30000 });
+    const outcome = credentialGuardFailure
+      ? await Promise.race([portalArrival, credentialGuardFailure])
+      : await portalArrival;
+    if (outcome instanceof Error) throw outcome;
+  } finally {
+    if (credentialRoutePattern && credentialRouteHandler) {
+      await page.unroute(credentialRoutePattern, credentialRouteHandler);
+    }
+  }
   await page.waitForSelector('main.main', { state: 'visible', timeout: 30000 });
 }
 
@@ -349,6 +425,8 @@ async function runViewportChecks(page, baseUrl, pageId, route, viewport) {
 }
 
 export async function runLiveUiAccessibilityMatrix(opts) {
+  const runnerPassword = process.env[ACCESSIBILITY_RUNNER_PASSWORD_ENV];
+  delete process.env[ACCESSIBILITY_RUNNER_PASSWORD_ENV];
   ensurePlaywrightCore();
   const { chromium } = await import('playwright-core');
   const baseUrl = String(opts.baseUrl).replace(/\/$/, '');
@@ -363,7 +441,9 @@ export async function runLiveUiAccessibilityMatrix(opts) {
   const page = await context.newPage();
   const runs = [];
   try {
-    await loginCustomer(page, baseUrl);
+    await loginCustomer(page, baseUrl, {
+      [ACCESSIBILITY_RUNNER_PASSWORD_ENV]: runnerPassword,
+    });
     for (const pageId of REQUIRED_PAGES) {
       const route = PAGE_ROUTES[pageId] ?? pageId;
       for (const viewport of ['desktop', 'mobile']) {

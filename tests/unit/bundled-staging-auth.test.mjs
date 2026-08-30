@@ -1,3 +1,5 @@
+import '../helpers/dev-data-dir.mjs';
+
 /**
  * What the unauthenticated bundled-fixture login is allowed to mint.
  *
@@ -15,6 +17,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loginBundledStagingPrincipal } from '../../src/services/bundledStagingAuth.mjs';
+import { rejectsPasswordlessProtectedStagingSession } from '../../src/server.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
 
 /** Fixture on, staff mint on — the shape a dev/staging deployment resolves to. */
@@ -31,6 +34,76 @@ test('bundled staging customer login mints access token', () => {
   assert.match(result.access_token, /^eyJ/);
   assert.equal(result.principal, 'customer');
   assert.equal(result.role, 'admin');
+});
+
+
+
+test('password-protected accessibility identity cannot mint a bundled customer token', () => {
+  for (const userId of [
+    'accessibility-runner@astranull.invalid',
+    'ACCESSIBILITY-RUNNER@ASTRANULL.INVALID',
+    '  accessibility-runner@astranull.invalid  ',
+  ]) {
+    const result = loginBundledStagingPrincipal(
+      { principal: 'customer', tenant_id: 'ten_demo', user_id: userId, role: 'admin' },
+      PRODUCTION_SHAPE,
+    );
+    assert.equal(result.error, 'password_required');
+    assert.equal(result.status, 403);
+    assert.equal(result.access_token, undefined, 'no bearer may be minted');
+  }
+});
+
+test('account-specific password guard does not disable other bundled staging customers', () => {
+  const result = loginBundledStagingPrincipal(
+    {
+      principal: 'customer',
+      tenant_id: 'ten_demo',
+      user_id: 'accessibility-runner-neighbor@astranull.invalid',
+      role: 'viewer',
+    },
+    PRODUCTION_SHAPE,
+  );
+  assert.equal(result.error, undefined);
+  assert.match(result.access_token, /^eyJ/);
+  assert.equal(result.user_id, 'accessibility-runner-neighbor@astranull.invalid');
+});
+
+test('preexisting passwordless tokens for the protected identity are rejected centrally', () => {
+  const runtimeConfig = { bundledStagingOidc: true };
+  const protectedCtx = {
+    tenantId: 'ten_demo',
+    userId: 'accessibility-runner@astranull.invalid',
+  };
+
+  assert.equal(
+    rejectsPasswordlessProtectedStagingSession(runtimeConfig, protectedCtx, null),
+    true,
+  );
+  assert.equal(
+    rejectsPasswordlessProtectedStagingSession(runtimeConfig, protectedCtx, {
+      tagged: true,
+      valid: true,
+      generation: 1,
+    }),
+    false,
+  );
+  assert.equal(
+    rejectsPasswordlessProtectedStagingSession(
+      runtimeConfig,
+      { ...protectedCtx, userId: 'neighbor@astranull.invalid' },
+      null,
+    ),
+    false,
+  );
+  assert.equal(
+    rejectsPasswordlessProtectedStagingSession(
+      { bundledStagingOidc: false },
+      protectedCtx,
+      null,
+    ),
+    false,
+  );
 });
 
 test('bundled staging staff login mints access token when explicitly enabled', () => {

@@ -57,6 +57,10 @@ describe('canonical live UI accessibility runner', () => {
     assert.match(RUNNER, /locator\('#login-user-id'\)\.fill\(ACCESSIBILITY_RUNNER_IDENTITY/);
     assert.match(RUNNER, /keyboard traversal executed \(\$\{keyboard\.checks\} checks\)/);
     assert.match(RUNNER, /keyboard issues: \$\{keyboard\.issues\.join\('; '\)\}/);
+    assert.match(
+      RUNNER,
+      /const runnerPassword = process\.env\[ACCESSIBILITY_RUNNER_PASSWORD_ENV\];\s*delete process\.env\[ACCESSIBILITY_RUNNER_PASSWORD_ENV\];\s*ensurePlaywrightCore\(\);/m,
+    );
   });
 
   it('starts at a temporary first-DOM sentinel and treats document or sentinel wrap as exhaustion', async () => {

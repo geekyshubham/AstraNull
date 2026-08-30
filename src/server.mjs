@@ -808,6 +808,13 @@ function readPasswordSessionGeneration(headers) {
   }
 }
 
+export function rejectsPasswordlessProtectedStagingSession(runtimeConfig, authCtx, passwordSession) {
+  return runtimeConfig?.bundledStagingOidc === true
+    && authCtx?.tenantId === 'ten_demo'
+    && bundledStagingAuth.isPasswordProtectedBundledStagingCustomerId(authCtx?.userId)
+    && passwordSession?.tagged !== true;
+}
+
 function isPasswordRecoveryPublicRoute(pathname, method) {
   return method === 'POST'
     && (pathname === '/v1/auth/request-password-reset' || pathname === '/v1/auth/reset-password');
@@ -1126,6 +1133,10 @@ export function createServer(options = {}) {
           return;
         }
         const passwordSession = readPasswordSessionGeneration(req.headers);
+        if (rejectsPasswordlessProtectedStagingSession(runtimeConfig, auth.ctx, passwordSession)) {
+          json(res, 401, { error: 'unauthorized', message: 'Missing or invalid session token.' });
+          return;
+        }
         if (passwordSession?.tagged) {
           const validatePasswordSession = serviceDeps.passwordAuth?.validatePasswordSession;
           if (!passwordSession.valid || typeof validatePasswordSession !== 'function') {

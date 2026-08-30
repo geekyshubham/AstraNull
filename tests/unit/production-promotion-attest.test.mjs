@@ -104,4 +104,35 @@ describe('production promotion attest', () => {
     assert.ok(attachIndex > gapAuditIndex);
     assert.ok(externalVerifyIndex > attachIndex);
   });
+
+  it('scopes the accessibility password to only the live accessibility subprocess', async () => {
+    const calls = [];
+    const secret = 'test-only-credential';
+    process.env.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD = secret;
+
+    await runProductionPromotionAttest(
+      { baseUrl: 'https://staging.example.test' },
+      {
+        shell(command, inherit, envOverrides = {}) {
+          calls.push({ command, inherit, envOverrides });
+        },
+        readGapAuditReport: () => ({
+          production_ready: true,
+          customer_production_ready: true,
+        }),
+      },
+    );
+
+    assert.equal(process.env.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD, undefined);
+    const recipients = calls.filter(
+      ({ envOverrides }) => envOverrides.ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD === secret,
+    );
+    assert.equal(recipients.length, 1);
+    assert.match(recipients[0].command, /run-live-ui-accessibility-matrix\.mjs/);
+    assert.equal(
+      calls.some(({ command }) => command.includes(secret)),
+      false,
+      'secret must never be placed in a command string',
+    );
+  });
 });
