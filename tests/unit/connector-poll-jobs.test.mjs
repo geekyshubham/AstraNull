@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
@@ -47,6 +48,40 @@ function signedJob(overrides = {}) {
     expiresAt: EXPIRES_AT,
     ...overrides,
   }, KEYS.privateKey);
+}
+
+const ABORT_RESPECTING_TRANSPORT = `(_url, init) => new Promise((_resolve, reject) => {`
+  + ` init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true }); })`;
+const ABORT_IGNORING_TRANSPORT = `() => new Promise(() => {})`;
+
+function runNoRefChild(settleSnippet, fetchFnSource = ABORT_RESPECTING_TRANSPORT) {
+  const moduleUrl = new URL('../../src/lib/connectorPollJobs.mjs', import.meta.url).href;
+  const childScript = [
+    `import { generateKeyPairSync } from 'node:crypto';`,
+    `import { buildSignedConnectorPollJob, createConnectorPollBudgetedFetch } from ${JSON.stringify(moduleUrl)};`,
+    `const t0 = Date.now();`,
+    `const { privateKey } = generateKeyPairSync('ed25519');`,
+    `const { envelope } = buildSignedConnectorPollJob({`,
+    `  tenantId: 'ten_demo', connectorId: 'conn_cf_1', provider: 'cloudflare',`,
+    `  pollRevision: 7, secretId: 'secret_cf_1', secretRotation: 4,`,
+    `  issuedAt: new Date(t0).toISOString(), expiresAt: new Date(t0 + 600_000).toISOString(),`,
+    `}, privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'));`,
+    `envelope.constraints.request_timeout_ms = 10;`,
+    `const budgeted = createConnectorPollBudgetedFetch(${fetchFnSource}, envelope);`,
+    settleSnippet,
+  ].join('\n');
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', childScript], {
+      timeout: 15_000,
+      killSignal: 'SIGKILL',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
+    child.on('close', (code, signalName) => resolve({ code, signalName, text }));
+    child.on('error', reject);
+  });
 }
 
 describe('signed connector poll jobs', () => {
@@ -195,6 +230,74 @@ describe('signed connector poll jobs', () => {
       (err) => err?.name === 'TimeoutError',
     );
     assert.equal(receivedSignal.aborted, true);
+  });
+
+  it('settles at the signed request deadline even when the transport ignores the abort signal', async () => {
+    const { envelope } = signedJob();
+    envelope.constraints.request_timeout_ms = 10;
+    let receivedSignal;
+    const budgeted = createConnectorPollBudgetedFetch((_url, init) => {
+      receivedSignal = init.signal;
+      return new Promise(() => {});
+    }, envelope);
+    const startedAt = performance.now();
+
+    await assert.rejects(
+      budgeted('https://api.cloudflare.com/client/v4/zones'),
+      (err) => err?.name === 'TimeoutError',
+    );
+    const elapsed = performance.now() - startedAt;
+    assert.equal(receivedSignal.aborted, true);
+    assert.equal(budgeted.requestCount(), 1);
+    assert.ok(elapsed >= 9, `settled before the signed deadline: ${elapsed}ms`);
+    assert.ok(elapsed < 10_000, `hard per-request bound violated: ${elapsed}ms`);
+  });
+
+  it('propagates a caller abort through the combined signal and settles promptly', async () => {
+    const { envelope } = signedJob();
+    envelope.constraints.request_timeout_ms = 5_000;
+    const caller = new AbortController();
+    let receivedSignal;
+    const budgeted = createConnectorPollBudgetedFetch((_url, init) => {
+      receivedSignal = init.signal;
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      });
+    }, envelope);
+    const pending = budgeted('https://api.cloudflare.com/client/v4/zones', { signal: caller.signal });
+
+    caller.abort(new DOMException('caller cancelled', 'AbortError'));
+    await assert.rejects(pending, (err) => err?.name === 'AbortError');
+    assert.equal(receivedSignal.aborted, true);
+    assert.equal(receivedSignal.reason.name, 'AbortError');
+  });
+
+  it('keeps the event loop alive until the per-request abort fires even with no other pending work', async () => {
+    const output = await runNoRefChild(`try {
+  await budgeted('https://api.cloudflare.com/client/v4/zones');
+  console.log('settled-without-abort');
+} catch (err) {
+  console.log('rejected ' + err?.name + ' at ' + (Date.now() - t0) + 'ms');
+}`);
+    assert.equal(output.signalName, null, `regression child was killed (${output.signalName}); output:\n${output.text}`);
+    assert.equal(output.code, 0, `regression child exited ${output.code} before the abort settled; output:\n${output.text}`);
+    assert.match(output.text, /rejected TimeoutError at \d+ms/, `abort did not settle the transport in the no-ref child; output:\n${output.text}`);
+  });
+
+  it('enforces the per-request hard deadline in a no-ref child even when the transport ignores abort', async () => {
+    const output = await runNoRefChild(`try {
+  await budgeted('https://api.cloudflare.com/client/v4/zones');
+  console.log('settled-without-abort');
+} catch (err) {
+  console.log('rejected ' + err?.name + ' at ' + (Date.now() - t0) + 'ms');
+}`, ABORT_IGNORING_TRANSPORT);
+    assert.equal(output.signalName, null, `no-ref child was killed (${output.signalName}); output:\n${output.text}`);
+    assert.equal(output.code, 0, `no-ref child exited ${output.code}; output:\n${output.text}`);
+    const match = output.text.match(/rejected TimeoutError at (\d+)ms/);
+    assert.ok(match, `deadline did not settle an abort-ignoring transport in the no-ref child; output:\n${output.text}`);
+    const elapsed = Number(match[1]);
+    assert.ok(elapsed >= 9, `settled before the signed deadline: ${elapsed}ms`);
+    assert.ok(elapsed < 15_000, `hard per-request bound violated: ${elapsed}ms`);
   });
 
   it('enforces the overall signed deadline before transport invocation', async () => {

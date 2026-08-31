@@ -258,9 +258,24 @@ export function createConnectorPollBudgetedFetch(fetchFn, envelope, options = {}
         code: 'connector_poll_deadline_exceeded',
       });
     }
-    const deadlineSignal = AbortSignal.timeout(Math.max(1, requestTimeout));
-    const signal = init.signal ? AbortSignal.any([init.signal, deadlineSignal]) : deadlineSignal;
-    return fetchFn(url, { ...init, signal });
+    const controller = new AbortController();
+    const signal = init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+    let deadlineReject;
+    const deadlinePromise = new Promise((_resolve, reject) => { deadlineReject = reject; });
+    const settleOnAbort = () => deadlineReject(signal.reason);
+    signal.addEventListener('abort', settleOnAbort, { once: true });
+    if (signal.aborted) deadlineReject(signal.reason);
+    const timer = setTimeout(() => {
+      const reason = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      controller.abort(reason);
+      deadlineReject(reason);
+    }, Math.max(1, requestTimeout));
+    try {
+      return await Promise.race([fetchFn(url, { ...init, signal }), deadlinePromise]);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', settleOnAbort);
+    }
   };
   budgetedFetch.requestCount = () => requests;
   return budgetedFetch;
