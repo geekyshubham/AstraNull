@@ -397,10 +397,17 @@ describe('Kubernetes worker exact-digest manifests', () => {
     );
     assert.match(workflow, /cosign sign --yes "\$IMAGE_REFERENCE"/);
     assert.match(workflow, /cosign verify[\s\S]*"\$IMAGE_REFERENCE" >\/dev\/null/);
-    assert.match(
-      workflow,
-      /cosign verify-attestation[\s\S]*--type slsaprovenance[\s\S]*"\$IMAGE_REFERENCE" >\/dev\/null/,
+    assert.equal(
+      workflow.includes([
+        '          cosign verify-attestation \\',
+        '            --type slsaprovenance1 \\',
+        '            --certificate-identity-regexp "$identity" \\',
+        '            --certificate-oidc-issuer "$issuer" \\',
+        '            "$IMAGE_REFERENCE" >/dev/null',
+      ].join('\n')),
+      true,
     );
+    assert.equal(workflow.includes('            --type slsaprovenance \\'), false);
     assert.match(workflow, /actions\/attest-build-provenance@[0-9a-f]{40}/);
     assert.equal(workflow.includes(`subject-name: ${repositoryOutput}`), true);
     assert.match(workflow, /subject-digest: \$\{\{ steps\.build\.outputs\.digest \}\}/);

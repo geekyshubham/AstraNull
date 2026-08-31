@@ -287,10 +287,13 @@ describe('AWS release path hardening', () => {
       assert.match(staleContainers, /all_release_operation_container_names[\s\S]*remove_named_container_checked/m);
       assert.match(staleWorkspace, /\.astranull-env\.deploy\.\*[\s\S]*\.astranull-env\.restore\.\*/m);
       assert.match(staleWorkspace, /is_release_workspace_scratch_name "\$candidate" \|\| continue/);
+      assert.ok(main.indexOf('acquire_deploy_lock') < main.indexOf('reconcile_pending_release_bundle'));
       assert.ok(main.indexOf('cleanup_stale_operation_containers_checked') < main.indexOf('cleanup_stale_release_workspace'));
       assert.ok(main.indexOf('cleanup_stale_release_workspace') < main.indexOf('snapshot_env_file'));
       if (name === 'deploy') {
         assert.ok(main.indexOf('install_failure_traps') < main.indexOf('snapshot_env_file'));
+        assert.ok(main.indexOf('reconcile_pending_release_bundle') < main.indexOf('backup_database'));
+        assert.ok(main.indexOf('reconcile_pending_release_bundle') < main.indexOf('activated=1'));
       }
     }
     assert.match(compose, /migrate:[\s\S]*exec timeout -k 10 150[\s\S]*migrate-postgres\.mjs/m);

@@ -589,13 +589,33 @@ release_runtime_health_for_bundle_file() {
 }
 
 reconcile_pending_release_bundle() {
-  local pending_match=0 current_match=0 rc
+  local pending_match=0 current_match=0 legacy_current_match=0 rc
   release_state_preactivation_pending=0
   ensure_release_state_dir || return
   if ! pending_release_bundle_exists; then
     if canonical_release_bundle_exists; then
       release_bundle_load "$CURRENT_RELEASE_BUNDLE_FILE" || return
-      if [[ "$release_bundle_connector_enabled" == 0 ]]; then
+      if release_runtime_matches_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE"; then
+        current_match=1
+      else
+        rc=$?
+        ((rc == 1)) || return "$rc"
+        if release_runtime_matches_bundle_file_for_legacy_migration "$CURRENT_RELEASE_BUNDLE_FILE"; then
+          legacy_current_match=1
+        else
+          rc=$?
+          ((rc == 1)) || {
+            release_state_error 'could not inspect immutable runtime IDs against canonical current state'
+            return "$rc"
+          }
+        fi
+      fi
+      # Preserve the normal cleanup of disabled connectors for a strict raw-ID fleet,
+      # but never use that cleanup to make a legacy-tag compatibility proof pass. The
+      # narrow compatibility proof itself must observe connector presence matching the
+      # canonical bundle.
+      if (( ! current_match && ! legacy_current_match )) \
+        && [[ "$release_bundle_connector_enabled" == 0 ]]; then
         if release_runtime_services_absent connector-poll-scheduler connector-poll-runner; then :; else
           rc=$?
           ((rc == 1)) || {
@@ -603,13 +623,22 @@ reconcile_pending_release_bundle() {
             return "$rc"
           }
           stop_remove_services connector-poll-scheduler connector-poll-runner || return
+          if release_runtime_matches_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE"; then
+            current_match=1
+          else
+            rc=$?
+            ((rc == 1)) || return "$rc"
+          fi
         fi
       fi
-      if release_runtime_matches_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE"; then
-        release_runtime_health_for_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE" || return
+      if ((current_match || legacy_current_match)); then
+        release_runtime_health_for_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE" || {
+          if ((legacy_current_match)); then
+            release_state_error 'canonical legacy-tag runtime failed health verification; refusing compatibility recovery'
+          fi
+          return 1
+        }
       else
-        rc=$?
-        ((rc == 1)) || return "$rc"
         if release_runtime_services_absent caddy control-plane probe-worker \
           password-recovery-worker test-policy-runner connector-poll-scheduler connector-poll-runner; then :; else
           rc=$?
@@ -618,7 +647,7 @@ reconcile_pending_release_bundle() {
           return 1
         fi
       fi
-      regenerate_release_state_projections
+      regenerate_release_state_projections || return
     fi
     return 0
   fi
@@ -644,6 +673,24 @@ reconcile_pending_release_bundle() {
       }
     fi
   fi
+  # Releases that first introduced canonical bundles could persist an observed legacy
+  # fleet, write the target pending bundle, and then fail before activation. Those
+  # unchanged containers retain exact-SHA Config.Image references even though their
+  # immutable .Image IDs exactly match canonical current. Keep this compatibility path
+  # narrower than normal reconciliation: it is considered only when neither strict
+  # bundle matches, and it still requires every canonical application container's exact
+  # immutable ID plus the complete postgres/caddy/connector presence contract.
+  if (( ! pending_match && ! current_match )) && canonical_release_bundle_exists; then
+    if release_runtime_matches_bundle_file_for_legacy_migration "$CURRENT_RELEASE_BUNDLE_FILE"; then
+      legacy_current_match=1
+    else
+      rc=$?
+      ((rc == 1)) || {
+        release_state_error 'could not inspect immutable runtime IDs against canonical current state'
+        return "$rc"
+      }
+    fi
+  fi
   if ((pending_match)); then
     release_runtime_health_for_bundle_file "$PENDING_RELEASE_BUNDLE_FILE" || {
       release_state_error 'runtime matches pending image IDs but failed health verification; refusing promotion'
@@ -659,6 +706,21 @@ reconcile_pending_release_bundle() {
     release_state_durable_remove "$PENDING_RELEASE_BUNDLE_FILE" 'stale pending release-image bundle' || return
     regenerate_release_state_projections || return
     release_state_error 'discarded pending release state because the complete runtime still matches canonical current state'
+  elif ((legacy_current_match)); then
+    release_runtime_health_for_bundle_file "$CURRENT_RELEASE_BUNDLE_FILE" || {
+      release_state_error 'runtime immutable IDs match canonical current state but failed health verification; refusing compatibility recovery'
+      return 1
+    }
+    # Repair non-authoritative projections before consuming the pending journal. If a
+    # checked atomic write fails, pending remains as retry/evidence. Once durable removal
+    # succeeds, every compatibility projection has already settled from canonical state.
+    regenerate_release_state_projections || {
+      release_state_error 'could not repair compatibility projections; refusing pending discard'
+      return 1
+    }
+    release_state_durable_remove "$PENDING_RELEASE_BUNDLE_FILE" \
+      'stale pre-activation pending release-image bundle' || return
+    release_state_error 'discarded stale pre-activation pending state because complete runtime immutable IDs still match canonical current state'
   elif ! canonical_release_bundle_exists; then
     if release_runtime_services_absent caddy control-plane probe-worker password-recovery-worker \
       test-policy-runner connector-poll-scheduler connector-poll-runner; then

@@ -2290,6 +2290,7 @@ PY
       CONNECTOR_IMAGE_STATE_FILE="$STATE_DIR/connector-image-state"
       RELEASE_VALIDATOR_IMAGE_STATE_FILE="$STATE_DIR/release-validator-image-state"
       release_runtime_matches_bundle_file() { return 1; }
+      release_runtime_matches_bundle_file_for_legacy_migration() { return 1; }
       release_runtime_services_absent() { return 0; }
     `;
     try {
@@ -2392,6 +2393,274 @@ PY
       assert.equal(existsSync(pending), true, 'ambiguous journal must remain for fail-closed investigation');
     } finally {
       rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers only exact immutable-current legacy residue and remains retry-safe without pending', () => {
+    const currentTag = '6'.repeat(40);
+    const targetTag = 'd'.repeat(40);
+    const currentId = `sha256:${'6'.repeat(64)}`;
+    const targetId = `sha256:${'d'.repeat(64)}`;
+
+    const runScenario = ({
+      connectorEnabled = false,
+      variant = 'safe',
+      failProjection = false,
+      failRemove = false,
+      secondVariant = variant,
+      failSecondProjection = false,
+      failSecondHealth = false,
+      script = DEPLOY,
+    }) => {
+      const temp = mkdtempSync(path.join(tmpdir(), `astranull-legacy-pending-${variant}-`));
+      const stateDir = path.join(temp, 'state');
+      const result = runBash(`
+        source "$1"
+        DEPLOY_STATE_DIR="$STATE_DIR"
+        CURRENT_RELEASE_BUNDLE_FILE="$STATE_DIR/release-image-current"
+        PENDING_RELEASE_BUNDLE_FILE="$STATE_DIR/release-image-pending"
+        CONTROL_PLANE_IMAGE_TAG_FILE="$STATE_DIR/control-plane-image-tag"
+        CORE_WORKER_IMAGE_STATE_FILE="$STATE_DIR/core-worker-image-state"
+        CONNECTOR_IMAGE_STATE_FILE="$STATE_DIR/connector-image-state"
+        RELEASE_VALIDATOR_IMAGE_STATE_FILE="$STATE_DIR/release-validator-image-state"
+
+        write_release_bundle_atomic "$CURRENT_RELEASE_BUNDLE_FILE" \
+          "$CURRENT_TAG" "$CURRENT_ID" "$CURRENT_TAG" "$CURRENT_ID" \
+          "$TARGET_TAG" "$TARGET_ID" "$CONNECTOR_ENABLED" \
+          "$([[ "$CONNECTOR_ENABLED" == 1 ]] && printf %s "$CURRENT_TAG")" \
+          "$([[ "$CONNECTOR_ENABLED" == 1 ]] && printf %s "$CURRENT_ID")"
+        write_pending_release_bundle \
+          "$TARGET_TAG" "$TARGET_ID" "$TARGET_TAG" "$TARGET_ID" \
+          "$TARGET_TAG" "$TARGET_ID" "$CONNECTOR_ENABLED" \
+          "$([[ "$CONNECTOR_ENABLED" == 1 ]] && printf %s "$TARGET_TAG")" \
+          "$([[ "$CONNECTOR_ENABLED" == 1 ]] && printf %s "$TARGET_ID")"
+
+        # Reproduce a crash/failure-era mixed projection: canonical is authoritative,
+        # while compatibility files contain a blend of target and current identities.
+        persist_control_plane_image_state "$TARGET_TAG" "$TARGET_ID"
+        persist_core_worker_image_state "$CURRENT_TAG" "$CURRENT_ID"
+        persist_release_validator_image_state "$TARGET_TAG" "$TARGET_ID"
+        persist_connector_image_state "$TARGET_TAG" "$TARGET_ID"
+
+        compose_timeout() {
+          local service="\${!#}"
+          case "$*" in
+            '30 ps -q '*|'30 ps --all -q '*)
+              case "$service" in
+                postgres|caddy)
+                  [[ ! ( "$VARIANT" == missing-runtime && "$service" == caddy ) ]] \
+                    && printf '%s-cid' "$service"
+                  return 0
+                  ;;
+                control-plane|probe-worker|password-recovery-worker|test-policy-runner)
+                  [[ ! ( "$VARIANT" == missing && "$service" == test-policy-runner ) ]] \
+                    && printf '%s-cid' "$service"
+                  return 0
+                  ;;
+                connector-poll-scheduler|connector-poll-runner)
+                  if [[ "$CONNECTOR_ENABLED" == 1 ]]; then
+                    [[ ! ( "$VARIANT" == missing-connector && "$service" == connector-poll-runner ) ]] \
+                      && printf '%s-cid' "$service"
+                  elif [[ "$VARIANT" == unexpected-disabled-connector ]]; then
+                    printf '%s-cid' "$service"
+                  fi
+                  return 0
+                  ;;
+                *) return 90 ;;
+              esac
+              ;;
+            *) return 91 ;;
+          esac
+        }
+        timeout() {
+          [[ "\${1:-}" == -k ]] && shift 3
+          [[ "$1 $2 $3" == 'docker inspect --format' ]] || return 92
+          local format=$4 cid=$5 service="\${5%-cid}" tag="$CURRENT_TAG" image_id="$CURRENT_ID"
+          local image_name=astranull-control-plane
+          if [[ "$VARIANT" == tag-only ]]; then
+            image_id="$TARGET_ID"
+          elif [[ "$VARIANT" == mixed && "$service" == probe-worker ]]; then
+            tag="$TARGET_TAG"
+            image_id="$TARGET_ID"
+          elif [[ "$VARIANT" == wrong-config-ref && "$service" == probe-worker ]]; then
+            image_name=untrusted-control-plane
+          elif [[ "$service" == connector-poll-scheduler || "$service" == connector-poll-runner ]]; then
+            tag="$CURRENT_TAG"
+            image_id="$CURRENT_ID"
+          fi
+          case "$format" in
+            '{{.Config.Image}}') printf '%s:%s' "$image_name" "$tag" ;;
+            '{{.Image}}') printf '%s' "$image_id" ;;
+            *) return 93 ;;
+          esac
+        }
+        check_postgres() { :; }
+        check_control_plane() { :; }
+        check_core_workers() { :; }
+        check_connector_workers() { :; }
+        verify_services_absent() { release_runtime_services_absent "$@"; }
+        stop_remove_services() { VARIANT=safe; }
+        if [[ "$FAIL_PROJECTION" == 1 ]]; then
+          persist_core_worker_image_state() { return 78; }
+        fi
+        if [[ "$FAIL_REMOVE" == 1 ]]; then
+          release_state_durable_remove() { return 79; }
+        fi
+
+        set +e
+        reconcile_pending_release_bundle
+        first_rc=$?
+        second_rc=skipped
+        if ((first_rc == 0)); then
+          VARIANT="$SECOND_VARIANT"
+          if [[ "$FAIL_SECOND_PROJECTION" == 1 ]]; then
+            persist_core_worker_image_state() { return 78; }
+          fi
+          if [[ "$FAIL_SECOND_HEALTH" == 1 ]]; then
+            check_control_plane() { return 77; }
+          fi
+          reconcile_pending_release_bundle
+          second_rc=$?
+        fi
+        set -e
+        printf '%s|%s|%s|%s|%s|%s' \
+          "$first_rc" \
+          "$second_rc" \
+          "$([[ -e "$PENDING_RELEASE_BUNDLE_FILE" ]] && printf present || printf absent)" \
+          "$([[ -e "$CONNECTOR_IMAGE_STATE_FILE" ]] && printf present || printf absent)" \
+          "$([[ -e "$CONTROL_PLANE_IMAGE_TAG_FILE" ]] && head -n 1 "$CONTROL_PLANE_IMAGE_TAG_FILE" || printf missing)" \
+          "$([[ -e "$CORE_WORKER_IMAGE_STATE_FILE" ]] && head -n 1 "$CORE_WORKER_IMAGE_STATE_FILE" || printf missing)"
+      `, {
+        CONNECTOR_ENABLED: connectorEnabled ? '1' : '0',
+        CURRENT_ID: currentId,
+        CURRENT_TAG: currentTag,
+        FAIL_PROJECTION: failProjection ? '1' : '0',
+        FAIL_REMOVE: failRemove ? '1' : '0',
+        FAIL_SECOND_HEALTH: failSecondHealth ? '1' : '0',
+        FAIL_SECOND_PROJECTION: failSecondProjection ? '1' : '0',
+        SECOND_VARIANT: secondVariant,
+        STATE_DIR: stateDir,
+        TARGET_ID: targetId,
+        TARGET_TAG: targetTag,
+        VARIANT: variant,
+      }, script);
+      return { result, temp };
+    };
+
+    const scenarios = [
+      { name: 'disabled-safe', options: {}, success: true, connectorProjection: 'absent' },
+      { name: 'enabled-safe', options: { connectorEnabled: true }, success: true, connectorProjection: 'present' },
+      { name: 'restore-disabled-safe', options: { script: RESTORE }, success: true, connectorProjection: 'absent' },
+      {
+        name: 'no-pending-mixed-activation',
+        options: { secondVariant: 'mixed' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-matching-tags-with-wrong-ids',
+        options: { secondVariant: 'tag-only' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-wrong-config-reference',
+        options: { secondVariant: 'wrong-config-ref' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-missing-runtime',
+        options: { secondVariant: 'missing-runtime' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-missing-core',
+        options: { secondVariant: 'missing' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-missing-enabled-connector',
+        options: { connectorEnabled: true, secondVariant: 'missing-connector' },
+        success: true,
+        secondFailure: true,
+        connectorProjection: 'present',
+      },
+      {
+        name: 'no-pending-unexpected-disabled-connectors',
+        options: { secondVariant: 'unexpected-disabled-connector' },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-health-failure',
+        options: { failSecondHealth: true },
+        success: true,
+        secondFailure: true,
+      },
+      {
+        name: 'no-pending-projection-write-failure',
+        options: { failSecondProjection: true },
+        success: true,
+        secondFailure: true,
+      },
+      { name: 'mixed-activation', options: { variant: 'mixed' }, success: false },
+      { name: 'matching-tags-with-wrong-ids', options: { variant: 'tag-only' }, success: false },
+      { name: 'missing-core', options: { variant: 'missing' }, success: false },
+      {
+        name: 'missing-enabled-connector',
+        options: { connectorEnabled: true, variant: 'missing-connector' },
+        success: false,
+      },
+      {
+        name: 'unexpected-disabled-connectors',
+        options: { variant: 'unexpected-disabled-connector' },
+        success: false,
+      },
+      {
+        name: 'atomic-projection-write-failure',
+        options: { connectorEnabled: true, failProjection: true },
+        success: false,
+        writeFailure: true,
+      },
+      {
+        name: 'durable-remove-failure',
+        options: { connectorEnabled: true, failRemove: true },
+        success: false,
+        writeFailure: true,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { result, temp } = runScenario(scenario.options);
+      try {
+        assert.equal(result.status, 0, `${scenario.name}: ${result.stderr}`);
+        const [firstRc, secondRc, pending, connectorProjection, controlProjection, coreProjection] = result.stdout.split('|');
+        if (scenario.success) {
+          assert.equal(firstRc, '0', `${scenario.name}: ${result.stderr}`);
+          if (scenario.secondFailure) {
+            assert.notEqual(secondRc, '0', `${scenario.name} second reconciliation must fail closed`);
+          } else {
+            assert.equal(secondRc, '0', `${scenario.name}: ${result.stderr}`);
+          }
+          assert.equal(pending, 'absent', scenario.name);
+          assert.equal(connectorProjection, scenario.connectorProjection ?? 'absent', scenario.name);
+          assert.equal(controlProjection, currentTag, scenario.name);
+          assert.equal(coreProjection, currentTag, scenario.name);
+          assert.match(result.stderr, /immutable IDs still match canonical current state/);
+        } else {
+          assert.notEqual(firstRc, '0', scenario.name);
+          assert.equal(secondRc, 'skipped', scenario.name);
+          assert.equal(pending, 'present', `${scenario.name} must preserve pending evidence`);
+          if (!scenario.writeFailure) {
+            assert.match(result.stderr, /mixed or matches neither/, scenario.name);
+          }
+        }
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
     }
   });
 
