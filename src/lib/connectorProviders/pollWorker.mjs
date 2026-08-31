@@ -1,3 +1,4 @@
+import { pinnedFetch } from '../pinnedHttpRequest.mjs';
 import {
   mapProviderErrorToHealth,
   parseProviderSecret,
@@ -47,7 +48,7 @@ export async function executeConnectorProviderPoll({
   connector,
   secretResolver,
   ctx,
-  fetchFn = fetch,
+  fetchFn = pinnedFetch,
   prefetchedMetadata = null,
   now = new Date().toISOString(),
   maxAttempts,
@@ -83,6 +84,11 @@ export async function executeConnectorProviderPoll({
   );
 
   const healthStatus = result.health ?? 'active';
+  const evidenceSource = prefetchedMetadata ? 'manual_metadata' : 'provider_api';
+  const inventoryTruncated = result.inventory_truncated === true;
+  const inventoryComplete = evidenceSource === 'provider_api'
+    && result.inventory_complete !== false
+    && !inventoryTruncated;
   return {
     snapshots: result.snapshots ?? [],
     health: {
@@ -90,7 +96,10 @@ export async function executeConnectorProviderPoll({
       health_code: healthStatus,
       attempts,
       permission_gaps: result.permission_gaps ?? [],
-      outbound: true,
+      outbound: evidenceSource === 'provider_api',
+      evidence_source: evidenceSource,
+      inventory_complete: inventoryComplete,
+      inventory_truncated: inventoryTruncated,
     },
   };
 }

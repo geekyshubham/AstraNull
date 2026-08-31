@@ -191,6 +191,46 @@ describe('wafCoverageService', () => {
     assert.ok(geography.items.some((item) => item.region_code === 'eu-west'));
   });
 
+  it('keeps edge-only protection visible in entity, criticality, and geography rollups', () => {
+    const edgeAsset = {
+      id: 'asset_edge',
+      target_group_id: 'tg_edge',
+      owner_hint: 'edge-team',
+      business_criticality: 'high',
+    };
+    const edgeSnapshots = new Map([
+      ['asset_edge', { status: 'edge_protected' }],
+    ]);
+    const targetGroups = [{
+      id: 'tg_edge',
+      name: 'Edge',
+      settings_json: { region_code: 'us-edge', region_label: 'US Edge' },
+    }];
+
+    const entity = buildEntityRollup({
+      assets: [edgeAsset],
+      currentSnapshotsByAsset: edgeSnapshots,
+      targetGroups,
+    }).items[0];
+    const criticality = buildCriticalityRollup({
+      assets: [edgeAsset],
+      currentSnapshotsByAsset: edgeSnapshots,
+    }).items[0];
+    const geography = buildGeographyRollup({
+      assets: [edgeAsset],
+      currentSnapshotsByAsset: edgeSnapshots,
+      targetGroups,
+    }).items[0];
+
+    for (const item of [entity, criticality, geography]) {
+      assert.equal(item.asset_count, 1);
+      assert.equal(item.edge_protected, 1);
+      assert.equal(item.coverage_ratio, 0);
+    }
+    assert.equal(entity.protected, 0);
+    assert.equal(criticality.protected, 0);
+  });
+
   it('builds tiered roadmap with recommended actions', () => {
     const roadmap = buildRiskRoadmap({
       assets,

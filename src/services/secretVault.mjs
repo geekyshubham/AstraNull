@@ -81,6 +81,15 @@ export function rotateEncryptedSecret(ctx, id, body, key) {
   record.updated_at = new Date().toISOString();
   record.envelope = encryptSecret(plaintext, key, buildSecretAad(record));
 
+  for (const connector of store.wafConnectors ?? []) {
+    if (connector.tenant_id !== ctx.tenantId || connector.secret_id !== id) continue;
+    if (!['disabled', 'revoked'].includes(connector.status)) connector.status = 'validating';
+    connector.last_success_at = null;
+    connector.last_success_revision = 0;
+    connector.poll_revision = Number(connector.poll_revision ?? 0) + 1;
+    connector.updated_at = record.updated_at;
+  }
+
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
@@ -113,5 +122,11 @@ export function decryptEncryptedSecretForUse(ctx, id, key) {
     metadata: { purpose: record.purpose, name: record.name, rotation: record.rotation ?? 0 },
   });
   persistStore();
-  return { plaintext, purpose: record.purpose, name: record.name, rotation: record.rotation ?? 0 };
+  return {
+    plaintext,
+    purpose: record.purpose,
+    name: record.name,
+    metadata: record.metadata ?? {},
+    rotation: record.rotation ?? 0,
+  };
 }

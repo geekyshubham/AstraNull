@@ -1,6 +1,7 @@
 import { audit } from '../audit.mjs';
 import { buildLoaCustodyDigest, recordSignature } from '../lib/authorizationArtifactLedger.mjs';
 import { newId } from '../lib/ids.mjs';
+import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { isArchivedTargetGroup } from './targetGroups.mjs';
 
@@ -32,18 +33,8 @@ function findGroup(ctx, groupId) {
 }
 
 function getLatestVerificationState(ctx, targetId) {
-  const rows = (getStore().targetVerifications ?? []).filter(
-    (row) => row.tenant_id === ctx.tenantId && row.target_id === targetId,
-  );
-  if (!rows.length) return 'unverified';
-  const latest = rows.reduce((best, row) => {
-    const bestAt = String(best.transitioned_at);
-    const rowAt = String(row.transitioned_at);
-    if (rowAt > bestAt) return row;
-    if (rowAt < bestAt) return best;
-    return (VERIFICATION_RANK[row.state] ?? 0) > (VERIFICATION_RANK[best.state] ?? 0) ? row : best;
-  });
-  return latest.state;
+  return effectiveTargetVerifications(getStore(), ctx.tenantId, [targetId]).get(targetId)?.state
+    ?? 'unverified';
 }
 
 function isEligibleForLoaScope(state) {

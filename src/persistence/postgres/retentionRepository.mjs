@@ -23,6 +23,24 @@ const RETENTION_COLLECTIONS = Object.freeze([
   { key: 'evidenceVault', table: 'evidence_vault', timestampColumn: 'created_at' },
   { key: 'reports', table: 'reports', timestampColumn: 'created_at' },
   { key: 'notificationEvents', table: 'notification_events', timestampColumn: 'created_at' },
+  {
+    key: 'connectorPollJobs',
+    table: 'connector_poll_jobs',
+    timestampColumn: 'created_at',
+    extraWhere: "status IN ('completed', 'failed', 'cancelled')",
+  },
+  {
+    key: 'connectorSnapshots',
+    table: 'waf_connector_snapshots',
+    timestampColumn: 'created_at',
+    extraWhere: `NOT EXISTS (
+      SELECT 1 FROM waf_connectors current_connector
+      WHERE current_connector.tenant_id = waf_connector_snapshots.tenant_id
+        AND current_connector.id = waf_connector_snapshots.connector_id
+        AND current_connector.last_success_revision = waf_connector_snapshots.poll_revision
+        AND current_connector.last_success_at = waf_connector_snapshots.observed_at
+    )`,
+  },
 ]);
 
 function rowToAuditEntry(row) {
@@ -66,11 +84,13 @@ function zeroCounts() {
     evidenceVault: 0,
     reports: 0,
     notificationEvents: 0,
+    connectorPollJobs: 0,
+    connectorSnapshots: 0,
   };
 }
 
 function totalCounts(counts) {
-  return counts.events + counts.evidenceVault + counts.reports + counts.notificationEvents;
+  return Object.values(counts).reduce((total, value) => total + Number(value ?? 0), 0);
 }
 
 async function countCandidates(client, tenantId, nowIso, privacy) {
@@ -80,6 +100,8 @@ async function countCandidates(client, tenantId, nowIso, privacy) {
     evidenceVault: new Date(metadataCutoffMs).toISOString(),
     reports: new Date(reportCutoffMs).toISOString(),
     notificationEvents: new Date(metadataCutoffMs).toISOString(),
+    connectorPollJobs: new Date(metadataCutoffMs).toISOString(),
+    connectorSnapshots: new Date(metadataCutoffMs).toISOString(),
   };
 
   const counts = zeroCounts();
@@ -88,7 +110,8 @@ async function countCandidates(client, tenantId, nowIso, privacy) {
     const { rows } = await client.query(
       `SELECT COUNT(*)::int AS count
        FROM ${collection.table}
-       WHERE tenant_id = $1 AND ${collection.timestampColumn} < $2::timestamptz`,
+       WHERE tenant_id = $1 AND ${collection.timestampColumn} < $2::timestamptz
+         ${collection.extraWhere ? `AND (${collection.extraWhere})` : ''}`,
       [tenantId, cutoffIso],
     );
     counts[collection.key] = Number(rows[0]?.count ?? 0);
@@ -103,7 +126,8 @@ async function deleteCandidates(client, tenantId, cutoffs) {
     const cutoffIso = cutoffs[collection.key];
     const result = await client.query(
       `DELETE FROM ${collection.table}
-       WHERE tenant_id = $1 AND ${collection.timestampColumn} < $2::timestamptz`,
+       WHERE tenant_id = $1 AND ${collection.timestampColumn} < $2::timestamptz
+         ${collection.extraWhere ? `AND (${collection.extraWhere})` : ''}`,
       [tenantId, cutoffIso],
     );
     deleted[collection.key] = Number(result.rowCount ?? 0);

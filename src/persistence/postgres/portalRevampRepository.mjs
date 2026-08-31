@@ -509,7 +509,8 @@ export function createPortalRevampRepository(pool) {
           [ctx.tenantId, groupId],
         );
         for (const row of rows) {
-          if (row.state && counts[row.state] != null) counts[row.state] = Number(row.count);
+          const state = row.state === 'provider_verified' ? 'dns_verified' : row.state;
+          if (state && counts[state] != null) counts[state] = Number(row.count) + counts[state];
         }
         return counts;
       });

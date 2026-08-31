@@ -348,8 +348,8 @@ export function buildOutsideInPostureReport({
     posture_label = 'Protected';
     posture_status = 'protected';
   } else if (probeValidationPassed && (wafDetected || genericWafDetected) && !agentCorroborated) {
-    posture_label = 'Detected, not validated';
-    posture_status = 'unknown';
+    posture_label = 'Edge protected · not internally validated';
+    posture_status = 'edge_protected';
   } else if (posture.status === 'unprotected') {
     posture_label = 'Unprotected';
   } else if (posture.status === 'excluded') {

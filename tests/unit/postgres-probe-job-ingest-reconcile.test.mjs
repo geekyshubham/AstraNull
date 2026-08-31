@@ -53,9 +53,24 @@ function createHarness(options = {}) {
       job.leased_at = leasedAt;
       return { ...job };
     },
-    async markJobCompleted(ctx, id, completedAt) {
+    async claimJobForResult(ctx, id, workerId, leasedAt, expected = {}) {
+      if (options.rejectResultClaim === true) return null;
       const job = state.jobs.get(id);
-      if (!job) return null;
+      if (!job
+        || job.status !== expected.status
+        || (job.leased_by ?? null) !== (expected.leased_by ?? null)
+        || (job.leased_at ?? null) !== (expected.leased_at ?? null)) return null;
+      job.status = 'leased';
+      job.leased_by = workerId;
+      job.leased_at = leasedAt;
+      return { ...job };
+    },
+    async markJobCompleted(ctx, id, completedAt, lease = {}) {
+      const job = state.jobs.get(id);
+      if (!job
+        || job.status !== 'leased'
+        || job.leased_by !== lease.workerId
+        || job.leased_at !== lease.leasedAt) return null;
       state.completedCalls.push({ id, completedAt });
       job.status = 'completed';
       job.completed_at = completedAt;
@@ -109,6 +124,9 @@ function createHarness(options = {}) {
       const run = state.runs.get(id);
       Object.assign(run, patch);
       return { ...run };
+    },
+    async withRunMutationLock(ctx, runId, callback) {
+      return { acquired: true, result: await callback() };
     },
   };
 
@@ -180,6 +198,30 @@ function createHarness(options = {}) {
 }
 
 describe('postgres probe result ingest — crash reconciliation', () => {
+  it('does not reconcile run state from a legacy-untrusted probe row', async () => {
+    const h = createHarness();
+    h.seedRun('run_1');
+    h.seedJob('pjob_1');
+    h.state.events.push({
+      id: 'event_legacy',
+      tenant_id: TENANT,
+      test_run_id: 'run_1',
+      signal_type: 'probe_result',
+      producer_kind: 'legacy_untrusted',
+      nonce_hash: 'nh_abc',
+      metadata: { external_result: 'blocked' },
+    });
+
+    const result = await h.svc.ingestProbeResult(WORKER_CTX, 'pjob_1', VALID_BODY);
+
+    assert.equal(result.reconciled, undefined);
+    assert.equal(h.run().status, 'collecting');
+    assert.equal(h.run().probe_external_result, 'connected');
+    assert.equal(h.probeEvents().length, 1);
+    assert.equal(h.probeEvents()[0].producer_kind, 'signed_probe');
+    assert.equal(h.probeEvents()[0].metadata.external_result, 'connected');
+  });
+
   it('reconciles the run and completes the job when a retry follows a crash after the event write', async () => {
     const h = createHarness();
     h.seedRun('run_1');
@@ -257,11 +299,28 @@ describe('postgres probe result ingest — crash reconciliation', () => {
     for (const call of h.state.updateCalls) {
       assert.deepEqual(
         Object.keys(call.patch).sort(),
-        ['awaiting_external_probe', 'correlation', 'probe_external_result', 'status'].filter((k) =>
+        ['awaiting_external_probe', 'correlation', 'expected_statuses', 'probe_external_result', 'status'].filter((k) =>
           Object.keys(call.patch).includes(k),
         ),
       );
     }
+  });
+
+  it('has no evidence, run, or completion side effects when result-lease claim loses', async () => {
+    const h = createHarness({ rejectResultClaim: true });
+    h.seedRun('run_1');
+    h.seedJob('pjob_1');
+    const beforeRun = { ...h.run(), correlation: { ...h.run().correlation } };
+
+    const result = await h.svc.ingestProbeResult(WORKER_CTX, 'pjob_1', VALID_BODY);
+
+    assert.equal(result.error, 'job_not_open');
+    assert.deepEqual(h.run(), beforeRun);
+    assert.equal(h.state.events.length, 0);
+    assert.equal(h.state.evidence.length, 0);
+    assert.equal(h.state.updateCalls.length, 0);
+    assert.equal(h.state.completedCalls.length, 0);
+    assert.equal(h.job().status, 'leased');
   });
 
   it('never resurrects a terminal run', async () => {

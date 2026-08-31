@@ -160,6 +160,7 @@ function createHarness(overrides = {}) {
           repo[method] = async () => null;
         }
         repo.appendProbeResultEventIdempotent = async () => null;
+        repo.withRunMutationLock = async (_ctx, _runId, fn) => fn();
         return repo;
       }
       if (key === 'secretVault') {
@@ -482,6 +483,15 @@ describe('postgres runtime adapter', () => {
     for (const method of POSTGRES_WAF_COVERAGE_ROLLUP_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.wafCoverageRollup[method], 'function', method);
     }
+    await runtime.close();
+  });
+
+  it('starts an unrelated production runtime without connector worker secret material', async () => {
+    const { deps } = createHarness();
+    const runtime = await createPostgresRuntime({ NODE_ENV: 'production' }, deps);
+
+    assert.ok(runtime.services?.passwordRecoveryDelivery);
+    assert.ok(runtime.services?.testPolicies);
     await runtime.close();
   });
 

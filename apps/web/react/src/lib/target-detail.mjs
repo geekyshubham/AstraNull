@@ -1,4 +1,4 @@
-const RUN_VERIFICATION_STATES = new Set(['dns_verified', 'agent_verified', 'user_confirmed', 'verified']);
+const RUN_VERIFICATION_STATES = new Set(['dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed', 'verified']);
 const LOA_SCOPE_STATES = new Set(['agent_verified', 'user_confirmed']);
 const SIGNED_LOA_STATES = new Set(['signed', 'active', 'valid']);
 

@@ -110,7 +110,10 @@ describe('test policy operator runner', () => {
   it('dry-runs each explicit tenant without leasing and always closes runtime', async () => {
     const calls = [];
     let closed = 0;
-    const createPostgresRuntimeFn = async () => ({
+    let runtimeOptions;
+    const createPostgresRuntimeFn = async (_env, options) => {
+      runtimeOptions = options;
+      return ({
       services: {
         testPolicies: {
           async listDueTestPolicies(ctx, query) {
@@ -124,6 +127,7 @@ describe('test policy operator runner', () => {
       },
       async close() { closed += 1; },
     });
+    };
 
     const tenants = await runPostgresTestPolicies({
       env: {}, tenantIds: ['ten_a', 'ten_b'], dryRun: true, limit: 3,
@@ -132,6 +136,10 @@ describe('test policy operator runner', () => {
     });
 
     assert.equal(closed, 1);
+    assert.deepEqual(runtimeOptions, {
+      autoMigrate: false,
+      wafPostureServiceOptions: { connectorEncryptionKey: null },
+    });
     assert.deepEqual(calls.map((call) => call.ctx.tenantId), ['ten_a', 'ten_b']);
     assert.deepEqual(tenants[0].policies, [{
       policy_id: 'pol_ten_a', next_run_at: '2026-06-01T12:00:00.000Z',

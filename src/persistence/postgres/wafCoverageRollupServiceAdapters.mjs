@@ -100,6 +100,7 @@ export function createPostgresWafCoverageRollupServices(repositories) {
           rollup_date: record.rollup_date,
           total_assets: record.total_assets,
           protected: record.protected,
+          edge_protected: record.edge_protected,
           underprotected: record.underprotected,
           unprotected: record.unprotected,
           unknown: record.unknown,

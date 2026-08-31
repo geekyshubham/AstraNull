@@ -102,6 +102,8 @@ describe('postgres retention repository', () => {
       evidenceVault: 2,
       reports: 0,
       notificationEvents: 3,
+      connectorPollJobs: 0,
+      connectorSnapshots: 0,
     });
     assert.deepEqual(summary.would_delete, summary.deleted);
     assert.equal(
@@ -162,12 +164,16 @@ describe('postgres retention repository', () => {
       evidenceVault: 0,
       reports: 0,
       notificationEvents: 0,
+      connectorPollJobs: 0,
+      connectorSnapshots: 0,
     });
     assert.deepEqual(summary.blocked_deletions, {
       events: 2,
       evidenceVault: 2,
       reports: 2,
       notificationEvents: 2,
+      connectorPollJobs: 2,
+      connectorSnapshots: 2,
     });
     const auditInsert = pool.client.queries.find((q) => q.text.startsWith('INSERT INTO audit_logs'));
     assert.ok(auditInsert);
@@ -205,16 +211,56 @@ describe('postgres retention repository', () => {
       evidenceVault: 0,
       reports: 0,
       notificationEvents: 0,
+      connectorPollJobs: 0,
+      connectorSnapshots: 0,
     });
     assert.deepEqual(summary.would_delete, {
       events: 4,
       evidenceVault: 4,
       reports: 4,
       notificationEvents: 4,
+      connectorPollJobs: 4,
+      connectorSnapshots: 4,
     });
     assert.ok(pool.client.queries.every((q) => !q.text.startsWith('DELETE FROM ')));
     assert.ok(pool.client.queries.every((q) => !q.text.startsWith('INSERT INTO audit_logs')));
     assertTenantContext(pool);
+  });
+
+  it('retains open jobs and current authoritative snapshots while purging expired connector metadata', async () => {
+    const pool = createFakePool({
+      onQuery({ text }) {
+        if (text.includes('FROM tenants') && text.includes('FOR UPDATE')) {
+          return { rows: [{ id: 'ten_demo', privacy_settings: { metadata_retention_days: 30 } }] };
+        }
+        if (text.includes('FROM connector_poll_jobs') && text.includes('COUNT(*)')) {
+          assert.match(text, /status IN \('completed', 'failed', 'cancelled'\)/);
+          return { rows: [{ count: '1' }] };
+        }
+        if (text.includes('FROM waf_connector_snapshots') && text.includes('COUNT(*)')) {
+          assert.match(text, /NOT EXISTS/);
+          assert.match(text, /last_success_revision = waf_connector_snapshots\.poll_revision/);
+          assert.match(text, /last_success_at = waf_connector_snapshots\.observed_at/);
+          return { rows: [{ count: '1' }] };
+        }
+        if (text.includes('COUNT(*)')) return { rows: [{ count: '0' }] };
+        if (text.startsWith('DELETE FROM connector_poll_jobs')) return { rowCount: 1, rows: [] };
+        if (text.startsWith('DELETE FROM waf_connector_snapshots')) return { rowCount: 1, rows: [] };
+        if (text.startsWith('DELETE FROM ')) return { rowCount: 0, rows: [] };
+        if (text.includes('pg_advisory_xact_lock(hashtext($1))')) return { rows: [] };
+        if (text.includes('FROM audit_logs')) return { rows: [] };
+        if (text.startsWith('INSERT INTO audit_logs')) return { rows: [] };
+        return { rows: [] };
+      },
+    });
+
+    const summary = await createRetentionRepository(pool).runMetadataRetention('ten_demo');
+    assert.equal(summary.deleted.connectorPollJobs, 1);
+    assert.equal(summary.deleted.connectorSnapshots, 1);
+    const jobDelete = pool.client.queries.find((query) => query.text.startsWith('DELETE FROM connector_poll_jobs'));
+    const snapshotDelete = pool.client.queries.find((query) => query.text.startsWith('DELETE FROM waf_connector_snapshots'));
+    assert.match(jobDelete.text, /status IN \('completed', 'failed', 'cancelled'\)/);
+    assert.match(snapshotDelete.text, /NOT EXISTS/);
   });
 
   it('rolls back when a delete fails', async () => {

@@ -303,6 +303,21 @@ npm run connector:poll:runner -- --tenant-ids-file ./staging-tenant-ids.json --d
 
 Optional bounded parallelism: `--concurrency <n>` or `ASTRANULL_CONNECTOR_POLL_CONCURRENCY` (default `4`). Provider retry attempts: `ASTRANULL_CONNECTOR_POLL_MAX_ATTEMPTS` (default `3`). Postgres mode is selected automatically when `ASTRANULL_DATABASE_URL` is set and requires `runtime.services.wafPosture.pollConnector()`. `--tenant-id` and `--tenant-ids-file` are mutually exclusive.
 
+### Kubernetes scheduled-worker release rendering
+
+The checked-in CronJobs are fail-closed templates and are not directly deployable. Render them out-of-tree with the immutable `sha256:<64 lowercase hex>` **registry manifest digest returned after pushing** `ops/kubernetes/Dockerfile.worker`; do not use a tag, the all-zero value, or a local Docker config image ID as a production pull digest.
+
+```bash
+npm run kubernetes:worker:check
+npm run kubernetes:worker:render -- \
+  --digest 'sha256:<registry-manifest-digest>' \
+  --out-dir ./output/kubernetes-workers
+npm run kubernetes:worker:validate -- ./output/kubernetes-workers
+kubectl apply -k ./output/kubernetes-workers
+```
+
+The renderer validates the four-resource kustomization and all five worker image references, requires one exact nonzero digest across every CronJob, and refuses to overwrite the checked-in templates. Auxiliary CronJobs project only their explicit database/TLS and workload-specific settings; they do not bulk-import the shared worker Secret.
+
 ### Deployment expectations
 
 - API and UI behind enterprise SSO/OIDC — no header-based impersonation in production

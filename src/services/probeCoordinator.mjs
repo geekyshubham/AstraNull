@@ -11,6 +11,7 @@ import {
   validateProbeResultBody,
 } from '../lib/probeResultValidation.mjs';
 import { enrichOutsideInWafProbeMetadata } from '../lib/outsideInWafAgentEvidence.mjs';
+import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { recordEvidence } from './evidence.mjs';
@@ -254,9 +255,43 @@ export function listPendingProbeJobsForWorker(workerCtx, runtimeConfig) {
   if (!tenantId) {
     return [];
   }
-  const jobs = store.probeJobs.filter(
-    (j) => j.status === 'pending' && j.tenant_id === tenantId,
-  );
+  const jobs = store.probeJobs.filter((job) => {
+    if (job.status !== 'pending' || job.tenant_id !== tenantId) return false;
+    if (job.ownership_verification_id) {
+      const verification = store.ownershipVerifications?.find(
+        (entry) => entry.id === job.ownership_verification_id
+          && entry.tenant_id === tenantId
+          && entry.status === 'challenge_sent',
+      );
+      if (!verification) return false;
+      const group = store.targetGroups.find(
+        (entry) => entry.id === verification.target_group_id
+          && entry.tenant_id === tenantId
+          && !entry.deleted_at
+          && !entry.archived_at,
+      );
+      const target = store.targets.find(
+        (entry) => entry.target_group_id === verification.target_group_id
+          && entry.tenant_id === tenantId
+          && entry.kind === 'fqdn'
+          && !entry.deleted_at
+          && String(entry.normalized_value ?? entry.value).trim().toLowerCase()
+            === String(verification.declared_fqdn).trim().toLowerCase(),
+      );
+      if (!group || !target) return false;
+      const agent = store.agents.find(
+        (entry) => entry.id === verification.agent_id
+          && entry.tenant_id === tenantId
+          && entry.target_group_id === verification.target_group_id,
+      );
+      return agent?.status === 'online'
+        && agent.last_token_validation_status !== 'invalid';
+    }
+    const run = store.testRuns.find(
+      (entry) => entry.id === job.test_run_id && entry.tenant_id === tenantId,
+    );
+    return ['running', 'collecting'].includes(run?.status);
+  });
   for (const job of jobs) {
     job.status = 'leased';
     job.leased_at = now;
@@ -335,12 +370,17 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
   const runForJob = store.testRuns.find(
     (r) => r.id === job.test_run_id && r.tenant_id === job.tenant_id,
   );
+  if (!runForJob) return { error: 'run_not_found', status: 404 };
+  if (!['running', 'collecting'].includes(runForJob.status)) {
+    return { error: 'run_not_collecting', status: 409 };
+  }
   if (job.status === 'completed') {
     const dupProbe = runForJob
       ? store.events.find(
           (e) =>
             e.test_run_id === runForJob.id &&
             e.signal_type === 'probe_result' &&
+            isTrustedProducerEvent(e) &&
             e.nonce_hash === job.nonce_hash,
         )
       : null;
@@ -378,7 +418,10 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
   if (!run) return { error: 'run_not_found', status: 404 };
 
   const existingProbe = store.events.find(
-    (e) => e.test_run_id === run.id && e.signal_type === 'probe_result' && e.nonce_hash === job.nonce_hash,
+    (e) => e.test_run_id === run.id
+      && e.signal_type === 'probe_result'
+      && isTrustedProducerEvent(e)
+      && e.nonce_hash === job.nonce_hash,
   );
   if (existingProbe) {
     return { error: 'probe_already_ingested', status: 409 };
@@ -402,7 +445,9 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
 
   if (job.probe_profile?.kind === 'outside_in_waf_scan') {
     const agentObservations = store.events.filter(
-      (event) => event.test_run_id === run.id && event.signal_type === 'agent_observation',
+      (event) => event.test_run_id === run.id
+        && event.signal_type === 'agent_observation'
+        && isTrustedProducerEvent(event),
     );
     probeMetadata = enrichOutsideInWafProbeMetadata(probeMetadata, {
       agents: agentObservations,
@@ -418,6 +463,7 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     check_id: job.check_id,
     source: 'probe_worker',
     signal_type: 'probe_result',
+    producer_kind: 'signed_probe',
     timestamp: new Date().toISOString(),
     nonce_hash: job.nonce_hash,
     metadata: probeMetadata,

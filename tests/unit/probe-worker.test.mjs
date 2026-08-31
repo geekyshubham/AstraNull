@@ -248,6 +248,27 @@ describe('probe job signature verification', () => {
     assert.equal(verifyProbeJobSignature(job, WORKER_SECRET), false);
   });
 
+  it('rejects tampered signed ownership generation', () => {
+    const job = baseJob({
+      constraints: {
+        ownership_binding: {
+          kind: 'provider_account',
+          state: 'provider_verified',
+          target_id: 'tgt_1',
+          transitioned_at: '2026-08-30T11:00:00.000Z',
+          provider_provenance: {
+            feature_revision: 2,
+            connector_id: 'conn_1',
+            connector_revision: 7,
+            snapshot_id: 'snap_1',
+          },
+        },
+      },
+    });
+    job.constraints.ownership_binding.provider_provenance.connector_revision = 8;
+    assert.equal(verifyProbeJobSignature(job, WORKER_SECRET), false);
+  });
+
   it('rejects tampered probe_profile', () => {
     const job = baseJob();
     job.probe_profile = { ...job.probe_profile, max_requests: 99 };

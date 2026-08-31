@@ -34,7 +34,7 @@ Implementation status: `GET /v1/waf/coverage` returns status counts in developer
 
 | Method | Path | Permission | Query params | Response |
 |---|---|---|---|---|
-| GET | `/v1/waf/coverage` | `waf:read` | `window_days?` (default 90) | `{ total, protected, underprotected, unprotected, unknown, excluded, coverage_ratio, percentages, trend[] }`. `trend[]`: `{ date, coverage_ratio, protected, underprotected, unprotected }`. |
+| GET | `/v1/waf/coverage` | `waf:read` | `window_days?` (default 90) | `{ total, protected, edge_protected, underprotected, unprotected, unknown, excluded, coverage_ratio, percentages, trend[] }`. `edge_protected` never contributes to `coverage_ratio`. `trend[]`: `{ date, coverage_ratio, protected, edge_protected, underprotected, unprotected }`. |
 | GET | `/v1/waf/coverage/vendors` | `waf:read` | - | `{ items: [{ vendor, product, asset_count, protected_count, underprotected_count, unprotected_count, unknown_count }], vendor_mix[] }`. |
 | GET | `/v1/waf/coverage/entities` | `waf:read` | `entity_type?` | `{ items: [{ entity_id, entity_type, name, coverage_ratio, protected, underprotected, unprotected, critical_gap_count }] }`. |
 | GET | `/v1/waf/coverage/criticality` | `waf:read` | - | `{ items: [{ business_criticality, asset_count, coverage_ratio, protected, underprotected, unprotected, critical_gap_count }] }`. |
@@ -207,7 +207,7 @@ When asset matches span multiple vendors, grouped playbooks coordinate mitigatio
 {
   "id": "uuid",
   "waf_asset_id": "uuid",
-  "status": "protected|underprotected|unprotected|unknown|excluded",
+  "status": "protected|edge_protected|underprotected|unprotected|unknown|excluded",
   "reason_codes": ["marker_rule_not_blocking"],
   "detected_vendor": "cloudflare",
   "detected_product": "Cloudflare WAF",

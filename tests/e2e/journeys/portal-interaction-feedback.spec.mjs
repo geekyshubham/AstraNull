@@ -103,7 +103,7 @@ test.describe('portal interaction feedback (FT-INTERACT-01)', () => {
     // Submit a whitespace-only domain (bypasses browser `required`) to force validation error.
     const domain = dialog.locator('input[name="value"]').first();
     await domain.fill('   ');
-    await dialog.getByRole('button', { name: 'Add target' }).click();
+    await dialog.getByRole('button', { name: /Add & issue target-bound challenge/i }).click();
 
     // The error banner must be visible WITHIN the dialog (not behind its backdrop).
     await expect(dialog.locator('.form-banner.error, [role="alert"]').first())

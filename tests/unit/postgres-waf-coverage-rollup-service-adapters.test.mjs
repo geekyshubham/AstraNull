@@ -73,10 +73,12 @@ describe('postgres WAF coverage rollup service adapters', () => {
         listWafAssets: async () => [
           { id: 'waf_1', tenant_id: CTX.tenantId },
           { id: 'waf_2', tenant_id: CTX.tenantId },
+          { id: 'waf_3', tenant_id: CTX.tenantId },
         ],
         listCurrentPostureSnapshots: async () => [
           { waf_asset_id: 'waf_1', status: 'protected' },
           { waf_asset_id: 'waf_2', status: 'unprotected' },
+          { waf_asset_id: 'waf_3', status: 'edge_protected' },
         ],
         upsertWafCoverageDailyRollup: async (_ctx, record) => ({
           ...record,
@@ -89,9 +91,10 @@ describe('postgres WAF coverage rollup service adapters', () => {
       ...CTX,
       rollupDate: '2026-07-02',
     });
-    assert.equal(outcome.rollup_result.total_assets, 2);
+    assert.equal(outcome.rollup_result.total_assets, 3);
     assert.equal(outcome.rollup_result.protected, 1);
+    assert.equal(outcome.rollup_result.edge_protected, 1);
     assert.equal(outcome.rollup_result.unprotected, 1);
-    assert.equal(outcome.rollup_result.coverage_ratio, 0.5);
+    assert.equal(outcome.rollup_result.coverage_ratio, 0.3333);
   });
 });

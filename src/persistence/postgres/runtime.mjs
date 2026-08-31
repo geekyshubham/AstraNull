@@ -1,4 +1,8 @@
 import path from 'node:path';
+import {
+  loadConnectorSecretEncryptionKey,
+  loadSecretEncryptionKey,
+} from '../../lib/secrets.mjs';
 import { fileURLToPath } from 'node:url';
 import { checkRoleRlsPosture, closePgPool, createPgPool, pingPostgres } from './pool.mjs';
 import {
@@ -144,6 +148,8 @@ const DEFAULT_REPOSITORY_FACTORIES = {
  *   repositoryFactories?: Partial<typeof DEFAULT_REPOSITORY_FACTORIES>,
  *   authServiceOptions?: Parameters<typeof createPostgresAuthServices>[1],
  *   agentServiceOptions?: Omit<Parameters<typeof createPostgresAgentServices>[1], 'tokens'>,
+ *   wafPostureServiceOptions?: Record<string, unknown>,
+ *   wafDriftServiceOptions?: Record<string, unknown>,
  * }} [options]
  */
 export async function createPostgresRuntime(env = process.env, options = {}) {
@@ -206,7 +212,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         throw new Error(`Missing repository factory for "${key}".`);
       }
       if (key === 'audit') repositories[key] = auditRepository;
-      else if (key === 'coreCatalog' || key === 'testPolicies') {
+      else if (key === 'coreCatalog' || key === 'testPolicies' || key === 'wafPosture') {
         repositories[key] = factory(pool, { auditRepository });
       } else repositories[key] = factory(pool);
     }
@@ -222,13 +228,24 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       tokens: authServices.tokens,
     });
     const validationServices = createPostgresValidationServices(repositories);
-    const secretVault = createPostgresSecretVaultServices(repositories);
+    const secretVault = createPostgresSecretVaultServices(repositories, {
+      encryptionKey: loadSecretEncryptionKey(env),
+      connectorEncryptionKey: loadConnectorSecretEncryptionKey(env),
+    });
     const reportServices = createPostgresReportServices(repositories);
     const notificationServices = createPostgresNotificationServices(repositories);
     const agentUpdateServices = createPostgresAgentUpdateServices(repositories);
     const stateServices = createPostgresStateServices(repositories);
     const placementServices = createPostgresPlacementServices(repositories);
-    const probeJobServices = createPostgresProbeJobServices(repositories);
+    const ownershipVerificationBase = createPostgresOwnershipVerificationServices({
+      repositories,
+      agentControl: repositories.agentControl,
+      probeJobs: repositories.probeJobs,
+      audit: repositories.audit,
+    });
+    const probeJobServices = createPostgresProbeJobServices(repositories, {
+      ownershipVerification: ownershipVerificationBase,
+    });
     const highScaleServices = createPostgresHighScaleServices(repositories, {
       notifications: notificationServices,
     });
@@ -239,7 +256,16 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       ...repositories,
       cvePipeline: cvePipelineRepository,
     };
-    const wafPostureServices = createPostgresWafPostureServices(repositoriesWithCve);
+    const wafPostureServices = createPostgresWafPostureServices(repositoriesWithCve, {
+      ...(options.wafPostureServiceOptions ?? {}),
+      env,
+      connectorJobPrivateKey: env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY,
+      connectorJobPublicKey: env.ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY,
+      requireConnectorJobSigner:
+        options.wafPostureServiceOptions?.requireConnectorJobSigner === true,
+      requireConnectorJobVerifier:
+        options.wafPostureServiceOptions?.requireConnectorJobVerifier === true,
+    });
     const wafOrchestratorServices = createPostgresWafOrchestratorServices(repositories, {
       ...(options.wafOrchestratorServiceOptions ?? {}),
       testRuns: validationServices.testRuns,
@@ -257,19 +283,16 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const actionItemServices = createPostgresActionItemServices(pool, {
       portalRevamp: repositories.portalRevamp,
     });
-    const wafDriftServices = createPostgresWafDriftServices(repositories);
+    const wafDriftServices = createPostgresWafDriftServices(
+      repositories,
+      options.wafDriftServiceOptions,
+    );
     const wafCoverageRollupServices = createPostgresWafCoverageRollupServices(repositories);
     const internalManagementServices = createPostgresInternalManagementServices(repositories);
     const subscriptionServices = createPostgresSubscriptionServices(repositories);
     const testPolicyServices = createPostgresTestPolicyServices({
       testPolicies: testPolicyRepository,
       coreCatalog: repositories.coreCatalog,
-      audit: repositories.audit,
-    });
-    const ownershipVerificationBase = createPostgresOwnershipVerificationServices({
-      repositories,
-      agentControl: repositories.agentControl,
-      probeJobs: repositories.probeJobs,
       audit: repositories.audit,
     });
     const dnsOwnershipBase = createPostgresDnsOwnershipServices({

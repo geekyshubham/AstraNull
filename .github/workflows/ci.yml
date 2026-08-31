@@ -49,13 +49,20 @@ jobs:
 
       - name: Deployment artifacts
         run: |
-          ruby -e "require 'yaml'; YAML.parse_file('.github/workflows/deploy-aws.yml')"
+          ruby -e "require 'yaml'; YAML.parse_file('.github/workflows/deploy-aws.yml'); YAML.parse_file('.github/workflows/publish-kubernetes-worker.yml')"
           bash -n ops/aws/deploy.sh
           bash -n ops/aws/restore.sh
           node --check scripts/validate-aws-compose-secrets.mjs
           node --check scripts/worker-heartbeat-health.mjs
           docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/env.example --profile ops config --no-interpolate --no-path-resolution >/dev/null
           docker build -f ops/aws/Dockerfile -t astranull-ci-check:${GITHUB_SHA:-local} .
+          docker build -f ops/kubernetes/Dockerfile.worker -t astranull-worker-ci-check:${GITHUB_SHA:-local} .
+          worker_digest="$(docker image inspect --format '{{.Id}}' astranull-worker-ci-check:${GITHUB_SHA:-local})"
+          rendered_dir="$(mktemp -d)"
+          trap 'rm -rf "$rendered_dir"' EXIT
+          node scripts/render-kubernetes-worker-manifests.mjs --check-source
+          node scripts/render-kubernetes-worker-manifests.mjs --digest "$worker_digest" --out-dir "$rendered_dir"
+          node scripts/render-kubernetes-worker-manifests.mjs --validate-dir "$rendered_dir"
 
       - name: Web typecheck
         run: npm run web:typecheck

@@ -30,7 +30,7 @@ before(() => {
 after(() => server.close());
 
 describe('connector lifecycle (FT-CRUD-CONN-01)', () => {
-  it('connect → poll-now → last_polled_at updates → disable blocks inventory', async () => {
+  it('connect → manual poll stays non-authoritative → disable blocks inventory', async () => {
     const headers = demoHeaders('admin');
     const created = await request(baseUrl, 'POST', '/v1/connectors', {
       headers,
@@ -64,16 +64,15 @@ describe('connector lifecycle (FT-CRUD-CONN-01)', () => {
     assert.ok(polled.json.poll_job?.created_at);
     assert.equal(polled.json.poll_job.snapshot_count, 0);
 
-    // A poll that completes with zero snapshots is still a completed poll: the stored stamp
-    // must advance on its own, or the portal LAST POLL cell reads as a dead connector.
+    // Manual/prefetched polling is operational metadata only. An empty manual poll must not
+    // manufacture authoritative provider freshness or ownership proof.
     const stored = getStore().wafConnectors.find((row) => row.id === connectorId);
-    assert.ok(stored.last_success_at, 'poll must stamp the connector poll timestamp');
-    assert.equal(stored.last_success_at, polled.json.poll_job.created_at);
+    assert.equal(stored.last_success_at, null);
 
     const listed = await request(baseUrl, 'GET', '/v1/connectors', { headers });
     assert.equal(listed.status, 200);
     const listedConnector = listed.json.items.find((item) => item.id === connectorId);
-    assert.equal(listedConnector.last_success_at, stored.last_success_at);
+    assert.equal(listedConnector.last_success_at ?? null, null);
 
     const disabled = await request(baseUrl, 'POST', `/v1/connectors/${connectorId}/disable`, {
       headers,

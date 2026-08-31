@@ -27,6 +27,55 @@ describe('placement reviews API service', () => {
     assert.deepEqual(payload.unbound_online_agent_ids, []);
   });
 
+  it('quarantines legacy-untrusted agent observations from placement proof', () => {
+    const diagnostics = computePlacementDiagnosticsFromData({
+      tenantId: 'ten_demo',
+      groups: [{ id: 'tg_1', tenant_id: 'ten_demo', name: 'Origin' }],
+      agents: [{
+        id: 'agent_1', tenant_id: 'ten_demo', target_group_id: 'tg_1', status: 'online',
+      }],
+      runs: [{ id: 'run_1', tenant_id: 'ten_demo', target_group_id: 'tg_1', status: 'completed' }],
+      events: [{
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_1',
+        signal_type: 'agent_observation',
+        producer_kind: 'legacy_untrusted',
+        timestamp: '2026-07-03T11:59:00.000Z',
+      }],
+      nowMs: Date.parse('2026-07-03T12:00:00.000Z'),
+    });
+
+    assert.equal(diagnostics.groups[0].status, 'needs_baseline');
+    assert.equal(diagnostics.groups[0].recent_observation_count, 0);
+  });
+
+  it('ignores trusted observations from cancelled runs', () => {
+    const diagnostics = computePlacementDiagnosticsFromData({
+      tenantId: 'ten_demo',
+      groups: [{ id: 'tg_1', tenant_id: 'ten_demo', name: 'Origin' }],
+      agents: [{
+        id: 'agent_1', tenant_id: 'ten_demo', target_group_id: 'tg_1', status: 'online',
+      }],
+      runs: [{
+        id: 'run_cancelled',
+        tenant_id: 'ten_demo',
+        target_group_id: 'tg_1',
+        status: 'cancelled',
+      }],
+      events: [{
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_cancelled',
+        signal_type: 'agent_observation',
+        producer_kind: 'authenticated_agent',
+        timestamp: '2026-07-03T11:59:00.000Z',
+      }],
+      nowMs: Date.parse('2026-07-03T12:00:00.000Z'),
+    });
+
+    assert.equal(diagnostics.groups[0].status, 'needs_baseline');
+    assert.equal(diagnostics.groups[0].recent_observation_count, 0);
+  });
+
   it('listPlacementReviews returns all target groups for tenant', () => {
     freshStore();
     const result = listPlacementReviews({ tenantId: 'ten_demo' });

@@ -73,9 +73,9 @@ async function seed(client) {
     );
   }
   await client.query(
-    `INSERT INTO test_runs (id, tenant_id, target_group_id, check_id, status, started_at)
-     VALUES ($1, $2, $3, 'chk_other', 'completed', now())`,
-    ['run_tgdet_other', IDS.tenantB, IDS.otherTenantGroup],
+    `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status, started_at)
+     VALUES ($1, $2, $3, $4, 'chk_other', 'completed', now())`,
+    ['run_tgdet_other', IDS.tenantB, IDS.otherTenantGroup, 'tgt_tgdet_3'],
   );
 
   await client.query(

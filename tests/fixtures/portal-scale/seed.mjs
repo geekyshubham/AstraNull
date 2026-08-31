@@ -195,6 +195,7 @@ export function seedPortalScale(env = process.env) {
       [ids.tenantId]: {
         assets_total: 12,
         protected: 9,
+        edge_protected: 0,
         underprotected: 3,
         unknown: 0,
         coverage_pct: 75,

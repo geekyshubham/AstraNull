@@ -1,4 +1,5 @@
 import { decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
+import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { getStore } from '../store.mjs';
 
 function toIso(value) {
@@ -36,8 +37,23 @@ function latestVerificationState(targetId) {
       history: [],
     };
   }
-  const latest = rows.reduce((best, row) =>
-    (VERIFICATION_STATE_RANK[row.state] ?? 0) >= (VERIFICATION_STATE_RANK[best.state] ?? 0) ? row : best);
+  const store = getStore();
+  const target = store.targets.find((candidate) => candidate.id === targetId);
+  const latest = target
+    ? effectiveTargetVerifications(store, target.tenant_id, [targetId]).get(targetId)
+    : null;
+  if (!latest) {
+    return {
+      state: 'unverified',
+      source_kind: null,
+      source_ref: null,
+      history: rows.map((row) => ({
+        state: row.state,
+        transitioned_at: toIso(row.transitioned_at),
+        ...(row.state !== 'pending' && row.source_ref ? { source_ref: row.source_ref } : {}),
+      })),
+    };
+  }
   return {
     state: latest.state,
     source_kind: latest.source_kind,

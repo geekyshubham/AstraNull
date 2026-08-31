@@ -10,7 +10,7 @@ import {
 } from './common.mjs';
 
 const AWS_WAF_SERVICE = 'wafv2';
-const AWS_REGION_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const AWS_REGION_LABEL = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+-[0-9]$/;
 export const AWS_WAF_RESPONSE_MAX_BYTES = 1024 * 1024;
 
 function providerRequestError(message, { code = 'provider_poll_failed', status, cause } = {}) {
@@ -179,13 +179,7 @@ async function awsWafJsonRequest({
       });
     }
 
-    let parsed = {};
-    try {
-      parsed = await readAwsWafResponse(response);
-    } catch (cause) {
-      if (cause?.code === 'provider_response_too_large') throw cause;
-      parsed = {};
-    }
+    const parsed = await readAwsWafResponse(response);
     if (!response.ok) {
       const code = response.status === 429
         ? 'rate_limited'
@@ -234,7 +228,12 @@ async function listWebAclSummaries({
       fetchFn,
       timeoutMs,
     });
-    const batch = Array.isArray(listBody?.WebACLs) ? listBody.WebACLs : [];
+    if (!Array.isArray(listBody?.WebACLs)) {
+      throw providerRequestError('AWS WAF ListWebACLs returned an invalid success body.', {
+        code: 'provider_response_invalid',
+      });
+    }
+    const batch = listBody.WebACLs;
     if (batch.length === 0) break;
 
     const remaining = CONNECTOR_POLL_MAX_INVENTORY_ITEMS - summaries.length;
@@ -306,8 +305,9 @@ export async function pollAwsWaf({
     throw err;
   }
 
-  const region = resolveRegion(config, credentials);
   const scope = String(config.scope ?? '').toLowerCase() === 'cloudfront' ? 'CLOUDFRONT' : 'REGIONAL';
+  const configuredRegion = resolveRegion(config, credentials);
+  const region = scope === 'CLOUDFRONT' ? 'us-east-1' : configuredRegion;
   const fetchOptions = {
     timeoutMs: Number.isFinite(fetchTimeoutMs)
       ? fetchTimeoutMs
@@ -340,7 +340,12 @@ export async function pollAwsWaf({
         fetchFn,
         ...fetchOptions,
       });
-      webAcl = webAcl?.WebACL ?? summary;
+      if (!webAcl?.WebACL || typeof webAcl.WebACL !== 'object' || Array.isArray(webAcl.WebACL)) {
+        throw providerRequestError('AWS WAF GetWebACL returned an invalid success body.', {
+          code: 'provider_response_invalid',
+        });
+      }
+      webAcl = webAcl.WebACL;
     } catch (err) {
       if (err.status === 403) {
         permissionGaps.push(`get_webacl:${summary.Id}`);

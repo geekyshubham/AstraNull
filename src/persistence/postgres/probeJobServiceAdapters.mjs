@@ -3,12 +3,14 @@ import { isProbeJobLeaseStale } from './probeJobRepository.mjs';
 import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichOutsideInWafProbeMetadata } from '../../lib/outsideInWafAgentEvidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
+import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 
 /** @type {readonly string[]} */
 export const PROBE_JOB_REPOSITORY_METHODS = Object.freeze([
   'leasePendingJobsForWorker',
   'getJobById',
   'claimPendingJobForWorker',
+  'claimJobForResult',
   'markJobCompleted',
   'createProbeJob',
   'cancelOpenProbeJobsForTestRuns',
@@ -41,6 +43,7 @@ const VALIDATION_PROBE_METHODS = Object.freeze([
   'appendProbeResultEventIdempotent',
   'appendEvidence',
   'updateTestRun',
+  'withRunMutationLock',
 ]);
 
 function assertProbeJobRepositories(repositories) {
@@ -120,12 +123,13 @@ async function killSwitchActiveForProbeTenant(killSwitch, ctx) {
 async function reconcileDurableProbeResult(
   validationEvidence,
   probeJobs,
-  { ctx, evidenceCtx, run, job, existingProbe, nowIso },
+  { ctx, evidenceCtx, run, job, existingProbe, nowIso, resultLease = null },
 ) {
   const durableResult = existingProbe?.metadata?.external_result;
   const runPatch = {
     correlation: { ...run.correlation, nonce_hash: job.nonce_hash },
     awaiting_external_probe: false,
+    expected_statuses: ['running', 'collecting'],
   };
   // Only mirror a result the durable event actually carries; never invent one.
   if (typeof durableResult === 'string' && durableResult !== '') {
@@ -139,7 +143,9 @@ async function reconcileDurableProbeResult(
   // UPDATE would overwrite the original `completed_at` with the retry's clock, drifting the
   // recorded completion time of durable evidence on every replay.
   if (job.status !== 'completed') {
-    await probeJobs.markJobCompleted(ctx, job.id, nowIso);
+    if (!resultLease) return null;
+    const completed = await probeJobs.markJobCompleted(ctx, job.id, nowIso, resultLease);
+    if (!completed) return null;
   }
   return runPatch;
 }
@@ -149,7 +155,11 @@ async function findDuplicateProbeEvent(validationEvidence, ctx, runId, nonceHash
     signalType: 'probe_result',
     limit: 1000,
   });
-  return events.find((e) => e.signal_type === 'probe_result' && e.nonce_hash === nonceHash) ?? null;
+  return events.find(
+    (event) => event.signal_type === 'probe_result'
+      && event.nonce_hash === nonceHash
+      && isTrustedProducerEvent(event),
+  ) ?? null;
 }
 
 /**
@@ -158,10 +168,15 @@ async function findDuplicateProbeEvent(validationEvidence, ctx, runId, nonceHash
  *   validationEvidence?: Record<string, unknown>,
  *   audit?: { appendAuditEvent?: (...args: unknown[]) => unknown },
  * }} repositories
- * @param {{ now?: () => Date, newId?: typeof newId }} [options]
+ * @param {{
+ *   now?: () => Date,
+ *   newId?: typeof newId,
+ *   ownershipVerification?: { recordOwnershipSignalByNonce?: Function },
+ * }} [options]
  */
 export function createPostgresProbeJobServices(repositories, options = {}) {
   assertProbeJobRepositories(repositories);
+  const ownershipVerification = options.ownershipVerification;
   const probeJobs = repositories.probeJobs;
   const validationEvidence = repositories.validationEvidence;
   const audit = repositories.audit;
@@ -203,13 +218,105 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
           message: 'Tenant kill switch is active; probe results are not accepted.',
         };
       }
-      const job = await probeJobs.getJobById(ctx, jobId);
-      if (!job) return { error: 'job_not_found', status: 404 };
+      const initialJob = await probeJobs.getJobById(ctx, jobId);
+      if (!initialJob) return { error: 'job_not_found', status: 404 };
 
-      const evidenceCtx = { tenantId: ctx.tenantId, userId: 'probe_worker', role: 'probe_worker' };
-      const run = await validationEvidence.getTestRun(evidenceCtx, job.test_run_id);
+      if (initialJob.ownership_verification_id) {
+        if (typeof ownershipVerification?.recordOwnershipSignalByNonce !== 'function') {
+          return { error: 'ownership_result_not_wired', status: 503 };
+        }
+        if (initialJob.status === 'completed') {
+          return { error: 'job_not_open', status: 409 };
+        }
+        if (
+          initialJob.status === 'leased'
+          && initialJob.leased_by !== workerId
+          && !isProbeJobLeaseStale(initialJob, nowFn())
+        ) {
+          return {
+            error: 'job_leased_to_another_worker',
+            status: 403,
+            message: 'This probe job is leased to a different worker.',
+          };
+        }
+        if (!['pending', 'leased'].includes(initialJob.status)) {
+          return { error: 'job_not_open', status: 409 };
+        }
+        const validated = validateProbeResultBody(body, initialJob.constraints ?? {}, {
+          probeKind: initialJob.probe_profile?.kind,
+        });
+        if (!validated.ok) {
+          return {
+            error: validated.error,
+            status: validated.status,
+            message: validated.message,
+          };
+        }
+        const nowIso = nowFn().toISOString();
+        const leasedJob = await probeJobs.claimJobForResult(
+          ctx,
+          initialJob.id,
+          workerId,
+          nowIso,
+          {
+            status: initialJob.status,
+            leased_by: initialJob.leased_by ?? null,
+            leased_at: initialJob.leased_at ?? null,
+          },
+        );
+        if (!leasedJob) return { error: 'job_not_open', status: 409 };
+        const resultLease = { workerId, leasedAt: leasedJob.leased_at };
+        const ownershipResult = await ownershipVerification.recordOwnershipSignalByNonce(
+          { tenantId: initialJob.tenant_id },
+          { source: 'probe', nonce_hash: initialJob.nonce_hash },
+        );
+        if (ownershipResult?.error) return ownershipResult;
+        const completed = await probeJobs.markJobCompleted(
+          ctx,
+          initialJob.id,
+          nowIso,
+          resultLease,
+        );
+        if (!completed) return { error: 'job_not_open', status: 409 };
+        await audit.appendAuditEvent({
+          tenant_id: initialJob.tenant_id,
+          actor_user_id: workerId,
+          actor_role: 'probe_worker',
+          action: 'probe_job.result_ingested',
+          resource_type: 'probe_job',
+          resource_id: initialJob.id,
+          metadata: {
+            ownership_verification_id: initialJob.ownership_verification_id,
+          },
+        });
+        return {
+          ownership_verification_id: initialJob.ownership_verification_id,
+          job_id: initialJob.id,
+          tenant_id: initialJob.tenant_id,
+        };
+      }
 
-      const nowIso = nowFn().toISOString();
+      const mutation = await validationEvidence.withRunMutationLock(
+        ctx,
+        initialJob.test_run_id,
+        async () => {
+          if (await killSwitchActiveForProbeTenant(killSwitch, ctx)) {
+            return { error: 'kill_switch_active', status: 423 };
+          }
+          const job = await probeJobs.getJobById(ctx, jobId);
+          if (!job) return { error: 'job_not_found', status: 404 };
+          const evidenceCtx = {
+            tenantId: ctx.tenantId,
+            userId: 'probe_worker',
+            role: 'probe_worker',
+          };
+          const run = await validationEvidence.getTestRun(evidenceCtx, job.test_run_id);
+          if (!run) return { error: 'run_not_found', status: 404 };
+          if (!['running', 'collecting'].includes(run.status)) {
+            return { error: 'run_not_collecting', status: 409 };
+          }
+
+          const nowIso = nowFn().toISOString();
 
       if (job.status === 'completed') {
         const dupProbe = run
@@ -273,6 +380,20 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
 
       if (!run) return { error: 'run_not_found', status: 404 };
 
+      const leasedJob = await probeJobs.claimJobForResult(
+        ctx,
+        job.id,
+        workerId,
+        nowIso,
+        {
+          status: job.status,
+          leased_by: job.leased_by ?? null,
+          leased_at: job.leased_at ?? null,
+        },
+      );
+      if (!leasedJob) return { error: 'job_not_open', status: 409 };
+      const resultLease = { workerId, leasedAt: leasedJob.leased_at };
+
       const existingProbe = await findDuplicateProbeEvent(
         validationEvidence,
         evidenceCtx,
@@ -284,14 +405,16 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         // the run and complete the job rather than rejecting. This is the branch a retry after
         // a crash *between the event write and the run patch* lands in — the job is still
         // pending/leased, so the old 409 here was what made that state unrepairable.
-        await reconcileDurableProbeResult(validationEvidence, probeJobs, {
+        const reconciled = await reconcileDurableProbeResult(validationEvidence, probeJobs, {
           ctx,
           evidenceCtx,
           run,
           job,
           existingProbe,
           nowIso,
+          resultLease,
         });
+        if (!reconciled) return { error: 'job_not_open', status: 409 };
         await audit.appendAuditEvent({
           tenant_id: run.tenant_id,
           actor_user_id: workerId,
@@ -310,10 +433,6 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         };
       }
 
-      if (job.status === 'pending') {
-        await probeJobs.claimPendingJobForWorker(ctx, job.id, workerId, nowIso);
-      }
-
       let probeMetadata = enrichProbeMetadataWithWafCatalog(
         {
           ...workerMetadata,
@@ -330,7 +449,9 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
           limit: 500,
         });
         probeMetadata = enrichOutsideInWafProbeMetadata(probeMetadata, {
-          agents: Array.isArray(agentObservations) ? agentObservations : [],
+          agents: Array.isArray(agentObservations)
+            ? agentObservations.filter(isTrustedProducerEvent)
+            : [],
           nonceHash: job.nonce_hash,
         });
       }
@@ -342,6 +463,7 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         check_id: job.check_id,
         source: 'probe_worker',
         signal_type: 'probe_result',
+        producer_kind: 'signed_probe',
         timestamp: nowIso,
         nonce_hash: job.nonce_hash,
         metadata: probeMetadata,
@@ -370,13 +492,15 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         correlation,
         probe_external_result: externalResult,
         awaiting_external_probe: false,
+        expected_statuses: ['running', 'collecting'],
       };
       if (run.status === 'running') {
         runPatch.status = 'collecting';
       }
       await validationEvidence.updateTestRun(evidenceCtx, run.id, runPatch);
 
-      await probeJobs.markJobCompleted(ctx, job.id, nowIso);
+      const completedJob = await probeJobs.markJobCompleted(ctx, job.id, nowIso, resultLease);
+      if (!completedJob) return { error: 'job_not_open', status: 409 };
 
       await audit.appendAuditEvent({
         tenant_id: run.tenant_id,
@@ -388,12 +512,18 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         metadata: { test_run_id: run.id, external_result: externalResult },
       });
 
-      return {
-        probe_event: probeEvent,
-        run_id: run.id,
-        job_id: job.id,
-        tenant_id: run.tenant_id,
-      };
+          return {
+            probe_event: probeEvent,
+            run_id: run.id,
+            job_id: job.id,
+            tenant_id: run.tenant_id,
+          };
+        },
+      );
+      if (!mutation.acquired) {
+        return { error: 'run_mutation_in_progress', status: 409 };
+      }
+      return mutation.result;
     },
   };
 }

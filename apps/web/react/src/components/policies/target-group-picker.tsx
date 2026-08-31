@@ -18,6 +18,30 @@ function getNumber(item: DataItem, keys: string[], fallback = 0) {
   return fallback;
 }
 
+const POLICY_TARGET_KIND_ALIASES: Readonly<Record<string, string>> = {
+  domain: 'fqdn',
+  hostname: 'fqdn',
+};
+
+/** Mirror the policy API: persisted aliases are canonical FQDNs and HTTP(S) values are URLs. */
+export function effectivePolicyTargetKind(target: DataItem) {
+  const value = getString(target, ['value'], '');
+  if (/^https?:\/\//i.test(value)) return 'url';
+  const kind = getString(target, ['kind'], '').trim().toLowerCase();
+  return POLICY_TARGET_KIND_ALIASES[kind] ?? kind;
+}
+
+export function policySupportedTargetKinds(check: DataItem | null | undefined) {
+  return Array.isArray(check?.supported_targets)
+    ? check.supported_targets.map((value) => String(value).trim()).filter(Boolean)
+    : [];
+}
+
+export function isPolicyTargetCompatible(check: DataItem | null | undefined, target: DataItem) {
+  const supportedTargets = policySupportedTargetKinds(check);
+  return supportedTargets.length === 0 || supportedTargets.includes(effectivePolicyTargetKind(target));
+}
+
 function TargetGroupChip({
   id,
   name,
@@ -125,20 +149,16 @@ export function TargetGroupPicker({
   const labelId = useId();
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false);
-    }
     document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, []);
 
@@ -162,8 +182,20 @@ export function TargetGroupPicker({
   return (
     <div className="tg-picker-field">
       <span className="field-label" id={labelId}>{label}</span>
-      <div className="tg-picker" data-tg-picker ref={rootRef}>
+      <div
+        className="tg-picker"
+        data-tg-picker
+        ref={rootRef}
+        onKeyDownCapture={(event) => {
+          if (!open || event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(false);
+          triggerRef.current?.focus({ preventScroll: true });
+        }}
+      >
         <button
+          ref={triggerRef}
           type="button"
           className="tg-picker-trigger input"
           aria-haspopup="listbox"

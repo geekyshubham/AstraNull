@@ -32,8 +32,31 @@ describe('target group service CRUD', () => {
     assert.equal(patched.description, 'New description');
     assert.equal(patched.timezone, 'America/New_York');
 
+    getStore().testPolicies.push({
+      id: 'policy_group_archive',
+      tenant_id: ctx.tenantId,
+      target_group_id: group.id,
+      target_id: 'target_group_archive',
+      check_id: 'waf.fingerprint.safe',
+      state: 'active',
+      enabled: true,
+      next_run_at: '2026-09-01T00:00:00.000Z',
+      lease_token: 'lease',
+      lease_owner: 'runner',
+      lease_expires_at: '2026-09-01T00:05:00.000Z',
+      schedule_revision: 1,
+    });
     const archived = archiveTargetGroup(ctx, group.id);
     assert.equal(archived.archived, true);
+    assert.equal(archived.paused_policy_count, 1);
+    const pausedPolicy = getStore().testPolicies.find((policy) => policy.id === 'policy_group_archive');
+    assert.equal(pausedPolicy.state, 'paused');
+    assert.equal(pausedPolicy.enabled, false);
+    assert.equal(pausedPolicy.next_run_at, null);
+    assert.equal(pausedPolicy.lease_token, null);
+    assert.equal(pausedPolicy.lease_owner, null);
+    assert.equal(pausedPolicy.lease_expires_at, null);
+    assert.equal(pausedPolicy.schedule_revision, 2);
     assert.equal(getTargetGroup(ctx, group.id), null);
     assert.equal(listTargetGroups(ctx).some((g) => g.id === group.id), false);
   });
@@ -58,6 +81,21 @@ describe('target group service CRUD', () => {
   it('patches and deletes targets with active-run guard', () => {
     const group = createTargetGroup(ctx, { name: 'Targets' });
     const target = addTarget(ctx, group.id, { value: 'one.example.com' });
+    getStore().testPolicies.push({
+      id: 'policy_target_archive',
+      tenant_id: ctx.tenantId,
+      target_group_id: group.id,
+      target_id: target.id,
+      check_id: 'dns.authoritative_response.safe',
+      cadence: 'daily',
+      state: 'active',
+      enabled: true,
+      next_run_at: '2026-09-01T00:00:00.000Z',
+      lease_token: 'lease',
+      lease_owner: 'runner',
+      lease_expires_at: '2026-09-01T00:05:00.000Z',
+      schedule_revision: 1,
+    });
 
     const patched = patchTarget(ctx, group.id, target.id, {
       value: 'two.example.com',
@@ -86,6 +124,15 @@ describe('target group service CRUD', () => {
     const archived = getStore().targets.find((row) => row.id === target.id);
     assert.ok(archived.deleted_at);
     assert.equal(archived.deleted_by, ctx.userId);
+    assert.equal(deleted.paused_policy_count, 1);
+    const pausedPolicy = getStore().testPolicies.find((policy) => policy.id === 'policy_target_archive');
+    assert.equal(pausedPolicy.state, 'paused');
+    assert.equal(pausedPolicy.enabled, false);
+    assert.equal(pausedPolicy.next_run_at, null);
+    assert.equal(pausedPolicy.lease_token, null);
+    assert.equal(pausedPolicy.lease_owner, null);
+    assert.equal(pausedPolicy.lease_expires_at, null);
+    assert.equal(pausedPolicy.schedule_revision, 2);
   });
 
   it('persists optional onboard metadata (agent_id binding, notes) on add', () => {

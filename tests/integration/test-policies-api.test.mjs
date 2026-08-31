@@ -31,6 +31,7 @@ describe('test policies API', () => {
       headers: engineer,
       body: {
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         check_id: 'dns.authoritative_response.safe',
         cadence: 'weekly',
         expected_verdict: 'pass',
@@ -40,6 +41,10 @@ describe('test policies API', () => {
 
     assert.equal(created.status, 201);
     assert.equal(created.json.target_group_id, 'tg_1');
+    assert.equal(created.json.target_id, 'tgt_1');
+    assert.equal(created.json.target.id, 'tgt_1');
+    assert.equal(created.json.target.kind, 'fqdn');
+    assert.equal(created.json.target.value, 'origin.test');
     assert.equal(created.json.check_id, 'dns.authoritative_response.safe');
     assert.equal(created.json.cadence, 'weekly');
     assert.equal(created.json.check.safety_class, 'safe');
@@ -53,11 +58,20 @@ describe('test policies API', () => {
 
     const patched = await request(baseUrl, 'PATCH', `/v1/test-policies/${created.json.id}`, {
       headers: engineer,
-      body: { cadence: 'monthly', expected_verdict: 'warn' },
+      body: {
+        cadence: 'monthly',
+        expected_verdict: 'warn',
+        target_group_id: 'tg_other',
+        target_id: 'tgt_other',
+        check_id: 'path.protected_canary.safe',
+      },
     });
     assert.equal(patched.status, 200);
     assert.equal(patched.json.cadence, 'monthly');
     assert.equal(patched.json.expected_verdict, 'warn');
+    assert.equal(patched.json.target_group_id, 'tg_1');
+    assert.equal(patched.json.target_id, 'tgt_1');
+    assert.equal(patched.json.check_id, 'dns.authoritative_response.safe');
 
     const archived = await request(baseUrl, 'DELETE', `/v1/test-policies/${created.json.id}`, {
       headers: engineer,
@@ -76,6 +90,7 @@ describe('test policies API', () => {
       headers: engineer,
       body: {
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         check_id: 'high_scale.volumetric.request_only',
         cadence: 'manual',
       },
@@ -83,5 +98,29 @@ describe('test policies API', () => {
 
     assert.equal(created.status, 403);
     assert.equal(created.json.error, 'soc_gated_check');
+  });
+
+  it('rejects check and effective target-kind incompatibility before persistence', async () => {
+    const engineer = demoHeaders('engineer');
+    const created = await request(baseUrl, 'POST', '/v1/test-policies', {
+      headers: engineer,
+      body: {
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        check_id: 'path.protected_canary.safe',
+        cadence: 'manual',
+      },
+    });
+
+    assert.equal(created.status, 400);
+    assert.deepEqual(created.json, {
+      error: 'target_kind_not_supported',
+      status: 400,
+      check_id: 'path.protected_canary.safe',
+      target_kind: 'fqdn',
+      supported_targets: ['url'],
+    });
+    const listed = await request(baseUrl, 'GET', '/v1/test-policies', { headers: engineer });
+    assert.equal(listed.json.items.length, 0);
   });
 });

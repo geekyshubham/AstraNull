@@ -286,6 +286,130 @@ describe('single-asset drift check', () => {
 });
 
 describe('tenant drift scan', () => {
+  it('detects regressions from edge-protected posture', () => {
+    Object.assign(process.env, wafEnabledEnv());
+    const cases = [
+      { status: 'unprotected', reason_codes: [], expected: 'mode_downgrade' },
+      { status: 'underprotected', reason_codes: ['origin_bypass_confirmed'], expected: 'origin_bypass_new' },
+      { status: 'underprotected', reason_codes: ['monitor_only_behavior'], expected: 'mode_downgrade' },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      freshStore();
+      const asset = seedWafAsset({ id: `waf_edge_${index}` });
+      seedPostureSnapshots([
+        {
+          id: `edge_prev_${index}`,
+          tenant_id: 'ten_demo',
+          waf_asset_id: asset.id,
+          status: 'edge_protected',
+          reason_codes: [],
+          detected_vendor: 'cloudflare',
+          created_at: '2026-05-01T00:00:00.000Z',
+          is_current: false,
+        },
+        {
+          id: `edge_curr_${index}`,
+          tenant_id: 'ten_demo',
+          waf_asset_id: asset.id,
+          status: testCase.status,
+          reason_codes: testCase.reason_codes,
+          detected_vendor: 'cloudflare',
+          created_at: '2026-06-01T00:00:00.000Z',
+          is_current: true,
+        },
+      ]);
+
+      const outcome = detectAssetDrift(demoCtx(), asset.id);
+      assert.ok(outcome.drift_events.some((event) => event.drift_type === testCase.expected));
+    }
+  });
+
+  it('emits one critical fingerprint-loss drift for edge-to-unprotected vendor loss', () => {
+    Object.assign(process.env, wafEnabledEnv());
+    freshStore();
+    const asset = seedWafAsset();
+    seedPostureSnapshots([
+      {
+        id: 'edge_prev_loss',
+        tenant_id: 'ten_demo',
+        waf_asset_id: asset.id,
+        status: 'edge_protected',
+        reason_codes: [],
+        detected_vendor: 'cloudflare',
+        created_at: '2026-05-01T00:00:00.000Z',
+        is_current: false,
+      },
+      {
+        id: 'edge_curr_loss',
+        tenant_id: 'ten_demo',
+        waf_asset_id: asset.id,
+        status: 'unprotected',
+        reason_codes: [],
+        detected_vendor: null,
+        created_at: '2026-06-01T00:00:00.000Z',
+        is_current: true,
+      },
+    ]);
+
+    const outcome = detectAssetDrift(demoCtx(), asset.id);
+    assert.equal(outcome.drifts_detected, 1);
+    assert.equal(getStore().wafDriftEvents.length, 1);
+    assert.equal(getStore().wafDriftEvents[0].drift_type, 'fingerprint_loss');
+    assert.equal(getStore().wafDriftEvents[0].severity, 'critical');
+  });
+
+  it('keeps existing critical severity and original creation on a lower-severity update', () => {
+    Object.assign(process.env, wafEnabledEnv());
+    freshStore();
+    const asset = seedWafAsset();
+    const originalCreatedAt = '2026-04-01T00:00:00.000Z';
+    getStore().wafDriftEvents.push({
+      id: 'drift_existing_critical',
+      tenant_id: 'ten_demo',
+      waf_asset_id: asset.id,
+      drift_type: 'fingerprint_loss',
+      severity: 'critical',
+      before_summary_json: { posture_status: 'protected' },
+      after_summary_json: { posture_status: 'edge_protected' },
+      status: 'open',
+      finding_id: null,
+      created_at: originalCreatedAt,
+      updated_at: originalCreatedAt,
+      resolved_at: null,
+    });
+    seedPostureSnapshots([
+      {
+        id: 'edge_prev_existing',
+        tenant_id: 'ten_demo',
+        waf_asset_id: asset.id,
+        status: 'unknown',
+        reason_codes: [],
+        detected_vendor: 'cloudflare',
+        created_at: '2026-05-01T00:00:00.000Z',
+        is_current: false,
+      },
+      {
+        id: 'edge_curr_existing',
+        tenant_id: 'ten_demo',
+        waf_asset_id: asset.id,
+        status: 'unknown',
+        reason_codes: [],
+        detected_vendor: null,
+        created_at: '2026-06-01T00:00:00.000Z',
+        is_current: true,
+      },
+    ]);
+
+    detectAssetDrift(demoCtx(), asset.id);
+    const [event] = getStore().wafDriftEvents;
+    assert.equal(getStore().wafDriftEvents.length, 1);
+    assert.equal(event.id, 'drift_existing_critical');
+    assert.equal(event.severity, 'critical');
+    assert.equal(event.created_at, originalCreatedAt);
+    assert.equal(event.after_summary_json.status, 'unknown');
+  });
+
   it('runDriftScan creates drift events from connector snapshot changes', () => {
     Object.assign(process.env, wafEnabledEnv());
     freshStore();

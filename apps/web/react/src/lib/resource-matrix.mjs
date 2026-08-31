@@ -35,7 +35,6 @@ const PROTECTED_VERDICTS = new Set([
   'protected',
   'success',
   'ok',
-  'edge_protected',
   'allowed_as_expected',
 ]);
 const EXPOSED_VERDICTS = new Set([

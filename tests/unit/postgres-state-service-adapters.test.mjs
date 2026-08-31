@@ -92,10 +92,14 @@ function stubRepositories(overrides = {}) {
       return evidence;
     },
     listFindings: async () => findings,
-    getVerdictForRun: async (_ctx, runId) => (runId === 'run_1' ? verdict : null),
+    getVerdictForRun: async (_ctx, runId) => {
+      if (overrides.getVerdictForRun) return overrides.getVerdictForRun(runId);
+      return runId === 'run_1' ? verdict : null;
+    },
     listRunEvents: async (_ctx, runId, options) => {
       assert.equal(options.limit, 1000);
-      return runId === 'run_1' ? events : [];
+      if (overrides.listRunEvents) return overrides.listRunEvents(runId);
+      return events.filter((event) => event.test_run_id === runId);
     },
   };
   const highScale = {
@@ -289,6 +293,76 @@ describe('postgres state service adapter', () => {
     assert.match(soc.detail, /Kill switch state recorded/);
     assert.match(soc.detail, /Other request\(s\) still pending gates/);
     assert.equal(payload.readiness.persistence, 'postgres');
+  });
+
+  it('does not award readiness for vault evidence linked to a legacy reserved event', async () => {
+    const repositories = stubRepositories({
+      agents: [],
+      findings: [],
+      verdict: false,
+      events: [{
+        id: 'evt_legacy_link',
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_1',
+        signal_type: 'probe_result',
+        producer_kind: 'legacy_untrusted',
+        timestamp: RECENT_TS,
+      }],
+      evidence: [{
+        id: 'evidence_legacy_link',
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_1',
+        related_event_id: 'evt_legacy_link',
+        created_at: RECENT_TS,
+      }],
+    });
+    const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
+    const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
+    const coverage = payload.readiness.factors.find((factor) => factor.key === 'coverage');
+    const freshness = payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness');
+    assert.equal(coverage.score, 0);
+    assert.equal(freshness.score, 0);
+    assert.match(freshness.detail, /No evidence-backed validations yet/);
+  });
+
+  it('loads trusted linked evidence for a run beyond the newest thirty', async () => {
+    const runs = Array.from({ length: 31 }, (_, index) => ({
+      id: `run_${index + 1}`,
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      status: 'completed',
+      created_at: new Date(FIXED_NOW.getTime() - index * 60_000).toISOString(),
+      completed_at: new Date(FIXED_NOW.getTime() - index * 60_000).toISOString(),
+    }));
+    const repositories = stubRepositories({
+      agents: [],
+      findings: [],
+      runs,
+      verdict: false,
+      evidence: [{
+        id: 'evidence_run_31',
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_31',
+        related_event_id: 'evt_run_31',
+        created_at: RECENT_TS,
+      }],
+      events: [{
+        id: 'evt_run_31',
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_31',
+        signal_type: 'probe_result',
+        producer_kind: 'signed_probe',
+        timestamp: RECENT_TS,
+      }],
+      getVerdictForRun: async () => null,
+    });
+    const state = createPostgresStateServices(repositories, { now: () => FIXED_NOW });
+    const payload = await state.getState({ tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' });
+    const coverage = payload.readiness.factors.find((factor) => factor.key === 'coverage');
+    const freshness = payload.readiness.factors.find((factor) => factor.key === 'evidence_freshness');
+
+    assert.equal(coverage.score, 40);
+    assert.equal(freshness.score, 15);
   });
 
   it('reports pending high-scale gates without awarding SOC readiness credit', async () => {

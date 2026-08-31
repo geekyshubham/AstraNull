@@ -738,6 +738,20 @@ describe('postgres core catalog repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('listTargets projects verification through target_verification_current', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/FROM targets t/i.test(text)) {
+        assert.match(text, /LEFT JOIN target_verification_current verification/);
+        assert.doesNotMatch(text, /FROM target_verifications tv/);
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const repo = createTestRepository(pool);
+    assert.deepEqual(await repo.listTargets(CTX), []);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
   it('only the HTTP detail handler asks for the enriched target group', () => {
     // Fails loudly if a new internal adapter call site forgets the lean option and silently
     // starts paying for the detail aggregates again.
@@ -1020,6 +1034,148 @@ describe('postgres core catalog repository', () => {
     );
     assert.equal(target.id, 'tgt_new');
     assert.equal(target.expected_behavior, undefined);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('rejects connector-backed bulk import when persisted feature authority is disabled', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/SELECT id FROM target_groups/i.test(text)) return { rows: [{ id: 'tg_1' }] };
+      if (/FROM tenant_connector_features/i.test(text)) return { rows: [{ enabled: false }] };
+      if (/FROM waf_connectors|INSERT INTO targets/i.test(text)) {
+        assert.fail('disabled feature must reject before connector evidence or target mutation');
+      }
+      return { rows: [] };
+    });
+    const repo = createTestRepository(pool);
+    const result = await repo.bulkImportTargets(
+      CTX,
+      'tg_1',
+      { connector_id: 'conn_1', items: [{ kind: 'fqdn', value: 'app.example.com' }] },
+      {
+        now: FIXED_NOW,
+        trustedConnector: { id: 'conn_1', provider: 'cloudflare', status: 'active' },
+      },
+    );
+
+    assert.deepEqual(result, { error: 'connectors_feature_disabled', status: 404 });
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('bulkImportTargets revalidates locked connector revision and falls back to pending', async () => {
+    let verificationInsert = null;
+    let targetMetadata = null;
+    const pool = createRecordingPool((text, params) => {
+      if (/SELECT id FROM target_groups/i.test(text)) return { rows: [{ id: 'tg_1' }] };
+      if (/FROM tenant_connector_features/i.test(text)) return { rows: [{ enabled: true }] };
+      if (/FROM waf_connectors/i.test(text)) {
+        assert.match(text, /FOR UPDATE/);
+        return {
+          rows: [{
+            id: 'conn_1',
+            provider: 'cloudflare',
+            name: 'Cloudflare DNS',
+            status: 'active',
+            secret_id: 'sec_1',
+            last_success_at: FIXED_NOW,
+            last_success_revision: 8,
+          }],
+        };
+      }
+      if (/FROM waf_connector_snapshots/i.test(text)) {
+        return {
+          rows: [{
+            id: 'snap_7',
+            connector_id: 'conn_1',
+            provider: 'cloudflare',
+            snapshot_kind: 'dns_zone',
+            resource_ref_hash: 'zone_hash',
+            display_ref: 'app.example.com',
+            observed_at: FIXED_NOW,
+            summary_json: {
+              hostnames: ['app.example.com'],
+              tags: ['ownership_eligible:true', 'resource_status:active'],
+            },
+            evidence_source: 'provider_api',
+            inventory_complete: true,
+            inventory_truncated: false,
+            poll_revision: 7,
+          }],
+        };
+      }
+      if (/SELECT id FROM targets/i.test(text)) return { rows: [] };
+      if (/INSERT INTO targets/i.test(text)) {
+        targetMetadata = JSON.parse(params[7]);
+        return {
+          rows: [{
+            id: params[0],
+            tenant_id: params[1],
+            target_group_id: params[2],
+            kind: params[3],
+            value: params[4],
+            normalized_value: params[5],
+            expected_behavior: params[6],
+            metadata_json: targetMetadata,
+            created_at: params[8],
+          }],
+        };
+      }
+      if (/INSERT INTO target_verifications/i.test(text)) {
+        verificationInsert = params;
+        return { rows: [] };
+      }
+      if (/SELECT \(\s*SELECT tv\.state/i.test(text)) return { rows: [{ state: 'pending' }] };
+      if (/UPDATE target_groups/i.test(text)) return { rows: [] };
+      return { rows: [] };
+    });
+    const repo = createTestRepository(pool);
+    const staleEvidence = {
+      kind: 'fqdn',
+      value: 'app.example.com',
+      provider: 'cloudflare',
+      snapshot_kind: 'dns_zone',
+      resource_ref: 'zone_hash',
+      observed_at: FIXED_NOW,
+      snapshot_id: 'snap_7',
+      poll_revision: 7,
+      poll_generation: FIXED_NOW,
+      evidence_source: 'provider_api',
+      candidate_source: 'snapshot_inventory',
+      current_successful_poll: true,
+      ownership_eligible: true,
+      resource_status: 'active',
+      inventory_complete: true,
+      inventory_truncated: false,
+    };
+    const result = await repo.bulkImportTargets(
+      CTX,
+      'tg_1',
+      { connector_id: 'conn_1', items: [{ kind: 'fqdn', value: 'app.example.com' }] },
+      {
+        now: FIXED_NOW,
+        trustedConnector: {
+          id: 'conn_1',
+          provider: 'cloudflare',
+          status: 'active',
+          has_secret: true,
+          last_success_at: FIXED_NOW,
+          last_success_revision: 7,
+        },
+        connectorInventoryKeys: new Set(['fqdn\u0000app.example.com']),
+        connectorInventoryEvidence: new Map([['fqdn\u0000app.example.com', staleEvidence]]),
+      },
+    );
+
+    assert.equal(result.count, 1);
+    assert.equal(result.imported[0].verify_state, 'pending');
+    assert.equal(verificationInsert[3], 'pending');
+    assert.equal(verificationInsert[4], 'connector_inventory');
+    assert.deepEqual(JSON.parse(verificationInsert[5]), { connector_id: 'conn_1' });
+    assert.equal(targetMetadata.managed_provenance.kind, 'connector_inventory');
+    assert.equal(
+      dataQueries(pool.client).findIndex((query) => /FROM waf_connectors/i.test(query.text))
+        < dataQueries(pool.client).findIndex((query) => /INSERT INTO targets/i.test(query.text)),
+      true,
+    );
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 

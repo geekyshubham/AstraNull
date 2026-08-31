@@ -193,6 +193,36 @@ describe('safe-test guardrails', () => {
     assert.ok(getStore().auditLog.some((a) => a.action === 'observation.rejected_inactive_run'));
   });
 
+  it('rejects agent observation without evidence or verdict side effects while kill switch is active', () => {
+    freshStore();
+    seedAgent();
+    const started = startTestRun(ctx, {
+      check_id: 'origin.direct_bypass.safe',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+    const job = ackedJobForAgent('ag_guard', started.run.id);
+    getStore().socKillSwitch = {
+      tenant_id: 'ten_demo', active: true, reason: 'emergency', updated_at: new Date().toISOString(),
+    };
+    const eventsBefore = getStore().events.length;
+    const verdictsBefore = getStore().verdicts.length;
+
+    const denied = ingestObservation(
+      { tenantId: 'ten_demo', userId: 'agent', role: 'agent' },
+      'ag_guard',
+      observationBody(started.run, job),
+    );
+
+    assert.deepEqual(denied, { error: 'kill_switch_active', status: 423 });
+    assert.equal(getStore().events.length, eventsBefore);
+    assert.equal(getStore().verdicts.length, verdictsBefore);
+    assert.equal(job.status, 'acked');
+    assert.ok(getStore().auditLog.some(
+      (entry) => entry.action === 'observation.rejected' && entry.metadata?.reason === 'kill_switch_active',
+    ));
+  });
+
   it('rejects missing agent_job_id and audits observation.rejected', () => {
     freshStore();
     seedAgent();

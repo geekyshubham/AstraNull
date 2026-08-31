@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
@@ -187,6 +188,34 @@ describe('production persistence fail-closed', () => {
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_CONNECTORS_ENABLED_TENANTS/);
   });
 
+
+  it('requires an Ed25519 private signing key when production connectors are enabled', () => {
+    process.env.NODE_ENV = 'production';
+    setProductionOidcEnv();
+    process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = 'p'.repeat(32);
+    process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
+    process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
+    process.env.ASTRANULL_WAF_POSTURE_ENABLED = '1';
+    process.env.ASTRANULL_CONNECTORS_ENABLED = '1';
+    process.env.ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
+    delete process.env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY;
+    assert.throws(() => loadRuntimeConfig(), /ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY/);
+
+    process.env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY = '<generate Ed25519 PKCS8>';
+    assert.throws(() => loadRuntimeConfig(), /PKCS8/);
+
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    process.env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY = privateKey
+      .export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    process.env.ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY = publicKey
+      .export({ format: 'der', type: 'spki' }).toString('base64');
+    const cfg = loadRuntimeConfig();
+    assert.equal(cfg.connectorJobPrivateKeyConfigured, true);
+    assert.equal(cfg.connectorJobPublicKeyConfigured, true);
+    assert.equal('connectorJobPrivateKey' in cfg, false);
+    assert.equal('connectorJobPublicKey' in cfg, false);
+  });
   it('rejects bearer-only agent identity in production', () => {
     process.env.NODE_ENV = 'test';
     process.env.ASTRANULL_AGENT_IDENTITY_MODE = 'bearer';

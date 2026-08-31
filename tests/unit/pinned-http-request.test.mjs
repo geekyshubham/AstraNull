@@ -150,6 +150,15 @@ describe('pinned HTTP destination transport', () => {
     );
   });
 
+  it('rejects hexadecimal IPv4-mapped IPv6 private destinations before transport', async () => {
+    for (const address of ['::ffff:7f00:1', '::ffff:a00:1', '::ffff:a9fe:a9fe']) {
+      await assert.rejects(
+        () => resolvePinnedDestination(address),
+        (error) => error?.code === 'EDESTINATION',
+      );
+    }
+  });
+
   it('destroys a bounded upgrade request on timeout', async () => {
     let destroyed = false;
     await assert.rejects(

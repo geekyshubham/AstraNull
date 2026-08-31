@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuntimeConfig } from '../src/config.mjs';
+import { loadTestPolicyRuntimeConfig } from './test-policy-runner.mjs';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
 import { createPostgresRuntime } from '../src/persistence/postgres/runtime.mjs';
 
@@ -291,11 +291,11 @@ export function redactWafOrchestratorRunnerMessage(message, env = process.env) {
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  * @param {ReturnType<typeof parseWafOrchestratorRunnerArgs>} parsed
- * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadRuntimeConfig }} [deps]
+ * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadTestPolicyRuntimeConfig }} [deps]
  */
 export function resolveWafOrchestratorRunnerConfig(env, parsed, deps = {}) {
   const readTenantIdsFile = deps.readTenantIdsFile ?? ((filePath) => readFileSync(filePath, 'utf8'));
-  const loadConfig = deps.loadRuntimeConfigFn ?? loadRuntimeConfig;
+  const loadConfig = deps.loadRuntimeConfigFn ?? loadTestPolicyRuntimeConfig;
 
   const databaseUrl = String(env.ASTRANULL_DATABASE_URL ?? '').trim();
   if (!databaseUrl) {
@@ -374,7 +374,10 @@ export function resolveWafOrchestratorRunnerConfig(env, parsed, deps = {}) {
  */
 export async function runPostgresWafOrchestratorPlans(options) {
   const createRuntime = options.createPostgresRuntimeFn ?? createPostgresRuntime;
-  const runtime = await createRuntime(options.env, { autoMigrate: false });
+  const runtime = await createRuntime(options.env, {
+    autoMigrate: false,
+    wafPostureServiceOptions: { connectorEncryptionKey: null },
+  });
 
   try {
     const auditContext = { userId: 'waf-orchestrator-runner', role: 'system' };

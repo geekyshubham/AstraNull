@@ -6,8 +6,10 @@ import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import {
   buildConnectorPollRunnerSummary,
+  interleaveConnectorPollTasks,
   isOutboundPollEligibleConnector,
   listEligibleConnectorsFromStore,
+  main,
 
   parseConnectorPollRunnerArgs,
   parseTenantIdsFromJson,
@@ -16,6 +18,7 @@ import {
   resolveConnectorPollRunnerConfig,
   resolveConnectorPollTenantIds,
   resolveTenantIdsFromConnectors,
+  rotateConnectorPollTenantIds,
   runConnectorPollRunner,
   runDevJsonConnectorPolls,
   runPostgresConnectorPolls,
@@ -80,14 +83,14 @@ function seedConnector(overrides = {}) {
   return connector;
 }
 
-function seedEncryptedSecret({ id, purpose, name, plaintext, tenantId = 'ten_demo' }) {
+function seedEncryptedSecret({ id, purpose, name, plaintext, tenantId = 'ten_demo', provider = 'cloudflare' }) {
   const key = loadSecretEncryptionKey({ ASTRANULL_SECRET_ENCRYPTION_KEY: TEST_ENC_KEY_B64 });
   const record = {
     id,
     tenant_id: tenantId,
     purpose,
     name,
-    metadata: {},
+    metadata: { provider },
     rotation: 0,
     created_at: '2026-07-01T00:00:00.000Z',
     updated_at: '2026-07-01T00:00:00.000Z',
@@ -113,6 +116,7 @@ describe('connector poll runner args', () => {
       allTenants: false,
       concurrency: null,
       dryRun: false,
+      queueOnly: false,
       out: null,
       help: false,
     });
@@ -126,6 +130,7 @@ describe('connector poll runner args', () => {
         '--tenant-id',
         'ten_alpha',
         '--dry-run',
+        '--queue-only',
         '--all-tenants',
         '--concurrency',
         '2',
@@ -139,6 +144,7 @@ describe('connector poll runner args', () => {
         allTenants: true,
         concurrency: 2,
         dryRun: true,
+        queueOnly: true,
         out: '/tmp/summary.json',
         help: true,
       },
@@ -212,6 +218,64 @@ describe('connector poll runner config', () => {
     );
     assert.equal(config.ok, true);
     assert.equal(config.persistenceMode, 'postgres');
+  });
+
+  it('requires and returns an explicit production Postgres worker identity', () => {
+    const parsed = parseConnectorPollRunnerArgs(['node', 'script.mjs', '--tenant-id', 'ten_a']);
+    const baseEnv = {
+      NODE_ENV: 'production',
+      ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull',
+    };
+    const deps = { loadRuntimeConfigFn: () => ({ featureFlags: { wafPostureEnabled: true } }) };
+    const missing = resolveConnectorPollRunnerConfig(baseEnv, parsed, deps);
+    assert.equal(missing.ok, false);
+    assert.match(missing.message, /ASTRANULL_CONNECTOR_WORKER_ID/);
+
+    const configured = resolveConnectorPollRunnerConfig({
+      ...baseEnv,
+      ASTRANULL_CONNECTOR_WORKER_ID: 'connector-worker-prod-a',
+    }, parsed, deps);
+    assert.equal(configured.ok, true);
+    assert.equal(configured.workerId, 'connector-worker-prod-a');
+  });
+
+  it('forwards the configured worker identity from main', async () => {
+    let forwardedConfig;
+    let exitCode;
+    await main({
+      argv: ['node', 'connector-poll-runner.mjs', '--tenant-id', 'ten_a'],
+      env: {
+        ASTRANULL_WAF_POSTURE_ENABLED: '1',
+        ASTRANULL_CONNECTORS_ENABLED: '1',
+        ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull',
+        ASTRANULL_CONNECTOR_WORKER_ID: 'connector-worker-main-a',
+      },
+      runConnectorPollRunnerFn: async (_env, config) => {
+        forwardedConfig = config;
+        return {
+          exitCode: 0,
+          summary: {
+            dry_run: false,
+            queue_only: false,
+            persistence_mode: 'postgres',
+            concurrency: 4,
+            connector_count: 0,
+            no_work: true,
+            connectors_queued: 0,
+            connectors_completed: 0,
+            connectors_polled: 0,
+            connectors_failed: 0,
+            total_snapshots: 0,
+          },
+        };
+      },
+      log: () => {},
+      error: () => {},
+      setExitCode: (code) => { exitCode = code; },
+    });
+
+    assert.equal(forwardedConfig.workerId, 'connector-worker-main-a');
+    assert.equal(exitCode, 0);
   });
 
   it('honors env and CLI concurrency overrides', () => {
@@ -386,7 +450,7 @@ describe('connector poll runner dev-json execution', () => {
     assert.equal(connectorResults.length, 1);
     assert.equal(connectorResults[0].error, 'connector_poll_failed');
     assert.equal(connectorResults[0].poll_result.health_code, 'encryption_not_configured');
-    assert.equal(getStore().wafConnectors[0].status, 'error');
+    assert.equal(getStore().wafConnectors[0].status, 'degraded');
   });
 });
 
@@ -443,7 +507,7 @@ describe('connector poll runner postgres tenant scope', () => {
     );
   });
 
-  it('polls every outbound provider in postgres apply mode', async () => {
+  it('polls only the bounded pending signed-job inventory in postgres worker mode', async () => {
     const pollCalls = [];
     const connectorResults = await runPostgresConnectorPolls({
       env: { ASTRANULL_DATABASE_URL: 'postgresql://user:secret@db.example.invalid/astranull' },
@@ -451,29 +515,31 @@ describe('connector poll runner postgres tenant scope', () => {
       dryRun: false,
       concurrency: 2,
       maxAttempts: 1,
-      createPostgresRuntimeFn: async () => ({
+      workerId: 'connector-worker-test-a',
+      createPostgresRuntimeFn: async (_env, runtimeOptions) => {
+        assert.deepEqual(runtimeOptions, {
+          autoMigrate: false,
+          wafPostureServiceOptions: {
+            requireConnectorJobSigner: false,
+            requireConnectorJobVerifier: true,
+          },
+        });
+        return {
         pool: { query: async () => ({ rows: [] }) },
         services: {
           wafPosture: {
-            listConnectors: async () => [
-              {
-                id: 'conn_cf',
-                tenant_id: 'ten_providers',
-                provider: 'cloudflare',
-                secret_id: 'sec_cf',
-                status: 'active',
-                config_json: { read_only: true },
-              },
-              {
-                id: 'conn_aws',
-                tenant_id: 'ten_providers',
-                provider: 'aws_waf',
-                secret_id: 'sec_aws',
-                status: 'active',
-                config_json: { read_only: true, scope: 'regional' },
-              },
-            ],
-            pollConnector: async (_ctx, connectorId) => {
+            listConnectors: async () => {
+              throw new Error('worker must not enumerate all connectors');
+            },
+            listPendingConnectorPollConnectors: async (_ctx, options) => {
+              assert.deepEqual(options, { limit: 2 });
+              return [
+                { connector_id: 'conn_cf', provider: 'cloudflare' },
+                { connector_id: 'conn_aws', provider: 'aws_waf' },
+              ];
+            },
+            pollConnector: async (_ctx, connectorId, _body, pollOptions) => {
+              assert.equal(pollOptions.workerId, 'connector-worker-test-a');
               pollCalls.push(connectorId);
               return {
                 poll_job: {
@@ -487,7 +553,8 @@ describe('connector poll runner postgres tenant scope', () => {
           },
         },
         close: async () => {},
-      }),
+        };
+      },
     });
 
     assert.equal(connectorResults.length, 2);
@@ -501,6 +568,132 @@ describe('connector poll runner postgres tenant scope', () => {
       connectorResults.every((row) => row.poll_result?.snapshot_count === 1),
       true,
     );
+  });
+
+  it('queues eligible connectors without transport, secret resolution, or worker identity', async () => {
+    const listTenants = [];
+    const featureStates = [];
+    const pollCalls = [];
+    const connectorResults = await runPostgresConnectorPolls({
+      env: { ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull' },
+      tenantIds: ['ten_disabled', 'ten_enabled'],
+      dryRun: false,
+      queueOnly: true,
+      concurrency: 2,
+      maxAttempts: 1,
+      runtimeConfig: {
+        featureFlags: {
+          connectorsEnabledDefault: false,
+          connectorsEnabledTenants: { ten_enabled: true },
+        },
+      },
+      fetchFn: async () => {
+        throw new Error('queue-only scheduler must not fetch');
+      },
+      secretResolver: async () => {
+        throw new Error('queue-only scheduler must not resolve secrets');
+      },
+      createPostgresRuntimeFn: async (_env, runtimeOptions) => {
+        assert.deepEqual(runtimeOptions, {
+          autoMigrate: false,
+          wafPostureServiceOptions: {
+            connectorEncryptionKey: null,
+            requireConnectorJobSigner: true,
+            requireConnectorJobVerifier: false,
+          },
+        });
+        return {
+          services: {
+            wafPosture: {
+              setConnectorFeatureState: async (ctx, enabled) => {
+                featureStates.push({ tenantId: ctx.tenantId, enabled });
+              },
+              listConnectorPollScheduleCandidates: async (ctx, options) => {
+              listTenants.push(ctx.tenantId);
+              assert.deepEqual(options, { limit: 2 });
+              return Array.from({ length: 40 }, (_entry, index) => ({
+                connector_id: `conn_queue_${index}`,
+                provider: 'cloudflare',
+              }));
+            },
+              pollConnector: async (_ctx, connectorId, _body, options) => {
+                assert.deepEqual(options, { executeOutbound: false, scheduled: true, maxAttempts: 1 });
+                pollCalls.push(connectorId);
+                return { poll_job: { status: 'pending', snapshot_count: 0 } };
+              },
+            },
+          },
+          close: async () => {},
+        };
+      },
+    });
+
+    assert.deepEqual(featureStates, [
+      { tenantId: 'ten_disabled', enabled: false },
+      { tenantId: 'ten_enabled', enabled: true },
+    ]);
+    assert.deepEqual(listTenants, ['ten_enabled']);
+    assert.deepEqual(pollCalls, ['conn_queue_0', 'conn_queue_1']);
+    assert.equal(connectorResults.length, 2);
+    assert.equal(connectorResults[0].poll_result.poll_status, 'pending');
+  });
+
+  it('returns no work without creating a runtime when all scoped tenants disable connectors', async () => {
+    let runtimeCreated = false;
+    const connectorResults = await runPostgresConnectorPolls({
+      env: { ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull' },
+      tenantIds: ['ten_disabled'],
+      dryRun: false,
+      concurrency: 2,
+      maxAttempts: 1,
+      runtimeConfig: {
+        featureFlags: {
+          connectorsEnabledDefault: false,
+          connectorsEnabledTenants: {},
+        },
+      },
+      createPostgresRuntimeFn: async () => {
+        runtimeCreated = true;
+        throw new Error('disabled tenants must not access the runtime');
+      },
+    });
+
+    assert.deepEqual(connectorResults, []);
+    assert.equal(runtimeCreated, false);
+  });
+
+  it('caps a multi-tenant worker inventory at configured concurrency', async () => {
+    const inventoryCalls = [];
+    const connectorResults = await runPostgresConnectorPolls({
+      env: { ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull' },
+      tenantIds: ['ten_a', 'ten_b'],
+      dryRun: false,
+      concurrency: 1,
+      maxAttempts: 1,
+      workerId: 'connector-worker-bounded',
+      rotationSeed: 0,
+      createPostgresRuntimeFn: async () => ({
+        services: {
+          wafPosture: {
+            listPendingConnectorPollConnectors: async (ctx, options) => {
+              inventoryCalls.push({ tenantId: ctx.tenantId, ...options });
+              return [{ connector_id: `conn_${ctx.tenantId}`, provider: 'cloudflare' }];
+            },
+            pollConnector: async () => ({
+              poll_job: { status: 'completed', snapshot_count: 0 },
+            }),
+          },
+        },
+        close: async () => {},
+      }),
+    });
+
+    assert.equal(connectorResults.length, 1);
+    assert.equal(connectorResults[0].tenant_id, 'ten_a');
+    assert.deepEqual(inventoryCalls, [
+      { tenantId: 'ten_a', limit: 1 },
+      { tenantId: 'ten_b', limit: 1 },
+    ]);
   });
 
   it('fails closed for postgres dry-run without explicit tenant scope', async () => {
@@ -527,6 +720,22 @@ describe('connector poll runner postgres tenant scope', () => {
 });
 
 describe('connector poll runner helpers', () => {
+  it('rotates tenant priority and interleaves bounded tasks fairly', () => {
+    assert.deepEqual(rotateConnectorPollTenantIds(['ten_a', 'ten_b'], 0), ['ten_a', 'ten_b']);
+    assert.deepEqual(rotateConnectorPollTenantIds(['ten_a', 'ten_b'], 1), ['ten_b', 'ten_a']);
+    assert.deepEqual(interleaveConnectorPollTasks([
+      [
+        { tenant_id: 'ten_a', connector_id: 'conn_a1', provider: 'cloudflare' },
+        { tenant_id: 'ten_a', connector_id: 'conn_a2', provider: 'cloudflare' },
+      ],
+      [{ tenant_id: 'ten_b', connector_id: 'conn_b1', provider: 'aws_waf' }],
+    ], 3).map((task) => task.connector_id), ['conn_a1', 'conn_b1', 'conn_a2']);
+    assert.throws(
+      () => parseTenantIdsFromJson(Array.from({ length: 33 }, (_, index) => `ten_${index}`)),
+      /at most 32 tenants/,
+    );
+  });
+
   it('parses tenant id file forms', () => {
     assert.deepEqual(parseTenantIdsFromJson(['ten_a', ' ten_b ']), ['ten_a', 'ten_b']);
     assert.deepEqual(parseTenantIdsFromJson({ tenant_ids: ['ten_x'] }), ['ten_x']);

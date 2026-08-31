@@ -312,7 +312,7 @@ CREATE TABLE target_groups (
   archived_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,
   deleted_by TEXT,
-  validation_mode TEXT DEFAULT 'agent_assisted',
+  validation_mode TEXT DEFAULT 'external_only',
   ownership_status TEXT DEFAULT 'unverified',
   dns_ownership JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -417,9 +417,9 @@ CREATE TABLE target_verifications (
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   target_id TEXT NOT NULL,
   state TEXT NOT NULL
-    CHECK (state IN ('unverified', 'pending', 'dns_verified', 'agent_verified', 'user_confirmed')),
+    CHECK (state IN ('unverified', 'pending', 'dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed')),
   source_kind TEXT NOT NULL
-    CHECK (source_kind IN ('dns_txt', 'agent_observation', 'user_attestation', 'manual_override')),
+    CHECK (source_kind IN ('dns_txt', 'provider_account', 'agent_observation', 'user_attestation', 'manual_override', 'connector_inventory', 'customer_declaration')),
   source_ref JSONB NOT NULL,
   transitioned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   transitioned_by TEXT NOT NULL,
@@ -547,6 +547,7 @@ CREATE TABLE test_policies (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   target_group_id TEXT NOT NULL,
+  target_id TEXT,
   check_id TEXT NOT NULL,
   cadence TEXT NOT NULL DEFAULT 'manual'
     CONSTRAINT test_policies_cadence_check
@@ -583,6 +584,17 @@ CREATE TABLE test_policies (
     cadence <> 'event_driven'
     OR (
       state = 'paused'
+      AND enabled = FALSE
+      AND next_run_at IS NULL
+      AND lease_token IS NULL
+      AND lease_owner IS NULL
+      AND lease_expires_at IS NULL
+    )
+  ),
+  CONSTRAINT test_policies_exact_target_check CHECK (
+    target_id IS NOT NULL
+    OR (
+      state IN ('paused', 'archived')
       AND enabled = FALSE
       AND next_run_at IS NULL
       AND lease_token IS NULL
@@ -630,6 +642,59 @@ $$;
 CREATE TRIGGER test_policies_event_driven_compat
 BEFORE INSERT OR UPDATE ON test_policies
 FOR EACH ROW EXECUTE FUNCTION astranull_test_policies_event_driven_compat_trigger();
+
+-- Rolling compatibility for the previous writer, which cannot send target_id. Bind only an
+-- unambiguous active target; otherwise keep the policy visible but inert. Bound identity is
+-- immutable for both old and current writers.
+CREATE OR REPLACE FUNCTION astranull_test_policies_exact_target_compat_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  active_target_count INTEGER;
+  resolved_target_id TEXT;
+  preserve_archived BOOLEAN;
+BEGIN
+  preserve_archived := NEW.state = 'archived' OR NEW.archived_at IS NOT NULL;
+  IF TG_OP = 'UPDATE' THEN
+    preserve_archived := preserve_archived OR OLD.state = 'archived' OR OLD.archived_at IS NOT NULL;
+    IF OLD.target_id IS NOT NULL AND NEW.target_id IS DISTINCT FROM OLD.target_id THEN
+      RAISE EXCEPTION 'test policy target identity is immutable'
+        USING ERRCODE = '23514', CONSTRAINT = 'test_policies_target_identity_immutable';
+    END IF;
+  END IF;
+  IF NEW.target_id IS NULL THEN
+    SELECT count(*), min(id) INTO active_target_count, resolved_target_id
+    FROM targets
+    WHERE tenant_id = NEW.tenant_id
+      AND target_group_id = NEW.target_group_id
+      AND deleted_at IS NULL;
+    IF active_target_count = 1 THEN
+      NEW.target_id := resolved_target_id;
+    ELSE
+      NEW.state := CASE WHEN preserve_archived THEN 'archived' ELSE 'paused' END;
+      NEW.enabled := FALSE;
+      NEW.next_run_at := NULL;
+      NEW.lease_token := NULL;
+      NEW.lease_owner := NULL;
+      NEW.lease_expires_at := NULL;
+    END IF;
+  END IF;
+  IF preserve_archived THEN
+    NEW.state := 'archived';
+    NEW.enabled := FALSE;
+    NEW.next_run_at := NULL;
+    NEW.lease_token := NULL;
+    NEW.lease_owner := NULL;
+    NEW.lease_expires_at := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER test_policies_exact_target_compat
+BEFORE INSERT OR UPDATE ON test_policies
+FOR EACH ROW EXECUTE FUNCTION astranull_test_policies_exact_target_compat_trigger();
 
 CREATE TABLE test_policy_dispatches (
   id TEXT PRIMARY KEY,
@@ -711,9 +776,19 @@ CREATE TABLE events (
   agent_id TEXT,
   source TEXT,
   signal_type TEXT,
+  producer_kind TEXT NOT NULL DEFAULT 'legacy_untrusted'
+    CHECK (producer_kind IN ('legacy_untrusted', 'public_api', 'signed_probe', 'authenticated_agent', 'internal_simulation', 'internal_control_plane')),
   nonce_hash TEXT,
   timestamp TIMESTAMPTZ NOT NULL,
-  metadata_json JSONB DEFAULT '{}'
+  metadata_json JSONB DEFAULT '{}',
+  CONSTRAINT events_reserved_producer_check CHECK (
+    signal_type NOT IN ('probe_result', 'agent_observation', 'ownership_observation', 'agent_no_observation')
+    OR producer_kind = 'legacy_untrusted'
+    OR (signal_type = 'probe_result' AND producer_kind IN ('signed_probe', 'internal_simulation'))
+    OR (signal_type = 'agent_observation' AND producer_kind = 'authenticated_agent')
+    OR (signal_type = 'ownership_observation' AND producer_kind IN ('signed_probe', 'authenticated_agent'))
+    OR (signal_type = 'agent_no_observation' AND producer_kind = 'internal_control_plane')
+  )
 );
 
 CREATE TABLE verdicts (
@@ -1113,6 +1188,7 @@ CREATE TABLE waf_coverage_daily_rollups (
   rollup_date DATE NOT NULL,
   total_assets INT NOT NULL DEFAULT 0,
   protected INT NOT NULL DEFAULT 0,
+  edge_protected INT NOT NULL DEFAULT 0,
   underprotected INT NOT NULL DEFAULT 0,
   unprotected INT NOT NULL DEFAULT 0,
   unknown INT NOT NULL DEFAULT 0,
@@ -1257,6 +1333,12 @@ CREATE TABLE waf_connectors (
   status TEXT NOT NULL DEFAULT 'disabled',
   last_success_at TIMESTAMPTZ,
   last_error_at TIMESTAMPTZ,
+  poll_revision BIGINT NOT NULL DEFAULT 0,
+  last_success_revision BIGINT NOT NULL DEFAULT 0,
+  last_poll_requested_at TIMESTAMPTZ,
+  next_poll_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0
+    CHECK (consecutive_failures >= 0 AND consecutive_failures <= 1000000),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -1271,9 +1353,162 @@ CREATE TABLE waf_connector_snapshots (
   display_ref TEXT,
   summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   config_hash TEXT,
+  evidence_source TEXT NOT NULL DEFAULT 'manual_metadata'
+    CHECK (evidence_source IN ('provider_api', 'manual_metadata')),
+  inventory_complete BOOLEAN NOT NULL DEFAULT FALSE,
+  inventory_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+  poll_revision BIGINT NOT NULL DEFAULT 0,
   observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (NOT inventory_complete OR NOT inventory_truncated)
 );
+
+CREATE TABLE tenant_connector_features (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by TEXT NOT NULL,
+  revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0)
+);
+
+CREATE TABLE connector_provider_rate_limits (
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  window_started_at TIMESTAMPTZ NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0 AND request_count <= 20),
+  next_allowed_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (tenant_id, provider)
+);
+
+CREATE TABLE connector_poll_jobs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  connector_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  poll_revision BIGINT NOT NULL CHECK (poll_revision > 0),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'leased', 'completed', 'failed', 'cancelled')),
+  envelope_json JSONB NOT NULL,
+  job_signature TEXT NOT NULL,
+  leased_by TEXT,
+  leased_at TIMESTAMPTZ,
+  lease_token TEXT,
+  completed_at TIMESTAMPTZ,
+  error_code TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (status = 'leased' AND leased_by IS NOT NULL AND leased_at IS NOT NULL AND lease_token IS NOT NULL)
+    OR
+    (status <> 'leased' AND leased_by IS NULL AND leased_at IS NULL AND lease_token IS NULL)
+  ),
+  CHECK (
+    envelope_json->>'job_id' = id
+    AND envelope_json->>'tenant_id' = tenant_id
+    AND envelope_json->>'connector_id' = connector_id
+    AND envelope_json->>'provider' = provider
+    AND (envelope_json->>'poll_revision')::BIGINT = poll_revision
+    AND envelope_json->>'operation' = 'read_only_provider_inventory'
+  ),
+  UNIQUE (tenant_id, connector_id, poll_revision)
+);
+
+CREATE INDEX idx_waf_connectors_poll_due
+  ON waf_connectors (tenant_id, next_poll_at, updated_at, id)
+  WHERE secret_id IS NOT NULL AND status NOT IN ('disabled', 'revoked');
+CREATE INDEX idx_connector_poll_jobs_retention
+  ON connector_poll_jobs (tenant_id, created_at)
+  WHERE status IN ('completed', 'failed', 'cancelled');
+CREATE INDEX idx_waf_connector_snapshots_retention
+  ON waf_connector_snapshots (tenant_id, created_at);
+
+CREATE OR REPLACE FUNCTION target_provider_verification_is_current(
+  p_tenant_id TEXT,
+  p_target_id TEXT,
+  p_source_ref JSONB
+) RETURNS BOOLEAN
+LANGUAGE SQL
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM targets t
+    JOIN waf_connectors c
+      ON c.tenant_id = t.tenant_id
+     AND c.id = p_source_ref->>'connector_id'
+    JOIN waf_connector_snapshots s
+      ON s.tenant_id = c.tenant_id
+     AND s.connector_id = c.id
+     AND s.provider = c.provider
+     AND s.snapshot_kind = 'dns_zone'
+     AND s.evidence_source = 'provider_api'
+     AND s.resource_ref_hash = p_source_ref->>'resource_ref_hash'
+     AND s.poll_revision = c.last_success_revision
+     AND s.observed_at = c.last_success_at
+    WHERE t.tenant_id = p_tenant_id
+      AND t.id = p_target_id
+      AND t.deleted_at IS NULL
+      AND c.provider = p_source_ref->>'provider'
+      AND c.provider IN ('cloudflare', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1')
+      AND c.status IN ('active', 'degraded')
+      AND c.secret_id IS NOT NULL
+      AND c.last_success_at IS NOT NULL
+      AND c.last_success_at <= CURRENT_TIMESTAMP
+      AND c.last_success_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+      AND c.last_success_revision > 0
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(s.summary_json->'hostnames', '[]'::jsonb)) hostname(value)
+        WHERE lower(rtrim(hostname.value, '.')) = lower(rtrim(COALESCE(t.normalized_value, t.value), '.'))
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(s.summary_json->'tags', '[]'::jsonb)) tag(value)
+        WHERE lower(tag.value) = 'ownership_eligible:true'
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(COALESCE(s.summary_json->'tags', '[]'::jsonb)) tag(value)
+        WHERE lower(tag.value) = 'resource_status:active'
+      )
+      AND (
+        c.provider <> 'namecheap'
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(COALESCE(s.summary_json->'tags', '[]'::jsonb)) tag(value)
+          WHERE lower(tag.value) = 'provider_environment:production'
+        )
+      )
+  );
+$$;
+
+CREATE OR REPLACE VIEW target_verification_current
+WITH (security_invoker = true) AS
+  SELECT latest.target_id, latest.tenant_id,
+         CASE
+           WHEN latest.state = 'provider_verified'
+            AND (
+              latest.source_kind <> 'provider_account'
+              OR feature.enabled IS NOT TRUE
+              OR NOT target_provider_verification_is_current(
+                latest.tenant_id, latest.target_id, latest.source_ref
+              )
+            )
+             THEN 'pending'
+           ELSE latest.state
+         END AS state,
+         latest.source_kind, latest.source_ref, latest.transitioned_at
+  FROM (
+    SELECT DISTINCT ON (target_id)
+      target_id, tenant_id, state, source_kind, source_ref, transitioned_at
+    FROM target_verifications
+    WHERE tenant_id = current_setting('app.tenant_id', true)
+    ORDER BY target_id, transitioned_at DESC
+  ) latest
+  LEFT JOIN tenant_connector_features feature
+    ON feature.tenant_id = latest.tenant_id;
 
 CREATE TABLE cve_pipeline_items (
   id TEXT PRIMARY KEY,
@@ -1399,6 +1634,7 @@ ALTER TABLE user_password_resets ADD CONSTRAINT fk_user_password_resets_user_ten
   FOREIGN KEY (tenant_id, user_id) REFERENCES users (tenant_id, id) ON DELETE CASCADE;
 ALTER TABLE target_groups ADD CONSTRAINT target_groups_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE targets ADD CONSTRAINT targets_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE targets ADD CONSTRAINT targets_tenant_group_id_key UNIQUE (tenant_id, target_group_id, id);
 ALTER TABLE dns_challenges ADD CONSTRAINT dns_challenges_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE target_verifications ADD CONSTRAINT target_verifications_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT bootstrap_tokens_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1465,6 +1701,9 @@ ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_target_tenant
   FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_policy_tenant
   FOREIGN KEY (tenant_id, policy_id) REFERENCES test_policies (tenant_id, id);
+ALTER TABLE test_policies ADD CONSTRAINT fk_test_policies_target_binding
+  FOREIGN KEY (tenant_id, target_group_id, target_id)
+  REFERENCES targets (tenant_id, target_group_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_policy_dispatch_tenant
   FOREIGN KEY (tenant_id, policy_dispatch_id) REFERENCES test_policy_dispatches (tenant_id, id);
 ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_policy_tenant
@@ -1474,10 +1713,6 @@ ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_run_
 ALTER TABLE loa_signatures ADD CONSTRAINT fk_loa_signatures_target_group_tenant
   FOREIGN KEY (tenant_id, target_group_id)
   REFERENCES target_groups (tenant_id, id) ON DELETE CASCADE;
-ALTER TABLE probe_jobs ADD CONSTRAINT fk_probe_jobs_test_run_tenant
-  FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
-ALTER TABLE probe_jobs ADD CONSTRAINT fk_probe_jobs_target_tenant
-  FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id);
 ALTER TABLE agent_jobs ADD CONSTRAINT fk_agent_jobs_agent_tenant
   FOREIGN KEY (tenant_id, agent_id) REFERENCES agents (tenant_id, id);
 ALTER TABLE agent_jobs ADD CONSTRAINT fk_agent_jobs_test_run_tenant
@@ -1577,6 +1812,8 @@ ALTER TABLE waf_connectors ADD CONSTRAINT fk_waf_connectors_secret_tenant
   FOREIGN KEY (tenant_id, secret_id) REFERENCES encrypted_secrets (tenant_id, id);
 ALTER TABLE waf_connector_snapshots ADD CONSTRAINT fk_waf_connector_snapshots_connector_tenant
   FOREIGN KEY (tenant_id, connector_id) REFERENCES waf_connectors (tenant_id, id);
+ALTER TABLE connector_poll_jobs ADD CONSTRAINT fk_connector_poll_jobs_connector_tenant
+  FOREIGN KEY (tenant_id, connector_id) REFERENCES waf_connectors (tenant_id, id);
 ALTER TABLE cve_asset_matches ADD CONSTRAINT fk_cve_asset_matches_cve_pipeline_item_tenant
   FOREIGN KEY (tenant_id, cve_pipeline_item_id) REFERENCES cve_pipeline_items (tenant_id, id);
 ALTER TABLE cve_asset_matches ADD CONSTRAINT fk_cve_asset_matches_waf_asset_tenant
@@ -1608,8 +1845,9 @@ CREATE UNIQUE INDEX uniq_target_groups_active_name
   WHERE deleted_at IS NULL AND archived_at IS NULL;
 CREATE INDEX idx_ownership_verifications_tenant_target ON ownership_verifications(tenant_id, target_group_id);
 CREATE INDEX idx_test_policies_tenant_active ON test_policies(tenant_id, target_group_id) WHERE archived_at IS NULL;
-CREATE UNIQUE INDEX uniq_test_policies_active_group_check
-  ON test_policies(tenant_id, target_group_id, check_id) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX uniq_test_policies_active_group_target_check
+  ON test_policies(tenant_id, target_group_id, target_id, check_id)
+  WHERE archived_at IS NULL AND target_id IS NOT NULL;
 CREATE INDEX idx_test_policies_due ON test_policies(tenant_id, next_run_at, id)
   WHERE archived_at IS NULL AND state = 'active' AND enabled = TRUE AND next_run_at IS NOT NULL;
 CREATE INDEX idx_test_policies_expired_lease ON test_policies(tenant_id, lease_expires_at)
@@ -1686,6 +1924,10 @@ CREATE UNIQUE INDEX uniq_waf_posture_snapshot_current ON waf_posture_snapshots(t
 CREATE INDEX idx_waf_posture_snapshots_dashboard ON waf_posture_snapshots(tenant_id, status, created_at DESC);
 CREATE INDEX idx_waf_drift_events_queue ON waf_drift_events(tenant_id, drift_type, status, created_at DESC);
 CREATE INDEX idx_waf_drift_scan_results_latest ON waf_drift_scan_results(tenant_id, completed_at DESC);
+
+CREATE UNIQUE INDEX uniq_waf_drift_events_open_asset_type
+  ON waf_drift_events(tenant_id, waf_asset_id, drift_type)
+  WHERE status = 'open';
 CREATE UNIQUE INDEX uniq_waf_coverage_daily_rollups_tenant_date ON waf_coverage_daily_rollups(tenant_id, rollup_date);
 CREATE INDEX idx_waf_coverage_daily_rollups_tenant_date ON waf_coverage_daily_rollups(tenant_id, rollup_date DESC);
 CREATE INDEX idx_waf_validation_plans_tenant_state ON waf_validation_plans(tenant_id, state, created_at DESC);
@@ -1697,6 +1939,9 @@ CREATE INDEX idx_waf_baseline_approvals_baseline ON waf_baseline_approvals(tenan
 CREATE INDEX idx_waf_exceptions_tenant_expires ON waf_exceptions(tenant_id, expires_at);
 CREATE INDEX idx_waf_exceptions_tenant_asset ON waf_exceptions(tenant_id, waf_asset_id);
 CREATE INDEX idx_waf_connector_snapshots_history ON waf_connector_snapshots(tenant_id, connector_id, provider, observed_at DESC);
+CREATE INDEX idx_connector_poll_jobs_worker_queue
+  ON connector_poll_jobs(tenant_id, status, created_at)
+  WHERE status IN ('pending', 'leased');
 CREATE INDEX idx_cve_pipeline_items_lookup ON cve_pipeline_items(tenant_id, cve_id);
 CREATE UNIQUE INDEX uniq_cve_asset_matches_dedupe ON cve_asset_matches(tenant_id, cve_pipeline_item_id, waf_asset_id);
 CREATE INDEX idx_supply_chain_risks_lookup ON supply_chain_risks(tenant_id, state, severity);
@@ -1709,6 +1954,139 @@ CREATE UNIQUE INDEX uniq_waf_action_items_dedupe ON waf_action_items(tenant_id, 
 -- once the Postgres adapter exists. Empty/unset setting denies tenant-scoped rows (fail closed).
 -- FORCE RLS applies policies even to table owners; runtime role must be non-owner and not BYPASSRLS.
 
+
+-- Exact target and archival serialization guards for live run/job creation.
+CREATE OR REPLACE FUNCTION astranull_test_runs_exact_active_target_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  policy_target_id TEXT;
+BEGIN
+  PERFORM 1
+  FROM target_groups tg
+  JOIN targets t ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
+  WHERE tg.tenant_id = NEW.tenant_id
+    AND tg.id = NEW.target_group_id
+    AND tg.deleted_at IS NULL
+    AND tg.archived_at IS NULL
+    AND t.id = NEW.target_id
+    AND t.deleted_at IS NULL
+  FOR KEY SHARE OF tg, t;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'test run target must be active and belong to its tenant/group'
+      USING ERRCODE = '23514', CONSTRAINT = 'test_runs_exact_active_target';
+  END IF;
+  IF NEW.policy_id IS NOT NULL THEN
+    SELECT p.target_id INTO policy_target_id
+    FROM test_policies p
+    WHERE p.tenant_id = NEW.tenant_id
+      AND p.id = NEW.policy_id
+      AND p.target_group_id = NEW.target_group_id
+      AND p.archived_at IS NULL
+    FOR KEY SHARE;
+    IF NOT FOUND OR policy_target_id IS DISTINCT FROM NEW.target_id THEN
+      RAISE EXCEPTION 'test run target must match its exact policy target'
+        USING ERRCODE = '23514', CONSTRAINT = 'test_runs_policy_target_binding';
+    END IF;
+  END IF;
+  IF NEW.policy_dispatch_id IS NOT NULL THEN
+    IF NEW.policy_id IS NULL THEN
+      RAISE EXCEPTION 'policy dispatch requires a matching policy binding'
+        USING ERRCODE = '23514', CONSTRAINT = 'test_runs_policy_dispatch_binding';
+    END IF;
+    PERFORM 1 FROM test_policy_dispatches d
+    WHERE d.tenant_id = NEW.tenant_id
+      AND d.id = NEW.policy_dispatch_id
+      AND d.policy_id = NEW.policy_id
+    FOR KEY SHARE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'test run dispatch must match its policy binding'
+        USING ERRCODE = '23514', CONSTRAINT = 'test_runs_policy_dispatch_binding';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER test_runs_exact_active_target
+BEFORE INSERT OR UPDATE OF tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id
+ON test_runs
+FOR EACH ROW EXECUTE FUNCTION astranull_test_runs_exact_active_target_trigger();
+
+CREATE OR REPLACE FUNCTION astranull_probe_jobs_exact_active_target_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  run_target_id TEXT;
+  run_status TEXT;
+BEGIN
+  IF NEW.ownership_verification_id IS NOT NULL THEN
+    PERFORM 1
+    FROM ownership_verifications ov
+    JOIN target_groups tg
+      ON tg.tenant_id = ov.tenant_id AND tg.id = ov.target_group_id
+    JOIN agents a
+      ON a.tenant_id = ov.tenant_id AND a.id = ov.agent_id
+    JOIN targets t
+      ON t.tenant_id = ov.tenant_id AND t.target_group_id = ov.target_group_id
+     AND t.deleted_at IS NULL AND t.kind = 'fqdn'
+     AND COALESCE(t.normalized_value, lower(btrim(t.value))) = lower(btrim(ov.declared_fqdn))
+    WHERE ov.tenant_id = NEW.tenant_id
+      AND ov.id = NEW.ownership_verification_id
+      AND ov.status = 'challenge_sent'
+      AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+      AND a.target_group_id = ov.target_group_id
+      AND a.status = 'online'
+      AND COALESCE(a.last_token_validation_status, 'valid') <> 'invalid'
+      AND NEW.test_run_id = ov.id
+      AND NEW.target_id = ov.agent_id
+      AND NEW.nonce_hash = ov.challenge_nonce_hash
+      AND NEW.target_descriptor_json->>'kind' = 'fqdn'
+      AND lower(btrim(NEW.target_descriptor_json->>'value')) = lower(btrim(ov.declared_fqdn))
+    FOR KEY SHARE OF ov, tg, a, t;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'ownership probe job must match an open exact-target challenge'
+        USING ERRCODE = '23514', CONSTRAINT = 'probe_jobs_ownership_challenge_binding';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  PERFORM 1
+  FROM targets t
+  JOIN target_groups tg ON tg.tenant_id = t.tenant_id AND tg.id = t.target_group_id
+  WHERE t.tenant_id = NEW.tenant_id
+    AND t.id = NEW.target_id
+    AND t.deleted_at IS NULL
+    AND tg.deleted_at IS NULL
+    AND tg.archived_at IS NULL
+  FOR KEY SHARE OF t, tg;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'probe job target must remain active'
+      USING ERRCODE = '23514', CONSTRAINT = 'probe_jobs_exact_active_target';
+  END IF;
+  IF NEW.test_run_id IS NOT NULL THEN
+    SELECT tr.target_id, tr.status INTO run_target_id, run_status
+    FROM test_runs tr
+    WHERE tr.tenant_id = NEW.tenant_id AND tr.id = NEW.test_run_id
+    FOR KEY SHARE;
+    IF NOT FOUND
+       OR run_target_id IS DISTINCT FROM NEW.target_id
+       OR run_status NOT IN ('planned', 'running', 'collecting') THEN
+      RAISE EXCEPTION 'probe job target must match an active test run'
+        USING ERRCODE = '23514', CONSTRAINT = 'probe_jobs_test_run_target_binding';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER probe_jobs_exact_active_target
+BEFORE INSERT OR UPDATE OF tenant_id, test_run_id, target_id, ownership_verification_id,
+  nonce_hash, target_descriptor_json
+ON probe_jobs
+FOR EACH ROW EXECUTE FUNCTION astranull_probe_jobs_exact_active_target_trigger();
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 ALTER TABLE environments ENABLE ROW LEVEL SECURITY;
@@ -1829,6 +2207,12 @@ ALTER TABLE waf_connectors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waf_connectors FORCE ROW LEVEL SECURITY;
 ALTER TABLE waf_connector_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waf_connector_snapshots FORCE ROW LEVEL SECURITY;
+ALTER TABLE tenant_connector_features ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_connector_features FORCE ROW LEVEL SECURITY;
+ALTER TABLE connector_provider_rate_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connector_provider_rate_limits FORCE ROW LEVEL SECURITY;
+ALTER TABLE connector_poll_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE connector_poll_jobs FORCE ROW LEVEL SECURITY;
 ALTER TABLE cve_pipeline_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cve_pipeline_items FORCE ROW LEVEL SECURITY;
 ALTER TABLE cve_asset_matches ENABLE ROW LEVEL SECURITY;
@@ -2019,6 +2403,15 @@ CREATE POLICY tenant_isolation_waf_connectors ON waf_connectors
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_waf_connector_snapshots ON waf_connector_snapshots
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_tenant_connector_features ON tenant_connector_features
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_connector_provider_rate_limits ON connector_provider_rate_limits
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_connector_poll_jobs ON connector_poll_jobs
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_cve_pipeline_items ON cve_pipeline_items

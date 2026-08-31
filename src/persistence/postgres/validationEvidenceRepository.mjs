@@ -6,7 +6,7 @@ const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, 
   completed_at, summary_json, created_at`;
 
 const EVENT_COLUMNS = `id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
-  signal_type, nonce_hash, timestamp, metadata_json`;
+  signal_type, producer_kind, nonce_hash, timestamp, metadata_json`;
 
 const EVIDENCE_COLUMNS = `id, tenant_id, test_run_id, label, metadata_json, related_event_id, created_at`;
 
@@ -141,6 +141,7 @@ function mapEventRow(row) {
     agent_id: row.agent_id ?? undefined,
     source: row.source ?? undefined,
     signal_type: row.signal_type ?? undefined,
+    producer_kind: row.producer_kind ?? undefined,
     nonce_hash: row.nonce_hash ?? undefined,
     timestamp: toIso(row.timestamp),
     metadata: asObject(row.metadata_json),
@@ -411,6 +412,15 @@ export function createValidationEvidenceRepository(pool) {
           return mapTestRunRow(rows[0] ?? null);
         }
 
+        const expectedStatuses = Array.isArray(patch.expected_statuses)
+          ? patch.expected_statuses.filter((status) => typeof status === 'string' && status)
+          : [];
+        let expectedStatusesParam = null;
+        if (expectedStatuses.length > 0) {
+          expectedStatusesParam = paramIndex;
+          params.push(expectedStatuses);
+          paramIndex += 1;
+        }
         params.push(ctx.tenantId, id);
         const tenantParam = paramIndex;
         const idParam = paramIndex + 1;
@@ -419,10 +429,60 @@ export function createValidationEvidenceRepository(pool) {
           `UPDATE test_runs
            SET ${sets.join(', ')}
            WHERE tenant_id = $${tenantParam} AND id = $${idParam}
+             ${expectedStatusesParam ? `AND status = ANY($${expectedStatusesParam}::text[])` : ''}
            RETURNING ${TEST_RUN_COLUMNS}`,
           params,
         );
         return mapTestRunRow(rows[0] ?? null);
+      });
+    },
+
+    async cancelTestRunAtomic(ctx, id, patch = {}) {
+      const tenantId = ctx.tenantId;
+      const completedAt = patch.completed_at ?? new Date().toISOString();
+      return withTenantContext(pool, tenantId, async (client) => {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`test_run_mutation:${id}`],
+        );
+        const selected = await client.query(
+          `SELECT ${TEST_RUN_COLUMNS}
+           FROM test_runs
+           WHERE tenant_id = $1 AND id = $2
+           FOR UPDATE`,
+          [tenantId, id],
+        );
+        const current = mapTestRunRow(selected.rows[0] ?? null);
+        if (!current) return null;
+        if (!EXPIRED_COLLECTION_SWEEP_STATUSES.includes(current.status)
+          && current.status !== 'planned') {
+          return { run: current, cancelled: false, cancelled_jobs: [] };
+        }
+
+        const summary = patch.summary === undefined
+          ? current.summary
+          : asObject(patch.summary);
+        const updated = await client.query(
+          `UPDATE test_runs
+           SET status = 'cancelled', completed_at = $3::timestamptz, summary_json = $4::jsonb
+           WHERE tenant_id = $1 AND id = $2
+           RETURNING ${TEST_RUN_COLUMNS}`,
+          [tenantId, id, completedAt, JSON.stringify(summary)],
+        );
+        const cancelledJobs = await client.query(
+          `UPDATE probe_jobs
+           SET status = 'cancelled', completed_at = $3::timestamptz
+           WHERE tenant_id = $1 AND test_run_id = $2
+             AND ownership_verification_id IS NULL
+             AND status IN ('pending', 'leased')
+           RETURNING id, test_run_id`,
+          [tenantId, id, completedAt],
+        );
+        return {
+          run: mapTestRunRow(updated.rows[0]),
+          cancelled: true,
+          cancelled_jobs: cancelledJobs.rows,
+        };
       });
     },
 
@@ -434,10 +494,10 @@ export function createValidationEvidenceRepository(pool) {
         const { rows } = await client.query(
           `INSERT INTO events (
              id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
-             signal_type, nonce_hash, timestamp, metadata_json
+             signal_type, producer_kind, nonce_hash, timestamp, metadata_json
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::jsonb
            )
            RETURNING ${EVENT_COLUMNS}`,
           [
@@ -450,6 +510,7 @@ export function createValidationEvidenceRepository(pool) {
             record.agent_id ?? null,
             record.source ?? null,
             record.signal_type ?? null,
+            record.producer_kind ?? 'legacy_untrusted',
             record.nonce_hash ?? null,
             record.timestamp,
             metadataJson,
@@ -473,10 +534,10 @@ export function createValidationEvidenceRepository(pool) {
         const { rows } = await client.query(
           `INSERT INTO events (
              id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
-             signal_type, nonce_hash, timestamp, metadata_json
+             signal_type, producer_kind, nonce_hash, timestamp, metadata_json
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::jsonb
            )
            ON CONFLICT (tenant_id, event_id) WHERE event_id IS NOT NULL
            DO UPDATE SET
@@ -486,6 +547,7 @@ export function createValidationEvidenceRepository(pool) {
              agent_id = EXCLUDED.agent_id,
              source = EXCLUDED.source,
              signal_type = EXCLUDED.signal_type,
+             producer_kind = EXCLUDED.producer_kind,
              nonce_hash = EXCLUDED.nonce_hash,
              timestamp = EXCLUDED.timestamp,
              metadata_json = EXCLUDED.metadata_json
@@ -500,6 +562,7 @@ export function createValidationEvidenceRepository(pool) {
             record.agent_id ?? null,
             record.source ?? null,
             record.signal_type ?? null,
+            record.producer_kind ?? 'legacy_untrusted',
             record.nonce_hash ?? null,
             record.timestamp,
             metadataJson,
@@ -579,10 +642,10 @@ export function createValidationEvidenceRepository(pool) {
         const { rows } = await client.query(
           `INSERT INTO events (
              id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
-             signal_type, nonce_hash, timestamp, metadata_json
+             signal_type, producer_kind, nonce_hash, timestamp, metadata_json
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12::jsonb
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::jsonb
            )
            ON CONFLICT (tenant_id, test_run_id, signal_type, nonce_hash)
              WHERE signal_type = 'probe_result' AND nonce_hash IS NOT NULL
@@ -592,6 +655,7 @@ export function createValidationEvidenceRepository(pool) {
              check_id = EXCLUDED.check_id,
              agent_id = EXCLUDED.agent_id,
              source = EXCLUDED.source,
+             producer_kind = EXCLUDED.producer_kind,
              timestamp = EXCLUDED.timestamp,
              metadata_json = EXCLUDED.metadata_json
            RETURNING ${EVENT_COLUMNS}`,
@@ -605,6 +669,7 @@ export function createValidationEvidenceRepository(pool) {
             record.agent_id ?? null,
             record.source ?? null,
             signalType,
+            record.producer_kind ?? 'signed_probe',
             record.nonce_hash,
             record.timestamp,
             metadataJson,
@@ -716,6 +781,29 @@ export function createValidationEvidenceRepository(pool) {
       const placementJson = placementConfidenceJson(record);
 
       return withTenantContext(pool, tenantId, async (client) => {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`test_run_mutation:${record.test_run_id}`],
+        );
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`kill_switch_state:${tenantId}`],
+        );
+        const killSwitchResult = await client.query(
+          `SELECT active FROM soc_kill_switch WHERE tenant_id = $1`,
+          [tenantId],
+        );
+        if (killSwitchResult.rows[0]?.active === true) return null;
+        const runResult = await client.query(
+          `SELECT status
+           FROM test_runs
+           WHERE tenant_id = $1 AND id = $2
+           FOR UPDATE`,
+          [tenantId, record.test_run_id],
+        );
+        const runStatus = runResult.rows[0]?.status ?? null;
+        if (!['running', 'collecting', 'verdicted'].includes(runStatus)) return null;
+
         const { rows } = await client.query(
           `INSERT INTO verdicts (
              id, tenant_id, test_run_id, target_id, check_id, verdict, confidence,
@@ -740,6 +828,13 @@ export function createValidationEvidenceRepository(pool) {
         );
 
         if (rows[0]) {
+          await client.query(
+            `UPDATE test_runs
+             SET status = 'verdicted', completed_at = $3::timestamptz
+             WHERE tenant_id = $1 AND id = $2
+               AND status IN ('running', 'collecting')`,
+            [tenantId, record.test_run_id, record.created_at],
+          );
           const inserted = mapVerdictRow(rows[0]);
           inserted[VERDICT_INSERTED] = true;
           return inserted;
@@ -807,6 +902,41 @@ export function createValidationEvidenceRepository(pool) {
         );
         return rows.map(mapTestRunRow);
       });
+    },
+
+    async withRunMutationLock(ctx, runId, callback) {
+      const lockKey = `test_run_mutation:${runId}`;
+      const killSwitchLockKey = `kill_switch_state:${ctx.tenantId}`;
+      const client = await pool.connect();
+      let runLockAcquired = false;
+      let killSwitchLockAcquired = false;
+      try {
+        const { rows } = await client.query(
+          'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+          [lockKey],
+        );
+        runLockAcquired = rows[0]?.acquired === true;
+        if (!runLockAcquired) return { acquired: false, result: null };
+        await client.query('SELECT pg_advisory_lock(hashtext($1))', [killSwitchLockKey]);
+        killSwitchLockAcquired = true;
+        return { acquired: true, result: await callback() };
+      } finally {
+        if (killSwitchLockAcquired) {
+          try {
+            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [killSwitchLockKey]);
+          } catch {
+            // locks are released when the session ends; do not mask the original error
+          }
+        }
+        if (runLockAcquired) {
+          try {
+            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+          } catch {
+            // locks are released when the session ends; do not mask the original error
+          }
+        }
+        client.release();
+      }
     },
 
     /**

@@ -5,3 +5,4 @@ resources:
   - waf-drift-runner.yaml
   - connector-poll-runner.yaml
   - notification-retry-scheduler.yaml
+  - worker-rbac.yaml

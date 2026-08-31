@@ -2,7 +2,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuntimeConfig } from '../src/config.mjs';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
 import { createPostgresRuntime } from '../src/persistence/postgres/runtime.mjs';
 import {
@@ -265,13 +264,26 @@ export function redactWafDriftRunnerMessage(message, env = process.env) {
 }
 
 /**
+ * Drift scans need only their feature gate; loading full API config would require
+ * unrelated OIDC, probe, and vault secrets in this read-only scheduler.
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+export function loadWafDriftRuntimeConfig(env) {
+  const raw = String(env.ASTRANULL_WAF_POSTURE_ENABLED ?? '').trim().toLowerCase();
+  if (!['', '0', '1', 'false', 'true'].includes(raw)) {
+    throw new Error('ASTRANULL_WAF_POSTURE_ENABLED must be one of: 1, 0, true, false.');
+  }
+  return { featureFlags: { wafPostureEnabled: raw === '1' || raw === 'true' } };
+}
+
+/**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  * @param {ReturnType<typeof parseWafDriftRunnerArgs>} parsed
- * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadRuntimeConfig }} [deps]
+ * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadWafDriftRuntimeConfig }} [deps]
  */
 export function resolveWafDriftRunnerConfig(env, parsed, deps = {}) {
   const readTenantIdsFile = deps.readTenantIdsFile ?? ((filePath) => readFileSync(filePath, 'utf8'));
-  const loadConfig = deps.loadRuntimeConfigFn ?? loadRuntimeConfig;
+  const loadConfig = deps.loadRuntimeConfigFn ?? loadWafDriftRuntimeConfig;
 
   const hasTenantId = Boolean(parsed.tenantId);
   const hasFile = Boolean(parsed.tenantIdsFile);
@@ -445,7 +457,11 @@ export function runDevJsonWafDriftScans(options) {
  */
 export async function runPostgresWafDriftScans(options) {
   const createRuntime = options.createPostgresRuntimeFn ?? createPostgresRuntime;
-  const runtime = await createRuntime(options.env, { autoMigrate: false });
+  const runtime = await createRuntime(options.env, {
+    autoMigrate: false,
+    wafPostureServiceOptions: { connectorEncryptionKey: null },
+    wafDriftServiceOptions: { wafPostureEnabled: true },
+  });
 
   try {
     const wafDrift = runtime.services?.wafDrift;

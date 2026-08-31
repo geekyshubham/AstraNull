@@ -5,6 +5,7 @@
 function postureClass(snapshot) {
   const status = String(snapshot?.status ?? 'unknown').toLowerCase();
   if (status === 'protected') return 'protected';
+  if (status === 'edge_protected') return 'edge_protected';
   if (['underprotected', 'unprotected', 'drift'].includes(status)) return 'underprotected';
   return 'unknown';
 }
@@ -26,7 +27,7 @@ export function computeWafCoverageSummaryRow(input = {}) {
       ? input.refreshedAt.toISOString()
       : String(input.refreshedAt ?? new Date().toISOString());
 
-  const counts = { protected: 0, underprotected: 0, unknown: 0 };
+  const counts = { protected: 0, edge_protected: 0, underprotected: 0, unknown: 0 };
   const vendorBuckets = new Map();
 
   for (const asset of assets) {
@@ -37,9 +38,10 @@ export function computeWafCoverageSummaryRow(input = {}) {
     const vendorRaw = snapshot?.detected_vendor ?? null;
     const vendor =
       typeof vendorRaw === 'string' && vendorRaw.trim() ? vendorRaw.trim() : 'generic';
-    const bucket = vendorBuckets.get(vendor) ?? { assets: 0, protected: 0 };
+    const bucket = vendorBuckets.get(vendor) ?? { assets: 0, protected: 0, edge_protected: 0 };
     bucket.assets += 1;
     if (posture === 'protected') bucket.protected += 1;
+    if (posture === 'edge_protected') bucket.edge_protected += 1;
     vendorBuckets.set(vendor, bucket);
   }
 
@@ -51,7 +53,11 @@ export function computeWafCoverageSummaryRow(input = {}) {
 
   const byVendor = {};
   for (const [vendor, bucket] of vendorBuckets.entries()) {
-    byVendor[vendor] = { assets: bucket.assets, protected: bucket.protected };
+    byVendor[vendor] = {
+      assets: bucket.assets,
+      protected: bucket.protected,
+      edge_protected: bucket.edge_protected,
+    };
   }
 
   let connectorsActive = 0;
@@ -67,6 +73,7 @@ export function computeWafCoverageSummaryRow(input = {}) {
   return {
     assets_total: assetsTotal,
     protected: counts.protected,
+    edge_protected: counts.edge_protected,
     underprotected: counts.underprotected,
     unknown: counts.unknown,
     coverage_pct: coveragePct,
@@ -90,6 +97,7 @@ export function mapWafCoverageSummaryRow(row) {
   return {
     assets_total: Number(row.assets_total ?? 0),
     protected: Number(row.protected ?? 0),
+    edge_protected: Number(row.edge_protected ?? 0),
     underprotected: Number(row.underprotected ?? 0),
     unknown: Number(row.unknown ?? 0),
     coverage_pct: Number(row.coverage_pct ?? 0),

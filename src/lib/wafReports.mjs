@@ -217,17 +217,11 @@ function buildExceptionRegister(exceptions = []) {
   return exceptions.map((entry) => redactExceptionForReport(entry));
 }
 
-function buildValidationPassRates(validations = [], scenarioResultsByRunId = new Map()) {
+function buildValidationPassRates(validations = []) {
   const finalized = validations.filter((run) => run.status === 'finalized');
-  let passed = 0;
-  for (const run of finalized) {
-    const scenarios = scenarioResultsByRunId.get(run.id) ?? [];
-    if (scenarios.length > 0 && scenarios.every((scenario) => scenario.passed === true)) {
-      passed += 1;
-    } else if (run.summary_json?.validation_passed === true) {
-      passed += 1;
-    }
-  }
+  const passed = finalized.filter(
+    (run) => run.summary_json?.validation_passed === true,
+  ).length;
   const total_finalized = finalized.length;
   return {
     total_finalized,
@@ -285,6 +279,7 @@ function buildEntityRollup(assets = [], snapshotsByAssetId = new Map()) {
         name: label,
         asset_count: 0,
         protected: 0,
+        edge_protected: 0,
         underprotected: 0,
         unprotected: 0,
         unknown: 0,
@@ -320,6 +315,7 @@ function buildGeographyRollup(assets = [], snapshotsByAssetId = new Map()) {
         region_label: asset.geography_label ?? region,
         asset_count: 0,
         protected: 0,
+        edge_protected: 0,
         underprotected: 0,
         unprotected: 0,
         unknown: 0,
@@ -441,6 +437,7 @@ function buildWafComplianceControlMappingAppendix(sources = {}) {
         in_scope_asset_count: taggedAssets.length || (sources.assets ?? []).length,
         coverage_ratio: coverage.coverage_ratio,
         protected_count: coverage.protected ?? 0,
+        edge_protected_count: coverage.edge_protected ?? 0,
         underprotected_count: coverage.underprotected ?? 0,
         unprotected_count: coverage.unprotected ?? 0,
         open_drift_count: driftEvents.filter((event) => event.status === 'open').length,

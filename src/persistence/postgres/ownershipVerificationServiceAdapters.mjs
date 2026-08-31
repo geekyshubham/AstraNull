@@ -5,6 +5,7 @@ import { buildSignedProbeJobRecord, signProbeJob } from '../../lib/probeJobs.mjs
 /** @type {readonly string[]} */
 export const OWNERSHIP_VERIFICATION_REPOSITORY_METHODS = Object.freeze([
   'insertVerification',
+  'insertVerificationWithProbeJob',
   'setVerificationProbeJobId',
   'findById',
   'findOpenByNonceHash',
@@ -230,7 +231,7 @@ export function createPostgresOwnershipVerificationServices(deps) {
       const challenge_nonce_hash = hashNonce(nonce);
       const id = newId('own');
       const now = new Date().toISOString();
-      let verification = await ownershipVerifications.insertVerification(ctx, {
+      const record = {
         id,
         target_group_id: targetGroupId,
         agent_id: agentId,
@@ -244,22 +245,21 @@ export function createPostgresOwnershipVerificationServices(deps) {
         confirmed_at: null,
         created_at: now,
         created_by: ctx.userId,
-      });
-      await auditVerification(audit, ctx, id, 'ownership_verification.challenge_created');
-
+      };
+      let verification;
       if (runtimeConfig?.probeMode === 'signed-worker' && runtimeConfig.probeWorkerSecret) {
-        if (probeJobs?.createProbeJob) {
-          const job = buildOwnershipChallengeProbeJob(ctx, verification, runtimeConfig);
-          const created = await probeJobs.createProbeJob(ctx, job);
-          if (created?.id) {
-            verification = await ownershipVerifications.setVerificationProbeJobId(
-              ctx,
-              verification.id,
-              created.id,
-            );
-          }
-        }
+        const job = buildOwnershipChallengeProbeJob(ctx, record, runtimeConfig);
+        const created = await ownershipVerifications.insertVerificationWithProbeJob(
+          ctx,
+          record,
+          job,
+          probeJobs,
+        );
+        verification = created.verification;
+      } else {
+        verification = await ownershipVerifications.insertVerification(ctx, record);
       }
+      await auditVerification(audit, ctx, id, 'ownership_verification.challenge_created');
 
       return { verification, nonce };
     },

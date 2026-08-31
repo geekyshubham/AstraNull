@@ -335,4 +335,80 @@ describe('postgres waf drift service adapter', () => {
     assert.equal(outcome.drifts_detected, 1);
     assert.equal(outcome.drift_events[0].drift_type, 'origin_bypass_new');
   });
+
+  it('emits one critical fingerprint-loss drift for edge-to-unprotected vendor loss', async () => {
+    Object.assign(process.env, wafEnabledEnv());
+    const repositories = stubRepositories({
+      connectorSnapshots: [],
+      postureSnapshots: [
+        {
+          id: 'post_prev',
+          tenant_id: 'ten_demo',
+          waf_asset_id: 'waf_asset_1',
+          status: 'edge_protected',
+          reason_codes: [],
+          detected_vendor: 'cloudflare',
+          created_at: '2026-05-01T00:00:00.000Z',
+          is_current: false,
+        },
+        {
+          id: 'post_curr',
+          tenant_id: 'ten_demo',
+          waf_asset_id: 'waf_asset_1',
+          status: 'unprotected',
+          reason_codes: [],
+          detected_vendor: null,
+          created_at: '2026-06-01T00:00:00.000Z',
+          is_current: true,
+        },
+      ],
+    });
+    const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
+
+    const outcome = await service.detectAssetDrift(demoCtx(), 'waf_asset_1');
+    assert.equal(outcome.drifts_detected, 1);
+    assert.equal(repositories.state.driftEvents.length, 1);
+    assert.equal(repositories.state.driftEvents[0].drift_type, 'fingerprint_loss');
+    assert.equal(repositories.state.driftEvents[0].severity, 'critical');
+  });
+
+  it('detects every regression from edge-protected posture', async () => {
+    Object.assign(process.env, wafEnabledEnv());
+    const cases = [
+      { status: 'unprotected', reason_codes: [], expected: 'mode_downgrade' },
+      { status: 'underprotected', reason_codes: ['origin_bypass_confirmed'], expected: 'origin_bypass_new' },
+      { status: 'underprotected', reason_codes: ['monitor_only_behavior'], expected: 'mode_downgrade' },
+    ];
+
+    for (const testCase of cases) {
+      const repositories = stubRepositories({
+        connectorSnapshots: [],
+        postureSnapshots: [
+          {
+            id: 'post_prev',
+            tenant_id: 'ten_demo',
+            waf_asset_id: 'waf_asset_1',
+            status: 'edge_protected',
+            reason_codes: [],
+            detected_vendor: 'cloudflare',
+            created_at: '2026-05-01T00:00:00.000Z',
+            is_current: false,
+          },
+          {
+            id: 'post_curr',
+            tenant_id: 'ten_demo',
+            waf_asset_id: 'waf_asset_1',
+            status: testCase.status,
+            reason_codes: testCase.reason_codes,
+            detected_vendor: 'cloudflare',
+            created_at: '2026-06-01T00:00:00.000Z',
+            is_current: true,
+          },
+        ],
+      });
+      const service = createPostgresWafDriftServices(repositories, { now: () => FIXED_NOW });
+      const outcome = await service.detectAssetDrift(demoCtx(), 'waf_asset_1');
+      assert.ok(outcome.drift_events.some((event) => event.drift_type === testCase.expected));
+    }
+  });
 });

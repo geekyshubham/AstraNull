@@ -26,6 +26,10 @@ import {
   WAF_SCENARIO_INTAKE_STAGES,
 } from '../contracts/wafPosture.mjs';
 import {
+  normalizeTargetInput,
+  targetDedupeKey,
+} from '../contracts/targetManagement.mjs';
+import {
   seedWafProductsIfEmpty,
   summarizeWafProductCatalog,
 } from '../lib/wafProductCatalog.mjs';
@@ -57,7 +61,6 @@ import {
 import { emitNotification } from './notifications.mjs';
 import { decryptEncryptedSecretForUse } from './secretVault.mjs';
 import {
-  booleanFieldExplicit,
   deriveWafSignalsFromBoundEvents,
 } from '../lib/wafBoundRunCorrelation.mjs';
 import {
@@ -157,7 +160,7 @@ function findTenantTestRun(ctx, testRunId) {
   );
 }
 
-function validateTestRunBinding(ctx, testRunId, asset) {
+function validateTestRunBinding(ctx, testRunId, asset, { requireSuccessfulTerminal = false } = {}) {
   const testRun = findTenantTestRun(ctx, testRunId);
   if (!testRun) {
     return {
@@ -166,11 +169,45 @@ function validateTestRunBinding(ctx, testRunId, asset) {
       message: 'test_run_id not found for tenant.',
     };
   }
+  if (['cancelled', 'failed', 'error'].includes(testRun.status)) {
+    return {
+      error: 'invalid_request',
+      status: 409,
+      message: 'test_run_id cannot provide WAF evidence from an unsuccessful run.',
+    };
+  }
+  if (requireSuccessfulTerminal && !['completed', 'verdicted'].includes(testRun.status)) {
+    return {
+      error: 'invalid_request',
+      status: 409,
+      message: 'test_run_id must be successfully completed before WAF finalization.',
+    };
+  }
   if (testRun.target_group_id !== asset.target_group_id) {
     return {
       error: 'invalid_request',
       status: 400,
       message: 'test_run_id target group does not match WAF asset target group.',
+    };
+  }
+  const assetTargetId = typeof asset.target_id === 'string' && asset.target_id.trim()
+    ? asset.target_id
+    : null;
+  const testRunTargetId = typeof testRun.target_id === 'string' && testRun.target_id.trim()
+    ? testRun.target_id
+    : null;
+  if (!assetTargetId || !testRunTargetId) {
+    return {
+      error: 'invalid_request',
+      status: 400,
+      message: 'WAF asset and test_run_id must each have one explicit target_id.',
+    };
+  }
+  if (testRunTargetId !== assetTargetId) {
+    return {
+      error: 'invalid_request',
+      status: 400,
+      message: 'test_run_id target_id does not exactly match WAF asset target_id.',
     };
   }
   return { testRun };
@@ -388,6 +425,13 @@ function upsertWafPostureFinding(ctx, {
 }
 
 const WAF_DRIFT_OPEN_STATUS = 'open';
+const WAF_DRIFT_SEVERITY_RANK = Object.freeze({ info: 0, low: 1, medium: 2, high: 3, critical: 4 });
+
+function maxWafDriftSeverity(left, right) {
+  return (WAF_DRIFT_SEVERITY_RANK[right] ?? -1) > (WAF_DRIFT_SEVERITY_RANK[left] ?? -1)
+    ? right
+    : left;
+}
 const WAF_DRIFT_TERMINAL_STATUSES = new Set(['resolved', 'accepted_risk', 'false_positive']);
 const WAF_DRIFT_PATCHABLE_STATUSES = new Set([
   'open',
@@ -423,13 +467,23 @@ function computeWafDriftSpecs({
   wafDetected,
   asset,
 }) {
-  if (!previous || previous.status !== 'protected') return [];
+  if (!previous || !['protected', 'edge_protected'].includes(previous.status)) return [];
 
   const newStatus = classification.status;
   const codes = new Set(classification.reason_codes ?? []);
   const before = postureSummaryFromSnapshot(previous);
   const after = postureSummaryAfter(classification, wafDetected);
   const specs = [];
+
+  if (previous.status === 'protected' && newStatus === 'edge_protected') {
+    specs.push({
+      drift_type: 'mode_change',
+      severity: isHighBusinessCriticality(asset) ? 'high' : 'medium',
+      before_summary_json: before,
+      after_summary_json: after,
+      reason_codes: classification.reason_codes ?? [],
+    });
+  }
 
   if (newStatus === 'unprotected') {
     const drift_type = wafDetected ? 'mode_change' : 'fingerprint_lost';
@@ -472,7 +526,7 @@ function computeWafDriftSpecs({
     }
   }
 
-  if (newStatus === 'unknown' && !wafDetected) {
+  if (previous.status === 'protected' && newStatus === 'unknown' && !wafDetected) {
     specs.push({
       drift_type: 'fingerprint_lost',
       severity: isHighBusinessCriticality(asset) ? 'high' : 'medium',
@@ -490,6 +544,9 @@ function activeDriftTypesForPosture(classification, wafDetected) {
   const codes = new Set(classification.reason_codes ?? []);
   const types = [];
 
+  if (newStatus === 'edge_protected') {
+    types.push('mode_change');
+  }
   if (newStatus === 'unprotected') {
     types.push(wafDetected ? 'mode_change' : 'fingerprint_lost');
   }
@@ -525,10 +582,13 @@ function refreshOpenWafDriftEvents(ctx, {
       severity = 'critical';
     } else if (driftType === 'mode_change' && classification.status === 'underprotected') {
       severity = isHighBusinessCriticality(asset) ? 'critical' : 'high';
+    } else if (driftType === 'mode_change' && classification.status === 'edge_protected') {
+      severity = isHighBusinessCriticality(asset) ? 'high' : 'medium';
     } else if (driftType === 'fingerprint_lost' && classification.status === 'unknown') {
       severity = isHighBusinessCriticality(asset) ? 'high' : 'medium';
     }
 
+    severity = maxWafDriftSeverity(existing.severity, severity);
     existing.severity = severity;
     existing.after_summary_json = after;
     existing.finding_id = finding?.id ?? existing.finding_id ?? null;
@@ -607,7 +667,8 @@ function upsertWafDriftEvents(ctx, {
 
     const existing = findOpenWafDriftEvent(ctx, asset.id, spec.drift_type);
     if (existing) {
-      existing.severity = spec.severity;
+      existing.severity = maxWafDriftSeverity(existing.severity, spec.severity);
+      auditBase.severity = existing.severity;
       existing.after_summary_json = spec.after_summary_json;
       existing.finding_id = finding?.id ?? existing.finding_id ?? null;
       existing.updated_at = now;
@@ -1300,11 +1361,19 @@ export function finalizeWafValidation(ctx, id, body = {}) {
   if (run.status === 'finalized') {
     return { error: 'validation_already_finalized', status: 409 };
   }
+  const asset = findAsset(ctx, run.waf_asset_id);
+  if (!asset) return { error: 'waf_asset_not_found', status: 404 };
+  if (run.test_run_id) {
+    const binding = validateTestRunBinding(ctx, run.test_run_id, asset, {
+      requireSuccessfulTerminal: true,
+    });
+    if (binding.error) return binding;
+  }
   try {
     assertNoRawWafEvidence(body);
+    const usedBoundRunDerivation = Boolean(run.test_run_id);
     const scenarioInputs = Array.isArray(body.scenario_results) ? body.scenario_results : [];
-    const hasExplicitScenarios = scenarioInputs.length > 0;
-    let normalizedScenarios = hasExplicitScenarios
+    let normalizedScenarios = !usedBoundRunDerivation && scenarioInputs.length > 0
       ? scenarioInputs.map((entry) => {
         const normalized = normalizeScenarioResultInput(entry);
         return {
@@ -1318,18 +1387,15 @@ export function finalizeWafValidation(ctx, id, body = {}) {
 
     let wafDetected = parseBooleanField(body, 'waf_detected', 'wafDetected', false);
     let validationPassed = parseBooleanField(body, 'validation_passed', 'validationPassed', false);
+    let edgeProtected = false;
     let validationFailed = parseBooleanField(body, 'validation_failed', 'validationFailed', false);
-    let originBypassConfirmed = parseBooleanField(
-      body,
-      'origin_bypass_confirmed',
-      'originBypassConfirmed',
-      false,
-    );
+    // Origin impact is authoritative only when derived below from a bound terminal run and
+    // nonce-matched authenticated agent evidence. Client booleans are informational.
+    let originBypassConfirmed = false;
     let sourceExternal = Boolean(body.source_external);
     let sourceAgent = Boolean(body.source_agent);
     const connectorMode = body.connector_mode ?? body.connectorMode ?? null;
 
-    const usedBoundRunDerivation = Boolean(run.test_run_id && !hasExplicitScenarios);
     let corroboration;
     if (usedBoundRunDerivation) {
       const probes = probeEventsForRun(ctx, run.test_run_id);
@@ -1337,31 +1403,19 @@ export function finalizeWafValidation(ctx, id, body = {}) {
       corroboration = buildWafEvidenceCorroboration({ probes, agents });
       const derived = deriveWafSignalsFromBoundEvents({ probes, agents });
       normalizedScenarios = derived.scenarioResults.map((entry) => normalizeScenarioResultInput(entry));
-      if (!booleanFieldExplicit(body, 'waf_detected', 'wafDetected')) {
-        wafDetected = derived.wafDetected;
-      }
-      if (!booleanFieldExplicit(body, 'validation_passed', 'validationPassed')) {
-        validationPassed = derived.validationPassed;
-      }
-      if (!booleanFieldExplicit(body, 'validation_failed', 'validationFailed')) {
-        validationFailed = derived.validationFailed;
-      }
-      if (!booleanFieldExplicit(body, 'origin_bypass_confirmed', 'originBypassConfirmed')) {
-        originBypassConfirmed = derived.originBypassConfirmed;
-      }
-      if (body.source_external === undefined && body.sourceExternal === undefined) {
-        sourceExternal = derived.source_external;
-      }
-      if (body.source_agent === undefined && body.sourceAgent === undefined) {
-        sourceAgent = derived.source_agent;
-      }
+      wafDetected = derived.wafDetected;
+      validationPassed = derived.validationPassed;
+      edgeProtected = derived.edgeProtected;
+      validationFailed = derived.validationFailed;
+      originBypassConfirmed = derived.originBypassConfirmed;
+      sourceExternal = derived.source_external;
+      sourceAgent = derived.source_agent;
     }
 
     if (!corroboration) {
       corroboration = buildCorroborationFromEvents(
         getStore().events,
         run.test_run_id ?? null,
-        normalizedScenarios,
       );
     }
     const evidenceGate = protectedFinalizeEvidenceRequired({
@@ -1369,15 +1423,17 @@ export function finalizeWafValidation(ctx, id, body = {}) {
       normalizedScenarios,
       corroboration,
     });
-    if (evidenceGate) return evidenceGate;
-
-    const asset = findAsset(ctx, run.waf_asset_id);
-    if (!asset) return { error: 'waf_asset_not_found', status: 404 };
+    if (evidenceGate?.error) return evidenceGate;
+    if (evidenceGate?.downgrade_to_edge_protected) {
+      validationPassed = false;
+      edgeProtected = true;
+    }
 
     const previous = getCurrentSnapshot(ctx, asset.id);
     const classification = classifyWafPosture({
       wafDetected,
       validationPassed,
+      edgeProtected,
       validationFailed,
       originBypassConfirmed,
       wafRequired: asset.expected_waf_required !== false,
@@ -1421,6 +1477,7 @@ export function finalizeWafValidation(ctx, id, body = {}) {
       }, {
         waf_detected: wafDetected,
         validation_passed: validationPassed,
+        edge_protected: edgeProtected,
         validation_failed: validationFailed,
         origin_bypass_confirmed: originBypassConfirmed,
         posture_status: classification.status,
@@ -1447,6 +1504,7 @@ export function finalizeWafValidation(ctx, id, body = {}) {
     run.summary_json = {
       waf_detected: wafDetected,
       validation_passed: validationPassed,
+      edge_protected: edgeProtected,
       validation_failed: validationFailed,
       origin_bypass_confirmed: originBypassConfirmed,
       posture_status: classification.status,
@@ -1510,6 +1568,10 @@ export function finalizeWafValidation(ctx, id, body = {}) {
 const CONNECTOR_PROVIDERS = new Set([
   'generic_waf',
   'cloudflare',
+  'akamai_edgedns',
+  'namecheap',
+  'godaddy',
+  'ibm_ns1',
   'aws_waf',
   'akamai',
   'fastly',
@@ -1524,11 +1586,13 @@ const CONNECTOR_CONFIG_SAFE_KEYS = new Set([
   'zone_ref_hash',
   'resource_ref_hash',
   'default_snapshot_kind',
+  'connection_mode',
   'read_only',
   'owner_hint',
   'tag_summary',
   'polling_interval_minutes',
   'region_summary',
+  'scope',
   'notes_hash',
 ]);
 
@@ -1636,6 +1700,11 @@ function redactConnectorConfig(raw) {
       if (Number.isFinite(n) && n > 0) out.polling_interval_minutes = Math.floor(n);
       continue;
     }
+    if (normalized === 'scope') {
+      const scope = String(value ?? '').trim().toLowerCase();
+      if (['regional', 'cloudfront'].includes(scope)) out.scope = scope;
+      continue;
+    }
     if (normalized === 'tag_summary' && value && typeof value === 'object' && !Array.isArray(value)) {
       out.tag_summary = value;
       continue;
@@ -1695,26 +1764,44 @@ function providerCapabilities(provider, connector = null) {
   };
 }
 
-async function defaultConnectorSecretResolver(ctx, secretId) {
+async function defaultConnectorSecretResolver(ctx, secretId, provider) {
   const key = loadSecretEncryptionKey();
   if (!key) return { error: 'encryption_not_configured' };
   const decrypted = decryptEncryptedSecretForUse(ctx, secretId, key);
   if (!decrypted || decrypted.error) return { error: 'secret_not_found' };
+  if (decrypted.purpose !== 'connector'
+    || String(decrypted.metadata?.provider ?? '').trim().toLowerCase() !== String(provider ?? '').trim().toLowerCase()) {
+    return { error: 'connector_secret_binding_invalid' };
+  }
   return { plaintext: decrypted.plaintext };
 }
 
-function applyConnectorPollHealth(connector, health, now) {
+function applyConnectorPollHealth(connector, health, now, expectedPollRevision) {
+  if (Number(connector.poll_revision ?? 0) !== Number(expectedPollRevision)
+    || ['disabled', 'revoked'].includes(connector.status)) {
+    return false;
+  }
   connector.updated_at = now;
-  if (health?.status === 'active' || health?.status === 'degraded') {
+  const completeSuccess = (health?.status === 'active' || health?.status === 'degraded')
+    && health?.inventory_complete === true;
+  if (completeSuccess) {
     connector.status = health.status;
     connector.last_success_at = now;
+    connector.last_success_revision = expectedPollRevision;
     connector.last_error_at = null;
-    return;
+    return true;
   }
-  if (connector.status !== 'disabled') {
-    connector.status = health?.status ?? 'error';
+  if (health?.status === 'revoked') {
+    connector.status = 'revoked';
+    connector.last_success_at = null;
+    connector.last_success_revision = 0;
+  } else {
+    connector.status = ['active', 'degraded', 'validating', 'polling'].includes(connector.status)
+      ? 'degraded'
+      : health?.status ?? 'error';
   }
   connector.last_error_at = now;
+  return true;
 }
 
 function findConnector(ctx, id) {
@@ -1747,6 +1834,9 @@ function formatConnectorSnapshot(record) {
     display_ref: record.display_ref,
     summary: record.summary_json ?? {},
     config_hash: record.config_hash,
+    evidence_source: record.evidence_source ?? 'manual_metadata',
+    inventory_complete: record.inventory_complete === true,
+    inventory_truncated: record.inventory_truncated === true,
     observed_at: record.observed_at,
     created_at: record.created_at,
   };
@@ -1831,6 +1921,8 @@ export function createConnector(ctx, body = {}) {
       created_at: now,
       updated_at: now,
       last_success_at: null,
+      last_success_revision: 0,
+      poll_revision: 0,
     };
     getStore().wafConnectors.push(record);
     audit({
@@ -1854,6 +1946,9 @@ export function validateConnector(ctx, id) {
   const connector = findConnector(ctx, id);
   if (!connector) {
     return { error: 'connector_not_found', status: 404 };
+  }
+  if (['disabled', 'revoked'].includes(connector.status)) {
+    return { error: 'connector_disabled', status: 409 };
   }
 
   const readOnly = connector.config_json?.read_only === true;
@@ -1943,6 +2038,9 @@ function persistManualConnectorSnapshots(ctx, connector, snapshotInputs, now) {
       id: newId('id'),
       tenant_id: ctx.tenantId,
       ...normalized,
+      evidence_source: 'manual_metadata',
+      inventory_complete: false,
+      inventory_truncated: false,
       created_at: now,
     };
     getStore().wafConnectorSnapshots.push(record);
@@ -1953,6 +2051,7 @@ function persistManualConnectorSnapshots(ctx, connector, snapshotInputs, now) {
 }
 
 function buildConnectorPollJob({
+  id = null,
   connectorId,
   now,
   status,
@@ -1961,7 +2060,7 @@ function buildConnectorPollJob({
   attempts = null,
 }) {
   return {
-    id: newId('poll'),
+    id: id ?? newId('poll'),
     connector_id: connectorId,
     status,
     snapshot_count: snapshotCount,
@@ -1977,19 +2076,58 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
   if (!connector) {
     return { error: 'connector_not_found', status: 404 };
   }
+  if (['disabled', 'revoked'].includes(connector.status)) {
+    return { error: 'connector_disabled', status: 409 };
+  }
   try {
     assertSafeConnectorPayload(body);
     const snapshotInputs = Array.isArray(body.snapshots) ? body.snapshots : [];
     const now = new Date().toISOString();
     const secretResolver = options.secretResolver ?? defaultConnectorSecretResolver;
-    const fetchFn = options.fetchFn ?? fetch;
+    const fetchFn = options.fetchFn;
     const prefetchedMetadata = options.prefetchedMetadata ?? body.prefetched_metadata ?? null;
+    const outboundRequested = shouldAttemptOutboundConnectorPoll(connector, body);
+
+    if (outboundRequested && options.executeOutbound !== true) {
+      if (!['validating', 'polling'].includes(connector.status)) {
+        connector.poll_revision = Number(connector.poll_revision ?? 0) + 1;
+        connector.status = 'validating';
+        connector.updated_at = now;
+        persistStore();
+      }
+      const pollRevision = Number(connector.poll_revision ?? 0);
+      audit({
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId,
+        actor_role: ctx.role,
+        action: 'connector.poll.requested',
+        resource_type: 'waf_connector',
+        resource_id: connector.id,
+        metadata: { provider: connector.provider, poll_revision: pollRevision },
+      });
+      return {
+        poll_job: buildConnectorPollJob({
+          id: `poll_${connector.id}_${pollRevision}`,
+          connectorId: connector.id,
+          now,
+          status: 'pending',
+          snapshotCount: 0,
+        }),
+        snapshots: [],
+      };
+    }
 
     let outboundHealth = null;
     let outboundAttempts = null;
     let outboundSnapshots = [];
+    let pollRevision = Number(connector.poll_revision ?? 0);
 
-    if (shouldAttemptOutboundConnectorPoll(connector, body)) {
+    if (outboundRequested) {
+      if (connector.status !== 'validating') pollRevision += 1;
+      connector.poll_revision = pollRevision;
+      connector.status = 'polling';
+      connector.updated_at = now;
+      persistStore();
       try {
         const outbound = await executeConnectorProviderPoll({
           connector,
@@ -2005,7 +2143,10 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
         outboundAttempts = outbound.health?.attempts ?? null;
       } catch (err) {
         const failure = buildProviderPollFailure(connector, err, err?.attempts ?? null);
-        applyConnectorPollHealth(connector, failure.health, now);
+        const applied = applyConnectorPollHealth(connector, failure.health, now, pollRevision);
+        if (!applied) {
+          return { error: 'connector_poll_superseded', status: 409 };
+        }
         audit({
           tenant_id: ctx.tenantId,
           actor_user_id: ctx.userId,
@@ -2031,6 +2172,13 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
       }
     }
 
+    if (outboundRequested && (
+      Number(connector.poll_revision ?? 0) !== pollRevision
+      || ['disabled', 'revoked'].includes(connector.status)
+    )) {
+      return { error: 'connector_poll_superseded', status: 409 };
+    }
+
     const manualResult = snapshotInputs.length > 0
       ? persistManualConnectorSnapshots(ctx, connector, snapshotInputs, now)
       : { created: [], kindCounts: {} };
@@ -2044,6 +2192,10 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
         id: newId('id'),
         tenant_id: ctx.tenantId,
         ...normalized,
+        evidence_source: outboundHealth?.evidence_source ?? 'manual_metadata',
+        inventory_complete: outboundHealth?.inventory_complete === true,
+        inventory_truncated: outboundHealth?.inventory_truncated === true,
+        poll_revision: pollRevision,
         created_at: now,
       };
       getStore().wafConnectorSnapshots.push(record);
@@ -2052,18 +2204,11 @@ export async function pollConnector(ctx, id, body = {}, options = {}) {
     }
 
     if (outboundHealth) {
-      applyConnectorPollHealth(connector, outboundHealth, now);
+      const applied = applyConnectorPollHealth(connector, outboundHealth, now, pollRevision);
+      if (!applied) return { error: 'connector_poll_superseded', status: 409 };
     } else {
-      // A failing poll returned above, so this poll completed: stamp it even when it produced
-      // zero snapshots, or LAST POLL keeps reading as dead after a successful empty poll.
-      connector.last_success_at = now;
+      // Manual snapshots are display-only metadata and never define provider ownership generation.
       connector.updated_at = now;
-      if (created.length > 0) {
-        if (connector.status !== 'disabled') {
-          connector.status = 'active';
-        }
-        connector.last_error_at = null;
-      }
     }
 
     const pollStatus = outboundHealth
@@ -2978,6 +3123,9 @@ export function disableConnector(ctx, id, body = {}) {
   }
   const now = new Date().toISOString();
   connector.status = 'disabled';
+  connector.poll_revision = Number(connector.poll_revision ?? 0) + 1;
+  connector.last_success_at = null;
+  connector.last_success_revision = 0;
   connector.updated_at = now;
   audit({
     tenant_id: ctx.tenantId,
@@ -3073,9 +3221,63 @@ export function getConnectorInventory(ctx, connectorId, query = {}) {
     return { error: 'connector_disabled', status: 409 };
   }
 
-  const inventory = Array.isArray(connector.inventory_items)
+  const inventoryByKey = new Map();
+  const rawInventory = Array.isArray(connector.inventory_items)
     ? connector.inventory_items
     : (connector.inventory_cache?.items ?? []);
+  for (const item of rawInventory) {
+    try {
+      const normalized = normalizeTargetInput(item);
+      inventoryByKey.set(targetDedupeKey(normalized), {
+        kind: normalized.kind,
+        value: normalized.value,
+        label: String(item.label ?? normalized.value).slice(0, 300),
+        importable: item.importable !== false,
+      });
+    } catch {
+      // Ignore malformed legacy inventory rows.
+    }
+  }
+
+  const seenResources = new Set();
+  const snapshots = (getStore().wafConnectorSnapshots ?? [])
+    .filter((snapshot) => snapshot.tenant_id === ctx.tenantId && snapshot.connector_id === connector.id)
+    .sort((left, right) => String(right.observed_at).localeCompare(String(left.observed_at)));
+  for (const snapshot of snapshots) {
+    const resourceKey = snapshot.resource_ref_hash ?? snapshot.id;
+    if (seenResources.has(resourceKey)) continue;
+    seenResources.add(resourceKey);
+    const mapped = mapProviderInventory(connector.provider, snapshot.summary_json ?? {});
+    const direct = snapshot.summary_json?.items ?? snapshot.summary_json?.inventory_items ?? [];
+    const candidates = mapped.length
+      ? mapped
+      : Array.isArray(direct) && direct.length
+        ? direct
+        : snapshot.display_ref
+          ? [{ kind: /(?:ip|address)/i.test(snapshot.snapshot_kind) ? 'ip' : /url/i.test(snapshot.snapshot_kind) ? 'url' : 'fqdn', value: snapshot.display_ref, label: snapshot.display_ref, importable: true }]
+          : [];
+    for (const candidate of candidates) {
+      if (candidate?.importable === false) continue;
+      try {
+        const normalized = normalizeTargetInput(candidate);
+        inventoryByKey.set(targetDedupeKey(normalized), {
+          kind: normalized.kind,
+          value: normalized.value,
+          label: String(candidate.label ?? normalized.value).slice(0, 300),
+          resource_ref: snapshot.resource_ref_hash ?? null,
+          importable: true,
+          observed_at: snapshot.observed_at ?? null,
+          snapshot_id: snapshot.id ?? null,
+          evidence_source: snapshot.evidence_source ?? 'manual_metadata',
+          inventory_complete: snapshot.inventory_complete === true,
+          inventory_truncated: snapshot.inventory_truncated === true,
+        });
+      } catch {
+        // Fail closed for malformed provider rows.
+      }
+    }
+  }
+  const inventory = [...inventoryByKey.values()].sort((left, right) => left.value.localeCompare(right.value));
 
   const limit = Number(query.limit) || 50;
   const paged = paginateItems(inventory, {

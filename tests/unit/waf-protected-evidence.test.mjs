@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   buildCorroborationFromEvents,
   buildWafEvidenceCorroboration,
+  corroborateEdgeProtectedScenarioEvidence,
   corroborateProtectedScenarioEvidence,
   protectedFinalizeEvidenceRequired,
   stripClientAssertedAgentEvidence,
@@ -16,7 +17,7 @@ describe('waf protected evidence corroboration', () => {
     );
   });
 
-  it('accepts protected claims only when probe events corroborate nonce and fingerprint', () => {
+  it('classifies a bound external block as edge-only without agent corroboration', () => {
     const corroboration = buildWafEvidenceCorroboration({
       probes: [{
         id: 'evt_probe_1',
@@ -32,7 +33,39 @@ describe('waf protected evidence corroboration', () => {
       passed: true,
       evidence_summary_json: { nonce_hash: 'nonce_1', request_id: 'evt_probe_1' },
     };
+    assert.equal(corroborateProtectedScenarioEvidence(scenario, corroboration), false);
+    assert.equal(corroborateEdgeProtectedScenarioEvidence(scenario, corroboration), true);
+    const gate = protectedFinalizeEvidenceRequired({
+      validationPassed: true,
+      normalizedScenarios: [scenario],
+      corroboration,
+    });
+    assert.equal(gate?.downgrade_to_edge_protected, true);
+  });
+
+  it('accepts protected only with matching agent blocked or not-reached-origin evidence', () => {
+    const scenario = {
+      passed: true,
+      evidence_summary_json: { nonce_hash: 'nonce_1', request_id: 'evt_probe_1' },
+    };
+    const corroboration = buildWafEvidenceCorroboration({
+      probes: [{
+        id: 'evt_probe_1',
+        nonce_hash: 'nonce_1',
+        metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+      }],
+      agents: [{
+        id: 'evt_agent_1',
+        nonce_hash: 'nonce_1',
+        metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
+      }],
+    });
     assert.equal(corroborateProtectedScenarioEvidence(scenario, corroboration), true);
+    assert.equal(protectedFinalizeEvidenceRequired({
+      validationPassed: true,
+      normalizedScenarios: [scenario],
+      corroboration,
+    }), null);
   });
 
   it('rejects self-asserted agent observation without stored agent events', () => {
@@ -99,5 +132,22 @@ describe('waf protected evidence corroboration', () => {
     );
     assert.equal(corroboration.probesByNonce.has('nonce_a'), true);
     assert.equal(corroboration.probesByNonce.has('nonce_b'), false);
+  });
+
+  it('does not corroborate unbound scenarios by nonce across same-tenant events', () => {
+    const corroboration = buildCorroborationFromEvents(
+      [{
+        test_run_id: 'run_other_target',
+        signal_type: 'probe_result',
+        nonce_hash: 'shared_nonce',
+        id: 'evt_other_target',
+        metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+      }],
+      null,
+      [{ evidence_summary_json: { nonce_hash: 'shared_nonce' } }],
+    );
+
+    assert.equal(corroboration.probesByNonce.size, 0);
+    assert.equal(corroboration.agentsByNonce.size, 0);
   });
 });

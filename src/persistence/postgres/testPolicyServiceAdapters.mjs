@@ -69,6 +69,19 @@ function policyMaxConcurrency(check) {
   return Math.max(1, Math.min(1, Number(check?.safety_constraints?.max_concurrent_runs_per_target_group) || 1));
 }
 
+function targetKindCompatibilityError(check, target) {
+  const kind = /^https?:\/\//i.test(String(target?.value ?? '')) ? 'url' : target?.kind;
+  if (!Array.isArray(check.supported_targets) || check.supported_targets.length === 0
+      || check.supported_targets.includes(kind)) return null;
+  return {
+    error: 'target_kind_not_supported',
+    status: 400,
+    check_id: check.check_id,
+    target_kind: kind ?? null,
+    supported_targets: check.supported_targets,
+  };
+}
+
 function unsupportedEventDrivenPolicy(body, current = null) {
   const cadence = String(body?.cadence ?? current?.cadence ?? 'manual').trim().toLowerCase();
   if (cadence !== 'event_driven') return null;
@@ -106,6 +119,7 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
 
   async function enrichPolicy(ctx, policy, cache = new Map()) {
     const group = await loadActiveGroup(ctx, policy.target_group_id, cache);
+    const target = group?.targets?.find((candidate) => candidate.id === policy.target_id) ?? null;
     const check = getCheckById(policy.check_id);
     return {
       ...policy,
@@ -116,6 +130,9 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
             environment_id: group.environment_id,
             expected_behavior_default: group.expected_behavior_default,
           }
+        : null,
+      target: target
+        ? { id: target.id, kind: target.kind, value: target.value, verify_state: target.verify_state ?? null }
         : null,
       check: publicCheck(check),
       target_count: group ? (group.targets ?? []).length : 0,
@@ -148,6 +165,10 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
       const cache = new Map();
       const targetGroup = await loadActiveGroup(ctx, targetGroupId, cache);
       if (!targetGroup) return { error: 'target_group_not_found', status: 404 };
+      const targetId = String(body.target_id ?? '').trim();
+      if (!targetId) return { error: 'missing_target_id', status: 400 };
+      const target = (targetGroup.targets ?? []).find((candidate) => candidate.id === targetId);
+      if (!target) return { error: 'target_not_found', status: 404 };
 
       const checkId = String(body.check_id ?? '').trim();
       const check = getCheckById(checkId);
@@ -159,7 +180,14 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
           message: 'This check requires a SOC-governed high-scale request, not a customer-runnable policy.',
         };
       }
-      const duplicate = await testPolicies.findActivePolicyByGroupCheck(ctx, targetGroupId, check.check_id);
+      const incompatibleTarget = targetKindCompatibilityError(check, target);
+      if (incompatibleTarget) return incompatibleTarget;
+      const duplicate = await testPolicies.findActivePolicyByGroupCheck(
+        ctx,
+        targetGroupId,
+        targetId,
+        check.check_id,
+      );
       if (duplicate) return { error: 'test_policy_exists', status: 409, existing_id: duplicate.id };
 
       let normalized;
@@ -173,6 +201,7 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
         id: newId('policy'),
         tenant_id: ctx.tenantId,
         target_group_id: targetGroup.id,
+        target_id: target.id,
         check_id: check.check_id,
         ...normalized,
         next_run_at: nextPolicyRunAt(normalized, { from: new Date(now), initial: true }),
@@ -293,6 +322,7 @@ export function createPostgresTestPolicyServices(repositories, options = {}) {
         try {
           started = await dispatchOptions.startTestRun(ctx, {
             target_group_id: lease.target_group_id,
+            target_id: lease.target_id,
             check_id: lease.check_id,
             policy_id: lease.id,
             policy_dispatch_id: lease.dispatch_id,

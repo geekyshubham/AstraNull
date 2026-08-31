@@ -133,6 +133,44 @@ describe('encrypted secret vault service', () => {
     assert.equal(rotateEncryptedSecret(ctx('ten_other'), stored.secret.id, { plaintext: 'nope' }, key), null);
   });
 
+  it('revokes every same-tenant connector generation when its vault secret rotates', () => {
+    freshStore();
+    const key = loadKey();
+    const stored = storeEncryptedSecret(ctx(), {
+      purpose: 'connector',
+      name: 'cloudflare',
+      plaintext: 'initial-provider-secret',
+      metadata: { provider: 'cloudflare' },
+    }, key);
+    const base = {
+      secret_id: stored.secret.id,
+      provider: 'cloudflare',
+      last_success_at: '2026-07-10T12:00:00.000Z',
+      last_success_revision: 5,
+      poll_revision: 5,
+    };
+    getStore().wafConnectors = [];
+    getStore().wafConnectors.push(
+      { ...base, id: 'conn_active', tenant_id: 'ten_demo', status: 'active' },
+      { ...base, id: 'conn_disabled', tenant_id: 'ten_demo', status: 'disabled' },
+      { ...base, id: 'conn_other', tenant_id: 'ten_other', status: 'active' },
+    );
+
+    rotateEncryptedSecret(ctx(), stored.secret.id, { plaintext: 'rotated-provider-secret' }, key);
+
+    const active = getStore().wafConnectors.find((item) => item.id === 'conn_active');
+    const disabled = getStore().wafConnectors.find((item) => item.id === 'conn_disabled');
+    const other = getStore().wafConnectors.find((item) => item.id === 'conn_other');
+    assert.equal(active.status, 'validating');
+    assert.equal(active.last_success_at, null);
+    assert.equal(active.last_success_revision, 0);
+    assert.equal(active.poll_revision, 6);
+    assert.equal(disabled.status, 'disabled');
+    assert.equal(disabled.last_success_revision, 0);
+    assert.equal(disabled.poll_revision, 6);
+    assert.equal(other.last_success_revision, 5);
+  });
+
   it('redacts secret-like metadata on store and rotate while preserving safe fields', () => {
     freshStore();
     const key = loadKey();

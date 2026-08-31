@@ -88,6 +88,8 @@ export function buildRetentionPolicySnapshot(tenant) {
       { collection: 'evidenceVault', effective_retention_days: privacy.metadata_retention_days },
       { collection: 'reports', effective_retention_days: reportRetentionDays },
       { collection: 'notificationEvents', effective_retention_days: privacy.metadata_retention_days },
+      { collection: 'connectorPollJobs', effective_retention_days: privacy.metadata_retention_days },
+      { collection: 'connectorSnapshots', effective_retention_days: privacy.metadata_retention_days },
     ],
   };
 }

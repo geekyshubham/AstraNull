@@ -122,13 +122,9 @@ function assertHighScaleRepositories(repositories) {
   if (!validationEvidence || typeof validationEvidence.listTestRuns !== 'function') {
     throw new Error('Postgres high-scale service adapter requires validationEvidence.listTestRuns().');
   }
-  if (typeof validationEvidence.updateTestRun !== 'function') {
-    throw new Error('Postgres high-scale service adapter requires validationEvidence.updateTestRun().');
-  }
-  const probeJobs = repositories?.probeJobs;
-  if (!probeJobs || typeof probeJobs.cancelOpenProbeJobsForTestRuns !== 'function') {
+  if (typeof validationEvidence.cancelTestRunAtomic !== 'function') {
     throw new Error(
-      'Postgres high-scale service adapter requires probeJobs.cancelOpenProbeJobsForTestRuns().',
+      'Postgres high-scale service adapter requires validationEvidence.cancelTestRunAtomic().',
     );
   }
 }
@@ -207,22 +203,30 @@ async function autoCancelActiveSafeRunsForKillSwitch(ctx, reason, validationEvid
     limit: 500,
   });
   const cancelledRunIds = [];
+  const cancelledProbeJobIds = [];
   const now = new Date().toISOString();
   for (const run of runs) {
     const summary = { ...(run.summary ?? {}), cancelled_by_kill_switch: true };
-    await validationEvidence.updateTestRun(ctx, run.id, {
-      status: 'cancelled',
+    const cancellation = await validationEvidence.cancelTestRunAtomic(ctx, run.id, {
       completed_at: now,
       summary,
     });
+    if (!cancellation?.cancelled) continue;
     await appendAudit(auditRepo, ctx, 'test_run.kill_switch_auto_cancel', 'test_run', run.id, {
       reason: reason ?? null,
       check_id: run.check_id,
       target_group_id: run.target_group_id,
     });
     cancelledRunIds.push(run.id);
+    for (const job of cancellation.cancelled_jobs) {
+      cancelledProbeJobIds.push(job.id);
+      await appendAudit(auditRepo, ctx, 'probe_job.kill_switch_auto_cancel', 'probe_job', job.id, {
+        reason: reason ?? null,
+        test_run_id: job.test_run_id,
+      });
+    }
   }
-  return cancelledRunIds;
+  return { cancelledRunIds, cancelledProbeJobIds };
 }
 
 /**
@@ -243,7 +247,6 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
   const auditRepo = repositories.audit;
   const killSwitchRepo = repositories.killSwitch;
   const validationEvidence = repositories.validationEvidence;
-  const probeJobsRepo = repositories.probeJobs;
   const portalRevamp = repositories.portalRevamp;
   const notifications = options.notifications ?? repositories.notifications;
   const nowFn = options.now ?? (() => new Date());
@@ -896,30 +899,22 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         // persisted when pass one listed them. Both sets are merged so the audit event and
         // the API response report every run this activation actually cancelled.
         for (let pass = 0; pass < KILL_SWITCH_SWEEP_PASSES; pass += 1) {
-          const passRunIds = await autoCancelActiveSafeRunsForKillSwitch(
+          const passCancellation = await autoCancelActiveSafeRunsForKillSwitch(
             ctx,
             reason,
             validationEvidence,
             auditRepo,
           );
-          for (const runId of passRunIds) {
+          for (const runId of passCancellation.cancelledRunIds) {
             if (!cancelledRunIds.includes(runId)) {
               cancelledRunIds.push(runId);
             }
           }
-        }
-        const cancelAt = nowFn().toISOString();
-        const cancelledJobs = await probeJobsRepo.cancelOpenProbeJobsForTestRuns(
-          ctx,
-          cancelledRunIds,
-          cancelAt,
-        );
-        for (const job of cancelledJobs) {
-          cancelledProbeJobIds.push(job.id);
-          await appendAudit(auditRepo, ctx, 'probe_job.kill_switch_auto_cancel', 'probe_job', job.id, {
-            reason: reason ?? null,
-            test_run_id: job.test_run_id,
-          });
+          for (const jobId of passCancellation.cancelledProbeJobIds) {
+            if (!cancelledProbeJobIds.includes(jobId)) {
+              cancelledProbeJobIds.push(jobId);
+            }
+          }
         }
       }
       await appendAudit(auditRepo, ctx, active ? 'soc.kill_switch.activated' : 'soc.kill_switch.cleared', 'platform', 'kill_switch', {

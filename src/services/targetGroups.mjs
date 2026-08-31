@@ -9,10 +9,10 @@ import {
   isCurrentSuccessfulProviderSnapshot,
   isProviderVerifiedDnsEvidence,
 } from '../lib/connectorProviders/domainInventory.mjs';
+import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import {
   ownershipProofFromStates,
   ownershipSummaryFromTargetStates,
-  VERIFICATION_RANK,
 } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
@@ -43,22 +43,7 @@ function optionalString(...values) {
 }
 
 function latestTargetVerifications(tenantId) {
-  const latestByTarget = new Map();
-  for (const row of getStore().targetVerifications ?? []) {
-    if (row.tenant_id !== tenantId) continue;
-    const previous = latestByTarget.get(row.target_id);
-    const rowAt = String(row.transitioned_at ?? '');
-    const previousAt = String(previous?.transitioned_at ?? '');
-    if (
-      !previous
-      || rowAt > previousAt
-      || (rowAt === previousAt
-        && (VERIFICATION_RANK[row.state] ?? 0) > (VERIFICATION_RANK[previous.state] ?? 0))
-    ) {
-      latestByTarget.set(row.target_id, row);
-    }
-  }
-  return latestByTarget;
+  return effectiveTargetVerifications(getStore(), tenantId);
 }
 
 function targetInventoryItem(target, group, environment, verification) {
@@ -452,6 +437,21 @@ export function archiveTargetGroup(ctx, id) {
   if (activeRunForGroup(ctx.tenantId, id)) return { error: 'target_group_active_run', status: 409 };
 
   const now = new Date().toISOString();
+  const pausedPolicyIds = [];
+  for (const policy of getStore().testPolicies ?? []) {
+    if (policy.tenant_id !== ctx.tenantId
+      || policy.target_group_id !== id
+      || policy.archived_at) continue;
+    policy.state = 'paused';
+    policy.enabled = false;
+    policy.next_run_at = null;
+    policy.lease_token = null;
+    policy.lease_owner = null;
+    policy.lease_expires_at = null;
+    policy.schedule_revision = Number(policy.schedule_revision ?? 0) + 1;
+    policy.updated_at = now;
+    pausedPolicyIds.push(policy.id);
+  }
   group.deleted_at = now;
   group.deleted_by = ctx.userId;
   group.archived_at = now;
@@ -462,10 +462,19 @@ export function archiveTargetGroup(ctx, id) {
     action: 'target_group.archived',
     resource_type: 'target_group',
     resource_id: id,
-    metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
+    metadata: {
+      changed_fields: ['deleted_at', 'deleted_by', 'archived_at'],
+      paused_policy_ids: pausedPolicyIds,
+    },
   });
   persistStore();
-  return { archived: true, id, deleted_at: now, deleted_by: ctx.userId };
+  return {
+    archived: true,
+    id,
+    deleted_at: now,
+    deleted_by: ctx.userId,
+    paused_policy_count: pausedPolicyIds.length,
+  };
 }
 
 export function patchTarget(ctx, groupId, targetId, body = {}) {
@@ -551,6 +560,22 @@ export function deleteTarget(ctx, groupId, targetId) {
   if (activeRunForTarget(ctx.tenantId, groupId, targetId)) return { error: 'target_active_run', status: 409 };
 
   const now = new Date().toISOString();
+  const pausedPolicyIds = [];
+  for (const policy of getStore().testPolicies ?? []) {
+    if (policy.tenant_id !== ctx.tenantId
+      || policy.target_group_id !== groupId
+      || policy.target_id !== targetId
+      || policy.archived_at) continue;
+    policy.state = 'paused';
+    policy.enabled = false;
+    policy.next_run_at = null;
+    policy.lease_token = null;
+    policy.lease_owner = null;
+    policy.lease_expires_at = null;
+    policy.schedule_revision = Number(policy.schedule_revision ?? 0) + 1;
+    policy.updated_at = now;
+    pausedPolicyIds.push(policy.id);
+  }
   target.deleted_at = now;
   target.deleted_by = ctx.userId;
   audit({
@@ -560,10 +585,21 @@ export function deleteTarget(ctx, groupId, targetId) {
     action: 'target.archived',
     resource_type: 'target',
     resource_id: targetId,
-    metadata: { target_group_id: groupId, changed_fields: ['deleted_at', 'deleted_by'] },
+    metadata: {
+      target_group_id: groupId,
+      changed_fields: ['deleted_at', 'deleted_by'],
+      paused_policy_ids: pausedPolicyIds,
+    },
   });
   persistStore();
-  return { deleted: true, archived: true, id: targetId, deleted_at: now, deleted_by: ctx.userId };
+  return {
+    deleted: true,
+    archived: true,
+    id: targetId,
+    deleted_at: now,
+    deleted_by: ctx.userId,
+    paused_policy_count: pausedPolicyIds.length,
+  };
 }
 
 /**
@@ -696,6 +732,7 @@ export function bulkImportTargets(ctx, groupId, body = {}) {
             resource_ref: snapshot.resource_ref_hash ?? null,
             observed_at: snapshot.observed_at ?? null,
             poll_generation: currentSuccessfulPoll ? connector.last_success_at : null,
+            poll_revision: snapshot.poll_revision ?? 0,
             evidence_source: snapshot.evidence_source ?? 'manual_metadata',
             candidate_source: candidateSource,
             current_successful_poll: currentSuccessfulPoll,

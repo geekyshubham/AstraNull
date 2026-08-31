@@ -377,22 +377,52 @@ function createKillSwitchInterleavingHarness(options = {}) {
       return { ...row };
     },
     async updateTestRun(ctx, id, patch) {
-      // Models a crash mid-sweep: the cancel write fails BEFORE mutating state, so the run
-      // is genuinely left uncancelled.
-      if (failNextCancelWrite && patch.status === 'cancelled') {
-        failNextCancelWrite = false;
-        throw new Error('sweep crashed');
-      }
       const idx = state.testRuns.findIndex((r) => r.id === id);
       if (idx < 0) return null;
       state.testRuns[idx] = { ...state.testRuns[idx], ...patch };
-      const row = { ...state.testRuns[idx] };
-      if (patch.status === 'cancelled' && onRunCancelled) {
+      return { ...state.testRuns[idx] };
+    },
+    async cancelTestRunAtomic(ctx, id, patch) {
+      if (failNextCancelWrite) {
+        failNextCancelWrite = false;
+        throw new Error('sweep crashed');
+      }
+      const idx = state.testRuns.findIndex((r) => r.id === id && r.tenant_id === ctx.tenantId);
+      if (idx < 0) return null;
+      if (!['planned', 'running', 'collecting'].includes(state.testRuns[idx].status)) {
+        return { run: { ...state.testRuns[idx] }, cancelled: false, cancelled_jobs: [] };
+      }
+      state.testRuns[idx] = {
+        ...state.testRuns[idx],
+        status: 'cancelled',
+        completed_at: patch.completed_at,
+        summary: patch.summary ?? state.testRuns[idx].summary,
+      };
+      const cancelledJobs = state.probeJobs.filter(
+        (job) => job.tenant_id === ctx.tenantId
+          && job.test_run_id === id
+          && ['pending', 'leased'].includes(job.status),
+      );
+      for (const job of cancelledJobs) {
+        job.status = 'cancelled';
+        job.completed_at = patch.completed_at;
+      }
+      if (onRunCancelled) {
         const hook = onRunCancelled;
         onRunCancelled = null;
         await hook(id);
       }
-      return row;
+      return {
+        run: { ...state.testRuns[idx] },
+        cancelled: true,
+        cancelled_jobs: cancelledJobs.map((job) => ({ ...job })),
+      };
+    },
+    async withRunMutationLock(ctx, runId, callback) {
+      return { acquired: true, result: await callback() };
+    },
+    async withRunFinalizationLock(ctx, runId, callback) {
+      return { acquired: true, result: await callback() };
     },
     async listRunEvents(ctx, runId, opts = {}) {
       return state.events.filter(
@@ -477,6 +507,27 @@ function createKillSwitchInterleavingHarness(options = {}) {
     async claimPendingJobForWorker(ctx, id, workerId, leasedAt) {
       const job = state.probeJobs.find((j) => j.id === id);
       if (!job) return null;
+      job.status = 'leased';
+      job.leased_by = workerId;
+      job.leased_at = leasedAt;
+      return { ...job };
+    },
+    // Optimistic claim for result ingest: mirrors the production UPDATE's guard clause
+    // (probeJobRepository.claimJobForResult) — expected status defaults to 'pending' and
+    // the lease columns compare null-safe (`IS NOT DISTINCT FROM`), so a stale expectation
+    // (status moved, lease changed hands) claims nothing and ingest 409s.
+    async claimJobForResult(ctx, id, workerId, leasedAt, expected = {}) {
+      const job = state.probeJobs.find(
+        (j) => j.tenant_id === ctx.tenantId && j.id === id,
+      );
+      if (!job) return null;
+      if (
+        job.status !== (expected.status ?? 'pending')
+        || (job.leased_by ?? null) !== (expected.leased_by ?? null)
+        || (job.leased_at ?? null) !== (expected.leased_at ?? null)
+      ) {
+        return null;
+      }
       job.status = 'leased';
       job.leased_by = workerId;
       job.leased_at = leasedAt;

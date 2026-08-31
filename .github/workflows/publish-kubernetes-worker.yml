@@ -1,0 +1,116 @@
+name: Publish Kubernetes Worker
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+
+concurrency:
+  group: publish-kubernetes-worker-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/astranull/astranull-worker
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Check out exact CI-tested revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact revision
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish exact worker image
+        id: build
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ops/kubernetes/Dockerfile.worker
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.RELEASE_SHA }}
+          provenance: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382 # v3.8.1
+
+      - name: Keyless-sign exact digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Publish GitHub build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify registry signature and provenance
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-kubernetes-worker.yml@refs/heads/main$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$IMAGE@$DIGEST" >/dev/null
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$IMAGE@$DIGEST" >/dev/null
+
+      - name: Render exact-digest Kubernetes release
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p output/kubernetes-worker
+          node scripts/render-kubernetes-worker-manifests.mjs \
+            --digest "$DIGEST" \
+            --out-dir output/kubernetes-worker/manifests
+          node scripts/render-kubernetes-worker-manifests.mjs \
+            --validate-dir output/kubernetes-worker/manifests
+          printf '{"release_sha":"%s","image":"%s","digest":"%s","signature_verified":true,"provenance_verified":true,"workflow_run_id":"%s"}\n' \
+            "$RELEASE_SHA" "$IMAGE" "$DIGEST" "$GITHUB_RUN_ID" \
+            > output/kubernetes-worker/release-evidence.json
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: kubernetes-worker-${{ env.RELEASE_SHA }}
+          path: output/kubernetes-worker
+          if-no-files-found: error
+          retention-days: 30

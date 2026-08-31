@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import os from 'node:os';
 import path from 'node:path';
@@ -211,6 +212,92 @@ describe('postgres streaming backup and restore', () => {
     assert.deepEqual(manifest.database_reference, DATABASE_REFERENCE);
     assert.doesNotMatch(readFileSync(manifestPath, 'utf8'), /postgresql:\/\//);
     validatePostgresBackupManifestFields(manifest);
+  });
+
+  it('publishes through private partials and advertises completion only with the manifest', async () => {
+    const root = tempDir();
+    const out = path.join(root, 'backups');
+    const steps = [];
+    const created = await createV2Backup(root, {
+      filenameNonce: 'abcdef123456',
+      publicationHook(step, paths) {
+        steps.push({ step, ...paths });
+        if (step.endsWith('_partial_ready')) {
+          assert.match(path.basename(paths.backupPartialPath), /^\.postgres-.*\.partial-artifact-[0-9a-f]{24}$/);
+          assert.match(path.basename(paths.manifestPartialPath), /^\.postgres-.*\.partial-manifest-[0-9a-f]{24}$/);
+        }
+      },
+    });
+    assert.deepEqual(steps.map(({ step }) => step), [
+      'artifact_partial_ready',
+      'manifest_partial_ready',
+      'artifact_published',
+      'manifest_published',
+      'pair_verified',
+    ]);
+    assert.deepEqual(readdirSync(out).sort(), [
+      path.basename(created.backupPath),
+      path.basename(created.manifestPath),
+    ].sort());
+
+    const racedRoot = tempDir();
+    const racedOut = path.join(racedRoot, 'backups');
+    await assert.rejects(
+      () => createV2Backup(racedRoot, {
+        filenameNonce: 'fedcba654321',
+        publicationHook(step, paths) {
+          if (step === 'manifest_published') rmSync(paths.backupPath);
+        },
+      }),
+      /published backup artifact|ENOENT/,
+    );
+    assert.deepEqual(readdirSync(racedOut), [], 'failed pair verification must remove the completion marker');
+
+    const tamperedRoot = tempDir();
+    const tamperedOut = path.join(tamperedRoot, 'backups');
+    await assert.rejects(
+      () => createV2Backup(tamperedRoot, {
+        filenameNonce: '012345abcdef',
+        publicationHook(step, paths) {
+          if (step === 'manifest_published') writeFileSync(paths.manifestPath, '{}\n', { mode: 0o600 });
+        },
+      }),
+      /published manifest/,
+    );
+    assert.deepEqual(readdirSync(tamperedOut), [], 'tampered completion manifest must be removed with its artifact');
+
+    const killedRoot = tempDir();
+    const killedOut = path.join(killedRoot, 'backups');
+    const input = path.join(killedRoot, 'input.dump');
+    const child = path.join(killedRoot, 'kill-writer.mjs');
+    writeFileSync(input, PG_CUSTOM_DUMP);
+    writeFileSync(child, `
+      import { backupPostgres } from ${JSON.stringify(new URL('../../scripts/postgres-backup.mjs', import.meta.url).href)};
+      await backupPostgres({
+        databaseReference: ${JSON.stringify(DATABASE_REFERENCE)},
+        encryptionKey: Buffer.from(${JSON.stringify(TEST_KEY_HEX)}, 'hex'),
+        out: ${JSON.stringify(killedOut)},
+        label: null,
+        filenameNonce: '123456abcdef',
+        inputPath: ${JSON.stringify(input)},
+        publicationHook(step) {
+          if (step === 'artifact_published') process.kill(process.pid, 'SIGKILL');
+        },
+      });
+    `);
+    const killed = spawnSync(process.execPath, [child], { encoding: 'utf8' });
+    assert.equal(killed.signal, 'SIGKILL', killed.stderr);
+    const leftovers = readdirSync(killedOut);
+    const finalArtifacts = leftovers.filter((name) => name.endsWith('.dump.enc'));
+    const finalManifests = leftovers.filter((name) => name.endsWith('.dump.enc.manifest.json'));
+    assert.equal(finalArtifacts.length, 1, 'artifact rename happened before the injected SIGKILL');
+    assert.deepEqual(finalManifests, [], 'manifest completion marker must not be published');
+    assert.ok(leftovers.some((name) => name.startsWith('.') && name.includes('.partial-manifest-')));
+    assert.equal(
+      leftovers.some((name) => name.endsWith('.manifest.json') && !name.startsWith('.')),
+      false,
+      'no complete restore point is advertised after interruption',
+    );
   });
 
   it('streams many input and output chunks without synchronous production input reads', async () => {

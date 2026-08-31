@@ -38,10 +38,10 @@ function runVerdictString(run: DataItem): string {
 function classifyRunVerdict(verdict: string): 'pass' | 'review' | 'gap' | null {
   const key = verdict.trim().toLowerCase();
   if (!key || ['pending', 'planned', 'running', 'collecting'].includes(key)) return null;
-  if (['pass', 'passed', 'protected', 'edge_protected', 'allowed_as_expected', 'success', 'ok'].includes(key)) {
+  if (['pass', 'passed', 'protected', 'allowed_as_expected', 'success', 'ok'].includes(key)) {
     return 'pass';
   }
-  if (['review', 'warn', 'warning', 'info', 'unknown', 'underprotected', 'inconclusive', 'misplaced_agent'].includes(key)) {
+  if (['review', 'warn', 'warning', 'info', 'unknown', 'underprotected', 'edge_protected', 'inconclusive', 'misplaced_agent'].includes(key)) {
     return 'review';
   }
   if (['gap', 'fail', 'failed', 'danger', 'penetrated', 'bypassable', 'edge_exposed', 'unprotected'].includes(key)) {

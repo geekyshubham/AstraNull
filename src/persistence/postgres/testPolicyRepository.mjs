@@ -3,7 +3,7 @@ import { newId } from '../../lib/ids.mjs';
 import { createAuditRepository } from './auditRepository.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
-const TEST_POLICY_COLUMNS = `id, tenant_id, target_group_id, check_id, cadence, expected_verdict,
+const TEST_POLICY_COLUMNS = `id, tenant_id, target_group_id, target_id, check_id, cadence, expected_verdict,
   safe_windows, timezone, event_trigger, state, enabled, max_concurrent_runs,
   next_run_at, last_scheduled_at, last_dispatched_at, last_run_id,
   lease_token, lease_owner, lease_expires_at, schedule_revision,
@@ -30,6 +30,7 @@ function mapTestPolicyRow(row) {
     id: row.id,
     tenant_id: row.tenant_id,
     target_group_id: row.target_group_id,
+    target_id: row.target_id ?? null,
     check_id: row.check_id,
     cadence: row.cadence,
     expected_verdict: row.expected_verdict,
@@ -90,6 +91,7 @@ async function appendPolicyAudit(auditRepository, client, ctx, event, now) {
 function auditMetadata(policy, changedFields) {
   return {
     target_group_id: policy.target_group_id,
+    target_id: policy.target_id ?? null,
     check_id: policy.check_id,
     changed_fields: changedFields,
   };
@@ -126,14 +128,15 @@ export function createPostgresTestPolicyRepository(pool, options = {}) {
       });
     },
 
-    async findActivePolicyByGroupCheck(ctx, targetGroupId, checkId) {
+    async findActivePolicyByGroupCheck(ctx, targetGroupId, targetId, checkId) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT ${TEST_POLICY_COLUMNS}
            FROM test_policies
-           WHERE tenant_id = $1 AND target_group_id = $2 AND check_id = $3 AND archived_at IS NULL
+           WHERE tenant_id = $1 AND target_group_id = $2 AND target_id = $3
+             AND check_id = $4 AND archived_at IS NULL
            LIMIT 1`,
-          [ctx.tenantId, targetGroupId, checkId],
+          [ctx.tenantId, targetGroupId, targetId, checkId],
         );
         return mapTestPolicyRow(rows[0] ?? null);
       });
@@ -144,15 +147,15 @@ export function createPostgresTestPolicyRepository(pool, options = {}) {
         try {
           const { rows } = await client.query(
             `INSERT INTO test_policies (
-               id, tenant_id, target_group_id, check_id, cadence, expected_verdict,
+               id, tenant_id, target_group_id, target_id, check_id, cadence, expected_verdict,
                safe_windows, timezone, event_trigger, state, enabled, max_concurrent_runs,
                next_run_at, schedule_revision, safety_policy_snapshot, created_at, updated_at
              ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10, $11, $12,
-               $13::timestamptz, $14, $15::jsonb, $16::timestamptz, $17::timestamptz
+               $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb, $11, $12, $13,
+               $14::timestamptz, $15, $16::jsonb, $17::timestamptz, $18::timestamptz
              ) RETURNING ${TEST_POLICY_COLUMNS}`,
             [
-              record.id, ctx.tenantId, record.target_group_id, record.check_id,
+              record.id, ctx.tenantId, record.target_group_id, record.target_id, record.check_id,
               record.cadence, record.expected_verdict, JSON.stringify(asArray(record.safe_windows)),
               record.timezone ?? 'UTC', record.event_trigger == null ? null : JSON.stringify(record.event_trigger),
               record.state ?? 'active', record.enabled !== false, record.max_concurrent_runs ?? 1,
@@ -164,7 +167,7 @@ export function createPostgresTestPolicyRepository(pool, options = {}) {
           await appendPolicyAudit(auditRepository, client, ctx, {
             action: 'test_policy.created', resource_type: 'test_policy', resource_id: policy.id,
             metadata: auditMetadata(policy, [
-              'target_group_id', 'check_id', 'cadence', 'expected_verdict', 'safe_windows', 'timezone',
+              'target_group_id', 'target_id', 'check_id', 'cadence', 'expected_verdict', 'safe_windows', 'timezone',
               'event_trigger', 'enabled', 'max_concurrent_runs', 'next_run_at', 'safety_policy_snapshot',
             ]),
           }, record.created_at);
@@ -436,6 +439,7 @@ export function createPostgresTestPolicyRepository(pool, options = {}) {
              WHERE run.tenant_id = $1 AND run.id = $2 AND run.policy_id = $3
                AND run.policy_dispatch_id = $4
                AND run.target_group_id = policy.target_group_id
+               AND run.target_id = policy.target_id
                AND run.check_id = policy.check_id
              LIMIT 1`,
             [ctx.tenantId, runId, policyId, dispatch.id],

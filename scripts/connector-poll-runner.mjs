@@ -2,7 +2,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuntimeConfig } from '../src/config.mjs';
+import { isConnectorsEnabledForTenant, loadConnectorWorkerConfig } from '../src/config.mjs';
 import { CONNECTOR_POLL_MAX_ATTEMPTS } from '../src/lib/connectorProviders/common.mjs';
 import { shouldAttemptOutboundConnectorPoll } from '../src/lib/connectorProviders/pollWorker.mjs';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 const DEFAULT_CONNECTOR_POLL_CONCURRENCY = 4;
 const MIN_CONNECTOR_POLL_CONCURRENCY = 1;
 const MAX_CONNECTOR_POLL_CONCURRENCY = 32;
+const MAX_CONNECTOR_POLL_TENANTS = 32;
 
 const USAGE = `connector-poll-runner: scheduled outbound read-only WAF/CDN connector polls.
 
@@ -41,6 +42,7 @@ Options:
   --all-tenants              Poll every tenant in dev-json store (default when tenant scope omitted; Postgres requires explicit scope)
   --concurrency <n>          Bounded parallel connector polls (default: env or ${DEFAULT_CONNECTOR_POLL_CONCURRENCY})
   --dry-run                  Summarize eligible connectors without outbound provider calls
+  --queue-only               Reserve and sign durable jobs; never claim or perform provider egress
   --out <path>               Write metadata-only JSON summary to this path
   --help                     Show this message
 `;
@@ -50,13 +52,14 @@ Options:
  */
 export function parseConnectorPollRunnerArgs(argv) {
   const args = argv.slice(2);
-  /** @type {{ tenantId: string | null, tenantIdsFile: string | null, allTenants: boolean, concurrency: number | null, dryRun: boolean, out: string | null, help: boolean }} */
+  /** @type {{ tenantId: string | null, tenantIdsFile: string | null, allTenants: boolean, concurrency: number | null, dryRun: boolean, queueOnly: boolean, out: string | null, help: boolean }} */
   const parsed = {
     tenantId: null,
     tenantIdsFile: null,
     allTenants: false,
     concurrency: null,
     dryRun: false,
+    queueOnly: false,
     out: null,
     help: false,
   };
@@ -69,6 +72,10 @@ export function parseConnectorPollRunnerArgs(argv) {
     }
     if (arg === '--dry-run') {
       parsed.dryRun = true;
+      continue;
+    }
+    if (arg === '--queue-only') {
+      parsed.queueOnly = true;
       continue;
     }
     if (arg === '--all-tenants') {
@@ -142,10 +149,14 @@ export function parseTenantIdsFromJson(raw) {
   }
 
   const normalized = ids.map((id) => String(id ?? '').trim()).filter(Boolean);
-  if (normalized.length === 0) {
+  const unique = [...new Set(normalized)];
+  if (unique.length === 0) {
     throw new Error('connector-poll-runner: tenant id list must not be empty.');
   }
-  return normalized;
+  if (unique.length > MAX_CONNECTOR_POLL_TENANTS) {
+    throw new Error(`connector-poll-runner: tenant id list must contain at most ${MAX_CONNECTOR_POLL_TENANTS} tenants.`);
+  }
+  return unique;
 }
 
 /**
@@ -188,8 +199,8 @@ export function resolveConnectorPollMaxAttempts(env) {
   const raw = String(env.ASTRANULL_CONNECTOR_POLL_MAX_ATTEMPTS ?? '').trim();
   if (!raw) return CONNECTOR_POLL_MAX_ATTEMPTS;
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10) {
-    throw new Error('connector-poll-runner: ASTRANULL_CONNECTOR_POLL_MAX_ATTEMPTS must be an integer between 1 and 10.');
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > CONNECTOR_POLL_MAX_ATTEMPTS) {
+    throw new Error(`connector-poll-runner: ASTRANULL_CONNECTOR_POLL_MAX_ATTEMPTS must be an integer between 1 and ${CONNECTOR_POLL_MAX_ATTEMPTS}.`);
   }
   return parsed;
 }
@@ -317,6 +328,7 @@ export async function runWithBoundedConcurrency(items, concurrency, worker) {
  *   finishedAt: string,
  *   persistenceMode: string,
  *   concurrency: number,
+ *   queueOnly?: boolean,
  * }} input
  */
 export function buildConnectorPollRunnerSummary(input) {
@@ -324,17 +336,23 @@ export function buildConnectorPollRunnerSummary(input) {
   const pollOutcomes = polled
     .map((row) => row.poll_result)
     .filter(Boolean);
+  const queued = pollOutcomes.filter((row) => row?.poll_status === 'pending');
+  const completed = pollOutcomes.filter((row) => row?.poll_status === 'completed');
   return {
     schema_version: 1,
     artifact_type: 'connector_poll_runtime_run',
     persistence_mode: input.persistenceMode,
     dry_run: input.dryRun,
+    queue_only: Boolean(input.queueOnly),
+    no_work: !input.dryRun && input.connectorResults.length === 0,
     started_at: input.startedAt,
     finished_at: input.finishedAt,
     concurrency: input.concurrency,
     tenant_count: new Set(input.connectorResults.map((row) => row.tenant_id).filter(Boolean)).size,
     connector_count: input.connectorResults.length,
-    connectors_polled: input.dryRun ? 0 : polled.length,
+    connectors_polled: input.dryRun || input.queueOnly ? 0 : polled.length,
+    connectors_queued: input.dryRun ? 0 : queued.length,
+    connectors_completed: input.dryRun ? 0 : completed.length,
     connectors_failed: input.dryRun
       ? 0
       : polled.filter((row) => row.error || row.poll_result?.error).length,
@@ -363,11 +381,11 @@ export function redactConnectorPollRunnerMessage(message, env = process.env) {
 /**
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  * @param {ReturnType<typeof parseConnectorPollRunnerArgs>} parsed
- * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadRuntimeConfig }} [deps]
+ * @param {{ readTenantIdsFile?: (path: string) => string, loadRuntimeConfigFn?: typeof loadConnectorWorkerConfig }} [deps]
  */
 export function resolveConnectorPollRunnerConfig(env, parsed, deps = {}) {
   const readTenantIdsFile = deps.readTenantIdsFile ?? ((filePath) => readFileSync(filePath, 'utf8'));
-  const loadConfig = deps.loadRuntimeConfigFn ?? loadRuntimeConfig;
+  const loadConfig = deps.loadRuntimeConfigFn ?? loadConnectorWorkerConfig;
 
   const hasTenantId = Boolean(parsed.tenantId);
   const hasFile = Boolean(parsed.tenantIdsFile);
@@ -394,12 +412,24 @@ export function resolveConnectorPollRunnerConfig(env, parsed, deps = {}) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, message };
     }
+  } else if (String(env.ASTRANULL_CONNECTOR_POLL_TENANT_IDS ?? '').trim()) {
+    try {
+      tenantIds = parseTenantIdsFromJson(
+        String(env.ASTRANULL_CONNECTOR_POLL_TENANT_IDS).split(',').map((value) => value.trim()),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, message };
+    }
   }
 
   /** @type {Record<string, unknown>} */
   let runtimeConfig;
   try {
-    runtimeConfig = loadConfig(env);
+    runtimeConfig = loadConfig(env, {
+      verificationOnly: !parsed.queueOnly,
+      signingOnly: parsed.queueOnly,
+    });
   } catch (err) {
     const message = redactConnectorPollRunnerMessage(err, env);
     return {
@@ -427,6 +457,21 @@ export function resolveConnectorPollRunnerConfig(env, parsed, deps = {}) {
 
   const databaseUrl = String(env.ASTRANULL_DATABASE_URL ?? '').trim();
   const persistenceMode = databaseUrl ? 'postgres' : 'dev-json';
+  const workerId = String(env.ASTRANULL_CONNECTOR_WORKER_ID ?? '').trim();
+
+  if (parsed.queueOnly && persistenceMode !== 'postgres') {
+    return {
+      ok: false,
+      message: 'connector-poll-runner: --queue-only requires Postgres durable job persistence.',
+    };
+  }
+
+  if (persistenceMode === 'postgres' && env.NODE_ENV === 'production' && !parsed.queueOnly && !workerId) {
+    return {
+      ok: false,
+      message: 'connector-poll-runner: ASTRANULL_CONNECTOR_WORKER_ID is required in production Postgres mode.',
+    };
+  }
 
   if (persistenceMode === 'postgres' && (tenantIds === null || tenantIds.length === 0)) {
     return {
@@ -442,10 +487,12 @@ export function resolveConnectorPollRunnerConfig(env, parsed, deps = {}) {
     tenantIds,
     allTenants: parsed.allTenants || tenantIds === null,
     dryRun: Boolean(parsed.dryRun),
+    queueOnly: Boolean(parsed.queueOnly),
     out: parsed.out ?? null,
     runtimeConfig,
     persistenceMode,
     databaseUrl: databaseUrl || null,
+    workerId: workerId || 'connector-poll-runner',
     concurrency,
     maxAttempts,
   };
@@ -495,6 +542,7 @@ export async function runDevJsonConnectorPolls(options) {
         maxAttempts: options.maxAttempts,
         fetchFn: options.fetchFn,
         secretResolver: options.secretResolver,
+        executeOutbound: true,
       });
       if (outcome?.error) {
         return {
@@ -541,29 +589,109 @@ export function resolveConnectorPollTenantIds(tenantIds, persistenceMode) {
 }
 
 /**
+ * @param {string[]} tenantIds
+ * @param {number} seed
+ */
+export function rotateConnectorPollTenantIds(tenantIds, seed) {
+  if (tenantIds.length < 2) return [...tenantIds];
+  const offset = Math.abs(Math.trunc(seed)) % tenantIds.length;
+  return [...tenantIds.slice(offset), ...tenantIds.slice(0, offset)];
+}
+
+/**
+ * @param {{ tenant_id: string, connector_id: string, provider: string }[][]} perTenant
+ * @param {number} limit
+ */
+export function interleaveConnectorPollTasks(perTenant, limit) {
+  const tasks = [];
+  for (let index = 0; tasks.length < limit; index += 1) {
+    let added = false;
+    for (const candidates of perTenant) {
+      if (candidates[index]) {
+        tasks.push(candidates[index]);
+        added = true;
+        if (tasks.length >= limit) break;
+      }
+    }
+    if (!added) break;
+  }
+  return tasks;
+}
+
+/**
  * @param {{
  *   env: NodeJS.ProcessEnv | Record<string, string | undefined>,
  *   tenantIds: string[],
  *   dryRun: boolean,
+ *   queueOnly?: boolean,
  *   concurrency: number,
  *   maxAttempts: number,
+ *   workerId?: string,
+ *   runtimeConfig?: Record<string, unknown>,
+ *   rotationSeed?: number,
  *   createPostgresRuntimeFn?: typeof createPostgresRuntime,
  *   fetchFn?: typeof fetch,
  *   secretResolver?: (ctx: unknown, secretId: string, provider: string) => Promise<unknown>,
  * }} options
  */
 export async function runPostgresConnectorPolls(options) {
+  const scopedTenantIds = resolveConnectorPollTenantIds(options.tenantIds, 'postgres');
+  let tenantIds = options.runtimeConfig
+    ? scopedTenantIds.filter((tenantId) => isConnectorsEnabledForTenant(options.runtimeConfig, tenantId))
+    : scopedTenantIds;
+  if (scopedTenantIds.length === 0 || (!options.queueOnly && tenantIds.length === 0)) return [];
+
   const createRuntime = options.createPostgresRuntimeFn ?? createPostgresRuntime;
-  const runtime = await createRuntime(options.env, { autoMigrate: false });
+  const runtime = await createRuntime(options.env, {
+    autoMigrate: false,
+    wafPostureServiceOptions: options.queueOnly
+      ? {
+          connectorEncryptionKey: null,
+          requireConnectorJobSigner: true,
+          requireConnectorJobVerifier: false,
+        }
+      : {
+          requireConnectorJobSigner: false,
+          requireConnectorJobVerifier: true,
+        },
+  });
 
   try {
     const wafPosture = runtime.services?.wafPosture;
-    if (!wafPosture || typeof wafPosture.pollConnector !== 'function' || typeof wafPosture.listConnectors !== 'function') {
+    if (!wafPosture || typeof wafPosture.pollConnector !== 'function') {
       throw new Error('postgres runtime is missing services.wafPosture.pollConnector().');
+    }
+    if (options.dryRun && typeof wafPosture.listConnectors !== 'function') {
+      throw new Error('postgres runtime is missing services.wafPosture.listConnectors().');
+    }
+    if (!options.dryRun && options.queueOnly
+      && typeof wafPosture.listConnectorPollScheduleCandidates !== 'function') {
+      throw new Error('postgres runtime is missing services.wafPosture.listConnectorPollScheduleCandidates().');
+    }
+    if (!options.dryRun && options.queueOnly
+      && typeof wafPosture.setConnectorFeatureState !== 'function') {
+      throw new Error('postgres runtime is missing services.wafPosture.setConnectorFeatureState().');
+    }
+    if (!options.dryRun && !options.queueOnly
+      && typeof wafPosture.listPendingConnectorPollConnectors !== 'function') {
+      throw new Error('postgres runtime is missing services.wafPosture.listPendingConnectorPollConnectors().');
     }
 
     const auditContext = { userId: 'connector-poll-runner', role: 'system' };
-    const tenantIds = resolveConnectorPollTenantIds(options.tenantIds, 'postgres');
+
+    if (!options.dryRun && options.queueOnly && options.runtimeConfig) {
+      for (const tenantId of scopedTenantIds) {
+        const enabled = isConnectorsEnabledForTenant(options.runtimeConfig, tenantId);
+        await wafPosture.setConnectorFeatureState(
+          { ...auditContext, tenantId },
+          enabled,
+        );
+      }
+      tenantIds = scopedTenantIds.filter(
+        (tenantId) => isConnectorsEnabledForTenant(options.runtimeConfig, tenantId),
+      );
+      if (tenantIds.length === 0) return [];
+    }
 
     if (options.dryRun) {
       /** @type {Record<string, unknown>[]} */
@@ -588,29 +716,52 @@ export async function runPostgresConnectorPolls(options) {
       return connectorResults;
     }
 
-    /** @type {{ tenant_id: string, connector_id: string, provider: string }[]} */
-    const tasks = [];
-    for (const tenantId of tenantIds) {
+    const rotationSeed = options.rotationSeed ?? Math.floor(Date.now() / 60_000);
+    const orderedTenantIds = rotateConnectorPollTenantIds(tenantIds, rotationSeed);
+    const listCandidates = options.queueOnly
+      ? wafPosture.listConnectorPollScheduleCandidates.bind(wafPosture)
+      : wafPosture.listPendingConnectorPollConnectors.bind(wafPosture);
+    /** @type {{ tenant_id: string, connector_id: string, provider: string }[][]} */
+    const perTenant = [];
+    for (const tenantId of orderedTenantIds) {
       const ctx = { ...auditContext, tenantId };
-      const connectors = await wafPosture.listConnectors(ctx);
-      for (const connector of connectors) {
-        if (!isOutboundPollEligibleConnector(connector)) continue;
-        tasks.push({
-          tenant_id: tenantId,
-          connector_id: connector.id,
-          provider: connector.provider,
-        });
-      }
+      const candidates = await listCandidates(ctx, { limit: options.concurrency });
+      perTenant.push(candidates.map((connector) => ({
+        tenant_id: tenantId,
+        connector_id: connector.connector_id,
+        provider: connector.provider,
+      })));
     }
+    const tasks = interleaveConnectorPollTasks(perTenant, options.concurrency);
 
     return runWithBoundedConcurrency(tasks, options.concurrency, async (task) => {
       const ctx = { ...auditContext, tenantId: task.tenant_id };
       try {
-        const outcome = await wafPosture.pollConnector(ctx, task.connector_id, {}, {
-          maxAttempts: options.maxAttempts,
-          fetchFn: options.fetchFn,
-          secretResolver: options.secretResolver,
-        });
+        const pollOptions = options.queueOnly
+          ? { executeOutbound: false, scheduled: true, maxAttempts: options.maxAttempts }
+          : {
+              maxAttempts: options.maxAttempts,
+              fetchFn: options.fetchFn,
+              secretResolver: options.secretResolver,
+              executeOutbound: true,
+              workerId: options.workerId ?? 'connector-poll-runner',
+            };
+        const outcome = await wafPosture.pollConnector(ctx, task.connector_id, {}, pollOptions);
+        if (['connector_poll_in_progress', 'connector_poll_deferred'].includes(outcome?.error)) {
+          return {
+            tenant_id: task.tenant_id,
+            connector_id: task.connector_id,
+            provider: task.provider,
+            dry_run: false,
+            poll_result: {
+              poll_status: 'idle',
+              snapshot_count: 0,
+              health_status: null,
+              health_code: null,
+              attempts: null,
+            },
+          };
+        }
         if (outcome?.error) {
           return {
             tenant_id: task.tenant_id,
@@ -653,8 +804,11 @@ export async function runPostgresConnectorPolls(options) {
  *   allTenants: boolean,
  *   out: string | null,
  *   persistenceMode: string,
+ *   queueOnly?: boolean,
  *   concurrency: number,
  *   maxAttempts: number,
+ *   workerId?: string,
+ *   runtimeConfig?: Record<string, unknown>,
  * }} config
  * @param {{
  *   createPostgresRuntimeFn?: typeof createPostgresRuntime,
@@ -679,8 +833,11 @@ export async function runConnectorPollRunner(env, config, deps = {}) {
       env,
       tenantIds: config.allTenants ? [] : tenantIds,
       dryRun: config.dryRun,
+      queueOnly: config.queueOnly,
       concurrency: config.concurrency,
       maxAttempts: config.maxAttempts,
+      workerId: config.workerId,
+      runtimeConfig: config.runtimeConfig,
       createPostgresRuntimeFn: deps.createPostgresRuntimeFn,
       fetchFn: deps.fetchFn,
       secretResolver: deps.secretResolver,
@@ -709,6 +866,7 @@ export async function runConnectorPollRunner(env, config, deps = {}) {
     finishedAt,
     persistenceMode: config.persistenceMode,
     concurrency: config.concurrency,
+    queueOnly: config.queueOnly,
   });
 
   if (config.out) {
@@ -724,49 +882,71 @@ export async function runConnectorPollRunner(env, config, deps = {}) {
   };
 }
 
-async function main() {
-  const parsed = parseConnectorPollRunnerArgs(process.argv);
+/**
+ * @param {{
+ *   argv?: string[],
+ *   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+ *   runConnectorPollRunnerFn?: typeof runConnectorPollRunner,
+ *   log?: (...args: unknown[]) => void,
+ *   error?: (...args: unknown[]) => void,
+ *   setExitCode?: (code: number) => void,
+ * }} [deps]
+ */
+export async function main(deps = {}) {
+  const argv = deps.argv ?? process.argv;
+  const env = deps.env ?? process.env;
+  const runRunner = deps.runConnectorPollRunnerFn ?? runConnectorPollRunner;
+  const log = deps.log ?? console.log;
+  const logError = deps.error ?? console.error;
+  const setExitCode = deps.setExitCode ?? ((code) => { process.exitCode = code; });
+  const parsed = parseConnectorPollRunnerArgs(argv);
   if (parsed.help) {
-    console.log(USAGE.trimEnd());
+    log(USAGE.trimEnd());
     return;
   }
 
-  const config = resolveConnectorPollRunnerConfig(process.env, parsed);
+  const config = resolveConnectorPollRunnerConfig(env, parsed);
   if (!config.ok) {
-    console.error(config.message);
-    process.exitCode = 1;
+    logError(config.message);
+    setExitCode(1);
     return;
   }
 
   try {
-    const { summary, exitCode } = await runConnectorPollRunner(process.env, {
+    const { summary, exitCode } = await runRunner(env, {
       dryRun: config.dryRun,
       tenantIds: config.tenantIds,
       allTenants: config.allTenants,
       out: config.out,
       persistenceMode: config.persistenceMode,
+      queueOnly: config.queueOnly,
+      runtimeConfig: config.runtimeConfig,
       concurrency: config.concurrency,
       maxAttempts: config.maxAttempts,
+      workerId: config.workerId,
     });
 
-    console.log('connector-poll-runner: ok');
-    console.log(`  mode: ${summary.dry_run ? 'dry_run' : 'apply'}`);
-    console.log(`  persistence: ${summary.persistence_mode}`);
-    console.log(`  concurrency: ${summary.concurrency}`);
-    console.log(`  connector_count: ${summary.connector_count}`);
+    log('connector-poll-runner: ok');
+    log(`  mode: ${summary.dry_run ? 'dry_run' : summary.queue_only ? 'queue_only' : 'worker'}`);
+    log(`  persistence: ${summary.persistence_mode}`);
+    log(`  concurrency: ${summary.concurrency}`);
+    log(`  connector_count: ${summary.connector_count}`);
     if (!summary.dry_run) {
-      console.log(`  connectors_polled: ${summary.connectors_polled}`);
-      console.log(`  connectors_failed: ${summary.connectors_failed}`);
-      console.log(`  total_snapshots: ${summary.total_snapshots}`);
+      log(`  no_work: ${summary.no_work}`);
+      log(`  connectors_queued: ${summary.connectors_queued}`);
+      log(`  connectors_completed: ${summary.connectors_completed}`);
+      log(`  connectors_polled: ${summary.connectors_polled}`);
+      log(`  connectors_failed: ${summary.connectors_failed}`);
+      log(`  total_snapshots: ${summary.total_snapshots}`);
     }
     if (config.out) {
-      console.log(`  out: ${config.out}`);
+      log(`  out: ${config.out}`);
     }
-    process.exitCode = exitCode;
+    setExitCode(exitCode);
   } catch (err) {
-    const message = redactConnectorPollRunnerMessage(err, process.env);
-    console.error(`connector-poll-runner: failed: ${message}`);
-    process.exitCode = 1;
+    const message = redactConnectorPollRunnerMessage(err, env);
+    logError(`connector-poll-runner: failed: ${message}`);
+    setExitCode(1);
   }
 }
 

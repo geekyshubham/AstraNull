@@ -20,6 +20,7 @@ import { simulateProbeResult } from './probeStub.mjs';
 import { targetOwnershipProof } from './ownershipVerification.mjs';
 import { getTestPolicyForDispatch } from './testPolicies.mjs';
 import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs';
+import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import { validateHostSniTargetBinding } from '../lib/probeJobs.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
 import { computeReadiness } from './readiness.mjs';
@@ -156,10 +157,13 @@ function hasMatchingObservation(run) {
     (e) =>
       e.test_run_id === run.id &&
       e.signal_type === 'probe_result' &&
+      isTrustedProducerEvent(e) &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
   const obsEvents = store.events.filter(
-    (e) => e.test_run_id === run.id && e.signal_type === 'agent_observation',
+    (e) => e.test_run_id === run.id
+      && e.signal_type === 'agent_observation'
+      && isTrustedProducerEvent(e),
   );
   return obsEvents.some(
     (e) =>
@@ -189,6 +193,7 @@ function hasExternalProbeEvidence(run) {
     (e) =>
       e.test_run_id === run.id &&
       e.signal_type === 'probe_result' &&
+      isTrustedProducerEvent(e) &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
 }
@@ -253,7 +258,12 @@ function validatePolicyBinding(ctx, body, group, check, options = {}) {
   if (policy.state !== 'active' || policy.enabled !== true || policy.archived_at) {
     return { error: 'test_policy_disabled', status: 409 };
   }
-  if (policy.target_group_id !== group.id || policy.check_id !== check.check_id) {
+  if (typeof policy.target_id !== 'string' || !policy.target_id.trim()) {
+    return { error: 'test_policy_target_binding_missing', status: 409 };
+  }
+  if (policy.target_group_id !== group.id
+    || policy.target_id !== body.target_id
+    || policy.check_id !== check.check_id) {
     return { error: 'test_policy_binding_mismatch', status: 409 };
   }
   if (policy.max_concurrent_runs !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
@@ -436,11 +446,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     return { error: 'concurrent_run_blocked', status: 409 };
   }
 
-  const targetId = body.target_id ?? getStore().targets.find(
-    (candidate) => candidate.tenant_id === ctx.tenantId
-      && candidate.target_group_id === targetGroupId
-      && !isArchivedTarget(candidate),
-  )?.id;
+  const targetId = typeof body.target_id === 'string' ? body.target_id.trim() : '';
+  if (!targetId) return { error: 'missing_target_id', status: 400 };
   const target = getStore().targets.find(
     (candidate) => candidate.id === targetId
       && candidate.tenant_id === ctx.tenantId
@@ -689,6 +696,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       check_id: check.check_id,
       source: probe.source,
       signal_type: probe.signal_type,
+      producer_kind: 'internal_simulation',
       timestamp: new Date().toISOString(),
       nonce_hash: probe.nonce_hash,
       metadata: { ...probe.metadata, external_result: probe.external_result },
@@ -781,6 +789,19 @@ export function ingestObservation(ctx, agentId, body) {
     });
     persistStore();
     return { error: 'cross_tenant_injection', status: 403 };
+  }
+
+  if (isKillSwitchActiveForTenant(run.tenant_id)) {
+    return rejectObservation(
+      ctx,
+      run.tenant_id,
+      agentId,
+      'kill_switch_active',
+      'kill_switch_active',
+      423,
+      run.id,
+      { agent_job_id: body.agent_job_id ?? body.job_id ?? null },
+    );
   }
 
   if (!['running', 'collecting'].includes(run.status)) {
@@ -914,6 +935,7 @@ export function ingestObservation(ctx, agentId, body) {
     agent_id: agentId,
     source: 'agent',
     signal_type: 'agent_observation',
+    producer_kind: 'authenticated_agent',
     timestamp: new Date().toISOString(),
     nonce_hash: body.nonce_hash,
     metadata: redactObject(body.metadata ?? {}),
@@ -967,6 +989,7 @@ function finalizeNoObservation(run) {
     check_id: run.check_id,
     source: 'system',
     signal_type: 'agent_no_observation',
+    producer_kind: 'internal_control_plane',
     timestamp: new Date().toISOString(),
     metadata: {
       reason: 'bounded_observation_window_elapsed',
@@ -1048,10 +1071,13 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
     (e) =>
       e.test_run_id === run.id &&
       e.signal_type === 'probe_result' &&
+      isTrustedProducerEvent(e) &&
       e.nonce_hash === run.correlation.nonce_hash,
   );
   const obsEvents = store.events.filter(
-    (e) => e.test_run_id === run.id && e.signal_type === 'agent_observation',
+    (e) => e.test_run_id === run.id
+      && e.signal_type === 'agent_observation'
+      && isTrustedProducerEvent(e),
   );
   const matchingObs = obsEvents.find(
     (e) =>
@@ -1155,6 +1181,13 @@ export function autoCancelActiveSafeRunsForKillSwitch(ctx, reason) {
     run.status = 'cancelled';
     run.completed_at = new Date().toISOString();
     run.cancelled_by_kill_switch = true;
+    for (const job of getStore().probeJobs) {
+      if (job.tenant_id !== ctx.tenantId || job.test_run_id !== run.id) continue;
+      if (job.ownership_verification_id) continue;
+      if (!['pending', 'leased'].includes(job.status)) continue;
+      job.status = 'cancelled';
+      job.completed_at = run.completed_at;
+    }
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -1188,6 +1221,13 @@ export function cancelTestRun(ctx, id) {
   }
   run.status = 'cancelled';
   run.completed_at = new Date().toISOString();
+  for (const job of getStore().probeJobs) {
+    if (job.tenant_id !== ctx.tenantId || job.test_run_id !== run.id) continue;
+    if (job.ownership_verification_id) continue;
+    if (!['pending', 'leased'].includes(job.status)) continue;
+    job.status = 'cancelled';
+    job.completed_at = run.completed_at;
+  }
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,

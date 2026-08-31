@@ -9,6 +9,7 @@ import {
   summarizePlacementDiagnostics,
 } from '../../lib/placementDiagnostics.mjs';
 import { buildGetStatePayload } from '../../lib/statePayload.mjs';
+import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 
 /** Evidence older than this window earns no freshness credit. */
 const RECENT_EVIDENCE_WINDOW_DAYS = 30;
@@ -184,7 +185,9 @@ function onlineAgentIds(agentList) {
 function runIdsForGroup(runs, tenantId, targetGroupId) {
   return new Set(
     runs
-      .filter((r) => r.tenant_id === tenantId && r.target_group_id === targetGroupId)
+      .filter((r) => r.tenant_id === tenantId
+        && r.target_group_id === targetGroupId
+        && ['completed', 'verdicted'].includes(r.status))
       .map((r) => r.id),
   );
 }
@@ -482,8 +485,23 @@ function indexEvidenceByRun(evidenceItems) {
   return map;
 }
 
+
+function evidenceBackedByTrustedLinkedEvent(item, eventsByRun) {
+  if (!item.related_event_id) return true;
+  return (eventsByRun.get(item.test_run_id) ?? [])
+    .some((event) => event.id === item.related_event_id);
+}
 function sortRunsNewestFirst(runs) {
   return [...runs].sort((a, b) => (parseTs(b.created_at) ?? 0) - (parseTs(a.created_at) ?? 0));
+}
+
+function verdictBackedByTrustedEvidence(verdict, runId, eventsByRun, evidenceByRun) {
+  const evidenceIds = new Set(Array.isArray(verdict?.evidence_ids) ? verdict.evidence_ids : []);
+  if (evidenceIds.size === 0) return false;
+  return [
+    ...(eventsByRun.get(runId) ?? []),
+    ...(evidenceByRun.get(runId) ?? []),
+  ].some((evidence) => evidenceIds.has(evidence.id));
 }
 
 function acceptedArtifactTypes(req) {
@@ -658,20 +676,7 @@ export function createPostgresStateServices(repositories, options = {}) {
       ]);
 
       const tenantAgents = agentsForTenant(agents, tenantId);
-      const evidenceByRun = indexEvidenceByRun(evidenceItems);
       const sortedRuns = sortRunsNewestFirst(runs);
-
-      const eventFetchRuns = sortedRuns.slice(0, RUN_EVENT_FETCH_RUN_LIMIT);
-      /** @type {Map<string, object[]>} */
-      const eventsByRun = new Map();
-      await Promise.all(
-        eventFetchRuns.map(async (run) => {
-          const events = await validationEvidence.listRunEvents(ctx, run.id, {
-            limit: RUN_EVENTS_LIMIT,
-          });
-          eventsByRun.set(run.id, events);
-        }),
-      );
 
       /** @type {Map<string, object>} */
       const verdictByRun = new Map();
@@ -682,6 +687,38 @@ export function createPostgresStateServices(repositories, options = {}) {
           if (verdict) verdictByRun.set(run.id, verdict);
         }),
       );
+
+      const eventRunIds = new Set(sortedRuns.slice(0, RUN_EVENT_FETCH_RUN_LIMIT).map((run) => run.id));
+      for (const item of evidenceItems) {
+        if (item.related_event_id && item.test_run_id) eventRunIds.add(item.test_run_id);
+      }
+      for (const [runId, verdict] of verdictByRun) {
+        if (Array.isArray(verdict.evidence_ids) && verdict.evidence_ids.length > 0) {
+          eventRunIds.add(runId);
+        }
+      }
+      const eventFetchRuns = sortedRuns.filter((run) => eventRunIds.has(run.id));
+      /** @type {Map<string, object[]>} */
+      const eventsByRun = new Map();
+      await Promise.all(
+        eventFetchRuns.map(async (run) => {
+          const events = await validationEvidence.listRunEvents(ctx, run.id, {
+            limit: RUN_EVENTS_LIMIT,
+          });
+          eventsByRun.set(
+            run.id,
+            (Array.isArray(events) ? events : []).filter(isTrustedProducerEvent),
+          );
+        }),
+      );
+      const evidenceByRun = indexEvidenceByRun(
+        evidenceItems.filter((item) => evidenceBackedByTrustedLinkedEvent(item, eventsByRun)),
+      );
+      for (const [runId, verdict] of verdictByRun) {
+        if (!verdictBackedByTrustedEvidence(verdict, runId, eventsByRun, evidenceByRun)) {
+          verdictByRun.delete(runId);
+        }
+      }
 
       const readiness = computeReadinessSummary({
         tenantId,

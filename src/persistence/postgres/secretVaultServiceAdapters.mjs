@@ -48,7 +48,12 @@ function assertSecretVaultRepositories(repositories) {
  *   secretVault?: Record<string, unknown>,
  *   audit?: { appendAuditEvent?: (...args: unknown[]) => unknown },
  * }} repositories
- * @param {{ now?: () => Date, newId?: typeof newId }} [options]
+ * @param {{
+ *   now?: () => Date,
+ *   newId?: typeof newId,
+ *   encryptionKey?: Buffer | null,
+ *   connectorEncryptionKey?: Buffer | null,
+ * }} [options]
  */
 export function createPostgresSecretVaultServices(repositories, options = {}) {
   assertSecretVaultRepositories(repositories);
@@ -56,19 +61,25 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
   const auditRepo = repositories.audit;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
+  const keyForPurpose = (purpose, suppliedKey) => (
+    purpose === 'connector'
+      ? options.connectorEncryptionKey ?? null
+      : suppliedKey ?? options.encryptionKey ?? null
+  );
 
   return {
     async storeEncryptedSecret(ctx, body, key) {
       const purpose = String(body.purpose ?? '').trim();
       const name = String(body.name ?? '').trim();
       const plaintext = body.plaintext;
+      const encryptionKey = keyForPurpose(purpose, key);
       if (!purpose || !name) {
         return { error: 'invalid_request', status: 400, message: 'purpose and name are required.' };
       }
       if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {
         return { error: 'invalid_request', status: 400, message: 'plaintext is required.' };
       }
-      if (!key) {
+      if (!encryptionKey) {
         return {
           error: 'encryption_not_configured',
           status: 503,
@@ -91,7 +102,7 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
         updated_at: now,
         created_by: ctx.userId,
       };
-      record.envelope = encryptSecret(plaintext, key, buildSecretAad(record));
+      record.envelope = encryptSecret(plaintext, encryptionKey, buildSecretAad(record));
 
       const persisted = await secretVaultRepo.createEncryptedSecret(ctx, record);
       await auditRepo.appendAuditEvent({
@@ -112,15 +123,16 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
     },
 
     async rotateEncryptedSecret(ctx, id, body, key) {
-      if (!key) {
+      const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
+      if (!record) return null;
+      const encryptionKey = keyForPurpose(record.purpose, key);
+      if (!encryptionKey) {
         return {
           error: 'encryption_not_configured',
           status: 503,
           message: 'Secret encryption key is not configured.',
         };
       }
-      const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
-      if (!record) return null;
 
       const plaintext = body.plaintext;
       if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {
@@ -133,7 +145,7 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
           ? redactObject(body.metadata)
           : record.metadata;
       const updated_at = nowFn().toISOString();
-      const envelope = encryptSecret(plaintext, key, buildSecretAad({
+      const envelope = encryptSecret(plaintext, encryptionKey, buildSecretAad({
         ...record,
         rotation: nextRotation,
         metadata,
@@ -160,17 +172,18 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
     },
 
     async decryptEncryptedSecretForUse(ctx, id, key) {
-      if (!key) {
+      const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
+      if (!record) return null;
+      const encryptionKey = keyForPurpose(record.purpose, key);
+      if (!encryptionKey) {
         return {
           error: 'encryption_not_configured',
           status: 503,
           message: 'Secret encryption key is not configured.',
         };
       }
-      const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
-      if (!record) return null;
 
-      const plaintext = decryptSecret(record.envelope, key, buildSecretAad(record));
+      const plaintext = decryptSecret(record.envelope, encryptionKey, buildSecretAad(record));
       await auditRepo.appendAuditEvent({
         tenant_id: ctx.tenantId,
         actor_user_id: ctx.userId,

@@ -121,10 +121,32 @@ function memoryRepositories(overrides = {}) {
       if (options.statuses) runs = runs.filter((r) => options.statuses.includes(r.status));
       return runs;
     },
-    async updateTestRun(ctx, id, patch) {
-      const idx = state.testRuns.findIndex((r) => r.id === id);
-      if (idx >= 0) state.testRuns[idx] = { ...state.testRuns[idx], ...patch };
-      return state.testRuns[idx];
+    async cancelTestRunAtomic(ctx, id, patch) {
+      const idx = state.testRuns.findIndex((r) => r.id === id && r.tenant_id === ctx.tenantId);
+      if (idx < 0) return null;
+      if (!['planned', 'running', 'collecting'].includes(state.testRuns[idx].status)) {
+        return { run: state.testRuns[idx], cancelled: false, cancelled_jobs: [] };
+      }
+      state.testRuns[idx] = {
+        ...state.testRuns[idx],
+        status: 'cancelled',
+        completed_at: patch.completed_at,
+        summary: patch.summary,
+      };
+      const cancelledJobs = (overrides.probeJobsOpen ?? []).filter(
+        (job) => job.tenant_id === ctx.tenantId
+          && job.test_run_id === id
+          && ['pending', 'leased'].includes(job.status),
+      );
+      for (const job of cancelledJobs) {
+        job.status = 'cancelled';
+        job.completed_at = patch.completed_at;
+      }
+      return {
+        run: state.testRuns[idx],
+        cancelled: true,
+        cancelled_jobs: cancelledJobs.map((job) => ({ ...job })),
+      };
     },
   };
 

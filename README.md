@@ -5,13 +5,13 @@
 It validates whether enterprise environments are ready for DDoS scenarios by combining:
 
 - externally originated validation probes,
-- customer-installed internal agents or canaries,
+- optional customer-installed internal agents or canaries for origin evidence,
 - target groups declared by the customer,
 - SOC-approved high-scale simulation workflows,
 - evidence-backed readiness scoring,
 - operational UX for engineering, security, SOC, and executives.
 
-AstraNull does **not** depend on customer cloud credentials in the default mode. It does **not** perform IP inventory discovery in the core product. Customers define the target groups they care about, install the AstraNull Agent in the right observation location, and AstraNull validates whether unwanted traffic reaches protected zones.
+AstraNull does **not** depend on customer cloud credentials in the default mode. It does **not** perform IP inventory discovery in the core product. Customers define target groups manually or through supported read-only DNS integrations, prove exact-target ownership, and run bounded external validation by default. Optional AstraNull Agents add corroborating internal/origin evidence without becoming an onboarding or execution prerequisite.
 
 ## Product promise
 
@@ -26,7 +26,7 @@ Evidence-backed verdicts, readiness scoring, and SOC-gated high-scale workflows 
 | Product name | AstraNull |
 | Discovery model | No automatic IP inventory discovery in core scope |
 | Access model | No customer cloud/API access required by default |
-| Agent model | Outbound-only control channel; no inbound management firewall rule required |
+| Agent model | Optional evidence enhancer; outbound-only control channel, no inbound management firewall rule required |
 | High-scale tests | SOC-gated only; customer requests, SOC validates authorization and executes/coordinates |
 | Detection model | Correlate external probe events with internal agent observations and health signals |
 | First killer use case | Direct-origin bypass and protected-path validation |

@@ -49,8 +49,7 @@ function assertWafDriftRepositories(repositories) {
   }
 }
 
-function wafFeatureGate() {
-  const enabled = loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
+function wafFeatureGate(enabled) {
   if (!enabled) return { skipped: true, reason: 'waf_feature_disabled' };
   return null;
 }
@@ -133,7 +132,7 @@ function detectPostureDrifts(previous, current) {
   const before = postureSummaryFromSnapshot(previous);
   const after = postureSummaryFromSnapshot(current);
 
-  if (previous.status === 'protected' && current.status === 'unprotected') {
+  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'unprotected') {
     const driftType = after.detected_vendor || after.detected_product ? 'mode_downgrade' : 'fingerprint_loss';
     drifts.push({
       drift_type: driftType,
@@ -148,6 +147,7 @@ function detectPostureDrifts(previous, current) {
     previous.detected_vendor
     && !current.detected_vendor
     && current.status !== 'protected'
+    && !drifts.some((drift) => drift.drift_type === 'fingerprint_loss')
   ) {
     drifts.push({
       drift_type: 'fingerprint_loss',
@@ -158,7 +158,7 @@ function detectPostureDrifts(previous, current) {
     });
   }
 
-  if (previous.status === 'protected' && current.status === 'underprotected') {
+  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'underprotected') {
     const codes = new Set(current.reason_codes ?? []);
     if (codes.has('origin_bypass_confirmed')) {
       drifts.push({
@@ -207,7 +207,7 @@ function formatScanResultForApi(scanResult) {
  *   wafPosture?: Record<string, unknown>,
  *   audit?: { appendAuditEvent?: (...args: unknown[]) => unknown },
  * }} repositories
- * @param {{ now?: () => Date, newId?: typeof newId }} [options]
+ * @param {{ now?: () => Date, newId?: typeof newId, wafPostureEnabled?: boolean }} [options]
  */
 export function createPostgresWafDriftServices(repositories, options = {}) {
   assertWafDriftRepositories(repositories);
@@ -215,6 +215,9 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   const auditRepo = repositories.audit;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
+  const isWafPostureEnabled = typeof options.wafPostureEnabled === 'boolean'
+    ? () => options.wafPostureEnabled
+    : () => loadRuntimeConfig().featureFlags.wafPostureEnabled === true;
 
   async function auditDriftDetected(ctx, driftEvent, metadata) {
     await auditRepo.appendAuditEvent({
@@ -289,7 +292,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
     connectorSnapshots = null,
     postureSnapshots = null,
   } = {}) {
-    const gate = wafFeatureGate();
+    const gate = wafFeatureGate(isWafPostureEnabled());
     if (gate) return gate;
 
     const asset = (await wafRepo.listWafAssets(ctx)).find((row) => row.id === assetId) ?? null;
@@ -351,7 +354,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function runDriftScan(ctx) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(isWafPostureEnabled());
       if (gate) return gate;
 
       const started = Date.now();
@@ -416,7 +419,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function runScheduledDriftScans(ctx = {}) {
-    const gate = wafFeatureGate();
+    const gate = wafFeatureGate(isWafPostureEnabled());
     if (gate) return gate;
 
     const scope = resolveScheduledTenantIds(ctx, { label: 'WAF drift scan runner' });
@@ -443,7 +446,7 @@ export function createPostgresWafDriftServices(repositories, options = {}) {
   }
 
   async function getLastScanResult(ctx) {
-      const gate = wafFeatureGate();
+      const gate = wafFeatureGate(isWafPostureEnabled());
       if (gate) return gate;
 
       const latest = await wafRepo.getLatestWafDriftScanResult(ctx);

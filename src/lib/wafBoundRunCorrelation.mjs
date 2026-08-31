@@ -1,3 +1,5 @@
+import { isTrustedProducerEvent } from './trustedEventProvenance.mjs';
+
 export const EXTERNAL_WAF_PASS = new Set([
   'blocked',
   'challenge',
@@ -43,8 +45,10 @@ function isWafMarkerAgentMetadata(metadata) {
  * @param {{ probes: Array<{ id: string, nonce_hash?: string|null, metadata?: object }>, agents: Array<{ nonce_hash?: string|null, metadata?: object }> }} input
  */
 export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
+  const trustedProbes = probes.filter(isTrustedProducerEvent);
+  const trustedAgents = agents.filter(isTrustedProducerEvent);
   const agentsByNonce = new Map();
-  for (const agentEvent of agents) {
+  for (const agentEvent of trustedAgents) {
     if (!agentEvent.nonce_hash) continue;
     const bucket = agentsByNonce.get(agentEvent.nonce_hash) ?? [];
     bucket.push(agentEvent);
@@ -53,12 +57,13 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
 
   let wafDetected = false;
   let anyPass = false;
+  let anyEdgePass = false;
   let validationFailed = false;
   let originBypassConfirmed = false;
   let hasExternalProbeEvidence = false;
   const scenarioResults = [];
 
-  for (const probe of probes) {
+  for (const probe of trustedProbes) {
     if (hasWafFingerprintHint(probe.metadata)) {
       wafDetected = true;
     }
@@ -77,29 +82,61 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
       validationFailed = true;
       passed = false;
       observed_action = 'allow';
-      if (external === 'reached_origin' || external === 'delivered') {
+      const trustedOriginObservation = wafMarkerAgents.some((agent) => {
+        const observed = normalizeExternalResult(agent.metadata?.observed_action);
+        return ['allow', 'allowed', 'reached_origin', 'delivered'].includes(observed)
+          || agent.metadata?.reached_origin === true
+          || agent.metadata?.origin_reached === true;
+      });
+      if ((external === 'reached_origin' || external === 'delivered')
+        && trustedOriginObservation) {
         originBypassConfirmed = true;
       }
     } else if (EXTERNAL_WAF_PASS.has(external)) {
       wafDetected = true;
-      if (wafMarkerAgents.length > 0) {
+      const markerLeak = wafMarkerAgents.some((agent) => {
+        const observed = normalizeExternalResult(agent.metadata?.observed_action);
+        return ['allow', 'allowed', 'reached_origin', 'delivered'].includes(observed)
+          || agent.metadata?.reached_origin === true
+          || agent.metadata?.origin_reached === true
+          || !(
+            ['block', 'blocked', 'not_reached_origin'].includes(observed)
+            || agent.metadata?.waf_blocked === true
+            || agent.metadata?.reached_origin === false
+            || agent.metadata?.origin_reached === false
+          );
+      });
+      const agentConfirmedBlock = wafMarkerAgents.some((agent) => {
+        const observed = normalizeExternalResult(agent.metadata?.observed_action);
+        return ['block', 'blocked', 'not_reached_origin'].includes(observed)
+          || agent.metadata?.waf_blocked === true
+          || agent.metadata?.reached_origin === false
+          || agent.metadata?.origin_reached === false;
+      });
+      if (markerLeak) {
         validationFailed = true;
         passed = false;
         observed_action = 'allow';
       } else if (nonce && hasWafFingerprintHint(probe.metadata)) {
-        anyPass = true;
+        anyEdgePass = true;
         passed = true;
         observed_action = 'block';
+        if (agentConfirmedBlock) anyPass = true;
       } else {
         passed = null;
         observed_action = 'inconclusive';
       }
     }
 
-    const agentObservedBlock = wafMarkerAgents.some(
-      (agent) => agent.metadata?.observed_action === 'block'
-        || agent.metadata?.waf_blocked === true,
-    );
+    const agentObservedBlock = wafMarkerAgents.some((agent) => {
+      const observed = normalizeExternalResult(agent.metadata?.observed_action);
+      return observed === 'block'
+        || observed === 'blocked'
+        || observed === 'not_reached_origin'
+        || agent.metadata?.waf_blocked === true
+        || agent.metadata?.reached_origin === false
+        || agent.metadata?.origin_reached === false;
+    });
 
     const evidence_summary = {
       request_id: probe.id,
@@ -122,15 +159,17 @@ export function deriveWafSignalsFromBoundEvents({ probes = [], agents = [] }) {
   }
 
   const validationPassed = hasExternalProbeEvidence && anyPass && !validationFailed;
+  const edgeProtected = hasExternalProbeEvidence && anyEdgePass && !validationFailed;
 
   return {
     wafDetected,
     validationPassed,
+    edgeProtected,
     validationFailed,
     originBypassConfirmed,
     scenarioResults,
     source_external: hasExternalProbeEvidence,
-    source_agent: agents.length > 0,
+    source_agent: trustedAgents.length > 0,
   };
 }
 

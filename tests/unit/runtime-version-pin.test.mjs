@@ -148,7 +148,7 @@ describe('node runtime version pin', () => {
   it('discovers the Dockerfiles and workflows it claims to guard', () => {
     const deploy = read('ops/aws/deploy.sh');
     const helper = /^build_control_plane_from_commit\(\) \{[\s\S]*?^\}/m.exec(deploy)?.[0] ?? '';
-    const built = /docker build -f (\S+)/.exec(helper);
+    const built = /docker build[\s\S]*?-f (\S+)/.exec(helper);
     assert.match(helper, /git archive "\$commit"/);
     assert.match(helper, /-t "astranull-control-plane:\$commit" -/);
     assert.ok(built, 'ops/aws/deploy.sh declares no Dockerfile in its exact-archive build helper.');

@@ -6,8 +6,35 @@ import {
   normalizePolicyMode,
   resolveConnectorPollFetchTimeoutMs,
 } from './common.mjs';
+import { boundedFetch } from './domainInventory.mjs';
 
 const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
+
+const CLOUDFLARE_AUTH_ERROR_CODES = new Set([6003, 6111, 9109, 10000]);
+
+function cloudflareErrorIsAuthentication(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  return errors.some((entry) => {
+    const code = Number(entry?.code ?? 0);
+    const message = String(entry?.message ?? '').toLowerCase();
+    return CLOUDFLARE_AUTH_ERROR_CODES.has(code)
+      || /(?:invalid|missing|malformed).*(?:token|authorization|header)/.test(message)
+      || /authentication|invalid api token/.test(message);
+  });
+}
+
+function cloudflareZoneProofTags(zone) {
+  const resourceStatus = String(zone?.status ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .slice(0, 64) || 'unknown';
+  return [
+    'provider_zone_inventory',
+    `resource_status:${resourceStatus}`,
+    `ownership_eligible:${resourceStatus === 'active' ? 'true' : 'false'}`,
+  ];
+}
 
 function countRulesetEntries(rulesets) {
   let count = 0;
@@ -40,37 +67,24 @@ async function cloudflareFetch(path, token, fetchFn, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs)
     ? options.timeoutMs
     : resolveConnectorPollFetchTimeoutMs();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let res;
+  let body;
   try {
-    res = await fetchFn(`${CLOUDFLARE_API_BASE}${path}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
+    body = await boundedFetch(`${CLOUDFLARE_API_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      fetchFn,
+      timeoutMs,
     });
-  } catch (cause) {
-    const err = new Error('Failed to fetch Cloudflare API within the bounded timeout.');
-    err.code = 'provider_poll_failed';
-    err.cause = cause;
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error(body?.errors?.[0]?.message ?? `Cloudflare API error (${res.status})`);
-    err.status = res.status;
-    err.code = res.status === 429 ? 'rate_limited' : 'provider_poll_failed';
-    throw err;
+  } catch (error) {
+    if (cloudflareErrorIsAuthentication(error?.response_body)) {
+      error.code = 'auth_failed';
+    }
+    throw error;
   }
   if (body?.success === false) {
+    const authFailure = cloudflareErrorIsAuthentication(body);
     const err = new Error(body?.errors?.[0]?.message ?? 'Cloudflare API request failed');
-    err.status = 403;
-    err.code = 'permission_insufficient';
+    err.status = authFailure ? 401 : 403;
+    err.code = authFailure ? 'auth_failed' : 'permission_insufficient';
     throw err;
   }
   return body;
@@ -118,6 +132,7 @@ function normalizePrefetchedZones(prefetched, config, observedAt) {
       hostnames: Array.isArray(zone.hostnames)
         ? zone.hostnames
         : (zone.name ? [String(zone.name)] : []),
+      tags: cloudflareZoneProofTags(zone),
       policy_mode: deriveCloudflarePolicyMode(zone, rulesets),
       rule_count: Number.isFinite(Number(zone.rule_count))
         ? Number(zone.rule_count)
@@ -130,7 +145,7 @@ function normalizePrefetchedZones(prefetched, config, observedAt) {
     };
     snapshots.push(buildNormalizedSnapshot({
       provider: 'cloudflare',
-      snapshotKind: 'waf_policy',
+      snapshotKind: 'dns_zone',
       resourceRef: zone.id ?? zone.zone_id ?? zone.name,
       displayRef: zone.name ?? zone.id,
       summary,
@@ -195,11 +210,12 @@ export async function pollCloudflare({
 
     snapshots.push(buildNormalizedSnapshot({
       provider: 'cloudflare',
-      snapshotKind: 'waf_policy',
+      snapshotKind: 'dns_zone',
       resourceRef: zone.id,
       displayRef: zone.name ?? zone.id,
       summary: {
         hostnames: zone.name ? [zone.name] : [],
+        tags: cloudflareZoneProofTags(zone),
         policy_mode: deriveCloudflarePolicyMode(zone, rulesets),
         rule_count: countRulesetEntries(rulesets),
         ...(zonePermissionGaps.length > 0 ? { permission_gaps: zonePermissionGaps } : {}),
@@ -212,6 +228,8 @@ export async function pollCloudflare({
     snapshots,
     health: permissionGaps.length > 0 ? 'degraded' : 'active',
     permission_gaps: permissionGaps,
+    inventory_complete: !truncated,
+    inventory_truncated: truncated,
   };
 }
 

@@ -144,7 +144,7 @@ Current and historical status.
 | `id` | uuid | PK. |
 | `tenant_id` | uuid | RLS. |
 | `waf_asset_id` | uuid | FK. |
-| `status` | text | protected, underprotected, unprotected, unknown, excluded. |
+| `status` | text | protected, edge_protected, underprotected, unprotected, unknown, excluded. |
 | `reason_codes` | text[] | Underprotected reasons. |
 | `detected_vendor` / `detected_product` | text nullable | From latest fingerprint. |
 | `coverage_required` | boolean | Policy. |

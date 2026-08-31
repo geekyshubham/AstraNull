@@ -94,8 +94,9 @@ describe('target-group React truthfulness contract', () => {
   });
 
   it('keeps imported provenance and target actions truthful without stealing the native row', () => {
-    assert.match(SOURCE, /import_source: importIntegration/);
+    assert.match(SOURCE, /targets:bulk-import/);
     assert.match(SOURCE, /connector_id: inventoryProvider/);
+    assert.doesNotMatch(SOURCE, /import_source: importIntegration/);
     assert.match(SOURCE, /targetDeclarationProvenanceLabel\(item\)/);
     assert.match(SOURCE, /href=\{buildDetailHref\('target-detail', id\)\}/);
     assert.match(SOURCE, /aria-label={`Open target \$\{getString\(item, \['value'\], id\)\}`}/);

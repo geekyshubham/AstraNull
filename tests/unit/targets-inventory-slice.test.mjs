@@ -215,7 +215,8 @@ describe('GET /v1/targets inventory', () => {
     assert.deepEqual(inventoryQuery.params, ['ten_pg']);
     assert.match(inventoryQuery.text, /WHERE t\.tenant_id = \$1/);
     assert.match(inventoryQuery.text, /tg\.tenant_id = \$1/);
-    assert.match(inventoryQuery.text, /tv\.tenant_id = \$1/);
+    assert.match(inventoryQuery.text, /verification\.tenant_id = t\.tenant_id/);
+    assert.match(inventoryQuery.text, /verification\.target_id = t\.id/);
     assert.match(inventoryQuery.text, /environment\.tenant_id = t\.tenant_id/);
   });
 

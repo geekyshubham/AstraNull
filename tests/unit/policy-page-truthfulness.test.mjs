@@ -65,12 +65,27 @@ describe('Policy page truthfulness contract', () => {
     assert.doesNotMatch(endControl, /(?:defaultValue|value)="[^"]+"/);
   });
 
-  it('reports each sequential multi-group result and selects only failures for retry', () => {
-    assert.match(POLICY_SOURCE, /for \(const targetGroupId of policyTargetGroupIds\) \{[\s\S]*try \{[\s\S]*successes\.push/);
+  it('reports each sequential multi-group result and retains only failed exact bindings for retry', () => {
+    assert.match(POLICY_SOURCE, /for \(const targetGroupId of policyTargetGroupIds\) \{[\s\S]*const targetId = policyTargetBindings\[targetGroupId\]\?\.selectedTargetId[\s\S]*successes\.push/);
+    assert.match(POLICY_SOURCE, /body: \{ \.\.\.bodyBase, target_group_id: targetGroupId, target_id: targetId \}/);
     assert.match(POLICY_SOURCE, /failures\.push\(\{/);
     assert.match(POLICY_SOURCE, /Created \$\{successes\.length\} of \$\{policyTargetGroupIds\.length\} policies/);
-    assert.match(POLICY_SOURCE, /Successful writes were retained; only failed target groups remain selected for retry\./);
-    assert.match(POLICY_SOURCE, /setPolicyTargetGroupIds\(failures\.map\(\(failure\) => failure\.targetGroupId\)\)/);
+    assert.match(POLICY_SOURCE, /Successful writes were retained; only failed exact target bindings remain selected for retry\./);
+    assert.match(POLICY_SOURCE, /const failedGroupIds = new Set\(failures\.map\(\(failure\) => failure\.targetGroupId\)\)/);
+    assert.match(POLICY_SOURCE, /if \(failedGroupIds\.has\(targetGroupId\)\) retained\[targetGroupId\] = binding/);
     assert.match(POLICY_SOURCE, /The writes succeeded; refresh the page instead of creating them again\./);
+  });
+
+  it('requires one explicit active target per selected group and displays immutable target identity', () => {
+    assert.match(POLICY_SOURCE, /`\/v1\/target-groups\/\$\{encodeURIComponent\(targetGroupId\)\}`/);
+    assert.match(POLICY_SOURCE, /target\.deleted_at == null && target\.archived_at == null/);
+    assert.match(POLICY_SOURCE, /Choose one exact active target per group/);
+    assert.match(POLICY_SOURCE, /Ambiguous groups are never assigned a target automatically/);
+    assert.doesNotMatch(POLICY_SOURCE, /setPolicyTargetGroupIds\(\[groupId\]\)/);
+    assert.match(POLICY_SOURCE, /const policyBindingsReady = policyTargetGroupIds\.length > 0/);
+    assert.match(POLICY_SOURCE, /!policyBindingsReady \|\| busy !== ''/);
+    assert.match(POLICY_SOURCE, /label: 'Exact target'/);
+    assert.match(POLICY_SOURCE, /buildDetailHref\('target-detail', targetId\)/);
+    assert.match(POLICY_SOURCE, /targetKind} · \{targetId\}/);
   });
 });

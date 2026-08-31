@@ -56,6 +56,7 @@ function VendorCoverageRow({
   passPct,
   warnPct,
   failPct,
+  edgeProtected,
   total,
 }: {
   vendor: string;
@@ -63,16 +64,18 @@ function VendorCoverageRow({
   passPct: number;
   warnPct: number;
   failPct: number;
+  edgeProtected: number;
   total: number;
 }) {
+  const description = `${vendor}: ${pct}% fully protected across ${total} assets; ${edgeProtected} edge protected but not internally validated`;
   return (
     <div className="dw-vendor-row">
       <div className="dw-vendor-label mono">{vendor}</div>
       <div
         className="dw-vendor-bar"
         role="img"
-        aria-label={`${vendor}: ${pct}% protected across ${total} assets`}
-        title={`${pct}% protected across ${total} assets`}
+        aria-label={description}
+        title={description}
       >
         {passPct > 0 ? <span className="seg pass" style={{ width: `${passPct}%` }} /> : null}
         {warnPct > 0 ? <span className="seg warn" style={{ width: `${warnPct}%` }} /> : null}
@@ -89,14 +92,15 @@ function vendorRows(summary: DataItem | null) {
   return Object.entries(byVendor as Record<string, DataItem>).map(([vendor, stats]) => {
     const assets = getNumber(stats, ['assets', 'assets_total'], 0) ?? 0;
     const protectedCount = getNumber(stats, ['protected'], 0) ?? 0;
+    const edgeProtected = getNumber(stats, ['edge_protected'], 0) ?? 0;
     const underprotected = getNumber(stats, ['underprotected'], 0) ?? 0;
     const unknown = getNumber(stats, ['unknown'], 0) ?? 0;
-    const total = assets > 0 ? assets : protectedCount + underprotected + unknown;
+    const total = assets > 0 ? assets : protectedCount + edgeProtected + underprotected + unknown;
     const pct = total > 0 ? Math.round((protectedCount / total) * 100) : 0;
     const passPct = total > 0 ? Math.round((protectedCount / total) * 100) : 0;
-    const warnPct = total > 0 ? Math.round((underprotected / total) * 100) : 0;
+    const warnPct = total > 0 ? Math.round(((edgeProtected + underprotected) / total) * 100) : 0;
     const failPct = Math.max(0, 100 - passPct - warnPct);
-    return { vendor, pct, passPct, warnPct, failPct, total };
+    return { vendor, pct, passPct, warnPct, failPct, edgeProtected, total };
   });
 }
 
@@ -112,6 +116,7 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
   }
 
   const protectedCount = getNumber(summary, ['protected'], 0) ?? 0;
+  const edgeProtected = getNumber(summary, ['edge_protected'], 0) ?? 0;
   const underprotected = getNumber(summary, ['underprotected'], 0) ?? 0;
   const coveragePct = getNumber(summary, ['coverage_pct'], null);
   const connectorsActive = getNumber(summary, ['connectors_active'], 0) ?? 0;
@@ -120,7 +125,7 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
   const vendors = vendorRows(summary);
   const emptyReason = getString(summary, ['meta', 'empty_reason'], '');
 
-  if (emptyReason && protectedCount === 0 && underprotected === 0 && vendors.length === 0) {
+  if (emptyReason && protectedCount === 0 && edgeProtected === 0 && underprotected === 0 && vendors.length === 0) {
     return (
       <EmptyState
         icon={ShieldHalf}
@@ -139,7 +144,13 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
   return (
     <div className={`dash-waf-grid${vendors.length === 0 ? ' dash-waf-grid--solo' : ''}`}>
       <div className="dash-waf-kpis">
-        <WafKpi label="Protected" value={protectedCount} note="from WAF coverage summary API" />
+        <WafKpi label="Protected" value={protectedCount} note="agent-confirmed full protection" />
+        <WafKpi
+          label="Edge protected"
+          value={edgeProtected}
+          note="not internally validated"
+          noteWarn={edgeProtected > 0}
+        />
         <WafKpi
           label="Underprotected"
           value={underprotected}

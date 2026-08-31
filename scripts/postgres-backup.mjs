@@ -2,9 +2,14 @@
 import { spawn as defaultSpawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
+  closeSync,
   createReadStream,
   createWriteStream,
+  fsyncSync,
+  lstatSync,
   mkdirSync,
+  openSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -331,6 +336,95 @@ function timestampForFilename(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, '-');
 }
 
+function fsyncPathSync(target, { directory = false } = {}) {
+  let descriptor;
+  try {
+    descriptor = openSync(target, 'r');
+    fsyncSync(descriptor);
+  } catch (error) {
+    // Some supported filesystems reject directory fsync. File fsync is never optional.
+    if (!directory || !['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM'].includes(error?.code)) throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function fsyncParentSync(target) {
+  fsyncPathSync(path.dirname(target), { directory: true });
+}
+
+function durableRenameSync(source, destination) {
+  fsyncPathSync(source);
+  fsyncParentSync(source);
+  renameSync(source, destination);
+  fsyncParentSync(destination);
+}
+
+function durableUnlinkIfPresent(target) {
+  try {
+    unlinkSync(target);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    return;
+  }
+  fsyncParentSync(target);
+}
+
+async function verifyPublishedBackupPair({
+  backupPath,
+  manifestPath,
+  expectedSha256,
+  expectedBytes,
+  expectedManifestText,
+}) {
+  const before = lstatSync(backupPath);
+  const manifestBefore = lstatSync(manifestPath);
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1
+    || (before.mode & 0o777) !== 0o600 || before.size !== expectedBytes) {
+    throw new Error('postgres-backup: published backup artifact is unsafe or incomplete');
+  }
+  if (!manifestBefore.isFile() || manifestBefore.isSymbolicLink() || manifestBefore.nlink !== 1
+    || (manifestBefore.mode & 0o777) !== 0o600 || manifestBefore.size < 1
+    || manifestBefore.size !== Buffer.byteLength(expectedManifestText)) {
+    throw new Error('postgres-backup: published manifest completion marker is unsafe or incomplete');
+  }
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of createReadStream(backupPath)) hash.update(chunk);
+  const manifestChunks = [];
+  let manifestBytes = 0;
+  for await (const chunk of createReadStream(manifestPath)) {
+    manifestBytes += chunk.length;
+    if (manifestBytes > Buffer.byteLength(expectedManifestText)) {
+      throw new Error('postgres-backup: published manifest exceeds expected content');
+    }
+    manifestChunks.push(chunk);
+  }
+  const after = lstatSync(backupPath);
+  const manifestAfter = lstatSync(manifestPath);
+  if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+    || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+    || hash.digest('hex') !== expectedSha256) {
+    throw new Error('postgres-backup: published backup artifact changed during final verification');
+  }
+  if (manifestBefore.dev !== manifestAfter.dev || manifestBefore.ino !== manifestAfter.ino
+    || manifestBefore.size !== manifestAfter.size || manifestBefore.mtimeMs !== manifestAfter.mtimeMs
+    || manifestBefore.ctimeMs !== manifestAfter.ctimeMs
+    || !Buffer.concat(manifestChunks).equals(Buffer.from(expectedManifestText))) {
+    throw new Error('postgres-backup: published manifest changed or differs from generated content');
+  }
+}
+
+function privatePartialPath(out, backupName, purpose) {
+  const nonce = crypto.randomBytes(12).toString('hex');
+  return path.join(out, `.${backupName}.partial-${purpose}-${nonce}`);
+}
+
+async function publicationCheckpoint(options, step, paths) {
+  if (typeof options.publicationHook === 'function') {
+    await options.publicationHook(step, paths);
+  }
+}
+
 function databaseReferenceFromInputCli(cli) {
   if (!SAFE_HOST.test(String(cli.databaseHost ?? ''))) {
     throw new Error('postgres-backup: --database-host is required and must be a safe hostname in input mode.');
@@ -530,9 +624,21 @@ export async function backupPostgres(options) {
   }
 
   mkdirSync(out, { recursive: true, mode: 0o700 });
-  const backupName = `postgres-${timestampForFilename(now)}.dump.enc`;
+  const filenameNonce = options.filenameNonce ?? crypto.randomBytes(6).toString('hex');
+  if (!/^[0-9a-f]{12}$/.test(filenameNonce)) {
+    throw new Error('postgres-backup: filename nonce must be 12 lowercase hexadecimal characters.');
+  }
+  const backupName = `postgres-${timestampForFilename(now)}-${filenameNonce}.dump.enc`;
   const backupPath = path.join(out, backupName);
   const manifestPath = `${backupPath}.manifest.json`;
+  const backupPartialPath = privatePartialPath(out, backupName, 'artifact');
+  const manifestPartialPath = privatePartialPath(out, backupName, 'manifest');
+  const publicationPaths = {
+    backupPath,
+    manifestPath,
+    backupPartialPath,
+    manifestPartialPath,
+  };
   const aad = {
     artifact_type: ARTIFACT_TYPE,
     backup_file: backupName,
@@ -541,55 +647,84 @@ export async function backupPostgres(options) {
   };
   const sourceControl = await sourceForBackup({ ...options, databaseUrl });
   let streamed;
+  let artifactPublished = false;
+  let manifestPublished = false;
   try {
     streamed = await encryptSourceToFile({
       source: sourceControl.stream,
-      destinationPath: backupPath,
+      destinationPath: backupPartialPath,
       encryptionKey,
       aad,
     });
-  } catch (error) {
-    sourceControl.cancel();
-    try { unlinkSync(backupPath); } catch {}
-    throw error;
-  }
+    fsyncPathSync(backupPartialPath);
+    fsyncParentSync(backupPartialPath);
+    await publicationCheckpoint(options, 'artifact_partial_ready', publicationPaths);
 
-  const manifest = {
-    version: MANIFEST_VERSION,
-    artifact_type: ARTIFACT_TYPE,
-    created_at: now.toISOString(),
-    backup_file: backupName,
-    sha256: streamed.encryptedSha256,
-    plaintext_sha256: streamed.plaintextSha256,
-    bytes: streamed.encryptedBytes,
-    label,
-    database_reference: databaseReference,
-    dump_format: 'pg_custom',
-    encryption: {
-      algorithm: BACKUP_ENCRYPTION_ALGORITHM,
-      key_reference: 'env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
-      envelope_version: BACKUP_ENVELOPE_VERSION,
-      encoding: 'binary_stream',
-    },
-  };
-  validatePostgresBackupManifestFields(manifest);
-  try {
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    const manifest = {
+      version: MANIFEST_VERSION,
+      artifact_type: ARTIFACT_TYPE,
+      created_at: now.toISOString(),
+      backup_file: backupName,
+      sha256: streamed.encryptedSha256,
+      plaintext_sha256: streamed.plaintextSha256,
+      bytes: streamed.encryptedBytes,
+      label,
+      database_reference: databaseReference,
+      dump_format: 'pg_custom',
+      encryption: {
+        algorithm: BACKUP_ENCRYPTION_ALGORITHM,
+        key_reference: 'env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
+        envelope_version: BACKUP_ENVELOPE_VERSION,
+        encoding: 'binary_stream',
+      },
+    };
+    validatePostgresBackupManifestFields(manifest);
+    const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+    writeFileSync(manifestPartialPath, manifestText, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
     });
+    fsyncPathSync(manifestPartialPath);
+    fsyncParentSync(manifestPartialPath);
+    await publicationCheckpoint(options, 'manifest_partial_ready', publicationPaths);
+
+    // The artifact becomes visible first. Only the subsequent manifest rename advertises
+    // a complete restore point; a crash in between leaves an unadvertised orphan.
+    durableRenameSync(backupPartialPath, backupPath);
+    artifactPublished = true;
+    await publicationCheckpoint(options, 'artifact_published', publicationPaths);
+    durableRenameSync(manifestPartialPath, manifestPath);
+    manifestPublished = true;
+    await publicationCheckpoint(options, 'manifest_published', publicationPaths);
+    await verifyPublishedBackupPair({
+      backupPath,
+      manifestPath,
+      expectedSha256: streamed.encryptedSha256,
+      expectedBytes: streamed.encryptedBytes,
+      expectedManifestText: manifestText,
+    });
+    await publicationCheckpoint(options, 'pair_verified', publicationPaths);
+
+    return {
+      backupPath,
+      manifestPath,
+      manifest,
+      plaintextBytes: streamed.plaintextBytes,
+      sourceChunks: streamed.sourceChunks,
+    };
   } catch (error) {
-    try { unlinkSync(backupPath); } catch {}
+    sourceControl.cancel();
+    try { durableUnlinkIfPresent(backupPartialPath); } catch {}
+    try { durableUnlinkIfPresent(manifestPartialPath); } catch {}
+    if (manifestPublished) {
+      try { durableUnlinkIfPresent(manifestPath); } catch {}
+    }
+    if (artifactPublished) {
+      try { durableUnlinkIfPresent(backupPath); } catch {}
+    }
     throw error;
   }
-  return {
-    backupPath,
-    manifestPath,
-    manifest,
-    plaintextBytes: streamed.plaintextBytes,
-    sourceChunks: streamed.sourceChunks,
-  };
 }
 
 /**

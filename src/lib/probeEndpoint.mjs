@@ -99,6 +99,10 @@ function parseIpv6Hextets(ip) {
       ...tail.map((t) => parseInt(t, 16)),
     ];
     if (hextets.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
+    if (hextets.slice(0, 5).every((n) => n === 0) && hextets[5] === 0xffff) {
+      const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+      return { kind: 'mapped', octets, embedded: octets.join('.') };
+    }
     return { kind: 'hextets', hextets };
   }
 
@@ -106,6 +110,10 @@ function parseIpv6Hextets(ip) {
   if (segments.length !== 8) return null;
   const hextets = segments.map((s) => parseInt(s, 16));
   if (hextets.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return null;
+  if (hextets.slice(0, 5).every((n) => n === 0) && hextets[5] === 0xffff) {
+    const octets = [hextets[6] >> 8, hextets[6] & 0xff, hextets[7] >> 8, hextets[7] & 0xff];
+    return { kind: 'mapped', octets, embedded: octets.join('.') };
+  }
   return { kind: 'hextets', hextets };
 }
 

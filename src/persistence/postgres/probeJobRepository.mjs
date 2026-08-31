@@ -172,12 +172,41 @@ export function createProbeJobRepository(pool) {
       return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `WITH picked AS (
-             SELECT id, status AS prior_status
-             FROM probe_jobs
-             WHERE tenant_id = $1
+             SELECT candidate.id, candidate.status AS prior_status
+             FROM probe_jobs AS candidate
+             WHERE candidate.tenant_id = $1
                AND (
-                 status = 'pending'
-                 OR (status = 'leased' AND leased_at < now() - ${LEASE_TTL_INTERVAL_SQL})
+                 candidate.status = 'pending'
+                 OR (candidate.status = 'leased' AND candidate.leased_at < now() - ${LEASE_TTL_INTERVAL_SQL})
+               )
+               AND (
+                 (candidate.ownership_verification_id IS NULL AND EXISTS (
+                   SELECT 1
+                   FROM test_runs tr
+                   WHERE tr.tenant_id = candidate.tenant_id
+                     AND tr.id = candidate.test_run_id
+                     AND tr.status IN ('running', 'collecting')
+                 ))
+                 OR
+                 (candidate.ownership_verification_id IS NOT NULL AND EXISTS (
+                   SELECT 1
+                   FROM ownership_verifications ov
+                   JOIN target_groups tg
+                     ON tg.tenant_id = ov.tenant_id AND tg.id = ov.target_group_id
+                   JOIN agents a
+                     ON a.tenant_id = ov.tenant_id AND a.id = ov.agent_id
+                   JOIN targets t
+                     ON t.tenant_id = ov.tenant_id AND t.target_group_id = ov.target_group_id
+                    AND t.deleted_at IS NULL AND t.kind = 'fqdn'
+                    AND COALESCE(t.normalized_value, lower(btrim(t.value))) = lower(btrim(ov.declared_fqdn))
+                   WHERE ov.tenant_id = candidate.tenant_id
+                     AND ov.id = candidate.ownership_verification_id
+                     AND ov.status = 'challenge_sent'
+                     AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+                     AND a.target_group_id = ov.target_group_id
+                     AND a.status = 'online'
+                     AND COALESCE(a.last_token_validation_status, 'valid') <> 'invalid'
+                 ))
                )
              ORDER BY created_at
              LIMIT $2
@@ -243,27 +272,122 @@ export function createProbeJobRepository(pool) {
     async claimPendingJobForWorker(ctx, id, workerId, leasedAt, options = {}) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
-          `UPDATE probe_jobs
+          `UPDATE probe_jobs AS j
            SET status = 'leased',
                leased_at = $4::timestamptz,
                leased_by = $3
-           WHERE tenant_id = $1 AND id = $2 AND status = 'pending'
-           RETURNING ${PROBE_JOB_COLUMNS}`,
+           WHERE j.tenant_id = $1 AND j.id = $2 AND j.status = 'pending'
+             AND (
+               (j.ownership_verification_id IS NULL AND EXISTS (
+                 SELECT 1 FROM test_runs tr
+                 WHERE tr.tenant_id = j.tenant_id AND tr.id = j.test_run_id
+                   AND tr.status IN ('running', 'collecting')
+                   AND j.constraints_json ? 'ownership_binding'
+                   AND EXISTS (
+                     SELECT 1
+                     FROM target_verification_current tvc
+                     WHERE tvc.tenant_id = j.tenant_id
+                       AND tvc.target_id = j.target_id
+                       AND tvc.state = j.constraints_json->'ownership_binding'->>'state'
+                       AND tvc.source_kind = j.constraints_json->'ownership_binding'->>'kind'
+                       AND tvc.transitioned_at = (
+                         j.constraints_json->'ownership_binding'->>'transitioned_at'
+                       )::timestamptz
+                       AND (
+                         tvc.state <> 'provider_verified'
+                         OR EXISTS (
+                           SELECT 1
+                           FROM tenant_connector_features feature
+                           JOIN waf_connectors connector
+                             ON connector.tenant_id = feature.tenant_id
+                           JOIN waf_connector_snapshots snapshot
+                             ON snapshot.tenant_id = connector.tenant_id
+                            AND snapshot.connector_id = connector.id
+                           WHERE feature.tenant_id = j.tenant_id
+                             AND feature.enabled = TRUE
+                             AND feature.revision = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'feature_revision'
+                             )::bigint
+                             AND connector.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_id'
+                             AND connector.provider = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_provider'
+                             AND connector.secret_id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_secret_id'
+                             AND connector.status NOT IN ('disabled', 'revoked')
+                             AND connector.last_success_revision = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_revision'
+                             )::bigint
+                             AND connector.last_success_at = (
+                               j.constraints_json->'ownership_binding'->'provider_provenance'->>'connector_generation'
+                             )::timestamptz
+                             AND snapshot.id = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_id'
+                             AND snapshot.provider = connector.provider
+                             AND snapshot.snapshot_kind = 'dns_zone'
+                             AND snapshot.evidence_source = 'provider_api'
+                             AND snapshot.resource_ref_hash = j.constraints_json->'ownership_binding'->'provider_provenance'->>'snapshot_resource_ref_hash'
+                             AND snapshot.poll_revision = connector.last_success_revision
+                             AND snapshot.observed_at = connector.last_success_at
+                         )
+                       )
+                   )
+               ))
+               OR
+               (j.ownership_verification_id IS NOT NULL AND EXISTS (
+                 SELECT 1
+                 FROM ownership_verifications ov
+                 JOIN target_groups tg
+                   ON tg.tenant_id = ov.tenant_id AND tg.id = ov.target_group_id
+                 JOIN agents a
+                   ON a.tenant_id = ov.tenant_id AND a.id = ov.agent_id
+                 JOIN targets t
+                   ON t.tenant_id = ov.tenant_id AND t.target_group_id = ov.target_group_id
+                  AND t.deleted_at IS NULL AND t.kind = 'fqdn'
+                  AND COALESCE(t.normalized_value, lower(btrim(t.value))) = lower(btrim(ov.declared_fqdn))
+                 WHERE ov.tenant_id = j.tenant_id
+                   AND ov.id = j.ownership_verification_id
+                   AND ov.status = 'challenge_sent'
+                   AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
+                   AND a.target_group_id = ov.target_group_id
+                   AND a.status = 'online'
+                   AND COALESCE(a.last_token_validation_status, 'valid') <> 'invalid'
+               ))
+             )
+           RETURNING ${PROBE_JOB_COLUMNS_QUALIFIED}`,
           [ctx.tenantId, id, workerId, leasedAt],
         );
         return mapProbeJobRow(rows[0] ?? null);
       });
     },
 
-    async markJobCompleted(ctx, id, completedAt, options = {}) {
+    async claimJobForResult(ctx, id, workerId, leasedAt, expected = {}, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const expectedStatus = expected.status ?? 'pending';
+        const expectedLeasedBy = expected.leased_by ?? null;
+        const expectedLeasedAt = expected.leased_at ?? null;
+        const { rows } = await client.query(
+          `UPDATE probe_jobs
+           SET status = 'leased', leased_at = $4::timestamptz, leased_by = $3
+           WHERE tenant_id = $1 AND id = $2
+             AND status = $5
+             AND leased_by IS NOT DISTINCT FROM $6
+             AND leased_at IS NOT DISTINCT FROM $7::timestamptz
+           RETURNING ${PROBE_JOB_COLUMNS}`,
+          [ctx.tenantId, id, workerId, leasedAt, expectedStatus, expectedLeasedBy, expectedLeasedAt],
+        );
+        return mapProbeJobRow(rows[0] ?? null);
+      });
+    },
+
+    async markJobCompleted(ctx, id, completedAt, lease = {}, options = {}) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `UPDATE probe_jobs
            SET status = 'completed',
                completed_at = $3::timestamptz
            WHERE tenant_id = $1 AND id = $2
+             AND status = 'leased'
+             AND leased_by = $4
+             AND leased_at = $5::timestamptz
            RETURNING ${PROBE_JOB_COLUMNS}`,
-          [ctx.tenantId, id, completedAt],
+          [ctx.tenantId, id, completedAt, lease.workerId, lease.leasedAt],
         );
         return mapProbeJobRow(rows[0] ?? null);
       });
@@ -287,7 +411,7 @@ export function createProbeJobRepository(pool) {
       });
     },
 
-    async createProbeJob(ctx, record) {
+    async createProbeJob(ctx, record, options = {}) {
       const tenantId = ctx.tenantId;
       const probeProfile = JSON.stringify(asObject(record.probe_profile));
       const constraintsJson = JSON.stringify(asObject(record.constraints ?? record.constraints_json));
@@ -296,7 +420,7 @@ export function createProbeJobRepository(pool) {
         asObject(record.worker_metadata ?? record.worker_metadata_json),
       );
 
-      return withTenantContext(pool, tenantId, async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const ownershipVerificationId = record.ownership_verification_id ?? null;
 
         // There is intentionally no schema change in this repair. Serialize creators by the

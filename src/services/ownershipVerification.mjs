@@ -1,5 +1,7 @@
 import { audit } from '../audit.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
+import { isCurrentProviderDnsOwnershipProof } from '../lib/connectorProviders/domainInventory.mjs';
+import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { newId } from '../lib/ids.mjs';
 import {
   VERIFICATION_RANK,
@@ -533,27 +535,7 @@ const LADDER_LABELS = Object.freeze({
 const VERIFY_PREREQ_STATES = new Set(['agent_verified', 'user_confirmed']);
 
 function latestVerificationByTarget(ctx, targetIds) {
-  const verifications = (getStore().targetVerifications ?? []).filter(
-    (v) => v.tenant_id === ctx.tenantId && targetIds.includes(v.target_id),
-  );
-  const latestByTarget = new Map();
-  for (const row of verifications) {
-    const prev = latestByTarget.get(row.target_id);
-    if (!prev) {
-      latestByTarget.set(row.target_id, row);
-      continue;
-    }
-    const prevAt = String(prev.transitioned_at);
-    const rowAt = String(row.transitioned_at);
-    if (rowAt > prevAt) {
-      latestByTarget.set(row.target_id, row);
-      continue;
-    }
-    if (rowAt === prevAt && (VERIFICATION_RANK[row.state] ?? 0) > (VERIFICATION_RANK[prev.state] ?? 0)) {
-      latestByTarget.set(row.target_id, row);
-    }
-  }
-  return latestByTarget;
+  return effectiveTargetVerifications(getStore(), ctx.tenantId, targetIds);
 }
 
 function getActiveLoa(ctx, groupId) {
@@ -589,17 +571,39 @@ function loaScopeTargetIds(loa) {
  * @returns {{ verified: boolean, state: string, source: 'target'|null }}
  */
 export function targetOwnershipProof(ctx, group, targetId) {
-  const target = getStore().targets.find(
+  const store = getStore();
+  const target = store.targets.find(
     (candidate) =>
       candidate.id === targetId
       && candidate.tenant_id === ctx.tenantId
       && candidate.target_group_id === group?.id
       && !candidate.deleted_at,
   );
+  if (!target) return ownershipProofFromStates({ targetState: null });
+
+  const verification = latestVerificationByTarget(ctx, [target.id]).get(target.id);
+  if (verification?.state !== 'provider_verified') {
+    return ownershipProofFromStates({ targetState: verification?.state ?? null });
+  }
+
+  const sourceRef = verification.source_ref && typeof verification.source_ref === 'object'
+    && !Array.isArray(verification.source_ref)
+    ? verification.source_ref
+    : {};
+  const connector = (store.wafConnectors ?? []).find(
+    (candidate) =>
+      candidate.id === sourceRef.connector_id
+      && candidate.tenant_id === ctx.tenantId,
+  );
+  const currentProof = Boolean(connector) && (store.wafConnectorSnapshots ?? []).some(
+    (snapshot) =>
+      snapshot.tenant_id === ctx.tenantId
+      && snapshot.connector_id === connector.id
+      && snapshot.resource_ref_hash === sourceRef.resource_ref_hash
+      && isCurrentProviderDnsOwnershipProof({ connector, snapshot, sourceRef, target }),
+  );
   return ownershipProofFromStates({
-    targetState: target
-      ? latestVerificationByTarget(ctx, [target.id]).get(target.id)?.state
-      : null,
+    targetState: currentProof ? 'provider_verified' : 'pending',
   });
 }
 
@@ -628,7 +632,8 @@ export function getLadder(ctx, groupId) {
       count = total;
     } else {
       for (const state of latestByTarget.values()) {
-        if (state.state === id) count += 1;
+        const ladderState = state.state === 'provider_verified' ? 'dns_verified' : state.state;
+        if (ladderState === id) count += 1;
       }
     }
     return {

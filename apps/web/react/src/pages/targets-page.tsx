@@ -104,7 +104,7 @@ function verificationState(item: DataItem) {
 }
 
 function isVerified(state: string) {
-  return ['dns_verified', 'agent_verified', 'user_confirmed', 'verified'].includes(state.trim().toLowerCase());
+  return ['dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed', 'verified'].includes(state.trim().toLowerCase());
 }
 
 function eligibilityTone(value: string): Tone {
@@ -344,7 +344,7 @@ export function TargetsPage({
       {showAdd ? (
         <Card className="targets-intake">
           <CardHeader>
-            <div><CardTitle>Add a single domain</CardTitle><CardDescription>Declare one hostname manually. DNS or agent verification is still required before any probe can run.</CardDescription></div>
+            <div><CardTitle>Add a single domain</CardTitle><CardDescription>Declare one hostname manually. Exact-target DNS verification is required before any external probe can run; agents remain optional.</CardDescription></div>
             <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Close</Button>
           </CardHeader>
           <CardContent>

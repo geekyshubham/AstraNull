@@ -92,7 +92,10 @@ async function createBoundSafeTestRun(baseUrl, headers) {
     },
   });
   assert.equal(runRes.status, 201);
-  return runRes.json.run;
+  const storedRun = store.testRuns.find((run) => run.id === runRes.json.run.id);
+  storedRun.status = 'completed';
+  storedRun.completed_at = new Date().toISOString();
+  return { ...runRes.json.run, status: 'completed', completed_at: storedRun.completed_at };
 }
 
 function clearProbeEventsForRun(testRunId) {
@@ -177,6 +180,11 @@ async function finalizeProtectedPosture(baseUrl, headers, asset) {
       waf_product_hint: 'cloudflare',
     },
   });
+  injectMetadataAgentObservation({
+    testRunId: safeRun.id,
+    nonceHash,
+    metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
+  });
 
   const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
     headers,
@@ -193,6 +201,38 @@ async function finalizeProtectedPosture(baseUrl, headers, asset) {
   });
   assert.equal(finalize.status, 200);
   assert.equal(finalize.json.posture.status, 'protected');
+  return { validationRunId: runId, posture: finalize.json.posture, safeRun };
+}
+
+async function finalizeEdgeProtectedPosture(baseUrl, headers, asset) {
+  const safeRun = await createBoundSafeTestRun(baseUrl, headers);
+  clearProbeEventsForRun(safeRun.id);
+  getStore().events = getStore().events.filter(
+    (event) => !(event.test_run_id === safeRun.id && event.signal_type === 'agent_observation'),
+  );
+  const nonceHash = safeRun.correlation?.nonce_hash ?? 'nonce_helper_edge_protected';
+  injectMetadataProbeEvent({
+    testRunId: safeRun.id,
+    nonceHash,
+    externalResult: 'blocked',
+    metadata: {
+      waf_fingerprint_detected: true,
+      waf_product_hint: 'cloudflare',
+    },
+  });
+
+  const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+    headers,
+    body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+  });
+  assert.equal(validation.status, 201);
+  const runId = validation.json.validation_run.id;
+  const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${runId}/finalize`, {
+    headers,
+    body: {},
+  });
+  assert.equal(finalize.status, 200);
+  assert.equal(finalize.json.posture.status, 'edge_protected');
   return { validationRunId: runId, posture: finalize.json.posture, safeRun };
 }
 
@@ -220,7 +260,14 @@ async function finalizeUnderprotectedMarkerLeak(baseUrl, headers, asset, { safeR
 
   const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${runId}/finalize`, {
     headers,
-    body: {},
+    body: {
+      waf_detected: false,
+      validation_passed: true,
+      validation_failed: false,
+      origin_bypass_confirmed: false,
+      source_external: false,
+      source_agent: false,
+    },
   });
   assert.equal(finalize.status, 200);
   assert.ok(['underprotected', 'unprotected'].includes(finalize.json.posture.status));
@@ -348,6 +395,41 @@ describe('WAF posture API', () => {
     assert.equal(validation.json.validation_run.safety_profile_json.probe_profile.max_requests, 2);
   });
 
+  it('rejects finalization while a bound test run is still active', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    getStore().testRuns.push({
+      id: 'run_active_waf',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'waf.fingerprint.safe',
+      status: 'collecting',
+      created_at: new Date().toISOString(),
+    });
+    const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: {
+        waf_asset_id: asset.id,
+        modes: ['marker'],
+        test_run_id: 'run_active_waf',
+      },
+    });
+    assert.equal(validation.status, 201);
+    const beforeSnapshots = getStore().wafPostureSnapshots.length;
+
+    const finalize = await request(
+      baseUrl,
+      'POST',
+      `/v1/waf/validations/${validation.json.validation_run.id}/finalize`,
+      { headers: engineer, body: {} },
+    );
+    assert.equal(finalize.status, 409);
+    assert.equal(finalize.json.error, 'invalid_request');
+    assert.match(finalize.json.message, /successfully completed/i);
+    assert.equal(getStore().wafPostureSnapshots.length, beforeSnapshots);
+  });
+
   it('rejects unsafe finalize payloads and does not persist evidence', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
@@ -464,6 +546,132 @@ describe('WAF posture API', () => {
     assert.equal(finalize.json.error, 'waf_validation_evidence_required');
   });
 
+  it('does not use same-tenant events to corroborate an unbound nonce claim', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const nonceHash = 'b'.repeat(64);
+    const probeId = 'evt_other_target_probe';
+    getStore().events.push(
+      {
+        id: probeId,
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_other_target',
+        target_id: 'tgt_other',
+        check_id: 'waf.marker_rule.safe',
+        source: 'probe_worker',
+        signal_type: 'probe_result',
+        timestamp: new Date().toISOString(),
+        nonce_hash: nonceHash,
+        metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+      },
+      {
+        id: 'evt_other_target_agent',
+        tenant_id: 'ten_demo',
+        test_run_id: 'run_other_target',
+        target_id: 'tgt_other',
+        check_id: 'waf.marker_rule.safe',
+        source: 'agent',
+        signal_type: 'agent_observation',
+        timestamp: new Date().toISOString(),
+        nonce_hash: nonceHash,
+        metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
+      },
+    );
+
+    const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: { waf_asset_id: asset.id, modes: ['marker'] },
+    });
+    const runId = validation.json.validation_run.id;
+    const beforeSnaps = getStore().wafPostureSnapshots.length;
+
+    const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${runId}/finalize`, {
+      headers: engineer,
+      body: {
+        waf_detected: true,
+        validation_passed: true,
+        scenario_results: [{
+          scenario_family: 'marker',
+          observed_action: 'block',
+          passed: true,
+          evidence_summary: { nonce_hash: nonceHash, request_id: probeId },
+        }],
+      },
+    });
+
+    assert.equal(finalize.status, 400);
+    assert.equal(finalize.json.error, 'waf_validation_evidence_required');
+    assert.equal(getStore().wafPostureSnapshots.length, beforeSnaps);
+  });
+
+  it('ignores conflicting client scenarios and booleans for a bound marker leak', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const safeRun = await createBoundSafeTestRun(baseUrl, engineer);
+    clearProbeEventsForRun(safeRun.id);
+    const nonceHash = 'c'.repeat(64);
+    const probeId = injectMetadataProbeEvent({
+      testRunId: safeRun.id,
+      nonceHash,
+      externalResult: 'blocked',
+      metadata: { waf_fingerprint_detected: true, waf_product_hint: 'cloudflare' },
+    });
+    injectMetadataAgentObservation({
+      testRunId: safeRun.id,
+      nonceHash,
+      metadata: { waf_marker: true, observed_action: 'reached_origin' },
+    });
+
+    const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+    });
+    const runId = validation.json.validation_run.id;
+    const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${runId}/finalize`, {
+      headers: engineer,
+      body: {
+        waf_detected: false,
+        validation_passed: true,
+        edge_protected: true,
+        validation_failed: false,
+        origin_bypass_confirmed: true,
+        source_external: false,
+        source_agent: false,
+        scenario_results: [{
+          scenario_family: 'marker',
+          expected_action: 'block',
+          observed_action: 'block',
+          passed: true,
+          confidence: 1,
+          evidence_summary: { nonce_hash: nonceHash, request_id: probeId },
+        }],
+      },
+    });
+
+    assert.equal(finalize.status, 200);
+    assert.equal(finalize.json.posture.status, 'underprotected');
+    assert.deepEqual(finalize.json.posture.reason_codes, ['marker_rule_not_blocking']);
+    assert.equal(finalize.json.posture.source_mix.external, true);
+    assert.equal(finalize.json.posture.source_mix.agent, true);
+
+    const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${runId}`, {
+      headers: engineer,
+    });
+    assert.deepEqual(detail.json.validation_run.summary_json, {
+      waf_detected: true,
+      validation_passed: false,
+      edge_protected: false,
+      validation_failed: true,
+      origin_bypass_confirmed: false,
+      posture_status: 'underprotected',
+      reason_codes: ['marker_rule_not_blocking'],
+    });
+    assert.equal(detail.json.scenario_results.length, 1);
+    assert.equal(detail.json.scenario_results[0].passed, false);
+    assert.equal(detail.json.scenario_results[0].observed_action, 'allow');
+    assert.equal(detail.json.scenario_results[0].evidence_summary_json.request_id, probeId);
+  });
+
   it('finalizes protected posture when bound probe evidence corroborates validation pass', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
@@ -478,6 +686,11 @@ describe('WAF posture API', () => {
         waf_fingerprint_detected: true,
         waf_product_hint: 'cloudflare',
       },
+    });
+    injectMetadataAgentObservation({
+      testRunId: safeRun.id,
+      nonceHash,
+      metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
     });
 
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -657,7 +870,7 @@ describe('WAF posture API', () => {
     assert.ok(finalize.json.posture.reason_codes.includes('insufficient_validation_evidence'));
   });
 
-  it('rejects cross-tenant or mismatched target_group test_run_id binding', async () => {
+  it('requires bound test_run_id to match one explicit WAF asset target exactly', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const safeRun = await createBoundSafeTestRun(baseUrl, engineer);
@@ -686,14 +899,32 @@ describe('WAF posture API', () => {
     assert.equal(crossTenant.status, 404);
     assert.equal(crossTenant.json.error, 'test_run_not_found');
 
-    getStore().testRuns.push({
-      id: 'run_wrong_tg',
-      tenant_id: 'ten_demo',
-      target_group_id: 'tg_other_demo',
-      target_id: 'tgt_1',
-      check_id: 'waf.marker_rule.safe',
-      status: 'collecting',
-    });
+    getStore().testRuns.push(
+      {
+        id: 'run_wrong_tg',
+        tenant_id: 'ten_demo',
+        target_group_id: 'tg_other_demo',
+        target_id: 'tgt_1',
+        check_id: 'waf.marker_rule.safe',
+        status: 'collecting',
+      },
+      {
+        id: 'run_wrong_target',
+        tenant_id: 'ten_demo',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_other',
+        check_id: 'waf.marker_rule.safe',
+        status: 'collecting',
+      },
+      {
+        id: 'run_missing_target',
+        tenant_id: 'ten_demo',
+        target_group_id: 'tg_1',
+        target_id: null,
+        check_id: 'waf.marker_rule.safe',
+        status: 'collecting',
+      },
+    );
     getStore().targetGroups.push({
       id: 'tg_other_demo',
       tenant_id: 'ten_demo',
@@ -701,12 +932,39 @@ describe('WAF posture API', () => {
       name: 'Other demo TG',
     });
 
-    const wrongGroup = await request(baseUrl, 'POST', '/v1/waf/validations', {
+    for (const [testRunId, messagePattern] of [
+      ['run_wrong_tg', /target group/i],
+      ['run_wrong_target', /exactly match/i],
+      ['run_missing_target', /explicit target_id/i],
+    ]) {
+      const rejected = await request(baseUrl, 'POST', '/v1/waf/validations', {
+        headers: engineer,
+        body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: testRunId },
+      });
+      assert.equal(rejected.status, 400);
+      assert.equal(rejected.json.error, 'invalid_request');
+      assert.match(rejected.json.message, messagePattern);
+    }
+
+    const ambiguousAsset = await request(baseUrl, 'POST', '/v1/waf/assets', {
       headers: engineer,
-      body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: 'run_wrong_tg' },
+      body: {
+        target_group_id: 'tg_1',
+        canonical_url: 'https://ambiguous.example.com',
+      },
     });
-    assert.equal(wrongGroup.status, 400);
-    assert.equal(wrongGroup.json.error, 'invalid_request');
+    assert.equal(ambiguousAsset.status, 201);
+    const ambiguous = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: {
+        waf_asset_id: ambiguousAsset.json.asset.id,
+        modes: ['marker'],
+        test_run_id: safeRun.id,
+      },
+    });
+    assert.equal(ambiguous.status, 400);
+    assert.equal(ambiguous.json.error, 'invalid_request');
+    assert.match(ambiguous.json.message, /explicit target_id/i);
 
     const bound = await request(baseUrl, 'POST', '/v1/waf/validations', {
       headers: engineer,
@@ -716,7 +974,7 @@ describe('WAF posture API', () => {
     assert.equal(bound.json.validation_run.test_run_id, safeRun.id);
   });
 
-  it('derives protected posture from blocked probe with WAF fingerprint and nonce binding', async () => {
+  it('derives edge-protected posture from blocked probe with WAF fingerprint and nonce binding', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const safeRun = await createBoundSafeTestRun(baseUrl, engineer);
@@ -740,13 +998,20 @@ describe('WAF posture API', () => {
 
     const finalize = await request(baseUrl, 'POST', `/v1/waf/validations/${runId}/finalize`, {
       headers: engineer,
-      body: {},
+      body: {
+        validation_passed: true,
+        validation_failed: false,
+        source_agent: true,
+      },
     });
     assert.equal(finalize.status, 200);
-    assert.equal(finalize.json.posture.status, 'protected');
+    assert.equal(finalize.json.posture.status, 'edge_protected');
+    assert.equal(finalize.json.posture.source_mix.agent, false);
 
     const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${runId}`, { headers: engineer });
     assert.equal(detail.status, 200);
+    assert.equal(detail.json.validation_run.summary_json.validation_passed, false);
+    assert.equal(detail.json.validation_run.summary_json.edge_protected, true);
     assert.equal(detail.json.scenario_results.length, 1);
     assert.equal(detail.json.scenario_results[0].passed, true);
     assert.equal(detail.json.scenario_results[0].evidence_summary_json.blocked, true);
@@ -756,9 +1021,20 @@ describe('WAF posture API', () => {
   it('classifies matching agent marker observation as underprotected, not protected', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
-    const { posture } = await finalizeUnderprotectedMarkerLeak(baseUrl, engineer, asset);
+    const { posture, validationRunId } = await finalizeUnderprotectedMarkerLeak(
+      baseUrl,
+      engineer,
+      asset,
+    );
     assert.notEqual(posture.status, 'protected');
     assert.ok(['underprotected', 'unprotected'].includes(posture.status));
+    assert.equal(posture.source_mix.external, true);
+    assert.equal(posture.source_mix.agent, true);
+    const detail = await request(baseUrl, 'GET', `/v1/waf/validations/${validationRunId}`, {
+      headers: engineer,
+    });
+    assert.equal(detail.json.validation_run.summary_json.validation_passed, false);
+    assert.equal(detail.json.validation_run.summary_json.validation_failed, true);
   });
 
   it('creates one open WAF posture finding when marker validation is underprotected', async () => {
@@ -929,6 +1205,89 @@ describe('WAF drift events API', () => {
     assert.equal(list.json.items.length, 0);
   });
 
+  it('emits mode_change drift when protected posture loses agent corroboration', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const protectedOutcome = await finalizeProtectedPosture(baseUrl, engineer, asset);
+    const safeRun = protectedOutcome.safeRun;
+    clearProbeEventsForRun(safeRun.id);
+    getStore().events = getStore().events.filter(
+      (event) => !(event.test_run_id === safeRun.id && event.signal_type === 'agent_observation'),
+    );
+    const nonceHash = safeRun.correlation?.nonce_hash ?? 'nonce_protected_to_edge';
+    injectMetadataProbeEvent({
+      testRunId: safeRun.id,
+      nonceHash,
+      externalResult: 'blocked',
+      metadata: { waf_fingerprint_detected: true, waf_product_hint: 'cloudflare' },
+    });
+
+    const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+    });
+    const finalize = await request(
+      baseUrl,
+      'POST',
+      `/v1/waf/validations/${validation.json.validation_run.id}/finalize`,
+      { headers: engineer, body: {} },
+    );
+
+    assert.equal(finalize.status, 200);
+    assert.equal(finalize.json.posture.status, 'edge_protected');
+    const drifts = openWafDriftEventsForAsset(asset.id, 'mode_change');
+    assert.equal(drifts.length, 1);
+    assert.equal(drifts[0].before_summary_json.status, 'protected');
+    assert.equal(drifts[0].after_summary_json.status, 'edge_protected');
+  });
+
+  it('emits marker_failed drift when edge-protected posture becomes underprotected', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const edgeOutcome = await finalizeEdgeProtectedPosture(baseUrl, engineer, asset);
+
+    const leak = await finalizeUnderprotectedMarkerLeak(baseUrl, engineer, asset, {
+      safeRun: edgeOutcome.safeRun,
+    });
+
+    assert.equal(leak.posture.status, 'underprotected');
+    const drifts = openWafDriftEventsForAsset(asset.id, 'marker_failed');
+    assert.equal(drifts.length, 1);
+    assert.equal(drifts[0].before_summary_json.status, 'edge_protected');
+    assert.equal(drifts[0].after_summary_json.status, 'underprotected');
+  });
+
+  it('emits fingerprint_lost drift when edge-protected posture becomes unprotected', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const edgeOutcome = await finalizeEdgeProtectedPosture(baseUrl, engineer, asset);
+    const safeRun = edgeOutcome.safeRun;
+    getStore().events = getStore().events.filter(
+      (event) => !(
+        event.test_run_id === safeRun.id
+        && ['probe_result', 'agent_observation'].includes(event.signal_type)
+      ),
+    );
+
+    const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
+      headers: engineer,
+      body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+    });
+    const finalize = await request(
+      baseUrl,
+      'POST',
+      `/v1/waf/validations/${validation.json.validation_run.id}/finalize`,
+      { headers: engineer, body: { waf_detected: true, validation_passed: true } },
+    );
+
+    assert.equal(finalize.status, 200);
+    assert.equal(finalize.json.posture.status, 'unprotected');
+    const drifts = openWafDriftEventsForAsset(asset.id, 'fingerprint_lost');
+    assert.equal(drifts.length, 1);
+    assert.equal(drifts[0].before_summary_json.status, 'edge_protected');
+    assert.equal(drifts[0].after_summary_json.status, 'unprotected');
+  });
+
   it('creates one open marker_failed drift after protected then underprotected marker leak', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
@@ -962,6 +1321,31 @@ describe('WAF drift events API', () => {
     assert.ok(['underprotected', 'unprotected'].includes(detectedAudits[0].metadata.posture_to));
   });
 
+  it('preserves critical severity in the drift upsert path', async () => {
+    const engineer = demoHeaders('engineer');
+    const asset = await createDemoAsset(baseUrl, engineer);
+    const protectedOutcome = await finalizeProtectedPosture(baseUrl, engineer, asset);
+    getStore().wafDriftEvents.push({
+      id: `drift_preexisting_critical_${asset.id}`,
+      tenant_id: 'ten_demo',
+      waf_asset_id: asset.id,
+      drift_type: 'marker_failed',
+      severity: 'critical',
+      before_summary_json: { status: 'protected' },
+      after_summary_json: { status: 'underprotected' },
+      status: 'open',
+      finding_id: null,
+      created_at: new Date().toISOString(),
+    });
+
+    await finalizeUnderprotectedMarkerLeak(baseUrl, engineer, asset, {
+      safeRun: protectedOutcome.safeRun,
+    });
+    const drifts = openWafDriftEventsForAsset(asset.id, 'marker_failed');
+    assert.equal(drifts.length, 1);
+    assert.equal(drifts[0].severity, 'critical');
+  });
+
   it('updates the same open drift event on repeat failed finalize', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
@@ -970,6 +1354,7 @@ describe('WAF drift events API', () => {
       safeRun: protectedOutcome.safeRun,
     });
     const drift = openWafDriftEventsForAsset(asset.id, 'marker_failed')[0];
+    drift.severity = 'critical';
     const detectedBefore = getStore().auditLog.filter(
       (e) => e.action === 'waf.drift.detected' && e.resource_id === drift.id,
     ).length;
@@ -980,6 +1365,7 @@ describe('WAF drift events API', () => {
     const drifts = openWafDriftEventsForAsset(asset.id, 'marker_failed');
     assert.equal(drifts.length, 1);
     assert.equal(drifts[0].id, drift.id);
+    assert.equal(drifts[0].severity, 'critical');
     assert.ok(drifts[0].updated_at);
     assert.equal(drifts[0].finding_id, openWafPostureFindingsForAsset(asset.id)[0].id);
     assert.equal(drifts[0].after_summary_json.status, second.posture.status);
@@ -1227,7 +1613,7 @@ describe('WAF connector API', () => {
     assert.equal(getStore().wafConnectors?.length ?? 0, before);
   });
 
-  it('validate is local-only and requires read_only', async () => {
+  it('does not reactivate a disabled non-read-only connector through local validation', async () => {
     const admin = demoHeaders('admin');
     const created = await request(baseUrl, 'POST', '/v1/connectors', {
       headers: admin,
@@ -1244,15 +1630,14 @@ describe('WAF connector API', () => {
     const validate = await request(baseUrl, 'POST', `/v1/connectors/${connectorId}/validate`, {
       headers: admin,
     });
-    assert.equal(validate.status, 200);
-    assert.equal(validate.json.status, 'error');
-    assert.ok(validate.json.redacted_errors[0].includes('read_only'));
+    assert.equal(validate.status, 409);
+    assert.equal(validate.json.error, 'connector_disabled');
 
     const stored = getStore().wafConnectors.find((c) => c.id === connectorId);
-    assert.equal(stored.status, 'error');
+    assert.equal(stored.status, 'disabled');
   });
 
-  it('fails closed on outbound poll without encryption key but keeps manual ingest', async () => {
+  it('queues outbound provider work without decrypting credentials in the customer request', async () => {
     const admin = demoHeaders('admin');
     const connector = await createReadOnlyConnector(admin);
 
@@ -1260,9 +1645,10 @@ describe('WAF connector API', () => {
       headers: admin,
       body: {},
     });
-    assert.equal(outbound.status, 503);
-    assert.equal(outbound.json.error, 'connector_poll_failed');
-    assert.equal(outbound.json.health.health_code, 'encryption_not_configured');
+    assert.equal(outbound.status, 202);
+    assert.equal(outbound.json.poll_job.status, 'pending');
+    assert.equal(outbound.json.poll_job.snapshot_count, 0);
+    assert.deepEqual(outbound.json.snapshots, []);
 
     const manual = await request(baseUrl, 'POST', `/v1/connectors/${connector.id}/poll`, {
       headers: admin,
@@ -2320,7 +2706,7 @@ describe('WAF report export API', () => {
     assert.ok(res.json.error);
   });
 
-  it('includes control-bypass effectiveness on asset detail', async () => {
+  it('keeps client-asserted control bypass suspected without trusted origin evidence', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
@@ -2341,7 +2727,7 @@ describe('WAF report export API', () => {
 
     const detail = await request(baseUrl, 'GET', `/v1/waf/assets/${asset.id}`, { headers: engineer });
     assert.equal(detail.status, 200);
-    assert.equal(detail.json.effectiveness.control_bypass_status, 'confirmed');
+    assert.equal(detail.json.effectiveness.control_bypass_status, 'suspected');
     assert.ok(detail.json.effectiveness.control_bypass_classes.length > 0);
   });
 

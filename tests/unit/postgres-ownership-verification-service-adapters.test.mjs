@@ -53,6 +53,75 @@ function dbRow(overrides = {}) {
   };
 }
 
+// Anchored 2 hours in the past so connector.last_success_at always satisfies the
+// production freshness window (<= now, within PROVIDER_OWNERSHIP_MAX_AGE_MS = 24h).
+function providerProofInstant(offsetMs = 0) {
+  return new Date(Date.now() - 2 * 60 * 60 * 1000 + offsetMs).toISOString();
+}
+
+function providerVerificationRow({
+  provider = 'cloudflare',
+  connectorStatus = 'active',
+  secretId = 'sec_provider_1',
+  lastSuccessAt = providerProofInstant(),
+  snapshotObservedAt = lastSuccessAt,
+  sourceResourceRef = 'hash_zone_1',
+  snapshotResourceRef = sourceResourceRef,
+  targetHostname = 'app.example.com',
+  snapshotHostnames = [targetHostname],
+  tags = ['resource_status:active', 'ownership_eligible:true'],
+  snapshotId = 'snap_current',
+  snapshotKind = 'dns_zone',
+  evidenceSource = 'provider_api',
+  sourceKind = 'provider_account',
+  featureEnabled = true,
+  featureRevision = 2,
+  connectorRevision = 7,
+  snapshotRevision = connectorRevision,
+} = {}) {
+  const originalPoll = providerProofInstant(-60 * 60 * 1000);
+  return {
+    id: 'tv_provider_1',
+    tenant_id: CTX.tenantId,
+    target_id: 'tgt_1',
+    state: 'provider_verified',
+    source_kind: sourceKind,
+    source_ref: {
+      connector_id: 'conn_provider_1',
+      provider,
+      snapshot_kind: 'dns_zone',
+      evidence_source: 'provider_api',
+      resource_ref_hash: sourceResourceRef,
+      snapshot_id: 'snap_original',
+      observed_at: originalPoll,
+      poll_generation: originalPoll,
+    },
+    transitioned_at: new Date(originalPoll),
+    transitioned_by: CTX.userId,
+    audit_entry_id: 'audit_provider_1',
+    proof_target_kind: 'fqdn',
+    proof_target_value: targetHostname,
+    proof_target_normalized_value: targetHostname,
+    proof_connector_feature_enabled: featureEnabled,
+    proof_connector_feature_revision: featureRevision,
+    proof_connector_id: 'conn_provider_1',
+    proof_connector_provider: provider,
+    proof_connector_status: connectorStatus,
+    proof_connector_secret_id: secretId,
+    proof_connector_last_success_at: new Date(lastSuccessAt),
+    proof_connector_last_success_revision: connectorRevision,
+    proof_snapshot_id: snapshotId,
+    proof_snapshot_connector_id: snapshotId ? 'conn_provider_1' : null,
+    proof_snapshot_provider: snapshotId ? provider : null,
+    proof_snapshot_kind: snapshotId ? snapshotKind : null,
+    proof_snapshot_resource_ref_hash: snapshotId ? snapshotResourceRef : null,
+    proof_snapshot_summary_json: snapshotId ? { hostnames: snapshotHostnames, tags } : null,
+    proof_snapshot_evidence_source: snapshotId ? evidenceSource : null,
+    proof_snapshot_poll_revision: snapshotId ? snapshotRevision : null,
+    proof_snapshot_observed_at: snapshotId ? new Date(snapshotObservedAt) : null,
+  };
+}
+
 function buildServices(pool, audit = { appendAuditEvent: async () => ({ id: 'audit_1' }) }) {
   const ownershipVerifications = createOwnershipVerificationRepository(pool);
   return createPostgresOwnershipVerificationServices({
@@ -279,6 +348,65 @@ describe('postgres ownership verification service adapters', () => {
     assert.match(query.text, /WHEN 'user_confirmed' THEN 4/);
   });
 
+  it('keeps current provider proof valid after a degraded failed poll retains last_success', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/FROM target_groups tg/i.test(text) && /JOIN LATERAL/i.test(text)) {
+        return { rows: [providerVerificationRow({ connectorStatus: 'degraded' })] };
+      }
+      return { rows: [] };
+    });
+    const repo = createOwnershipVerificationRepository(pool);
+
+    const current = await repo.getCurrentTargetVerification(CTX, 'tg_1', 'tgt_1');
+
+    assert.equal(current.state, 'provider_verified');
+    const query = dataQueries(pool.client).find((entry) => /JOIN LATERAL/i.test(entry.text));
+    assert.match(query.text, /connector_feature\.enabled AS proof_connector_feature_enabled/);
+    assert.match(query.text, /connector_feature\.revision AS proof_connector_feature_revision/);
+    assert.match(query.text, /LEFT JOIN tenant_connector_features connector_feature/);
+    assert.match(query.text, /ownership_connector\.status AS proof_connector_status/);
+    assert.match(query.text, /ownership_connector\.secret_id AS proof_connector_secret_id/);
+    assert.match(query.text, /candidate_snapshot\.evidence_source = 'provider_api'/);
+    assert.match(query.text, /candidate_snapshot\.snapshot_kind = 'dns_zone'/);
+    assert.match(query.text, /candidate_snapshot\.observed_at = ownership_connector\.last_success_at/);
+    assert.match(query.text, /candidate_snapshot\.poll_revision = ownership_connector\.last_success_revision/);
+    assert.match(query.text, /candidate_snapshot\.resource_ref_hash = tv\.source_ref->>'resource_ref_hash'/);
+  });
+
+  for (const [label, overrides] of [
+    ['disabled tenant connector feature', { featureEnabled: false }],
+    ['successful empty poll', { snapshotId: null, lastSuccessAt: providerProofInstant(60 * 60 * 1000) }],
+    ['disabled connector', { connectorStatus: 'disabled' }],
+    ['removed vault secret', { secretId: null }],
+    ['pending Cloudflare zone', { tags: ['resource_status:pending', 'ownership_eligible:false'] }],
+    ['status-absent Cloudflare zone', { tags: ['ownership_eligible:true'] }],
+    ['Namecheap sandbox', {
+      provider: 'namecheap',
+      tags: ['resource_status:sandbox', 'provider_environment:sandbox', 'ownership_eligible:false'],
+    }],
+    ['manual snapshot', { evidenceSource: 'manual_metadata' }],
+    ['stale snapshot generation', { snapshotObservedAt: providerProofInstant(-1000) }],
+    ['same-timestamp stale poll revision', { connectorRevision: 8, snapshotRevision: 7 }],
+    ['different provider resource', { snapshotResourceRef: 'hash_other_zone' }],
+    ['different hostname', { snapshotHostnames: ['victim.example.com'] }],
+    ['non-provider source kind', { sourceKind: 'connector_inventory' }],
+  ]) {
+    it(`downgrades provider_verified for ${label}`, async () => {
+      const pool = createRecordingPool((text) => {
+        if (/FROM target_groups tg/i.test(text) && /JOIN LATERAL/i.test(text)) {
+          return { rows: [providerVerificationRow(overrides)] };
+        }
+        return { rows: [] };
+      });
+      const repo = createOwnershipVerificationRepository(pool);
+
+      const current = await repo.getCurrentTargetVerification(CTX, 'tg_1', 'tgt_1');
+
+      assert.equal(current.state, 'pending');
+      assert.equal(current.target_id, 'tgt_1');
+    });
+  }
+
   it('verifyOwnershipSetup returns ready without INSERT or UPDATE', async () => {
     const pool = createRecordingPool(ownershipSetupPoolHandler());
     const services = buildServicesWithAgent(pool, onlineAgent());
@@ -314,6 +442,98 @@ describe('postgres ownership verification service adapters', () => {
     assert.equal(result.error, 'agent_not_online');
     assert.equal(result.status, 409);
     assertSelectOnlyDataQueries(pool.client);
+  });
+
+  it('creates signed ownership verification and probe job in one transaction', async () => {
+    const pool = createRecordingPool((text, params) => {
+      if (/FROM target_groups/i.test(text)) {
+        return { rows: [{
+          id: 'tg_1', tenant_id: CTX.tenantId, validation_mode: 'agent_assisted',
+          ownership_status: 'unverified', dns_ownership: null, archived_at: null,
+        }] };
+      }
+      if (/FROM targets/i.test(text) && /kind = 'fqdn'/i.test(text)) {
+        return { rows: [{ value: 'app.example.com' }] };
+      }
+      if (/INSERT INTO ownership_verifications/i.test(text)) {
+        assert.match(text, /CURRENT_TIMESTAMP/);
+        return { rows: [dbRow({
+          id: params[0],
+          challenge_nonce_hash: params[6],
+          probe_job_id: params[12],
+          created_at: new Date(),
+        })] };
+      }
+      return { rows: [] };
+    });
+    let probeInsert;
+    const ownershipVerifications = createOwnershipVerificationRepository(pool);
+    const services = createPostgresOwnershipVerificationServices({
+      repositories: { ownershipVerifications },
+      agentControl: { getAgentById: async () => onlineAgent() },
+      probeJobs: {
+        async createProbeJob(ctx, job, options) {
+          probeInsert = { ctx, job, options };
+          return job;
+        },
+      },
+      audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
+    });
+
+    const result = await services.createOwnershipChallenge(CTX, {
+      target_group_id: 'tg_1',
+      agent_id: 'agt_1',
+    }, {
+      probeMode: 'signed-worker',
+      probeWorkerSecret: 'probe-worker-secret-at-least-32-chars',
+    });
+
+    assert.ok(result.verification.probe_job_id);
+    assert.equal(probeInsert.options.client, pool.client);
+    assert.equal(probeInsert.job.ownership_verification_id, result.verification.id);
+    assert.equal(probeInsert.job.test_run_id, result.verification.id);
+    assert.equal(probeInsert.job.target_id, 'agt_1');
+    assert.equal(pool.client.queries[0].text, 'BEGIN');
+    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
+  });
+
+  it('rolls back signed ownership verification when probe job insertion fails', async () => {
+    const pool = createRecordingPool((text, params) => {
+      if (/FROM target_groups/i.test(text)) {
+        return { rows: [{ id: 'tg_1', tenant_id: CTX.tenantId, archived_at: null }] };
+      }
+      if (/FROM targets/i.test(text) && /kind = 'fqdn'/i.test(text)) {
+        return { rows: [{ value: 'app.example.com' }] };
+      }
+      if (/INSERT INTO ownership_verifications/i.test(text)) {
+        return { rows: [dbRow({ id: params[0], challenge_nonce_hash: params[6] })] };
+      }
+      return { rows: [] };
+    });
+    const ownershipVerifications = createOwnershipVerificationRepository(pool);
+    const services = createPostgresOwnershipVerificationServices({
+      repositories: { ownershipVerifications },
+      agentControl: { getAgentById: async () => onlineAgent() },
+      probeJobs: { createProbeJob: async () => { throw new Error('probe insert failed'); } },
+      audit: { appendAuditEvent: async () => ({ id: 'audit_1' }) },
+    });
+
+    await assert.rejects(
+      services.createOwnershipChallenge(CTX, {
+        target_group_id: 'tg_1',
+        agent_id: 'agt_1',
+      }, {
+        probeMode: 'signed-worker',
+        probeWorkerSecret: 'probe-worker-secret-at-least-32-chars',
+      }),
+      /probe insert failed/,
+    );
+    assert.equal(pool.client.queries.at(-1).text, 'ROLLBACK');
+    const lastBegin = pool.client.queries.findLastIndex((query) => query.text === 'BEGIN');
+    assert.equal(
+      pool.client.queries.slice(lastBegin + 1).some((query) => query.text === 'COMMIT'),
+      false,
+    );
   });
 
   it('atomically confirms only A, keeps unverified B in the summary, and is idempotent', async () => {

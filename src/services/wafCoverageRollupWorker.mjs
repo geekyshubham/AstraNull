@@ -161,6 +161,7 @@ export function runCoverageRollup(ctx) {
       rollup_date: rollupDate,
       total_assets: record.total_assets,
       protected: record.protected,
+      edge_protected: record.edge_protected,
       underprotected: record.underprotected,
       unprotected: record.unprotected,
       unknown: record.unknown,

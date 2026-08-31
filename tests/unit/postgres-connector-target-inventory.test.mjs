@@ -8,6 +8,9 @@ import { PORTAL_REVAMP_REPOSITORY_METHODS } from '../../src/persistence/postgres
 
 const CTX = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
 
+// Snapshots must read as a recent successful poll (within PROVIDER_OWNERSHIP_MAX_AGE_MS).
+const lastSuccessAt = new Date(Date.now() - 60_000).toISOString();
+
 function portalRepositoryDouble() {
   return Object.fromEntries(PORTAL_REVAMP_REPOSITORY_METHODS.map((method) => [method, async () => null]));
 }
@@ -17,13 +20,18 @@ function createServices(overrides = {}) {
   const connector = overrides.connector ?? {
     id: 'conn_1', tenant_id: CTX.tenantId, provider: 'cloudflare', name: 'Production DNS',
     status: 'active', secret_id: 'secret_must_not_leak', config: { api_token: 'must_not_leak' },
-    last_success_at: '2026-06-01T12:00:00.000Z',
+    last_success_at: lastSuccessAt, last_success_revision: 7,
   };
   const snapshots = overrides.snapshots ?? [{
     id: 'snap_1', tenant_id: CTX.tenantId, connector_id: 'conn_1', provider: 'cloudflare',
-    snapshot_kind: 'zones', resource_ref_hash: 'sha256:zone-1', display_ref: 'Example.COM.',
-    summary: { result: [{ id: 'zone-secret-provider-ref', name: 'Example.COM.', status: 'active' }] },
-    observed_at: '2026-06-01T12:00:00.000Z',
+    snapshot_kind: 'dns_zone', resource_ref_hash: 'sha256:zone-1', display_ref: 'Example.COM.',
+    summary: {
+      result: [{ id: 'zone-secret-provider-ref', name: 'Example.COM.', status: 'active' }],
+      hostnames: ['Example.COM.'],
+      tags: ['ownership_eligible:true', 'resource_status:active'],
+    },
+    evidence_source: 'provider_api', inventory_complete: true, inventory_truncated: false,
+    poll_revision: 7, observed_at: lastSuccessAt,
   }];
   const coreCatalog = {
     async restoreTargetGroup() { return { restored: true, id: 'tg_1', audit_entry_id: 'audit_1' }; },
@@ -39,6 +47,7 @@ function createServices(overrides = {}) {
     audit: {},
     validationEvidence: {},
     wafPosture: {
+      async isConnectorFeatureEnabled() { return true; },
       async getConnector(ctx, id) {
         return id === connector.id && ctx.tenantId === connector.tenant_id ? connector : null;
       },
@@ -60,7 +69,7 @@ describe('Postgres connector target inventory', () => {
     ]);
     assert.equal(result.count, 1);
     const serialized = JSON.stringify(result);
-    assert.doesNotMatch(serialized, /api_token|must_not_leak|secret_id/i);
+    assert.doesNotMatch(serialized, /api_token|must_not_leak|secret_id|poll_revision/i);
   });
 
   it('passes a verified connector and exact canonical inventory set into transactional bulk import', async () => {
@@ -74,6 +83,11 @@ describe('Postgres connector target inventory', () => {
     assert.equal(result.count, 1);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].options.trustedConnector.id, 'conn_1');
+    assert.equal(calls[0].options.trustedConnector.last_success_revision, 7);
+    assert.equal(
+      calls[0].options.connectorInventoryEvidence.get(targetDedupeKey(body.items[0])).poll_revision,
+      7,
+    );
     assert.ok(calls[0].options.connectorInventoryKeys.has(targetDedupeKey(body.items[0])));
   });
 

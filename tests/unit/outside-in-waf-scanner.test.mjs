@@ -221,7 +221,8 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.waf_detected, true);
     assert.equal(outcome.detected_vendor, 'cloudflare');
-    assert.equal(outcome.posture_label, 'Detected, not validated');
+    assert.equal(outcome.posture_label, 'Edge protected · not internally validated');
+    assert.equal(outcome.posture_status, 'edge_protected');
     assert.equal(outcome.probe_validation_passed, true);
     assert.equal(outcome.validation_passed, false);
     assert.ok(outcome.marker_probes.some((probe) => probe.family === 'sqli_encoded_marker'));

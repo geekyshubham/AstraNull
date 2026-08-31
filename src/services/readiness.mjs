@@ -7,6 +7,7 @@ import {
   summarizePlacementDiagnostics,
 } from './placement.mjs';
 import { activeTargetGroupsForTenant } from './targetGroups.mjs';
+import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 
 /** Evidence older than this window earns no freshness credit. */
 export const RECENT_EVIDENCE_WINDOW_DAYS = 30;
@@ -50,15 +51,26 @@ function runStatusEligible(run) {
 }
 
 function verdictForRun(store, runId) {
-  return store.verdicts.find((v) => v.test_run_id === runId) ?? null;
+  const verdict = store.verdicts.find((v) => v.test_run_id === runId) ?? null;
+  if (!verdict) return null;
+  const evidenceIds = new Set(Array.isArray(verdict.evidence_ids) ? verdict.evidence_ids : []);
+  if (evidenceIds.size === 0) return null;
+  return [
+    ...eventsForRun(store, runId),
+    ...vaultForRun(store, runId),
+  ].some((evidence) => evidenceIds.has(evidence.id)) ? verdict : null;
 }
 
 function eventsForRun(store, runId) {
-  return store.events.filter((e) => e.test_run_id === runId);
+  return store.events.filter(
+    (event) => event.test_run_id === runId && isTrustedProducerEvent(event),
+  );
 }
 
 function vaultForRun(store, runId) {
-  return (store.evidenceVault ?? []).filter((e) => e.test_run_id === runId);
+  const trustedEventIds = new Set(eventsForRun(store, runId).map((event) => event.id));
+  return (store.evidenceVault ?? []).filter((e) => e.test_run_id === runId
+    && (!e.related_event_id || trustedEventIds.has(e.related_event_id)));
 }
 
 function runHasEvidenceBacking(store, run) {
@@ -126,6 +138,7 @@ function hasAgentObservationEvidence(store, tenantId) {
   return store.events.some(
     (e) =>
       e.tenant_id === tenantId &&
+      isTrustedProducerEvent(e) &&
       (e.signal_type === 'agent_observation' || e.signal_type === 'agent_no_observation'),
   );
 }
@@ -243,7 +256,8 @@ export function computeReadiness(tenantId) {
   const onlineAgents = agents.filter((a) => a.status === 'online');
   const runs = store.testRuns.filter((r) => r.tenant_id === tenantId);
   const findings = store.findings.filter((f) => f.tenant_id === tenantId && f.status === 'open');
-  const verdicts = store.verdicts.filter((v) => v.tenant_id === tenantId);
+  const verdicts = store.verdicts.filter((v) => v.tenant_id === tenantId
+    && verdictForRun(store, v.test_run_id)?.id === v.id);
 
   const factors = [];
 

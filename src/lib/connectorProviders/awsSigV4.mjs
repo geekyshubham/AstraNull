@@ -4,19 +4,20 @@ function sha256Hex(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function hmac(key, value, encoding = 'hex') {
-  return createHmac('sha256', key).update(value, 'utf8').digest(encoding);
+function hmac(key, value, encoding) {
+  const digest = createHmac('sha256', key).update(value, 'utf8');
+  return encoding ? digest.digest(encoding) : digest.digest();
 }
 
 function toAmzDate(date) {
   return date.toISOString().replace(/[:-]|\.\d{3}/g, '');
 }
 
-function getSignatureKey(secretAccessKey, dateStamp, region, service) {
-  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp, undefined);
-  const kRegion = hmac(kDate, region, undefined);
-  const kService = hmac(kRegion, service, undefined);
-  return hmac(kService, 'aws4_request', undefined);
+export function deriveAwsV4SigningKey(secretAccessKey, dateStamp, region, service) {
+  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp);
+  const kRegion = hmac(kDate, region);
+  const kService = hmac(kRegion, service);
+  return hmac(kService, 'aws4_request');
 }
 
 /**
@@ -36,16 +37,17 @@ export function signAwsJsonRequest({
   const amzDate = toAmzDate(now);
   const dateStamp = amzDate.slice(0, 8);
   const payloadHash = sha256Hex(body ?? '');
-  const canonicalHeaders = [
-    `content-type:application/x-amz-json-1.1`,
-    `host:${host}`,
-    `x-amz-date:${amzDate}`,
-    `x-amz-target:${amzTarget}`,
-    ...(credentials.session_token ? [`x-amz-security-token:${credentials.session_token}`] : []),
-  ].join('\n');
-  const signedHeaders = credentials.session_token
-    ? 'content-type;host;x-amz-date;x-amz-target;x-amz-security-token'
-    : 'content-type;host;x-amz-date;x-amz-target';
+  const canonicalHeaderEntries = [
+    ['content-type', 'application/x-amz-json-1.1'],
+    ['host', host],
+    ['x-amz-date', amzDate],
+    ...(credentials.session_token ? [['x-amz-security-token', credentials.session_token]] : []),
+    ['x-amz-target', amzTarget],
+  ].sort(([left], [right]) => left.localeCompare(right));
+  const canonicalHeaders = canonicalHeaderEntries
+    .map(([name, value]) => `${name}:${String(value).trim().replace(/\s+/g, ' ')}`)
+    .join('\n');
+  const signedHeaders = canonicalHeaderEntries.map(([name]) => name).join(';');
   const canonicalRequest = [
     method,
     path,
@@ -61,8 +63,13 @@ export function signAwsJsonRequest({
     credentialScope,
     sha256Hex(canonicalRequest),
   ].join('\n');
-  const signingKey = getSignatureKey(credentials.secret_access_key, dateStamp, region, service);
-  const signature = hmac(signingKey, stringToSign);
+  const signingKey = deriveAwsV4SigningKey(
+    credentials.secret_access_key,
+    dateStamp,
+    region,
+    service,
+  );
+  const signature = hmac(signingKey, stringToSign, 'hex');
   const authorization = [
     'AWS4-HMAC-SHA256',
     `Credential=${credentials.access_key_id}/${credentialScope},`,

@@ -258,7 +258,7 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 | POST | `/v1/waf/assets/:id/exception` | `waf:write` | `{ owner, reason, expires_at, scope_hash? }` | `201 { exception, posture }`; approved metadata-only exception is tenant-scoped, future-expiring, audited, and available to compliance exports. |
 | GET | `/v1/waf/exceptions` | `waf:read` | — | `{ items }` active, non-expired tenant-scoped WAF exceptions. |
 | GET | `/v1/waf/coverage` | `waf:read` | `window_days?` | Status counts, `percentages`, aggregate `coverage_ratio`, and `trend[]` rollups when available. |
-| GET | `/v1/waf/coverage/summary` | `waf:read` | — | Dashboard summary from `waf_coverage_summary` matview (dev-json parity via rollup refresh): `{ assets_total, protected, underprotected, unknown, coverage_pct, by_vendor, connectors_active, connectors_degraded, connectors_disabled, refreshed_at }`. |
+| GET | `/v1/waf/coverage/summary` | `waf:read` | — | Dashboard summary from `waf_coverage_summary` matview (dev-json parity via rollup refresh): `{ assets_total, protected, edge_protected, underprotected, unknown, coverage_pct, by_vendor, connectors_active, connectors_degraded, connectors_disabled, refreshed_at }`; `edge_protected` never increases `protected` or `coverage_pct`. |
 | GET | `/v1/waf/offensive-suites` | `waf:read` | — | `{ suites[] }` SOC-gated offensive suite catalog (SQLi, XSS, RCE, etc.). |
 | POST | `/v1/waf/offensive-requests` | `waf_offensive:request` | `{ waf_asset_id, objective, requested_suites[], emergency_contacts[], scope_confirmation: true, ... }` | `201 { offensive_request }`. Customer request only — SOC must approve and execute. |
 | GET | `/v1/waf/offensive-requests` | `waf_offensive:read` | — | `{ items }` offensive validation requests. |
@@ -370,9 +370,9 @@ Tenant-scoped ledger: `agentUpdateTrustKeys` in developer validation; `agent_upd
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| GET | `/v1/test-policies` | `test_policy:read` | — | `{ items }` active, non-archived per-group rules enriched with active target-group and check metadata. Policies for archived groups are omitted. |
-| POST | `/v1/test-policies` | `test_policy:write` | `{ target_group_id, check_id, cadence?, expected_verdict?, safe_windows?, timezone?, enabled?, max_concurrent_runs? }` | `201` policy. Exactly one active rule is allowed per tenant/group/check. Only customer-runnable safe checks can be bound; SOC-gated/high-scale checks return `403 soc_gated_check`. |
-| PATCH | `/v1/test-policies/:id` | `test_policy:write` | `{ cadence?, expected_verdict?, safe_windows?, timezone?, enabled?, max_concurrent_runs?, state? }` | Updated rule or `404`; `state` is `active` or `paused`, `enabled` is strictly boolean, and scheduling fields are recalculated server-side. |
+| GET | `/v1/test-policies` | `test_policy:read` | — | `{ items }` active, non-archived per-target rules enriched with exact active target, target-group, and check metadata. Policies for archived groups are omitted. |
+| POST | `/v1/test-policies` | `test_policy:write` | `{ target_group_id, target_id, check_id, cadence?, expected_verdict?, safe_windows?, timezone?, enabled?, max_concurrent_runs? }` | `201` policy. `target_id` is required and must name one active target in `target_group_id`. Exactly one active rule is allowed per tenant/group/target/check, so the same check may be scheduled independently for different targets in one group. Only customer-runnable safe checks can be bound; SOC-gated/high-scale checks return `403 soc_gated_check`, and a check whose `supported_targets` excludes the target's effective kind returns `400 target_kind_not_supported` with `check_id`, `target_kind`, and `supported_targets`. |
+| PATCH | `/v1/test-policies/:id` | `test_policy:write` | `{ cadence?, expected_verdict?, safe_windows?, timezone?, enabled?, max_concurrent_runs?, state? }` | Updated rule or `404`; `state` is `active` or `paused`, `enabled` is strictly boolean, and scheduling fields are recalculated server-side. `target_group_id`, `target_id`, and `check_id` form the immutable policy identity and cannot be changed; archive and create a new policy to bind a different target or check. |
 | DELETE | `/v1/test-policies/:id` | `test_policy:write` | — | Soft-archives the rule and returns the archived record or `404`. |
 
 Cadence is one of `manual`, `daily`, `weekly`, or `monthly`; timezone must be an IANA name. Safe windows accept at most 14 `{ day, start, end, timezone? }` entries, with `Mon`–`Sun` days, strict 24-hour `HH:MM`, and same-day `start < end`. Event-triggered policies are not exposed because no durable event consumer is configured; `event_driven` or `event_trigger` input fails closed. `expected_verdict` is `pass`, `warn`, `fail`, or `manual_review`. The current safety and active-run invariants cap `max_concurrent_runs` at exactly `1`.
@@ -431,7 +431,7 @@ Report and finding exports attach a metadata-only **custody** manifest (`schema_
 
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
-| POST | `/v1/events` | `event:ingest` | `{ event_id, signal_type?, metadata?, test_run_id?, evidence? }` | `201` or `200` duplicate; rejects cross-tenant `tenant_id` and packet fields. |
+| POST | `/v1/events` | `event:ingest` | `{ event_id, signal_type?, metadata?, test_run_id?, evidence? }` | `201` or `200` duplicate; rejects cross-tenant `tenant_id`, packet fields, and reserved producer signals (`probe_result`, `agent_observation`, `ownership_observation`) which must use signed-worker or authenticated-agent ingestion. |
 | GET | `/v1/evidence` | `evidence:read` | — | `{ items }`. |
 | GET | `/v1/evidence/:id` | `evidence:read` | — | Evidence record (metadata). |
 

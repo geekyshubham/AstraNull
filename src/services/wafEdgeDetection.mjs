@@ -11,8 +11,10 @@ import {
   validateEdgeDetectionRequest,
   WAF_EDGE_DETECTION_CHECK_ID,
 } from '../lib/edgeDetection.mjs';
+import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 'collecting']);
+const SUCCESSFUL_TERMINAL_RUN_STATUSES = new Set(['completed', 'verdicted']);
 const ERROR_RUN_STATUSES = new Set(['failed', 'error', 'cancelled']);
 const TRUSTED_EVENT_SOURCES = new Set(['probe_worker', 'probe_simulation_stub']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,160}$/;
@@ -78,6 +80,7 @@ function latestTrustedWorkerEvent(events, run) {
   for (let index = boundedEvents.length - 1; index >= 0; index -= 1) {
     const event = asRecord(boundedEvents[index]);
     if (!event || event.signal_type !== 'probe_result') continue;
+    if (!isTrustedProducerEvent(event)) continue;
     if (event.check_id !== WAF_EDGE_DETECTION_CHECK_ID) continue;
     if (!TRUSTED_EVENT_SOURCES.has(event.source)) continue;
     const eventNonce = boundedString(event.nonce_hash, 256);
@@ -105,14 +108,17 @@ function signalProjection(signal, details, providerField) {
 
 function projectWorkerResult(run, events) {
   const runStatus = boundedString(run.status).toLowerCase();
+  if (ERROR_RUN_STATUSES.has(runStatus)) {
+    return { status: 'error', reason: 'test_run_failed', detection: null };
+  }
+  if (ACTIVE_RUN_STATUSES.has(runStatus)) {
+    return { status: 'pending', reason: 'worker_result_pending', detection: null };
+  }
+  if (!SUCCESSFUL_TERMINAL_RUN_STATUSES.has(runStatus)) {
+    return { status: 'inconclusive', reason: 'test_run_not_successful', detection: null };
+  }
   const event = latestTrustedWorkerEvent(events, run);
   if (!event) {
-    if (ACTIVE_RUN_STATUSES.has(runStatus)) {
-      return { status: 'pending', reason: 'worker_result_pending', detection: null };
-    }
-    if (ERROR_RUN_STATUSES.has(runStatus)) {
-      return { status: 'error', reason: 'test_run_failed', detection: null };
-    }
     return { status: 'inconclusive', reason: 'worker_result_not_observed', detection: null };
   }
 

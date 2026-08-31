@@ -55,7 +55,7 @@ function smallestRepeatingPeriod(buf) {
  * @param {Buffer} key decoded 32-byte key material
  * @param {NodeJS.ProcessEnv} [env]
  */
-export function assertStrongSecretEncryptionKey(key, env = process.env) {
+export function assertStrongSecretEncryptionKey(key, env = process.env, name = 'ASTRANULL_SECRET_ENCRYPTION_KEY') {
   const reasons = [];
 
   const digest = createHash('sha256').update(key).digest('hex');
@@ -79,7 +79,7 @@ export function assertStrongSecretEncryptionKey(key, env = process.env) {
   if (reasons.length === 0) return;
 
   const message =
-    `ASTRANULL_SECRET_ENCRYPTION_KEY is unacceptably weak: ${reasons.join('; ')}. `
+    `${name} is unacceptably weak: ${reasons.join('; ')}. `
     + 'Generate a fresh key with: openssl rand -hex 32';
 
   // Gated on the deployment profile only (never NODE_ENV): hosted-staging runs
@@ -108,12 +108,12 @@ function serializeAad(aadObject) {
   return Buffer.from(stableStringify(aadObject ?? {}), 'utf8');
 }
 
-export function loadSecretEncryptionKey(env = process.env, { required = false } = {}) {
-  const raw = (env.ASTRANULL_SECRET_ENCRYPTION_KEY ?? '').trim();
+function loadEncryptionKey(env, name, { required = false } = {}) {
+  const raw = String(env[name] ?? '').trim();
   if (!raw) {
     if (required) {
       throw new Error(
-        'Refusing to start: ASTRANULL_SECRET_ENCRYPTION_KEY must be set when NODE_ENV=production.',
+        `Refusing to start: ${name} must be set when connector credential encryption is required.`,
       );
     }
     return null;
@@ -128,11 +128,19 @@ export function loadSecretEncryptionKey(env = process.env, { required = false } 
 
   if (key.length !== KEY_BYTES) {
     throw new Error(
-      'ASTRANULL_SECRET_ENCRYPTION_KEY must be a 32-byte key encoded as base64 or 64-character hex.',
+      `${name} must be a 32-byte key encoded as base64 or 64-character hex.`,
     );
   }
-  assertStrongSecretEncryptionKey(key, env);
+  assertStrongSecretEncryptionKey(key, env, name);
   return key;
+}
+
+export function loadSecretEncryptionKey(env = process.env, options = {}) {
+  return loadEncryptionKey(env, 'ASTRANULL_SECRET_ENCRYPTION_KEY', options);
+}
+
+export function loadConnectorSecretEncryptionKey(env = process.env, options = {}) {
+  return loadEncryptionKey(env, 'ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY', options);
 }
 
 export function encryptSecret(plaintext, key, aadObject) {

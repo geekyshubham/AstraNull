@@ -3,7 +3,14 @@ import {
   assertBundledStagingOidcFixtureUsable,
 } from './lib/bundledStagingOidc.mjs';
 import { isHostedStagingDeployment, resolveDeploymentProfile } from './lib/deploymentProfile.mjs';
-import { loadSecretEncryptionKey } from './lib/secrets.mjs';
+import {
+  isConnectorJobPrivateKeyValid,
+  isConnectorJobPublicKeyValid,
+} from './lib/connectorPollJobs.mjs';
+import {
+  loadConnectorSecretEncryptionKey,
+  loadSecretEncryptionKey,
+} from './lib/secrets.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
 
@@ -121,8 +128,61 @@ export function isConnectorsEnabledForTenant(runtimeConfig, tenantId) {
     return tenantOverrides[tenantKey] === true;
   }
   return runtimeConfig.featureFlags?.connectorsEnabledDefault === true;
+/**
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ verificationOnly?: boolean, signingOnly?: boolean }} options
+ */
 }
 
+
+export function loadConnectorWorkerConfig(env = process.env, options = {}) {
+  const wafPostureEnabled = parseOptionalBoolean(
+    env.ASTRANULL_WAF_POSTURE_ENABLED,
+    'ASTRANULL_WAF_POSTURE_ENABLED',
+    false,
+  );
+  const connectorsEnabledDefault = parseOptionalBoolean(
+    env.ASTRANULL_CONNECTORS_ENABLED,
+    'ASTRANULL_CONNECTORS_ENABLED',
+    false,
+  );
+  const connectorsEnabledTenants = parseTenantBooleanMap(
+    env.ASTRANULL_CONNECTORS_ENABLED_TENANTS,
+    'ASTRANULL_CONNECTORS_ENABLED_TENANTS',
+  );
+  const connectorJobPrivateKey = String(env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY ?? '');
+  const connectorJobPublicKey = String(env.ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY ?? '');
+  const anyConnectorEnabled = connectorsEnabledDefault
+    || Object.values(connectorsEnabledTenants).some((enabled) => enabled === true);
+  const verificationOnly = options.verificationOnly === true;
+  const signingOnly = options.signingOnly === true;
+  const connectorSecretEncryptionKey = loadConnectorSecretEncryptionKey(env, {
+    required: env.NODE_ENV === 'production' && wafPostureEnabled && anyConnectorEnabled && !signingOnly,
+  });
+  if (env.NODE_ENV === 'production' && wafPostureEnabled && anyConnectorEnabled) {
+    if (verificationOnly && !isConnectorJobPublicKeyValid(connectorJobPublicKey)) {
+      throw new Error(
+        'ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY must be a base64 DER Ed25519 SPKI key in connector worker mode.',
+      );
+    }
+    if (!verificationOnly && !isConnectorJobPrivateKeyValid(connectorJobPrivateKey)) {
+      throw new Error(
+        'ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY must be a base64 DER Ed25519 PKCS8 key in connector signer mode.',
+      );
+    }
+  }
+  return {
+    connectorJobPrivateKeyConfigured: isConnectorJobPrivateKeyValid(connectorJobPrivateKey),
+    connectorJobPublicKeyConfigured: isConnectorJobPublicKeyValid(connectorJobPublicKey),
+    connectorSecretEncryptionKey,
+    connectorSecretEncryptionConfigured: Boolean(connectorSecretEncryptionKey),
+    featureFlags: {
+      wafPostureEnabled,
+      connectorsEnabledDefault,
+      connectorsEnabledTenants,
+    },
+  };
+}
 function parseOidcRoleMap(raw, name) {
   if (raw === undefined || raw === null || String(raw).trim() === '') {
     return {};
@@ -514,15 +574,11 @@ export function loadRuntimeConfig(env = process.env) {
     'ASTRANULL_EXTERNAL_DISCOVERY_ENABLED',
     false,
   );
-  const connectorsEnabledDefault = parseOptionalBoolean(
-    env.ASTRANULL_CONNECTORS_ENABLED,
-    'ASTRANULL_CONNECTORS_ENABLED',
-    false,
-  );
-  const connectorsEnabledTenants = parseTenantBooleanMap(
-    env.ASTRANULL_CONNECTORS_ENABLED_TENANTS,
-    'ASTRANULL_CONNECTORS_ENABLED_TENANTS',
-  );
+  const connectorWorkerConfig = loadConnectorWorkerConfig(env);
+  const {
+    connectorsEnabledDefault,
+    connectorsEnabledTenants,
+  } = connectorWorkerConfig.featureFlags;
 
   const bundledStagingOidc = env.ASTRANULL_BUNDLED_STAGING_OIDC === '1';
   if (bundledStagingOidc && authMode === 'oidc-jwt') {
@@ -634,6 +690,8 @@ export function loadRuntimeConfig(env = process.env) {
     probeMode,
     probeWorkerSecret,
     probeWorkerSecretConfigured: probeMode === 'signed-worker' && Boolean(probeWorkerSecret),
+    connectorJobPrivateKeyConfigured: connectorWorkerConfig.connectorJobPrivateKeyConfigured,
+    connectorJobPublicKeyConfigured: connectorWorkerConfig.connectorJobPublicKeyConfigured,
     highScaleAdapterMode,
     agentIdentityMode,
     rateLimit: {
@@ -645,6 +703,8 @@ export function loadRuntimeConfig(env = process.env) {
     },
     secretEncryptionKey,
     secretEncryptionConfigured,
+    connectorSecretEncryptionKey: connectorWorkerConfig.connectorSecretEncryptionKey,
+    connectorSecretEncryptionConfigured: connectorWorkerConfig.connectorSecretEncryptionConfigured,
     featureFlags: {
       wafPostureEnabled,
       externalDiscoveryEnabled,

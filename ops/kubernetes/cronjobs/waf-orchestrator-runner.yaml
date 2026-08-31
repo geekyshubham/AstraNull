@@ -1,4 +1,5 @@
 apiVersion: batch/v1
+apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: astranull-waf-orchestrator-runner
@@ -12,6 +13,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 180
       backoffLimit: 1
       template:
         metadata:
@@ -19,11 +21,13 @@ spec:
             app.kubernetes.io/name: astranull
             app.kubernetes.io/component: waf-orchestrator-runner
         spec:
+          automountServiceAccountToken: false
           restartPolicy: Never
           serviceAccountName: astranull-worker
           containers:
             - name: runner
-              image: ghcr.io/astranull/astranull-worker:latest
+              # Render out-of-tree with scripts/render-kubernetes-worker-manifests.mjs.
+              image: ghcr.io/astranull/astranull-worker@__ASTRANULL_WORKER_IMAGE_DIGEST__
               imagePullPolicy: IfNotPresent
               command: ["node", "scripts/waf-orchestrator-runner.mjs"]
               args:
@@ -31,12 +35,30 @@ spec:
                 - "/config/tenant-ids.json"
                 - "--out"
                 - "/tmp/waf-orchestrator-summary.json"
-              envFrom:
-                - secretRef:
-                    name: astranull-worker-env
               env:
+                - name: NODE_ENV
+                  value: "production"
+                - name: ASTRANULL_PERSISTENCE_MODE
+                  value: "postgres"
+                - name: ASTRANULL_ENFORCE_DATABASE_ROLE
+                  value: "1"
                 - name: ASTRANULL_PROBE_MODE
                   value: signed-worker
+                - name: ASTRANULL_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-worker-env
+                      key: ASTRANULL_DATABASE_URL
+                - name: ASTRANULL_PG_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-worker-env
+                      key: ASTRANULL_PG_SSL_CA
+                - name: ASTRANULL_PROBE_WORKER_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-worker-env
+                      key: ASTRANULL_PROBE_WORKER_SECRET
               resources:
                 requests:
                   cpu: 100m
@@ -63,3 +85,6 @@ spec:
             - name: tenant-scope
               configMap:
                 name: astranull-worker-tenant-ids
+                items:
+                  - key: tenant-ids.json
+                    path: tenant-ids.json

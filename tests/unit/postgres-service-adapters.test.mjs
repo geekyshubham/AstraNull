@@ -921,6 +921,9 @@ function createRecordingValidationRepositories(overrides = {}) {
     validationEvidence[method] = async (...args) => {
       validationCalls.push({ method, args });
       if (overrides[method]) return overrides[method](...args);
+      if (method === 'withRunMutationLock') {
+        return { acquired: true, result: await args[2]() };
+      }
       if (method === 'listTestRuns') return [];
       if (method === 'listRunEvents') return [];
       return undefined;
@@ -1035,7 +1038,7 @@ function customerRunnableRunsLastHour(tenantId, count, nowIso = FIXED_NOW.toISOS
 describe('postgres validation service adapters', () => {
   it('exposes stable validation repository and service method lists', () => {
     assert.deepEqual(VALIDATION_AUDIT_REPOSITORY_METHODS, ['appendAuditEvent']);
-    assert.equal(VALIDATION_EVIDENCE_REPOSITORY_METHODS.length, 18);
+    assert.equal(VALIDATION_EVIDENCE_REPOSITORY_METHODS.length, 20);
     assert.ok(VALIDATION_EVIDENCE_REPOSITORY_METHODS.includes('findEventByTenantEventId'));
     assert.ok(VALIDATION_EVIDENCE_REPOSITORY_METHODS.includes('appendEventIdempotent'));
     assert.ok(VALIDATION_EVIDENCE_REPOSITORY_METHODS.includes('appendEvidence'));
@@ -1209,6 +1212,39 @@ describe('postgres validation service adapters', () => {
     const markIdx = validationCalls.findIndex((c) => c.method === 'agentControl.markAgentJobObserved');
     const appendIdx = validationCalls.findIndex((c) => c.method === 'appendEvent');
     assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
+  });
+
+  it('kill switch blocks agent observation and verdict insertion inside the run mutation lock', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const run = collectingRun();
+    const agent = baseOnlineAgent({ id: 'ag_1' });
+    const job = {
+      id: 'job_1', tenant_id: 'ten_demo', agent_id: 'ag_1', test_run_id: 'run_1',
+      check_id: run.check_id, target_id: 'tgt_1', nonce_hash: 'nh_1', status: 'acked',
+    };
+    let eventWrites = 0;
+    let verdictWrites = 0;
+    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
+      getAgentById: async () => agent,
+      getTestRun: async () => ({ ...run }),
+      getAgentJobById: async () => job,
+      isKillSwitchActiveForTenant: async () => true,
+      appendEvent: async () => { eventWrites += 1; return {}; },
+      createVerdictIfAbsent: async () => { verdictWrites += 1; return {}; },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
+      test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1', metadata: { mode: 'canary' },
+    });
+
+    assert.deepEqual(result, { error: 'kill_switch_active', status: 423 });
+    assert.equal(eventWrites, 0);
+    assert.equal(verdictWrites, 0);
+    assert.equal(validationCalls.some((call) => call.method === 'agentControl.markAgentJobObserved'), false);
+    assert.ok(auditEvents.some(
+      (event) => event.entry.action === 'observation.rejected' && event.entry.metadata.reason === 'kill_switch_active',
+    ));
   });
 
   it('ingestObservation after probe evidence publishes bypassable verdict and upserts finding', async () => {
@@ -1750,9 +1786,87 @@ describe('postgres validation service adapters', () => {
     assert.equal(result.run.status, 'collecting');
     assert.equal(result.jobs_dispatched, 1);
     assert.ok(result.probe_event);
+    const inlineProbeWrite = validationCalls.find(
+      (call) => call.method === 'appendEvent' && call.args[1]?.signal_type === 'probe_result',
+    );
+    assert.equal(inlineProbeWrite.args[1].producer_kind, 'internal_simulation');
     assert.ok(validationCalls.some((c) => c.method === 'createTestRun'));
     assert.ok(validationCalls.some((c) => c.method === 'agentControl.createAgentJob'));
     assert.ok(auditEvents.some((a) => a.entry.action === 'test_run.started'));
+  });
+
+  it('cancels an inline run when probe evidence persistence fails', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const group = baseStartTargetGroup({
+      targets: [{
+        id: 'tgt_1',
+        kind: 'ip',
+        value: '203.0.113.1',
+        expected_behavior: 'must_block_before_origin',
+      }],
+    });
+    let createdRun;
+    const recorded = createRecordingValidationRepositories({
+      getTargetGroup: async () => group,
+      listAgents: async () => [],
+      createTestRun: async (_ctx, record) => {
+        createdRun = record;
+        return { ...record, awaiting_external_probe: false };
+      },
+      updateTestRun: async (_ctx, id, patch) => ({ ...createdRun, id, ...patch }),
+      appendEvent: async () => {
+        throw new Error('simulated event write failure');
+      },
+    });
+    const { testRuns } = createPostgresValidationServices(recorded.repositories, {
+      now: () => FIXED_NOW,
+    });
+
+    await assert.rejects(
+      testRuns.startTestRun(ctx, {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      }),
+      /simulated event write failure/,
+    );
+    assert.ok(recorded.validationCalls.some(
+      (call) => call.method === 'updateTestRun'
+        && call.args[2]?.status === 'cancelled'
+        && call.args[2]?.summary?.reason === 'inline_probe_persistence_failed',
+    ));
+  });
+
+  it('surfaces inline cancellation failure with the original persistence error as cause', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const group = baseStartTargetGroup({
+      targets: [{ id: 'tgt_1', kind: 'ip', value: '203.0.113.1' }],
+    });
+    const cancellationFailure = new Error('simulated cancellation write failure');
+    const recorded = createRecordingValidationRepositories({
+      getTargetGroup: async () => group,
+      listAgents: async () => [],
+      createTestRun: async (_ctx, record) => ({ ...record }),
+      appendEvent: async () => {
+        throw new Error('simulated event write failure');
+      },
+      updateTestRun: async () => {
+        throw cancellationFailure;
+      },
+    });
+    const { testRuns } = createPostgresValidationServices(recorded.repositories, {
+      now: () => FIXED_NOW,
+    });
+
+    await assert.rejects(
+      testRuns.startTestRun(ctx, {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      }),
+      (error) => error === cancellationFailure
+        && /simulated event write failure/.test(error.cause?.message ?? ''),
+    );
   });
 
   it('startTestRun signed-worker mode creates probe job, awaits external probe, and redacts nonce', async () => {
@@ -2000,6 +2114,7 @@ describe('postgres validation service adapters', () => {
     const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
     const policy = {
       id: 'pol_crash', tenant_id: ctx.tenantId, target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
       max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
       lease_token: 'lease_crash', lease_expires_at: '2026-06-01T12:05:00.000Z',
@@ -2122,6 +2237,7 @@ describe('postgres validation service adapters', () => {
       id: 'pol_1',
       tenant_id: 'ten_demo',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: body.check_id,
       cadence: 'daily',
       state: 'active',
@@ -2171,6 +2287,7 @@ describe('postgres validation service adapters', () => {
     const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
     const policy = {
       id: 'pol_1', tenant_id: 'ten_demo', target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
       max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
       lease_token: 'lease_1', lease_expires_at: '2026-06-01T12:05:00.000Z',
@@ -2229,6 +2346,7 @@ describe('postgres validation service adapters', () => {
     const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
     const policy = {
       id: 'pol_1', tenant_id: 'ten_demo', target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'origin.direct_bypass.safe', cadence: 'daily', state: 'active', enabled: true,
       max_concurrent_runs: 1, safe_windows: [], timezone: 'UTC',
       lease_token: 'lease_1', lease_expires_at: '2026-06-01T12:05:00.000Z',
@@ -2591,12 +2709,23 @@ describe('postgres validation service adapters', () => {
   it('cancelTestRun updates cancellable runs and denies terminal statuses', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
     const { repositories, auditEvents } = createRecordingValidationRepositories({
-      getTestRun: async (c, id) => {
-        if (id === 'run_open') return { id, status: 'running', tenant_id: 'ten_demo' };
-        if (id === 'run_done') return { id, status: 'verdicted', tenant_id: 'ten_demo' };
+      cancelTestRunAtomic: async (c, id, patch) => {
+        if (id === 'run_open') {
+          return {
+            run: { id, status: 'cancelled', tenant_id: 'ten_demo', completed_at: patch.completed_at },
+            cancelled: true,
+            cancelled_jobs: [{ id: 'pjob_1', test_run_id: id }],
+          };
+        }
+        if (id === 'run_done') {
+          return {
+            run: { id, status: 'verdicted', tenant_id: 'ten_demo' },
+            cancelled: false,
+            cancelled_jobs: [],
+          };
+        }
         return null;
       },
-      updateTestRun: async (c, id, patch) => ({ id, status: patch.status, completed_at: patch.completed_at }),
     });
     const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
 
@@ -2648,6 +2777,24 @@ describe('postgres validation service adapters', () => {
     assert.equal(auditEvents[0].entry.action, 'event.ingested');
     assert.equal(auditEvents[0].entry.resource_id, 'ext_evt_1');
     assert.equal(JSON.stringify(auditEvents[0].entry).includes('secret-key-value'), false);
+  });
+
+  it('ingestEvent rejects producer-reserved signal types before repository access', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+    const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories();
+    const { events } = createPostgresValidationServices(repositories);
+
+    for (const signalType of ['probe_result', 'agent_observation', 'ownership_observation']) {
+      const result = await events.ingestEvent(ctx, {
+        event_id: `ext_reserved_${signalType}`,
+        signal_type: signalType,
+      });
+      assert.deepEqual(result, { error: 'reserved_signal_type', status: 400 });
+    }
+
+    assert.equal(validationCalls.some((c) => c.method === 'findEventByTenantEventId'), false);
+    assert.equal(validationCalls.some((c) => c.method === 'appendEventIdempotent'), false);
+    assert.equal(auditEvents.length, 0);
   });
 
   it('ingestEvent rejects nested raw event metadata before appending', async () => {
@@ -2879,6 +3026,7 @@ describe('postgres secret vault service adapters', () => {
     assert.equal(listed[0].envelope.ciphertext, undefined);
 
     const rotated = await secretVault.rotateEncryptedSecret(
+
       ctx,
       storedRow.id,
       { plaintext: 'rotated-plain' },
@@ -2893,6 +3041,57 @@ describe('postgres secret vault service adapters', () => {
     assert.equal(auditEvents.length, 3);
     assert.equal(auditEvents[2].action, 'secret.decrypted_for_use');
     assert.ok(repoCalls.some((c) => c.method === 'createEncryptedSecret'));
+  });
+
+  it('isolates connector credential envelopes from the global vault key', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+    const globalKey = randomBytes(32);
+    const connectorKey = randomBytes(32);
+    const wrongConnectorKey = randomBytes(32);
+    let current = null;
+    const { repositories } = createRecordingSecretVaultRepositories({
+      createEncryptedSecret: async (_ctx, record) => {
+        current = { ...record };
+        return current;
+      },
+      getEncryptedSecretById: async () => current,
+      updateEncryptedSecret: async (_ctx, _id, patch) => {
+        current = { ...current, ...patch };
+        return current;
+      },
+    });
+
+    const withoutConnectorKey = createPostgresSecretVaultServices(repositories, {
+      encryptionKey: globalKey,
+      now: () => FIXED_NOW,
+      newId: () => 'secret_connector',
+    });
+    const denied = await withoutConnectorKey.storeEncryptedSecret(ctx, {
+      purpose: 'connector', name: 'cloudflare', plaintext: 'provider-token',
+    }, globalKey);
+    assert.equal(denied.error, 'encryption_not_configured');
+
+    const connectorVault = createPostgresSecretVaultServices(repositories, {
+      encryptionKey: globalKey,
+      connectorEncryptionKey: connectorKey,
+      now: () => FIXED_NOW,
+      newId: () => 'secret_connector',
+    });
+    const stored = await connectorVault.storeEncryptedSecret(ctx, {
+      purpose: 'connector', name: 'cloudflare', plaintext: 'provider-token',
+    }, globalKey);
+    assert.equal(stored.secret.id, 'secret_connector');
+    const decrypted = await connectorVault.decryptEncryptedSecretForUse(ctx, 'secret_connector', globalKey);
+    assert.equal(decrypted.plaintext, 'provider-token');
+
+    const wrongVault = createPostgresSecretVaultServices(repositories, {
+      encryptionKey: globalKey,
+      connectorEncryptionKey: wrongConnectorKey,
+    });
+    await assert.rejects(
+      wrongVault.decryptEncryptedSecretForUse(ctx, 'secret_connector', globalKey),
+      /authenticate data|Unsupported state/i,
+    );
   });
 
   it('does not reference dev-json memory store or dev secret service in secret vault adapter source', () => {
@@ -3752,6 +3951,7 @@ describe('postgres probe job service adapters', () => {
       'leasePendingJobsForWorker',
       'getJobById',
       'claimPendingJobForWorker',
+      'claimJobForResult',
       'markJobCompleted',
       'createProbeJob',
       'cancelOpenProbeJobsForTestRuns',
@@ -3813,6 +4013,9 @@ describe('postgres probe job service adapters', () => {
       async claimPendingJobForWorker() {
         return null;
       },
+      async claimJobForResult(_ctx, id, workerId, leasedAt) {
+        return { id, status: 'leased', leased_by: workerId, leased_at: leasedAt };
+      },
       async markJobCompleted() {
         return { id: 'pjob_1', status: 'completed' };
       },
@@ -3851,6 +4054,9 @@ describe('postgres probe job service adapters', () => {
         assert.equal(patch.awaiting_external_probe, false);
         assert.equal(patch.status, 'collecting');
         return { id: runId, ...patch };
+      },
+      async withRunMutationLock(evidenceCtx, runId, callback) {
+        return { acquired: true, result: await callback() };
       },
     };
     const auditEvents = [];
@@ -3920,9 +4126,12 @@ describe('postgres probe job service adapters', () => {
       async claimPendingJobForWorker() {
         return null;
       },
+      async claimJobForResult(_ctx, id, workerId, leasedAt) {
+        return { id, status: 'leased', leased_by: workerId, leased_at: leasedAt };
+      },
       async markJobCompleted() {
         completed = true;
-        return null;
+        return { id: 'pjob_dup', status: 'completed' };
       },
       async createProbeJob() {
         return null;
@@ -3962,6 +4171,9 @@ describe('postgres probe job service adapters', () => {
         runPatch = patch;
         return null;
       },
+      async withRunMutationLock(evidenceCtx, runId, callback) {
+        return { acquired: true, result: await callback() };
+      },
     };
     const auditEvents = [];
     const svc = createPostgresProbeJobServices({
@@ -3999,6 +4211,75 @@ describe('postgres probe job service adapters', () => {
     assert.equal(runPatch.probe_external_result, 'blocked');
     assert.equal(runPatch.awaiting_external_probe, false);
     assert.equal(runPatch.status, 'collecting');
+  });
+
+  it('records an ownership probe signal and completes its signed job', async () => {
+    const ctx = { tenantId: 'ten_demo', workerId: 'pw_1', role: 'probe_worker' };
+    let completed = false;
+    let recordedSignal = null;
+    const probeJobs = {};
+    for (const method of PROBE_JOB_REPOSITORY_METHODS) probeJobs[method] = async () => null;
+    probeJobs.getJobById = async () => ({
+      id: 'pjob_ownership',
+      tenant_id: 'ten_demo',
+      test_run_id: 'own_1',
+      target_id: 'agt_1',
+      check_id: 'ownership.challenge',
+      status: 'leased',
+      leased_by: 'pw_1',
+      nonce_hash: 'nonce_hash_1',
+      ownership_verification_id: 'own_1',
+      probe_profile: { kind: 'ownership_challenge' },
+      constraints: { max_requests: 1, timeout_ms: 5000 },
+    });
+    probeJobs.claimJobForResult = async (_ctx, id, workerId, leasedAt) => ({
+      id,
+      status: 'leased',
+      leased_by: workerId,
+      leased_at: leasedAt,
+    });
+    probeJobs.markJobCompleted = async () => {
+      completed = true;
+      return { id: 'pjob_ownership', status: 'completed' };
+    };
+    const validationEvidence = {
+      getTestRun: async () => null,
+      listRunEvents: async () => [],
+      appendProbeResultEventIdempotent: async () => null,
+      appendEvidence: async () => null,
+      updateTestRun: async () => null,
+      withRunMutationLock: async (_ctx, _id, callback) => ({
+        acquired: true,
+        result: await callback(),
+      }),
+    };
+    const svc = createPostgresProbeJobServices(
+      {
+        probeJobs,
+        validationEvidence,
+        audit: { appendAuditEvent: async () => null },
+      },
+      {
+        ownershipVerification: {
+          async recordOwnershipSignalByNonce(signalCtx, payload) {
+            recordedSignal = { signalCtx, payload };
+            return { verification: { id: 'own_1', probe_observed: true } };
+          },
+        },
+      },
+    );
+
+    const result = await svc.ingestProbeResult(ctx, 'pjob_ownership', {
+      external_result: 'connected',
+      safety_attestation: { requests_sent: 1, duration_ms: 10 },
+    });
+
+    assert.equal(result.ownership_verification_id, 'own_1');
+    assert.equal(completed, true);
+    assert.deepEqual(recordedSignal, {
+      signalCtx: { tenantId: 'ten_demo' },
+      payload: { source: 'probe', nonce_hash: 'nonce_hash_1' },
+    });
   });
 });
 
@@ -4245,7 +4526,18 @@ function createRecordingWafPostureRepositories(overrides = {}) {
   for (const method of WAF_POSTURE_REPOSITORY_METHODS) {
     wafPosture[method] = async (...args) => {
       repoCalls.push({ method, args });
-      if (overrides[method]) return overrides[method](...args);
+      if (overrides[method]) {
+        const result = await overrides[method](...args);
+        const mutation = method === 'completeConnectorPoll' ? args[2] ?? {} : args[1] ?? {};
+        if (result && ['createConnectorPollJob', 'completeConnectorPoll'].includes(method)
+          && mutation.audit_event) {
+          auditEvents.push(mutation.audit_event);
+        }
+        return result;
+      }
+      if (method === 'beginConnectorPoll') return 1;
+      if (method === 'isConnectorFeatureEnabled') return true;
+      if (method === 'isConnectorPollLeaseCurrent') return true;
       return null;
     };
   }
@@ -4269,7 +4561,7 @@ function createRecordingWafPostureRepositories(overrides = {}) {
     getTestRun: async (...args) => {
       evidenceCalls.push({ method: 'getTestRun', args });
       if (overrides.getTestRun) return overrides.getTestRun(...args);
-      return { id: 'run_bound_1', target_group_id: 'tg_1' };
+      return { id: 'run_bound_1', target_group_id: 'tg_1', target_id: 'tgt_1' };
     },
     listRunEvents: async (...args) => {
       evidenceCalls.push({ method: 'listRunEvents', args });
@@ -4289,12 +4581,23 @@ function createRecordingWafPostureRepositories(overrides = {}) {
         },
       }
     : undefined;
+  const secretVault = {
+    getEncryptedSecretMetadataById: async (_ctx, id) => ({
+      id,
+      tenant_id: 'ten_demo',
+      purpose: 'connector',
+      metadata: { provider: 'cloudflare' },
+      rotation: 3,
+    }),
+    getEncryptedSecretById: async () => null,
+  };
   return {
     repositories: {
       wafPosture,
       audit,
       coreCatalog,
       validationEvidence,
+      secretVault,
       ...(cvePipeline ? { cvePipeline } : {}),
     },
     auditEvents,
@@ -4327,8 +4630,17 @@ describe('postgres WAF posture service adapters', () => {
       'upsertWafDriftEvent',
       'patchWafDriftEvent',
       'listConnectors',
+      'isConnectorFeatureEnabled',
+      'setConnectorFeatureState',
       'createConnector',
       'getConnector',
+      'beginConnectorPoll',
+      'listConnectorPollScheduleCandidates',
+      'listPendingConnectorPollConnectors',
+      'createConnectorPollJob',
+      'claimConnectorPollJob',
+      'isConnectorPollLeaseCurrent',
+      'completeConnectorPoll',
       'updateConnectorStatus',
       'createConnectorSnapshots',
       'listConnectorSnapshots',
@@ -4357,6 +4669,10 @@ describe('postgres WAF posture service adapters', () => {
       'listWafDriftEvents',
       'patchWafDriftEvent',
       'listConnectors',
+      'isConnectorFeatureEnabled',
+      'setConnectorFeatureState',
+      'listConnectorPollScheduleCandidates',
+      'listPendingConnectorPollConnectors',
       'createConnector',
       'validateConnector',
       'pollConnector',
@@ -4590,6 +4906,7 @@ describe('postgres WAF posture service adapters', () => {
       date: '2026-07-02',
       coverage_ratio: 0.5,
       protected: 1,
+      edge_protected: 0,
       underprotected: 0,
       unprotected: 1,
       unknown: 0,
@@ -4613,6 +4930,7 @@ describe('postgres WAF posture service adapters', () => {
     const asset = {
       id: 'waf_1',
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       expected_waf_required: true,
     };
     const { repositories, repoCalls } = createRecordingWafPostureRepositories({
@@ -4633,6 +4951,7 @@ describe('postgres WAF posture service adapters', () => {
     repositories.validationEvidence.getTestRun = async () => ({
       id: 'run_other_tg',
       target_group_id: 'tg_other',
+      target_id: 'tgt_1',
     });
     const mismatch = await svc.createWafValidation(ctx, {
       waf_asset_id: 'waf_1',
@@ -4643,6 +4962,52 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(mismatch.status, 400);
     assert.match(mismatch.message, /target group/i);
     assert.equal(repoCalls.some((c) => c.method === 'createWafValidationRun'), false);
+
+    repositories.validationEvidence.getTestRun = async () => ({
+      id: 'run_cancelled',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      status: 'cancelled',
+    });
+    const cancelled = await svc.createWafValidation(ctx, {
+      waf_asset_id: 'waf_1',
+      modes: ['marker'],
+      test_run_id: 'run_cancelled',
+    });
+    assert.equal(cancelled.error, 'invalid_request');
+    assert.equal(cancelled.status, 409);
+    assert.match(cancelled.message, /unsuccessful run/i);
+
+    for (const testRun of [
+      { id: 'run_wrong_target', target_group_id: 'tg_1', target_id: 'tgt_other' },
+      { id: 'run_missing_target', target_group_id: 'tg_1', target_id: null },
+    ]) {
+      repositories.validationEvidence.getTestRun = async () => testRun;
+      const rejected = await svc.createWafValidation(ctx, {
+        waf_asset_id: 'waf_1',
+        modes: ['marker'],
+        test_run_id: testRun.id,
+      });
+      assert.equal(rejected.error, 'invalid_request');
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.message, /target_id/i);
+    }
+
+    const ambiguousAsset = { ...asset, target_id: null };
+    repositories.wafPosture.getWafAsset = async () => ambiguousAsset;
+    repositories.validationEvidence.getTestRun = async () => ({
+      id: 'run_exact',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+    });
+    const ambiguous = await svc.createWafValidation(ctx, {
+      waf_asset_id: 'waf_1',
+      modes: ['marker'],
+      test_run_id: 'run_exact',
+    });
+    assert.equal(ambiguous.error, 'invalid_request');
+    assert.match(ambiguous.message, /explicit target_id/i);
+    assert.equal(repoCalls.some((c) => c.method === 'createWafValidationRun'), false);
   });
 
   it('forwards optional test_run_id to createWafValidationRun', async () => {
@@ -4652,6 +5017,7 @@ describe('postgres WAF posture service adapters', () => {
       getWafAsset: async () => ({
         id: 'waf_1',
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         expected_waf_required: true,
       }),
       createWafValidationRun: async (_ctx, record) => record,
@@ -4699,7 +5065,7 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(repoCalls.filter((c) => c.method === 'listWafDriftEvents').length, 1);
   });
 
-  it('derives underprotected posture from bound probe/agent events by nonce without explicit scenarios', async () => {
+  it('derives bound marker leakage from persisted events despite conflicting client scenarios', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     const nonceHash = 'sha256:marker_leak_nonce';
     const { fixed, repositories, repoCalls, evidenceCalls, run } = wafFinalizeFixture({
@@ -4710,7 +5076,11 @@ describe('postgres WAF posture service adapters', () => {
             return [{
               id: 'evt_probe_1',
               nonce_hash: nonceHash,
-              metadata: { external_result: 'blocked' },
+              metadata: {
+                external_result: 'blocked',
+                waf_fingerprint_detected: true,
+                waf_product_hint: 'cloudflare',
+              },
             }];
           }
           if (options.signalType === 'agent_observation') {
@@ -4744,14 +5114,33 @@ describe('postgres WAF posture service adapters', () => {
       newId: (prefix) => (prefix === 'finding' ? 'fnd_marker_leak' : 'snap_pg_1'),
     });
 
-    const result = await svc.finalizeWafValidation(ctx, run.id, {});
+    const result = await svc.finalizeWafValidation(ctx, run.id, {
+      waf_detected: false,
+      validation_passed: true,
+      edge_protected: true,
+      validation_failed: false,
+      origin_bypass_confirmed: true,
+      source_external: false,
+      source_agent: false,
+      scenario_results: [{
+        scenario_family: 'marker',
+        expected_action: 'block',
+        observed_action: 'block',
+        passed: true,
+        confidence: 1,
+        evidence_summary: { nonce_hash: nonceHash, request_id: 'evt_probe_1' },
+      }],
+    });
     assert.equal(result.posture.status, 'underprotected');
     assert.ok(result.posture.reason_codes.includes('marker_rule_not_blocking'));
 
     const finalizeCall = repoCalls.find((c) => c.method === 'finalizeWafValidationBundle');
     assert.ok(finalizeCall);
-    assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_failed, true);
     assert.equal(finalizeCall.args[1].run_updates.summary_json.waf_detected, true);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_passed, false);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.edge_protected, false);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_failed, true);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.origin_bypass_confirmed, false);
     assert.equal(finalizeCall.args[1].snapshot.source_mix_json.external, true);
     assert.equal(finalizeCall.args[1].snapshot.source_mix_json.agent, true);
     const scenario = finalizeCall.args[1].scenarios[0];
@@ -4765,7 +5154,7 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(repoCalls.some((c) => c.method === 'upsertWafPostureFinding'), true);
   });
 
-  it('derives protected posture from bound blocked probe without agent marker leakage', async () => {
+  it('derives edge-protected posture from a bound blocked probe without agent corroboration', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     const nonceHash = 'sha256:blocked_only_nonce';
     const { fixed, repositories, repoCalls, run } = wafFinalizeFixture({
@@ -4809,10 +5198,16 @@ describe('postgres WAF posture service adapters', () => {
       newId: () => 'snap_prot',
     });
 
-    const result = await svc.finalizeWafValidation(ctx, run.id, {});
-    assert.equal(result.posture.status, 'protected');
+    const result = await svc.finalizeWafValidation(ctx, run.id, {
+      validation_passed: true,
+      validation_failed: false,
+      source_agent: true,
+    });
+    assert.equal(result.posture.status, 'edge_protected');
     const finalizeCall = repoCalls.find((c) => c.method === 'finalizeWafValidationBundle');
-    assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_passed, true);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.validation_passed, false);
+    assert.equal(finalizeCall.args[1].run_updates.summary_json.edge_protected, true);
+    assert.equal(finalizeCall.args[1].snapshot.source_mix_json.agent, false);
     assert.equal(finalizeCall.args[1].scenarios[0].passed, true);
     assert.equal(repoCalls.some((c) => c.method === 'upsertWafPostureFinding'), false);
   });
@@ -4824,6 +5219,12 @@ describe('postgres WAF posture service adapters', () => {
         id: 'waf_val_1',
         waf_asset_id: 'waf_1',
         status: 'planned',
+      }),
+      getWafAsset: async () => ({
+        id: 'waf_1',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        expected_waf_required: true,
       }),
     });
     const svc = createPostgresWafPostureServices(repositories);
@@ -4844,7 +5245,7 @@ describe('postgres WAF posture service adapters', () => {
     const asset = {
       id: 'waf_1',
       target_group_id: 'tg_1',
-      target_id: null,
+      target_id: 'tgt_1',
       canonical_url: 'https://app.example.com',
       expected_waf_required: true,
       business_criticality: 'high',
@@ -4861,6 +5262,12 @@ describe('postgres WAF posture service adapters', () => {
       getWafValidationRun: async () => run,
       getWafAsset: async () => asset,
       getCurrentPostureSnapshot: async () => null,
+      getTestRun: async () => ({
+        id: 'run_bound_1',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+        status: 'completed',
+      }),
       listTenantCveAssetMatches: async () => new Map(),
       finalizeWafValidationBundle: async () => ({
         validation_run: { ...run, status: 'finalized' },
@@ -4886,11 +5293,47 @@ describe('postgres WAF posture service adapters', () => {
     return { fixed, asset, run, ...recording };
   }
 
+  it('rejects bound WAF finalization while the test run is still active', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const { repositories, repoCalls, run } = wafFinalizeFixture({
+      repo: {
+        getTestRun: async () => ({
+          id: 'run_bound_1',
+          target_group_id: 'tg_1',
+          target_id: 'tgt_1',
+          status: 'collecting',
+        }),
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories);
+
+    const result = await svc.finalizeWafValidation(ctx, run.id, {});
+    assert.equal(result.error, 'invalid_request');
+    assert.equal(result.status, 409);
+    assert.match(result.message, /successfully completed/i);
+    assert.equal(repoCalls.some((call) => call.method === 'finalizeWafValidationBundle'), false);
+    assert.equal(repoCalls.some((call) => call.method === 'upsertWafPostureFinding'), false);
+  });
+
   it('finalizing underprotected or unprotected upserts WAF finding and audits lifecycle', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     for (const postureStatus of ['underprotected', 'unprotected']) {
+      const markerLeakNonce = 'sha256:fixture_marker_leak';
       const { fixed, repositories, auditEvents, repoCalls, asset, run } = wafFinalizeFixture({
         postureStatus,
+        repo: postureStatus === 'underprotected'
+          ? {
+              listRunEvents: async (_ctx, _runId, options = {}) => {
+                if (options.signalType === 'probe_result') {
+                  return [{ id: 'evt_fixture_probe', nonce_hash: markerLeakNonce, metadata: { external_result: 'blocked' } }];
+                }
+                if (options.signalType === 'agent_observation') {
+                  return [{ id: 'evt_fixture_agent', nonce_hash: markerLeakNonce, metadata: { waf_marker: true } }];
+                }
+                return [];
+              },
+            }
+          : {},
       });
       let idSeq = 0;
       const svc = createPostgresWafPostureServices(repositories, {
@@ -4929,7 +5372,29 @@ describe('postgres WAF posture service adapters', () => {
 
   it('finalizing protected or unknown does not upsert WAF finding', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
-    const protectedCase = wafFinalizeFixture({ postureStatus: 'protected' });
+    const protectedNonce = 'sha256:fixture_protected';
+    const protectedCase = wafFinalizeFixture({
+      postureStatus: 'protected',
+      repo: {
+        listRunEvents: async (_ctx, _runId, options = {}) => {
+          if (options.signalType === 'probe_result') {
+            return [{
+              id: 'evt_protected_probe',
+              nonce_hash: protectedNonce,
+              metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+            }];
+          }
+          if (options.signalType === 'agent_observation') {
+            return [{
+              id: 'evt_protected_agent',
+              nonce_hash: protectedNonce,
+              metadata: { waf_marker: true, observed_action: 'not_reached_origin' },
+            }];
+          }
+          return [];
+        },
+      },
+    });
     const protectedSvc = createPostgresWafPostureServices(protectedCase.repositories, {
       now: () => protectedCase.fixed,
       newId: () => 'snap_prot',
@@ -4937,25 +5402,24 @@ describe('postgres WAF posture service adapters', () => {
     await protectedSvc.finalizeWafValidation(ctx, protectedCase.run.id, {
       waf_detected: true,
       validation_passed: true,
-      scenario_results: [
-        {
-          scenario_family: 'marker',
-          expected_action: 'block',
-          observed_action: 'block',
-          passed: true,
-          evidence_summary: {
-            nonce_hash: 'e'.repeat(64),
-            observed_at_agent: true,
-          },
-        },
-      ],
     });
     assert.equal(
       protectedCase.repoCalls.some((c) => c.method === 'upsertWafPostureFinding'),
       false,
     );
 
-    const unknownCase = wafFinalizeFixture({ postureStatus: 'unknown' });
+    const unknownCase = wafFinalizeFixture({
+      postureStatus: 'unknown',
+      repo: {
+        listRunEvents: async (_ctx, _runId, options = {}) => options.signalType === 'probe_result'
+          ? [{
+              id: 'evt_unknown_probe',
+              nonce_hash: 'sha256:fixture_unknown',
+              metadata: { external_result: 'blocked' },
+            }]
+          : [],
+      },
+    });
     const unknownSvc = createPostgresWafPostureServices(unknownCase.repositories, {
       now: () => unknownCase.fixed,
       newId: () => 'snap_unk',
@@ -5012,6 +5476,27 @@ describe('postgres WAF posture service adapters', () => {
         reasonCodes: postureStatus === 'underprotected' ? ['marker_rule_not_blocking'] : [],
         repo: {
           getCurrentPostureSnapshot: async () => previousProtected,
+          ...(postureStatus === 'underprotected'
+            ? {
+                listRunEvents: async (_ctx, _runId, options = {}) => {
+                  if (options.signalType === 'probe_result') {
+                    return [{
+                      id: 'evt_drift_probe',
+                      nonce_hash: 'sha256:fixture_drift',
+                      metadata: { external_result: 'blocked' },
+                    }];
+                  }
+                  if (options.signalType === 'agent_observation') {
+                    return [{
+                      id: 'evt_drift_agent',
+                      nonce_hash: 'sha256:fixture_drift',
+                      metadata: { waf_marker: true },
+                    }];
+                  }
+                  return [];
+                },
+              }
+            : {}),
         },
       });
       const svc = createPostgresWafPostureServices(repositories, {
@@ -5033,6 +5518,126 @@ describe('postgres WAF posture service adapters', () => {
       assert.equal(driftAudit.metadata.posture_to, postureStatus);
       assert.equal('raw_payload' in (driftAudit.metadata ?? {}), false);
     }
+  });
+
+  it('emits drift for protected-to-edge and edge-to-lower posture transitions', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const nonceHash = 'sha256:edge_transition';
+    const blockedProbe = {
+      id: 'evt_edge_transition_probe',
+      nonce_hash: nonceHash,
+      metadata: {
+        external_result: 'blocked',
+        waf_fingerprint_detected: true,
+        waf_product_hint: 'cloudflare',
+      },
+    };
+    const markerLeak = {
+      id: 'evt_edge_transition_agent',
+      nonce_hash: nonceHash,
+      metadata: { waf_marker: true, observed_action: 'reached_origin' },
+    };
+
+    for (const transition of [
+      {
+        from: 'protected',
+        to: 'edge_protected',
+        expectedDriftType: 'mode_change',
+        probes: [blockedProbe],
+        agents: [],
+        reasonCodes: ['insufficient_validation_evidence'],
+        findingId: null,
+      },
+      {
+        from: 'edge_protected',
+        to: 'underprotected',
+        expectedDriftType: 'marker_failed',
+        probes: [blockedProbe],
+        agents: [markerLeak],
+        reasonCodes: ['marker_rule_not_blocking'],
+        findingId: 'fnd_waf_1',
+      },
+      {
+        from: 'edge_protected',
+        to: 'unprotected',
+        expectedDriftType: 'fingerprint_lost',
+        probes: [],
+        agents: [],
+        reasonCodes: [],
+        findingId: 'fnd_waf_1',
+      },
+    ]) {
+      const previous = {
+        id: `snap_${transition.from}`,
+        waf_asset_id: 'waf_1',
+        status: transition.from,
+        reason_codes: transition.from === 'edge_protected'
+          ? ['insufficient_validation_evidence']
+          : [],
+        detected_vendor: 'cloudflare',
+        coverage_required: true,
+        created_at: '2026-07-01T12:00:00.000Z',
+        is_current: true,
+      };
+      const { fixed, repositories, repoCalls, auditEvents, run } = wafFinalizeFixture({
+        postureStatus: transition.to,
+        reasonCodes: transition.reasonCodes,
+        repo: {
+          getCurrentPostureSnapshot: async () => previous,
+          listRunEvents: async (_ctx, _runId, options = {}) => (
+            options.signalType === 'probe_result' ? transition.probes : transition.agents
+          ),
+        },
+      });
+      const svc = createPostgresWafPostureServices(repositories, {
+        now: () => fixed,
+        newId: (prefix) => (prefix === 'finding' ? 'fnd_transition' : 'drf_transition'),
+      });
+
+      const result = await svc.finalizeWafValidation(ctx, run.id, {
+        waf_detected: true,
+        validation_passed: true,
+      });
+
+      assert.equal(result.posture.status, transition.to);
+      const driftCall = repoCalls.find((call) => call.method === 'upsertWafDriftEvent');
+      assert.ok(driftCall, `expected drift for ${transition.from} -> ${transition.to}`);
+      assert.equal(driftCall.args[1].drift_type, transition.expectedDriftType);
+      assert.equal(driftCall.args[1].finding_id, transition.findingId);
+      assert.equal(driftCall.args[1].before_summary.posture_status, transition.from);
+      assert.equal(driftCall.args[1].after_summary.posture_status, transition.to);
+
+      const driftAudit = auditEvents.find((event) => event.action === 'waf.drift.detected');
+      assert.equal(driftAudit.metadata.posture_from, transition.from);
+      assert.equal(driftAudit.metadata.posture_to, transition.to);
+    }
+  });
+
+  it('preserves explicit AWS CloudFront scope in connector configuration', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    let createdRecord;
+    const { repositories } = createRecordingWafPostureRepositories({
+      createConnector: async (_ctx, record) => {
+        createdRecord = record;
+        return {
+          ...record,
+          tenant_id: ctx.tenantId,
+          config: record.config_json,
+          poll_revision: 0,
+          last_success_revision: 0,
+        };
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories);
+    const result = await svc.createConnector(ctx, {
+      provider: 'aws_waf',
+      name: 'Global AWS WAF',
+      config: { read_only: true, scope: 'cloudfront' },
+    });
+
+    assert.equal(result.error, undefined);
+    assert.equal(createdRecord.config_json.scope, 'cloudfront');
+    assert.equal(result.connector.config.scope, 'cloudfront');
   });
 
   it('createConnector rejects forbidden config before repository write', async () => {
@@ -5271,6 +5876,27 @@ describe('postgres WAF posture service adapters', () => {
     );
   });
 
+  it('exposes bounded metadata-only scheduler candidates and pending connector work', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'connector-worker', role: 'system' };
+    const received = {};
+    const { repositories } = createRecordingWafPostureRepositories({
+      listConnectorPollScheduleCandidates: async (_ctx, options) => {
+        received.scheduler = options;
+        return [{ connector_id: 'conn_schedule', provider: 'aws_waf' }];
+      },
+      listPendingConnectorPollConnectors: async (_ctx, options) => {
+        received.pending = options;
+        return [{ connector_id: 'conn_pending', provider: 'cloudflare' }];
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories);
+    const scheduled = await svc.listConnectorPollScheduleCandidates(ctx, { limit: 1000 });
+    const pending = await svc.listPendingConnectorPollConnectors(ctx, { limit: 1000 });
+    assert.deepEqual(received, { scheduler: { limit: 32 }, pending: { limit: 32 } });
+    assert.deepEqual(scheduled, [{ connector_id: 'conn_schedule', provider: 'aws_waf' }]);
+    assert.deepEqual(pending, [{ connector_id: 'conn_pending', provider: 'cloudflare' }]);
+  });
+
   it('validateConnector marks active or error locally without outbound calls', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     const fixed = new Date('2026-07-02T12:00:00.000Z');
@@ -5280,7 +5906,7 @@ describe('postgres WAF posture service adapters', () => {
         provider: 'cloudflare',
         name: 'Edge',
         config: { read_only: true },
-        status: 'disabled',
+        status: 'error',
       }),
       updateConnectorStatus: async (_ctx, id, updates) => ({
         id,
@@ -5307,12 +5933,23 @@ describe('postgres WAF posture service adapters', () => {
       provider: 'cloudflare',
       name: 'Edge',
       config: { read_only: false },
-      status: 'disabled',
+      status: 'active',
     });
     const errored = await svc.validateConnector(ctx, 'conn_bad');
     assert.equal(errored.status, 'error');
     assert.ok(Array.isArray(errored.redacted_errors));
     assert.match(errored.redacted_errors[0], /read_only/);
+
+    repositories.wafPosture.getConnector = async (_ctx, id) => ({
+      id,
+      provider: 'cloudflare',
+      name: 'Edge',
+      config: { read_only: true },
+      status: 'disabled',
+    });
+    const disabled = await svc.validateConnector(ctx, 'conn_disabled');
+    assert.deepEqual(disabled, { error: 'connector_disabled', status: 409 });
+    assert.equal(repoCalls.filter((c) => c.method === 'updateConnectorStatus').length, 2);
   });
 
   it('pollConnector persists metadata snapshots and rejects raw fields', async () => {
@@ -5360,7 +5997,477 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(auditEvents.find((e) => e.action === 'connector.snapshot.created')?.metadata.snapshot_count, 1);
   });
 
-  it('pollConnector stamps the poll timestamp when a manual poll produces zero snapshots', async () => {
+  it('queues one signed durable generation and lets the identified worker claim only that job', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const fixed = new Date('2026-07-02T12:00:00.000Z');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const connectorJobPrivateKey = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    const connectorJobPublicKey = publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+    let queuedJob = null;
+    let beginCalls = 0;
+    let fetchCalls = 0;
+    const { repositories, auditEvents, repoCalls } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        id: 'conn_signed', provider: 'cloudflare', name: 'Edge DNS', secret_id: 'sec_cf',
+        config: { read_only: true }, status: queuedJob ? 'validating' : 'active', poll_revision: 7,
+      }),
+      beginConnectorPoll: async () => { beginCalls += 1; return 7; },
+      createConnectorPollJob: async (_ctx, record) => {
+        queuedJob = {
+          ...record,
+          tenant_id: ctx.tenantId,
+          envelope: record.envelope_json,
+          status: 'pending',
+          leased_by: null,
+          leased_at: null,
+          completed_at: null,
+          error_code: null,
+          created_at: record.created_at,
+          updated_at: record.created_at,
+        };
+        return queuedJob;
+      },
+      claimConnectorPollJob: async (_ctx, _id, lease) => ({
+        ...queuedJob,
+        status: 'leased',
+        leased_by: lease.worker_id,
+        leased_at: lease.leased_at,
+        lease_token: `lease-${lease.worker_id}`,
+      }),
+      completeConnectorPoll: async (_ctx, _id, completion) => ({
+        connector: { id: 'conn_signed', status: 'active', last_success_revision: 7 },
+        snapshots: [],
+        job: { ...queuedJob, status: 'completed', completed_at: completion.completed_at },
+      }),
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => fixed,
+      connectorJobPrivateKey,
+      connectorJobPublicKey,
+      requireConnectorJobSigner: true,
+      requireConnectorJobVerifier: true,
+    });
+
+    const queued = await svc.pollConnector(ctx, 'conn_signed');
+    assert.equal(queued.status, 202);
+    assert.equal(queued.poll_job.id, 'connector_poll_conn_signed_7');
+    assert.equal(beginCalls, 1);
+    assert.equal(fetchCalls, 0);
+    assert.equal('envelope' in queued.poll_job, false);
+    assert.equal('job_signature' in queued.poll_job, false);
+
+    const completed = await svc.pollConnector(ctx, 'conn_signed', {}, {
+      executeOutbound: true,
+      workerId: 'worker-a',
+      secretResolver: async () => ({ plaintext: 'provider-token' }),
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return new Response(JSON.stringify({
+          success: true, result: [], result_info: { page: 1, total_pages: 1 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+      maxAttempts: 1,
+    });
+    assert.ok(completed.poll_job, JSON.stringify(completed));
+    assert.equal(completed.poll_job.id, 'connector_poll_conn_signed_7');
+    assert.equal(completed.poll_job.status, 'completed_empty');
+    assert.equal(beginCalls, 1, 'worker must not reserve or sign another generation');
+    assert.equal(fetchCalls, 1);
+    assert.equal(repoCalls.filter((call) => call.method === 'createConnectorPollJob').length, 1);
+    assert.equal(repoCalls.filter((call) => call.method === 'claimConnectorPollJob').length, 1);
+    assert.equal(repoCalls.filter((call) => call.method === 'completeConnectorPoll').length, 1);
+    const successAudit = auditEvents.find((event) => event.action === 'connector.snapshot.created');
+    assert.equal(successAudit.metadata.connector_poll_job_id, 'connector_poll_conn_signed_7');
+    assert.equal(successAudit.metadata.worker_id, 'worker-a');
+    assert.equal(successAudit.metadata.request_count, 1);
+    assert.equal(JSON.stringify(auditEvents).includes(connectorJobPrivateKey), false);
+    assert.equal(JSON.stringify(auditEvents).includes(connectorJobPublicKey), false);
+  });
+
+  it('rejects tampered jobs before egress and persists no snapshots after a lost signed lease', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const fixed = new Date('2026-07-02T12:00:00.000Z');
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const connectorJobPrivateKey = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    const connectorJobPublicKey = publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+    let queuedJob = null;
+    let tamper = true;
+    let leaseCurrent = true;
+    let fetchCalls = 0;
+    const { repositories, repoCalls } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        id: 'conn_signed', provider: 'cloudflare', name: 'Edge DNS', secret_id: 'sec_cf',
+        config: { read_only: true }, status: queuedJob ? 'validating' : 'active', poll_revision: 7,
+      }),
+      beginConnectorPoll: async () => 7,
+      createConnectorPollJob: async (_ctx, record) => {
+        queuedJob = {
+          ...record, tenant_id: ctx.tenantId, envelope: record.envelope_json, status: 'pending',
+          created_at: record.created_at, updated_at: record.created_at,
+        };
+        return queuedJob;
+      },
+      claimConnectorPollJob: async (_ctx, _id, lease) => ({
+        ...queuedJob,
+        envelope_json: tamper
+          ? { ...queuedJob.envelope_json, provider: 'namecheap' }
+          : queuedJob.envelope_json,
+        envelope: tamper ? { ...queuedJob.envelope, provider: 'namecheap' } : queuedJob.envelope,
+        status: 'leased', leased_by: lease.worker_id, leased_at: lease.leased_at,
+        lease_token: `lease-${lease.worker_id}`,
+      }),
+      completeConnectorPoll: async () => null,
+      isConnectorPollLeaseCurrent: async () => leaseCurrent,
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => fixed,
+      connectorJobPrivateKey,
+      connectorJobPublicKey,
+      requireConnectorJobSigner: true,
+      requireConnectorJobVerifier: true,
+    });
+    await svc.pollConnector(ctx, 'conn_signed');
+    const fetchFn = async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({
+        success: true,
+        result: [{ id: 'zone_1', name: 'example.com', status: 'active' }],
+        result_info: { page: 1, total_pages: 1 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+
+    const rejected = await svc.pollConnector(ctx, 'conn_signed', {}, {
+      executeOutbound: true, workerId: 'worker-a', secretResolver: async () => ({ plaintext: 'token' }),
+      fetchFn, maxAttempts: 1,
+    });
+    assert.deepEqual(rejected, { error: 'invalid_connector_poll_job_signature', status: 403 });
+    assert.equal(fetchCalls, 0);
+
+    tamper = false;
+    const superseded = await svc.pollConnector(ctx, 'conn_signed', {}, {
+      executeOutbound: true,
+      workerId: 'worker-b',
+      secretResolver: async (_ctx, secretId, provider, rotation) => {
+        assert.equal(secretId, 'sec_cf');
+        assert.equal(provider, 'cloudflare');
+        assert.equal(rotation, 3);
+        leaseCurrent = false;
+        return { plaintext: 'token' };
+      },
+      fetchFn,
+      maxAttempts: 1,
+    });
+    assert.deepEqual(superseded, { error: 'connector_poll_superseded', status: 409 });
+    assert.equal(fetchCalls, 0);
+    assert.equal(repoCalls.some((call) => call.method === 'createConnectorSnapshots'), false);
+    assert.equal(repoCalls.filter((call) => call.method === 'createConnectorPollJob').length, 1);
+  });
+
+  it('does not let a stale concurrent provider poll rewind current ownership generation', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const pollTimes = [
+      new Date('2026-07-02T12:00:00.000Z'),
+      new Date('2026-07-02T12:00:01.000Z'),
+    ];
+    let issuedRevision = 0;
+    let lastSuccessRevision = 0;
+    let lastSuccessAt = null;
+    let fetchCount = 0;
+    let releaseFirstFetch;
+    const persistedSnapshots = [];
+    const connector = {
+      id: 'conn_1',
+      provider: 'godaddy',
+      name: 'Production DNS',
+      config: { read_only: true },
+      status: 'active',
+      secret_id: 'sec_1',
+    };
+    const { repositories } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        ...connector,
+        poll_revision: issuedRevision,
+        last_success_revision: lastSuccessRevision,
+        last_success_at: lastSuccessAt,
+      }),
+      beginConnectorPoll: async () => {
+        issuedRevision += 1;
+        return issuedRevision;
+      },
+      createConnectorSnapshots: async (_ctx, records) => {
+        persistedSnapshots.push(...records);
+        return records.map((record) => ({ ...record, summary: record.summary_json }));
+      },
+      updateConnectorStatus: async (_ctx, _id, updates) => {
+        if (updates.expected_poll_revision !== issuedRevision) return null;
+        if (updates.last_success_at !== undefined) {
+          lastSuccessRevision = updates.expected_poll_revision;
+          lastSuccessAt = updates.last_success_at;
+        }
+        return { ...connector, ...updates, last_success_revision: lastSuccessRevision };
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => pollTimes.shift(),
+      newId: (prefix) => `${prefix}_${persistedSnapshots.length + 1}`,
+    });
+    const fetchFn = async () => {
+      fetchCount += 1;
+      const thisFetch = fetchCount;
+      if (thisFetch === 1) {
+        await new Promise((resolve) => { releaseFirstFetch = resolve; });
+      }
+      return new Response(JSON.stringify(
+        thisFetch === 1
+          ? [{ domainId: 'stale-zone', domain: 'stale.example.com' }]
+          : [],
+      ), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const options = {
+      executeOutbound: true,
+      secretResolver: async () => ({ plaintext: '{"key":"key","secret":"secret"}' }),
+      fetchFn,
+      maxAttempts: 1,
+    };
+
+    const olderPoll = svc.pollConnector(ctx, 'conn_1', {}, options);
+    while (!releaseFirstFetch) await new Promise((resolve) => setImmediate(resolve));
+    const newerPoll = await svc.pollConnector(ctx, 'conn_1', {}, options);
+    releaseFirstFetch();
+    const staleCompletion = await olderPoll;
+
+    assert.equal(newerPoll.poll_job.snapshot_count, 0);
+    assert.equal(staleCompletion.error, 'connector_poll_superseded');
+    assert.equal(issuedRevision, 2);
+    assert.equal(lastSuccessRevision, 2);
+    assert.equal(lastSuccessAt, '2026-07-02T12:00:01.000Z');
+    assert.equal(persistedSnapshots[0].poll_revision, 1);
+    assert.notEqual(persistedSnapshots[0].poll_revision, lastSuccessRevision);
+  });
+
+  it('keeps disable authoritative over an in-flight provider poll completion', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    let connector = {
+      id: 'conn_disable_race',
+      provider: 'godaddy',
+      name: 'Production DNS',
+      config: { read_only: true },
+      status: 'active',
+      secret_id: 'sec_1',
+      poll_revision: 0,
+      last_success_at: '2026-07-01T12:00:00.000Z',
+      last_success_revision: 0,
+    };
+    let releaseFetch;
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    const blocked = new Promise((resolve) => { releaseFetch = resolve; });
+    const { repositories } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({ ...connector }),
+      beginConnectorPoll: async () => {
+        connector.poll_revision += 1;
+        return connector.poll_revision;
+      },
+      createConnectorSnapshots: async (_ctx, records) => records,
+      updateConnectorStatus: async (_ctx, _id, updates) => {
+        if (updates.poll_completion
+          && (connector.status === 'disabled' || connector.status === 'revoked')) return null;
+        if (updates.advance_poll_revision) connector.poll_revision += 1;
+        if (updates.invalidate_success_generation) {
+          connector.last_success_at = null;
+          connector.last_success_revision = null;
+        }
+        connector = { ...connector, ...updates };
+        return { ...connector };
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories, {
+      now: () => new Date('2026-07-02T12:00:00.000Z'),
+    });
+    const poll = svc.pollConnector(ctx, connector.id, {}, {
+      executeOutbound: true,
+      secretResolver: async () => ({ plaintext: '{"key":"key","secret":"secret"}' }),
+      maxAttempts: 1,
+      fetchFn: async () => {
+        markStarted();
+        await blocked;
+        return new Response('[]', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    await started;
+    await svc.disableConnector(ctx, connector.id, {});
+    releaseFetch();
+    await poll;
+
+    assert.equal(connector.status, 'disabled');
+    assert.equal(connector.last_success_at, null);
+    assert.equal(connector.last_success_revision, null);
+  });
+
+  it('degrades transient poll failures while auth failures revoke and invalidate success generation', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    for (const testCase of [
+      {
+        name: 'transient',
+        fetchFn: async () => { throw Object.assign(new Error('network unavailable'), { code: 'network_error' }); },
+        expectedStatus: 'degraded',
+        expectedNextPollAt: '2026-07-02T13:00:00.000Z',
+      },
+      {
+        name: 'rate-limit',
+        fetchFn: async () => new Response('{"success":false}', { status: 429 }),
+        expectedStatus: 'degraded',
+        expectedNextPollAt: '2026-07-02T13:00:00.000Z',
+      },
+      {
+        name: 'authentication',
+        fetchFn: async () => new Response('{"success":false}', { status: 401 }),
+        expectedStatus: 'revoked',
+        expectedNextPollAt: '2026-07-02T18:00:00.000Z',
+      },
+    ]) {
+      const statusUpdates = [];
+      const { repositories } = createRecordingWafPostureRepositories({
+        getConnector: async () => ({
+          id: `conn_${testCase.name}`,
+          provider: 'cloudflare',
+          name: 'Edge DNS',
+          secret_id: 'sec_1',
+          config: { read_only: true },
+          status: 'active',
+          last_success_at: '2026-07-01T12:00:00.000Z',
+          last_success_revision: 6,
+          consecutive_failures: 2,
+        }),
+        beginConnectorPoll: async () => 7,
+        updateConnectorStatus: async (_ctx, _id, updates) => {
+          statusUpdates.push(updates);
+          return { status: updates.status ?? 'active', ...updates };
+        },
+      });
+      const svc = createPostgresWafPostureServices(repositories, {
+        now: () => new Date('2026-07-02T12:00:00.000Z'),
+      });
+      const result = await svc.pollConnector(ctx, `conn_${testCase.name}`, {}, {
+        executeOutbound: true,
+        secretResolver: async () => ({ plaintext: 'provider-token' }),
+        fetchFn: testCase.fetchFn,
+        maxAttempts: 1,
+      });
+      assert.equal(result.error, 'connector_poll_failed');
+      assert.equal(statusUpdates[0].status, testCase.expectedStatus);
+      assert.equal(
+        statusUpdates[0].last_success_at,
+        testCase.name === 'authentication' ? null : undefined,
+      );
+      assert.equal(
+        statusUpdates[0].invalidate_success_generation,
+        testCase.name === 'authentication' ? true : undefined,
+      );
+      assert.equal(statusUpdates[0].expected_poll_revision, 7);
+      assert.equal(statusUpdates[0].consecutive_failures, 3);
+      assert.equal(statusUpdates[0].next_poll_at, testCase.expectedNextPollAt);
+    }
+  });
+
+  it('advances authoritative generation for a complete real provider empty poll', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const fixed = new Date('2026-07-02T12:00:00.000Z');
+    const statusUpdates = [];
+    const { repositories } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        id: 'conn_empty_provider',
+        provider: 'cloudflare',
+        name: 'Edge DNS',
+        secret_id: 'sec_1',
+        config: { read_only: true },
+        status: 'active',
+        last_success_at: '2026-07-01T12:00:00.000Z',
+        last_success_revision: 6,
+        consecutive_failures: 4,
+      }),
+      beginConnectorPoll: async () => 7,
+      createConnectorSnapshots: async () => [],
+      updateConnectorStatus: async (_ctx, _id, updates) => {
+        statusUpdates.push(updates);
+        return { status: updates.status ?? 'active', ...updates };
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories, { now: () => fixed });
+    const result = await svc.pollConnector(ctx, 'conn_empty_provider', {}, {
+      executeOutbound: true,
+      secretResolver: async () => ({ plaintext: 'provider-token' }),
+      fetchFn: async () => new Response(JSON.stringify({
+        success: true,
+        result: [],
+        result_info: { page: 1, total_pages: 1 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      maxAttempts: 1,
+    });
+
+    assert.equal(result.poll_job.status, 'completed_empty');
+    assert.equal(result.poll_job.health.inventory_complete, true);
+    assert.equal(statusUpdates[0].status, 'active');
+    assert.equal(statusUpdates[0].last_success_at, fixed.toISOString());
+    assert.equal(statusUpdates[0].expected_poll_revision, 7);
+    assert.equal(statusUpdates[0].consecutive_failures, 0);
+    assert.equal(statusUpdates[0].next_poll_at, '2026-07-02T12:15:00.000Z');
+  });
+
+  it('preserves prior successful proof across a degraded partial provider inventory', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
+    const statusUpdates = [];
+    const persistedSnapshots = [];
+    const fixed = new Date('2026-07-02T12:00:01.000Z');
+    const { repositories } = createRecordingWafPostureRepositories({
+      getConnector: async () => ({
+        id: 'conn_nc',
+        provider: 'namecheap',
+        name: 'Production DNS',
+        config: { read_only: true },
+        status: 'active',
+        secret_id: 'sec_nc',
+        last_success_at: '2026-07-02T12:00:00.000Z',
+        last_success_revision: 3,
+      }),
+      beginConnectorPoll: async () => 4,
+      createConnectorSnapshots: async (_ctx, records) => {
+        persistedSnapshots.push(...records);
+        return records.map((record) => ({ ...record, summary: record.summary_json }));
+      },
+      updateConnectorStatus: async (_ctx, _id, updates) => {
+        statusUpdates.push(updates);
+        return { status: updates.status ?? 'active', ...updates };
+      },
+    });
+    const svc = createPostgresWafPostureServices(repositories, { now: () => fixed });
+    const xml = '<?xml version="1.0"?><ApiResponse Status="OK"><CommandResponse><DomainGetListResult><Domain ID="1" Name="example.com"/></DomainGetListResult><Paging TotalItems="2"/></CommandResponse></ApiResponse>';
+
+    const result = await svc.pollConnector(ctx, 'conn_nc', {}, {
+      executeOutbound: true,
+      secretResolver: async () => ({
+        plaintext: '{"api_username":"user","api_key":"key","client_ip":"203.0.113.10","env_type":"production"}',
+      }),
+      fetchFn: async () => new Response(xml, {
+        status: 200,
+        headers: { 'content-type': 'application/xml' },
+      }),
+      maxAttempts: 1,
+    });
+
+    assert.equal(result.poll_job.health.status, 'degraded');
+    assert.equal(result.poll_job.health.inventory_complete, false);
+    assert.equal(persistedSnapshots[0].poll_revision, 4);
+    assert.equal(statusUpdates.length, 1);
+    assert.equal(statusUpdates[0].status, 'degraded');
+    assert.equal(statusUpdates[0].last_success_at, undefined);
+    assert.equal(statusUpdates[0].expected_poll_revision, 4);
+  });
+
+  it('pollConnector leaves authoritative generation unchanged when a manual poll produces zero snapshots', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_waf', role: 'admin' };
     const fixed = new Date('2026-07-02T12:00:00.000Z');
     const statusUpdates = [];
@@ -5375,7 +6482,7 @@ describe('postgres WAF posture service adapters', () => {
       createConnectorSnapshots: async () => [],
       updateConnectorStatus: async (_ctx, _id, updates) => {
         statusUpdates.push(updates);
-        return null;
+        return { status: updates.status ?? 'active', ...updates };
       },
     });
     const svc = createPostgresWafPostureServices(repositories, {
@@ -5387,7 +6494,8 @@ describe('postgres WAF posture service adapters', () => {
     assert.equal(polled.status, 202);
     assert.equal(polled.poll_job.snapshot_count, 0);
     assert.equal(statusUpdates.length, 1);
-    assert.equal(statusUpdates[0].last_success_at, fixed.toISOString());
+    assert.equal(statusUpdates[0].last_success_at, undefined);
+    assert.equal(statusUpdates[0].last_success_revision, undefined);
     assert.equal(statusUpdates[0].updated_at, fixed.toISOString());
     // An empty poll reports nothing new; it must not flip status or clear a recorded error.
     assert.equal(statusUpdates[0].status, undefined);
@@ -5419,7 +6527,11 @@ describe('postgres WAF posture service adapters', () => {
 
     const result = await svc.disableConnector(ctx, 'conn_1', { reason: 'rotation complete' });
     assert.equal(result.connector.status, 'disabled');
-    assert.equal(repoCalls.filter((c) => c.method === 'updateConnectorStatus').length, 1);
+    const disableCall = repoCalls.find((c) => c.method === 'updateConnectorStatus');
+    assert.ok(disableCall);
+    assert.equal(disableCall.args[2].status, 'disabled');
+    assert.equal(disableCall.args[2].advance_poll_revision, true);
+    assert.equal(disableCall.args[2].invalidate_success_generation, true);
     assert.equal(auditEvents[0].action, 'connector.disabled');
     assert.equal(auditEvents[0].metadata.provider, 'cloudflare');
   });
@@ -7684,9 +8796,10 @@ function createTestPolicyRepositories(overrides = {}) {
     listTestPolicies: async () => overrides.listRows ?? [],
     getActiveTestPolicy: async (ctx, id) =>
       overrides.getActive ? overrides.getActive(ctx, id) : stored.get(id) ?? null,
-    findActivePolicyByGroupCheck: async (ctx, groupId, checkId) =>
+    findActivePolicyByGroupCheck: async (ctx, groupId, targetId, checkId) =>
       [...stored.values(), ...(overrides.listRows ?? [])].find(
-        (row) => row.target_group_id === groupId && row.check_id === checkId && !row.archived_at,
+        (row) => row.target_group_id === groupId && row.target_id === targetId
+          && row.check_id === checkId && !row.archived_at,
       ) ?? null,
     createTestPolicy: async (ctx, record) => {
       stored.set(record.id, { ...record });
@@ -7740,7 +8853,7 @@ describe('postgres test policy service adapter', () => {
     environment_id: 'env_1',
     expected_behavior_default: 'must_block_before_origin',
     safety_policy: { max_runs_per_hour: 10 },
-    targets: [{ id: 'tgt_1', value: 'a.example' }],
+    targets: [{ id: 'tgt_1', kind: 'fqdn', value: 'a.example' }],
   };
 
   it('exposes stable service method list', () => {
@@ -7772,6 +8885,7 @@ describe('postgres test policy service adapter', () => {
     const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
     const created = await svc.createTestPolicy(ctx, {
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'dns.authoritative_response.safe',
       cadence: 'weekly',
       expected_verdict: 'pass',
@@ -7780,6 +8894,9 @@ describe('postgres test policy service adapter', () => {
     assert.equal(created.check_id, 'dns.authoritative_response.safe');
     assert.equal(created.cadence, 'weekly');
     assert.equal(created.target_group.name, 'TG');
+    assert.equal(created.target.id, 'tgt_1');
+    assert.equal(created.target.kind, 'fqdn');
+    assert.equal(created.target.value, 'a.example');
     assert.equal(created.target_count, 1);
     assert.equal(created.check.safety_class, 'safe');
     assert.equal(created.safe_windows[0].timezone, 'UTC');
@@ -7801,20 +8918,45 @@ describe('postgres test policy service adapter', () => {
       status: 404,
     });
     assert.deepEqual(
-      await svc.createTestPolicy(ctx, { target_group_id: 'tg_1', check_id: 'nope' }),
+      await svc.createTestPolicy(ctx, { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'nope' }),
       { error: 'unknown_check', status: 400 },
     );
     const soc = await svc.createTestPolicy(ctx, {
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'high_scale.volumetric.request_only',
     });
     assert.equal(soc.error, 'soc_gated_check');
     assert.equal(soc.status, 403);
   });
 
+  it('rejects an incompatible effective target kind before Postgres persistence', async () => {
+    const { repositories, stored, auditEvents } = createTestPolicyRepositories({
+      getTargetGroup: async (c, id) => (id === 'tg_1' ? activeGroup : null),
+    });
+    const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
+
+    const rejected = await svc.createTestPolicy(ctx, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'path.protected_canary.safe',
+      cadence: 'manual',
+    });
+
+    assert.deepEqual(rejected, {
+      error: 'target_kind_not_supported',
+      status: 400,
+      check_id: 'path.protected_canary.safe',
+      target_kind: 'fqdn',
+      supported_targets: ['url'],
+    });
+    assert.equal(stored.size, 0);
+    assert.equal(auditEvents.some((entry) => entry.action === 'test_policy.created'), false);
+  });
+
   it('rejects event-driven create and update because no durable event consumer exists', async () => {
     const existing = {
-      id: 'pol_manual', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      id: 'pol_manual', tenant_id: ctx.tenantId, target_group_id: activeGroup.id, target_id: 'tgt_1',
       check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass',
       safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
       max_concurrent_runs: 1, schedule_revision: 1,
@@ -7826,6 +8968,7 @@ describe('postgres test policy service adapter', () => {
     const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
     const created = await svc.createTestPolicy(ctx, {
       target_group_id: activeGroup.id,
+      target_id: 'tgt_1',
       check_id: existing.check_id,
       cadence: 'event_driven',
       event_trigger: { type: 'finding.created' },
@@ -7839,7 +8982,7 @@ describe('postgres test policy service adapter', () => {
 
   it('claims a dispatch before start and forwards its exact durable binding', async () => {
     const lease = {
-      id: 'pol_lease', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      id: 'pol_lease', tenant_id: ctx.tenantId, target_group_id: activeGroup.id, target_id: 'tgt_1',
       check_id: 'dns.authoritative_response.safe', cadence: 'daily', expected_verdict: 'pass',
       safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
       max_concurrent_runs: 1, schedule_revision: 1,
@@ -7893,7 +9036,7 @@ describe('postgres test policy service adapter', () => {
 
   it('does not settle retryable starts or signed-worker runs missing a probe job', async () => {
     const lease = {
-      id: 'pol_retry', tenant_id: ctx.tenantId, target_group_id: activeGroup.id,
+      id: 'pol_retry', tenant_id: ctx.tenantId, target_group_id: activeGroup.id, target_id: 'tgt_1',
       check_id: 'dns.authoritative_response.safe', cadence: 'daily', expected_verdict: 'pass',
       safe_windows: [], timezone: 'UTC', event_trigger: null, state: 'active', enabled: true,
       max_concurrent_runs: 1, schedule_revision: 1,
@@ -7942,7 +9085,7 @@ describe('postgres test policy service adapter', () => {
   });
   it('lists only policies whose target group is still active', async () => {
     const rows = [
-      { id: 'p1', tenant_id: 'ten_demo', target_group_id: 'tg_1', check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass', safe_windows: [], state: 'active' },
+      { id: 'p1', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass', safe_windows: [], state: 'active' },
       { id: 'p2', tenant_id: 'ten_demo', target_group_id: 'tg_gone', check_id: 'dns.authoritative_response.safe', cadence: 'manual', expected_verdict: 'pass', safe_windows: [], state: 'active' },
     ];
     const { repositories } = createTestPolicyRepositories({
@@ -7963,14 +9106,21 @@ describe('postgres test policy service adapter', () => {
     const svc = createPostgresTestPolicyServices(repositories, { now: () => FIXED_NOW });
     const created = await svc.createTestPolicy(ctx, {
       target_group_id: 'tg_1',
+      target_id: 'tgt_1',
       check_id: 'dns.authoritative_response.safe',
     });
     const patched = await svc.patchTestPolicy(ctx, created.id, {
       cadence: 'monthly',
       expected_verdict: 'warn',
+      target_group_id: 'tg_other',
+      target_id: 'tgt_other',
+      check_id: 'path.protected_canary.safe',
     });
     assert.equal(patched.cadence, 'monthly');
     assert.equal(patched.expected_verdict, 'warn');
+    assert.equal(patched.target_group_id, 'tg_1');
+    assert.equal(patched.target_id, 'tgt_1');
+    assert.equal(patched.check_id, 'dns.authoritative_response.safe');
     assert.ok(auditEvents.some((e) => e.action === 'test_policy.updated'));
 
     const archived = await svc.archiveTestPolicy(ctx, created.id);
@@ -8090,6 +9240,7 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
       (c) => c.method === 'appendEvent' && c.args[1]?.signal_type === 'probe_result',
     );
     assert.ok(probeEvent, 'expected an inline ops-readiness probe event');
+    assert.equal(probeEvent.args[1].producer_kind, 'internal_simulation');
     assert.equal(probeEvent.args[1].metadata.external_result, 'connected');
     assert.equal(probeEvent.args[1].metadata.ops_validation_ok, true);
     assert.equal(result.run.probe_external_result, 'connected');
@@ -8144,11 +9295,11 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
       validationCalls.some((c) => c.method === 'upsertOpenFindingFromVerdict'),
       false,
     );
-    // Test run is persisted as verdicted, never left collecting.
+    // Verdict insertion owns the run transition atomically; no follow-up status write is allowed.
     const verdictedUpdate = validationCalls.find(
       (c) => c.method === 'updateTestRun' && c.args[2]?.status === 'verdicted',
     );
-    assert.ok(verdictedUpdate);
+    assert.equal(verdictedUpdate, undefined);
   });
 
   it('finalizes ops-readiness to inconclusive verdicted when no evidence exists', async () => {

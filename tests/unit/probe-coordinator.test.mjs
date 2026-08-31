@@ -6,12 +6,14 @@ import { getCheckById } from '../../src/contracts/checks.mjs';
 import {
   authenticateProbeWorker,
   ingestProbeResult,
+  listPendingProbeJobsForWorker,
   probeWorkerAuthHeaders,
   signProbeWorkerRequest,
   verifyProbeJobSignature,
 } from '../../src/services/probeCoordinator.mjs';
 import { createOwnershipChallenge } from '../../src/services/ownershipVerification.mjs';
 import {
+  cancelTestRun,
   finalizeTestRun,
   ingestObservation,
   maybeFinalizeRunAfterProbeIngest,
@@ -268,6 +270,54 @@ describe('signed probe coordinator', () => {
       },
     });
     assert.equal(res.status, 401);
+  });
+
+  it('cancels pending and leased probe work and rejects post-cancel results', () => {
+    freshStore();
+    seedAgent();
+    const first = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const pendingJob = getStore().probeJobs.find((job) => job.test_run_id === first.run.id);
+    assert.equal(pendingJob.status, 'pending');
+    cancelTestRun(ctx, first.run.id);
+    assert.equal(pendingJob.status, 'cancelled');
+
+    const second = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.leak_scan.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const workerCtx = { tenantId: 'ten_demo', workerId: 'worker-a' };
+    const leased = listPendingProbeJobsForWorker(workerCtx, runtimeSignedWorker());
+    assert.equal(leased.length, 1);
+    const leasedJob = getStore().probeJobs.find((job) => job.test_run_id === second.run.id);
+    assert.equal(leasedJob.status, 'leased');
+    cancelTestRun(ctx, second.run.id);
+    assert.equal(leasedJob.status, 'cancelled');
+    assert.deepEqual(listPendingProbeJobsForWorker(workerCtx, runtimeSignedWorker()), []);
+
+    const eventCount = getStore().events.length;
+    const evidenceCount = getStore().evidenceVault.length;
+    const denied = ingestProbeResult(
+      workerCtx,
+      leasedJob.id,
+      probeResultBody(leasedJob, 'blocked'),
+      runtimeSignedWorker(),
+    );
+    assert.equal(denied.error, 'run_not_collecting');
+    assert.equal(getStore().events.length, eventCount);
+    assert.equal(getStore().evidenceVault.length, evidenceCount);
   });
 
   it('worker can fetch signed pending job and ingest metadata result', async () => {

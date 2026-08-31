@@ -12,6 +12,7 @@ import { newId } from '../lib/ids.mjs';
 import { getStore, persistStore } from '../store.mjs';
 
 const WAF_DRIFT_OPEN_STATUS = 'open';
+const DRIFT_SEVERITY_RANK = Object.freeze({ info: 0, low: 1, medium: 2, high: 3, critical: 4 });
 const BLOCKING_POLICY_MODES = new Set(['blocking', 'block', 'prevention', 'on', 'enabled']);
 const MONITOR_POLICY_MODES = new Set(['monitor', 'detect', 'log', 'log_only', 'simulate', 'count']);
 
@@ -116,7 +117,7 @@ function detectPostureDrifts(previous, current) {
   const before = postureSummaryFromSnapshot(previous);
   const after = postureSummaryFromSnapshot(current);
 
-  if (previous.status === 'protected' && current.status === 'unprotected') {
+  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'unprotected') {
     const driftType = after.detected_vendor || after.detected_product ? 'mode_downgrade' : 'fingerprint_loss';
     drifts.push({
       drift_type: driftType,
@@ -131,6 +132,7 @@ function detectPostureDrifts(previous, current) {
     previous.detected_vendor
     && !current.detected_vendor
     && current.status !== 'protected'
+    && !drifts.some((drift) => drift.drift_type === 'fingerprint_loss')
   ) {
     drifts.push({
       drift_type: 'fingerprint_loss',
@@ -141,7 +143,7 @@ function detectPostureDrifts(previous, current) {
     });
   }
 
-  if (previous.status === 'protected' && current.status === 'underprotected') {
+  if (['protected', 'edge_protected'].includes(previous.status) && current.status === 'underprotected') {
     const codes = new Set(current.reason_codes ?? []);
     if (codes.has('origin_bypass_confirmed')) {
       drifts.push({
@@ -223,9 +225,12 @@ function upsertDriftEvent(ctx, asset, spec) {
   };
 
   if (existing) {
-    existing.severity = spec.severity;
+    if ((DRIFT_SEVERITY_RANK[spec.severity] ?? -1) > (DRIFT_SEVERITY_RANK[existing.severity] ?? -1)) {
+      existing.severity = spec.severity;
+    }
     existing.after_summary_json = spec.after_summary_json;
     existing.updated_at = now;
+    auditMetadata.severity = existing.severity;
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId ?? null,

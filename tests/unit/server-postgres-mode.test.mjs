@@ -1096,7 +1096,7 @@ describe('createServer postgres mode — route wiring', () => {
 
     const created = await request(baseUrl, 'POST', '/v1/test-policies', {
       headers,
-      body: { target_group_id: 'tg_1', check_id: 'dns.authoritative_response.safe', cadence: 'monthly' },
+      body: { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'dns.authoritative_response.safe', cadence: 'monthly' },
     });
     assert.equal(created.status, 201);
     assert.equal(created.json.cadence, 'monthly');

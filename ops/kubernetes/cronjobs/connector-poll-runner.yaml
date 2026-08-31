@@ -1,42 +1,75 @@
 apiVersion: batch/v1
+apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: astranull-connector-poll-runner
+  name: astranull-connector-poll-scheduler
   labels:
     app.kubernetes.io/name: astranull
-    app.kubernetes.io/component: connector-poll-runner
+    app.kubernetes.io/component: connector-poll-scheduler
 spec:
-  schedule: "*/30 * * * *"
+  schedule: "*/2 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 180
       backoffLimit: 1
       template:
         metadata:
           labels:
             app.kubernetes.io/name: astranull
-            app.kubernetes.io/component: connector-poll-runner
+            app.kubernetes.io/component: connector-poll-scheduler
         spec:
+          automountServiceAccountToken: false
           restartPolicy: Never
           serviceAccountName: astranull-worker
           containers:
-            - name: runner
-              image: ghcr.io/astranull/astranull-worker:latest
+            - name: scheduler
+              # Render out-of-tree with scripts/render-kubernetes-worker-manifests.mjs.
+              image: ghcr.io/astranull/astranull-worker@__ASTRANULL_WORKER_IMAGE_DIGEST__
               imagePullPolicy: IfNotPresent
               command: ["node", "scripts/connector-poll-runner.mjs"]
               args:
+                - "--queue-only"
                 - "--tenant-ids-file"
                 - "/config/tenant-ids.json"
                 - "--out"
-                - "/tmp/connector-poll-summary.json"
-              envFrom:
-                - secretRef:
-                    name: astranull-worker-env
+                - "/tmp/connector-poll-scheduler-summary.json"
               env:
+                - name: NODE_ENV
+                  value: "production"
+                - name: ASTRANULL_PERSISTENCE_MODE
+                  value: "postgres"
+                - name: ASTRANULL_ENFORCE_DATABASE_ROLE
+                  value: "1"
                 - name: ASTRANULL_WAF_POSTURE_ENABLED
                   value: "1"
+                - name: ASTRANULL_CONNECTORS_ENABLED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: astranull-connector-config
+                      key: connectors-enabled
+                - name: ASTRANULL_CONNECTORS_ENABLED_TENANTS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: astranull-connector-config
+                      key: connectors-enabled-tenants
+                - name: ASTRANULL_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: scheduler-database-url
+                - name: ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: job-private-key
+                - name: ASTRANULL_PG_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: pg-ssl-ca
               resources:
                 requests:
                   cpu: 100m
@@ -63,3 +96,113 @@ spec:
             - name: tenant-scope
               configMap:
                 name: astranull-worker-tenant-ids
+                items:
+                  - key: tenant-ids.json
+                    path: tenant-ids.json
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: astranull-connector-poll-runner
+  labels:
+    app.kubernetes.io/name: astranull
+    app.kubernetes.io/component: connector-poll-runner
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 180
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: astranull
+            app.kubernetes.io/component: connector-poll-runner
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          serviceAccountName: astranull-worker
+          containers:
+            - name: runner
+              # Render out-of-tree with scripts/render-kubernetes-worker-manifests.mjs.
+              image: ghcr.io/astranull/astranull-worker@__ASTRANULL_WORKER_IMAGE_DIGEST__
+              imagePullPolicy: IfNotPresent
+              command: ["node", "scripts/connector-poll-runner.mjs"]
+              args:
+                - "--tenant-ids-file"
+                - "/config/tenant-ids.json"
+                - "--out"
+                - "/tmp/connector-poll-summary.json"
+              env:
+                - name: NODE_ENV
+                  value: "production"
+                - name: ASTRANULL_PERSISTENCE_MODE
+                  value: "postgres"
+                - name: ASTRANULL_ENFORCE_DATABASE_ROLE
+                  value: "1"
+                - name: ASTRANULL_WAF_POSTURE_ENABLED
+                  value: "1"
+                - name: ASTRANULL_CONNECTORS_ENABLED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: astranull-connector-config
+                      key: connectors-enabled
+                - name: ASTRANULL_CONNECTORS_ENABLED_TENANTS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: astranull-connector-config
+                      key: connectors-enabled-tenants
+                - name: ASTRANULL_CONNECTOR_WORKER_ID
+                  value: "kubernetes-connector-poll-runner"
+                - name: ASTRANULL_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: worker-database-url
+                - name: ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: job-public-key
+                - name: ASTRANULL_PG_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: pg-ssl-ca
+                - name: ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: astranull-connector-worker
+                      key: connector-secret-encryption-key
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 768Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 10001
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: tenant-scope
+                  mountPath: /config
+                  readOnly: true
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: tenant-scope
+              configMap:
+                name: astranull-worker-tenant-ids
+                items:
+                  - key: tenant-ids.json
+                    path: tenant-ids.json

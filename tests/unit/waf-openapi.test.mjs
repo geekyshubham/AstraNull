@@ -38,6 +38,22 @@ describe('WAF posture OpenAPI artifact', () => {
     assert.ok('continuation_required' in executeSchema.properties);
   });
 
+  it('documents edge-protected coverage across summary, trend, vendor, and business rollups', () => {
+    const doc = JSON.parse(readFileSync(ARTIFACT, 'utf8'));
+    assert.ok('edge_protected' in doc.components.schemas.WafCoverageSummary.properties);
+    assert.ok('edge_protected' in doc.components.schemas.WafCoverageTrendPoint.properties);
+    assert.ok(
+      'edge_protected_count' in doc.components.schemas.WafCoverageVendorItem.properties,
+    );
+    for (const schemaName of [
+      'WafCoverageEntityItem',
+      'WafCoverageGeographyItem',
+      'WafCoverageCriticalityItem',
+    ]) {
+      assert.ok('edge_protected' in doc.components.schemas[schemaName].properties, schemaName);
+    }
+  });
+
   it('fails validation when a required orchestrator error code is removed', () => {
     const doc = JSON.parse(readFileSync(ARTIFACT, 'utf8'));
     const apiError = doc.components.schemas.ApiError;

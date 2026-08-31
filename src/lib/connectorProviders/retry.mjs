@@ -8,7 +8,17 @@ function isRetryableProviderError(err) {
   const status = Number(err?.status ?? err?.http_status ?? 0);
   if (status === 429 || status >= 500) return true;
   const code = String(err?.code ?? '').toLowerCase();
-  return code === 'network_error' || code === 'provider_timeout' || code === 'rate_limited';
+  return [
+    'network_error',
+    'provider_timeout',
+    'rate_limited',
+    'econnreset',
+    'etimedout',
+    'eai_again',
+    'enetunreach',
+    'ehostunreach',
+    'econnrefused',
+  ].includes(code);
 }
 
 /**
@@ -21,8 +31,10 @@ export async function withConnectorPollRetry(fn, options = {}) {
   const maxAttempts = Number(options.maxAttempts ?? CONNECTOR_POLL_MAX_ATTEMPTS);
   const baseBackoffMs = Number(options.baseBackoffMs ?? CONNECTOR_POLL_BASE_BACKOFF_MS);
   let lastError = null;
+  let attempts = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    attempts = attempt;
     try {
       const result = await fn(attempt);
       return { result, attempts: attempt };
@@ -40,6 +52,6 @@ export async function withConnectorPollRetry(fn, options = {}) {
   if (!(wrapped instanceof Error)) {
     throw wrapped;
   }
-  wrapped.attempts = maxAttempts;
+  wrapped.attempts = attempts;
   throw wrapped;
 }

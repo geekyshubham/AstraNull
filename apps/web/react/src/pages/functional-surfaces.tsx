@@ -290,6 +290,7 @@ function formatFindingStatusLabel(status: string) {
 function wafAssetStatusBadgeTone(status: string): BadgeTone {
   const normalized = status.toLowerCase();
   if (normalized === 'protected') return 'success';
+  if (normalized === 'edge_protected') return 'info';
   if (normalized === 'underprotected' || normalized === 'unprotected') return 'danger';
   if (normalized === 'unknown') return 'warn';
   if (normalized === 'excluded') return 'muted';
@@ -580,6 +581,7 @@ function buildDetailHashRowProps(
 function formatCoverageStatusLabel(status: string) {
   const labels: Record<string, string> = {
     protected: 'Protected',
+    edge_protected: 'Edge protected · not internally validated',
     underprotected: 'Underprotected',
     unprotected: 'Unprotected',
     unknown: 'Unknown',
@@ -590,6 +592,7 @@ function formatCoverageStatusLabel(status: string) {
 
 function coverageBucketBadgeTone(status: string, count: number, percent: number): BadgeTone {
   if (status === 'protected') return scoreTone(percent);
+  if (status === 'edge_protected') return count > 0 ? 'info' : 'muted';
   if (status === 'underprotected') return count > 0 ? 'warn' : 'muted';
   if (status === 'unprotected') return count > 0 ? 'danger' : 'muted';
   if (status === 'unknown') return count > 0 ? 'muted' : 'muted';
@@ -613,6 +616,7 @@ function scrollElementIntoView(element: HTMLElement | null, block: ScrollLogical
 function coverageStatusHint(status: string) {
   const hints: Record<string, string> = {
     protected: 'Asset meets declared WAF protection expectations.',
+    edge_protected: 'Blocking was observed at the edge, but no matching internal or origin observation validates full protection.',
     underprotected: 'Partial coverage or weak rule effectiveness.',
     unprotected: 'No effective WAF coverage on declared scope.',
     unknown: 'Insufficient evidence to classify coverage.',
@@ -1643,7 +1647,7 @@ export function AgentsPage({
         <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
           <SurfaceTableCard
             title="Registered agents"
-            description="Outbound-only observation agents and their reported evidence context. Readiness still requires correlated probe and agent evidence. Select a row for details."
+            description="Outbound-only observation agents are optional for external readiness validation. Use them when origin validation must correlate an outside probe with an observation from inside the protected path. Select a row for details."
             columns={fleetColumns}
             items={data.agents}
             loadError={agentsLoadError}

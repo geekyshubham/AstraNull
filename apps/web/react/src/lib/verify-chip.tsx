@@ -31,6 +31,9 @@ export function resolveVerifyChipState(
   if (state === 'dns_verified') {
     return { label: 'dns_verified', className: 'verify-chip is-dns', title };
   }
+  if (state === 'provider_verified') {
+    return { label: 'provider_verified', className: 'verify-chip is-verified', title };
+  }
   if (['pending', 'dns_pending', 'awaiting_heartbeat', 'pending_agent'].includes(state)) {
     return { label: state.replace(/_/g, ' '), className: 'verify-chip is-pending', title };
   }
@@ -54,6 +57,10 @@ export function resolveTargetVerificationProvenance(target: DataItem | null, ver
     }
     if (getString(ref, ['agent_id'])) {
       return `Probe and agent correlated on ${getString(ref, ['agent_id'])} per verification API.`;
+    }
+    if (sourceKind === 'provider_account' && getString(ref, ['connector_id'])) {
+      const observedAt = getString(ref, ['observed_at'], 'the recorded poll time');
+      return `Read-only provider inventory from connector ${getString(ref, ['connector_id'])}, observed ${observedAt}.`;
     }
     if (getString(ref, ['correlated_at'])) {
       return `Verification correlated at ${getString(ref, ['correlated_at'])} (${sourceKind || 'api'}).`;

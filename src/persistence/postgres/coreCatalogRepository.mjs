@@ -3,7 +3,10 @@ import {
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
-import { isProviderVerifiedDnsEvidence } from '../../lib/connectorProviders/domainInventory.mjs';
+import {
+  isCurrentProviderDnsOwnershipProof,
+  isProviderVerifiedDnsEvidence,
+} from '../../lib/connectorProviders/domainInventory.mjs';
 import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../../lib/ownershipPolicy.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
@@ -86,7 +89,7 @@ function mapTargetGroupRow(row) {
       ? { deleted_at: toIso(row.deleted_at), deleted_by: row.deleted_by ?? null }
       : {}),
     ...(row.archived_at ? { archived_at: toIso(row.archived_at) } : {}),
-    validation_mode: row.validation_mode ?? 'agent_assisted',
+    validation_mode: row.validation_mode ?? 'external_only',
     ownership_status: row.ownership_status ?? 'unverified',
     dns_ownership: row.dns_ownership ?? null,
     // Only the list query selects these summary columns; other callers omit them entirely.
@@ -456,22 +459,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
              ON tg.id = t.target_group_id AND tg.tenant_id = t.tenant_id
            LEFT JOIN environments environment
              ON environment.id = tg.environment_id AND environment.tenant_id = t.tenant_id
-           LEFT JOIN LATERAL (
-             SELECT tv.state, tv.source_kind, tv.source_ref, tv.transitioned_at
-             FROM target_verifications tv
-             WHERE tv.tenant_id = $1 AND tv.target_id = t.id
-             ORDER BY tv.transitioned_at DESC,
-                      CASE tv.state
-                        WHEN 'user_confirmed' THEN 4
-                        WHEN 'agent_verified' THEN 3
-                        WHEN 'dns_verified' THEN 2
-                        WHEN 'provider_verified' THEN 2
-                        WHEN 'pending' THEN 1
-                        ELSE 0
-                      END DESC,
-                      tv.id DESC
-             LIMIT 1
-           ) verification ON TRUE
+           LEFT JOIN target_verification_current verification
+             ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
            WHERE t.tenant_id = $1
              AND t.deleted_at IS NULL
              AND tg.tenant_id = $1
@@ -864,13 +853,26 @@ export function createCoreCatalogRepository(pool, options = {}) {
         const existing = await client.query(
           `SELECT id
            FROM target_groups
-           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL
+           FOR UPDATE`,
           [id, ctx.tenantId],
         );
         if (!existing.rows[0]) return null;
         if (await hasActiveRunForGroup(client, ctx.tenantId, id)) {
           return { error: 'target_group_active_run', status: 409 };
         }
+
+        const pausedPolicies = await client.query(
+          `UPDATE test_policies
+           SET state = 'paused', enabled = FALSE, next_run_at = NULL,
+               lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL,
+               schedule_revision = schedule_revision + 1,
+               updated_at = $3::timestamptz
+           WHERE tenant_id = $1 AND target_group_id = $2 AND archived_at IS NULL
+           RETURNING id`,
+          [ctx.tenantId, id, now],
+        );
+        const pausedPolicyIds = pausedPolicies.rows.map((policy) => policy.id);
 
         const { rows } = await client.query(
           `UPDATE target_groups
@@ -884,9 +886,18 @@ export function createCoreCatalogRepository(pool, options = {}) {
         if (!rows[0]) return null;
         await appendMutationAudit(auditRepository, client, ctx, {
           action: 'target_group.archived', resource_type: 'target_group', resource_id: id,
-          metadata: { changed_fields: ['deleted_at', 'deleted_by', 'archived_at'] },
+          metadata: {
+            changed_fields: ['deleted_at', 'deleted_by', 'archived_at'],
+            paused_policy_ids: pausedPolicyIds,
+          },
         }, now);
-        return { archived: true, id, deleted_at: now, deleted_by: deletedBy };
+        return {
+          archived: true,
+          id,
+          deleted_at: now,
+          deleted_by: deletedBy,
+          paused_policy_count: pausedPolicyIds.length,
+        };
       });
     },
 
@@ -1043,6 +1054,65 @@ export function createCoreCatalogRepository(pool, options = {}) {
         );
         if (!groupResult.rows[0]) return { error: 'target_group_not_found', status: 404 };
 
+        let authoritativeConnector = null;
+        const authoritativeSnapshots = new Map();
+        if (connector) {
+          const feature = await client.query(
+            `SELECT enabled FROM tenant_connector_features WHERE tenant_id = $1`,
+            [ctx.tenantId],
+          );
+          if (feature.rows[0]?.enabled !== true) {
+            return { error: 'connectors_feature_disabled', status: 404 };
+          }
+          const { rows: connectorRows } = await client.query(
+            `SELECT id, provider, name, status, secret_id, last_success_at,
+                    last_success_revision
+             FROM waf_connectors
+             WHERE tenant_id = $1 AND id = $2
+             FOR UPDATE`,
+            [ctx.tenantId, connector.id],
+          );
+          const row = connectorRows[0] ?? null;
+          if (row) {
+            authoritativeConnector = {
+              id: row.id,
+              provider: row.provider,
+              name: row.name,
+              status: row.status,
+              secret_id: row.secret_id ?? null,
+              has_secret: Boolean(row.secret_id),
+              last_success_at: toIso(row.last_success_at),
+              last_success_revision: Number(row.last_success_revision ?? 0),
+            };
+            const snapshotIds = [...new Set(
+              [...connectorEvidence.values()]
+                .map((evidence) => String(evidence?.snapshot_id ?? '').trim())
+                .filter(Boolean),
+            )];
+            if (snapshotIds.length > 0) {
+              const { rows: snapshotRows } = await client.query(
+                `SELECT id, connector_id, provider, snapshot_kind, resource_ref_hash,
+                        display_ref, observed_at, summary_json, evidence_source,
+                        inventory_complete, inventory_truncated, poll_revision
+                 FROM waf_connector_snapshots
+                 WHERE tenant_id = $1 AND connector_id = $2
+                   AND id = ANY($3::text[])`,
+                [ctx.tenantId, connector.id, snapshotIds],
+              );
+              for (const snapshot of snapshotRows) {
+                authoritativeSnapshots.set(snapshot.id, {
+                  ...snapshot,
+                  observed_at: toIso(snapshot.observed_at),
+                  summary: asObject(snapshot.summary_json),
+                  inventory_complete: snapshot.inventory_complete === true,
+                  inventory_truncated: snapshot.inventory_truncated === true,
+                  poll_revision: Number(snapshot.poll_revision ?? 0),
+                });
+              }
+            }
+          }
+        }
+
         const imported = [];
         const skipped = [];
         for (const item of items) {
@@ -1059,8 +1129,53 @@ export function createCoreCatalogRepository(pool, options = {}) {
             skipped.push({ value: normalized.value, reason: 'connector_item_not_found' });
             continue;
           }
-          const itemEvidence = connector ? connectorEvidence.get(key) : null;
-          const providerVerified = isProviderVerifiedDnsEvidence(connector, itemEvidence);
+          const loadedEvidence = connector ? connectorEvidence.get(key) : null;
+          const providerSnapshot = loadedEvidence?.snapshot_id
+            ? authoritativeSnapshots.get(loadedEvidence.snapshot_id) ?? null
+            : null;
+          const itemEvidence = providerSnapshot && authoritativeConnector
+            ? {
+                kind: normalized.kind,
+                value: normalized.value,
+                provider: providerSnapshot.provider ?? authoritativeConnector.provider,
+                snapshot_kind: providerSnapshot.snapshot_kind,
+                resource_ref: providerSnapshot.resource_ref_hash,
+                observed_at: providerSnapshot.observed_at,
+                snapshot_id: providerSnapshot.id,
+                poll_revision: providerSnapshot.poll_revision,
+                poll_generation: authoritativeConnector.last_success_at,
+                evidence_source: providerSnapshot.evidence_source,
+                candidate_source: 'snapshot_inventory',
+                inventory_complete: providerSnapshot.inventory_complete,
+                inventory_truncated: providerSnapshot.inventory_truncated,
+                summary: providerSnapshot.summary,
+              }
+            : null;
+          const sourceRef = itemEvidence && authoritativeConnector
+            ? {
+                connector_id: authoritativeConnector.id,
+                connector_secret_id: authoritativeConnector.secret_id,
+                connector_revision: authoritativeConnector.last_success_revision,
+                provider: itemEvidence.provider,
+                snapshot_kind: itemEvidence.snapshot_kind,
+                evidence_source: itemEvidence.evidence_source,
+                resource_ref_hash: itemEvidence.resource_ref,
+                snapshot_id: itemEvidence.snapshot_id,
+                observed_at: itemEvidence.observed_at,
+                poll_generation: itemEvidence.poll_generation,
+              }
+            : null;
+          const providerVerified = Boolean(
+            authoritativeConnector
+            && providerSnapshot
+            && isProviderVerifiedDnsEvidence(authoritativeConnector, itemEvidence)
+            && isCurrentProviderDnsOwnershipProof({
+              connector: authoritativeConnector,
+              snapshot: providerSnapshot,
+              sourceRef,
+              target: normalized,
+            }),
+          );
           const duplicate = await client.query(
             `SELECT id FROM targets
              WHERE tenant_id = $1 AND target_group_id = $2 AND kind = $3
@@ -1084,8 +1199,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
               ? {
                   managed_provenance: {
                     kind: providerVerified ? 'provider_account' : 'connector_inventory',
-                    connector_id: connector.id,
-                    provider: itemEvidence?.provider ?? connector.provider ?? null,
+                    connector_id: authoritativeConnector?.id ?? connector.id,
+                    provider: itemEvidence?.provider ?? authoritativeConnector?.provider ?? null,
                     snapshot_kind: itemEvidence?.snapshot_kind ?? null,
                     snapshot_id: itemEvidence?.snapshot_id ?? null,
                     resource_ref_hash: itemEvidence?.resource_ref ?? null,
@@ -1142,7 +1257,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
                 providerVerified ? 'provider_account' : connector ? 'connector_inventory' : 'customer_declaration',
                 JSON.stringify(providerVerified
                   ? {
-                      connector_id: connector.id,
+                      connector_id: authoritativeConnector.id,
                       provider: itemEvidence.provider,
                       snapshot_kind: itemEvidence.snapshot_kind,
                       evidence_source: itemEvidence.evidence_source,
@@ -1197,6 +1312,13 @@ export function createCoreCatalogRepository(pool, options = {}) {
           [groupId, ctx.tenantId],
         );
         if (!groupResult.rows[0]) return null;
+        const targetResult = await client.query(
+          `SELECT id FROM targets
+           WHERE id = $1 AND tenant_id = $2 AND target_group_id = $3 AND deleted_at IS NULL
+           FOR UPDATE`,
+          [targetId, ctx.tenantId, groupId],
+        );
+        if (!targetResult.rows[0]) return null;
         if (await hasActiveRunForTarget(client, ctx.tenantId, groupId, targetId)) {
           return { error: 'target_active_run', status: 409 };
         }
@@ -1209,11 +1331,34 @@ export function createCoreCatalogRepository(pool, options = {}) {
           [targetId, ctx.tenantId, groupId, now, deletedBy],
         );
         if (!rows[0]) return null;
+        const pausedPolicies = await client.query(
+          `UPDATE test_policies
+           SET state = 'paused', enabled = FALSE, next_run_at = NULL,
+               lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL,
+               schedule_revision = schedule_revision + 1,
+               updated_at = $4::timestamptz
+           WHERE tenant_id = $1 AND target_group_id = $2 AND target_id = $3
+             AND archived_at IS NULL
+           RETURNING id`,
+          [ctx.tenantId, groupId, targetId, now],
+        );
+        const pausedPolicyIds = pausedPolicies.rows.map((policy) => policy.id);
         await appendMutationAudit(auditRepository, client, ctx, {
           action: 'target.archived', resource_type: 'target', resource_id: targetId,
-          metadata: { target_group_id: groupId, changed_fields: ['deleted_at', 'deleted_by'] },
+          metadata: {
+            target_group_id: groupId,
+            changed_fields: ['deleted_at', 'deleted_by'],
+            paused_policy_ids: pausedPolicyIds,
+          },
         }, now);
-        return { deleted: true, archived: true, id: targetId, deleted_at: now, deleted_by: deletedBy };
+        return {
+          deleted: true,
+          archived: true,
+          id: targetId,
+          deleted_at: now,
+          deleted_by: deletedBy,
+          paused_policy_count: pausedPolicyIds.length,
+        };
       });
     },
   };

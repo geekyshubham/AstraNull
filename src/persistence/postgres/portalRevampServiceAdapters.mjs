@@ -4,7 +4,10 @@ import { encodeBase32 } from '../../lib/base32.mjs';
 import { mapProviderInventory } from '../../lib/connectorInventory.mjs';
 import { paginateItems } from '../../lib/cursorPagination.mjs';
 import { buildLoaCustodyDigest } from '../../lib/authorizationArtifactLedger.mjs';
-import { isCurrentSuccessfulProviderSnapshot } from '../../lib/connectorProviders/domainInventory.mjs';
+import {
+  getProviderSnapshotProofMetadata,
+  isCurrentSuccessfulProviderSnapshot,
+} from '../../lib/connectorProviders/domainInventory.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { PORTAL_REVAMP_REPOSITORY_METHODS } from './portalRevampRepository.mjs';
@@ -195,6 +198,10 @@ async function loadConnectorInventory(repositories, ctx, connectorId) {
     const currentSuccessfulPoll = isCurrentSuccessfulProviderSnapshot(connector, snapshot);
     if (snapshot.evidence_source === 'provider_api' && !currentSuccessfulPoll) continue;
 
+    const proofMetadata = getProviderSnapshotProofMetadata(
+      snapshot,
+      snapshot.provider ?? connector.provider,
+    );
     const summary = snapshot.summary && typeof snapshot.summary === 'object'
       ? snapshot.summary
       : {};
@@ -236,10 +243,14 @@ async function loadConnectorInventory(repositories, ctx, connectorId) {
         resource_ref: snapshot.resource_ref_hash ?? null,
         observed_at: snapshot.observed_at ?? null,
         snapshot_id: snapshot.id ?? null,
+        poll_revision: snapshot.poll_revision ?? null,
         poll_generation: currentSuccessfulPoll ? connector.last_success_at : null,
         evidence_source: snapshot.evidence_source ?? 'manual_metadata',
         candidate_source: candidateSource,
         current_successful_poll: currentSuccessfulPoll,
+        ownership_eligible: proofMetadata.ownership_eligible,
+        resource_status: proofMetadata.resource_status,
+        provider_environment: proofMetadata.provider_environment,
         inventory_complete: snapshot.inventory_complete === true,
         inventory_truncated: snapshot.inventory_truncated === true,
       }, currentSuccessfulPoll ? 2 : 1);
@@ -255,6 +266,7 @@ async function loadConnectorInventory(repositories, ctx, connectorId) {
       status: connector.status,
       has_secret: Boolean(connector.secret_id),
       last_success_at: connector.last_success_at ?? null,
+      last_success_revision: connector.last_success_revision ?? null,
     },
     discovered_at: connector.last_success_at ?? snapshots[0]?.observed_at ?? null,
     items,
@@ -645,6 +657,10 @@ export function createPostgresPortalRevampServices(deps) {
       let trustedConnector = null;
       let connectorInventoryEvidence = new Map();
       if (body.connector_id) {
+        if (typeof repositories.wafPosture?.isConnectorFeatureEnabled !== 'function'
+          || !await repositories.wafPosture.isConnectorFeatureEnabled(ctx)) {
+          return { error: 'connectors_feature_disabled', status: 404 };
+        }
         const inventory = await loadConnectorInventory(repositories, ctx, String(body.connector_id));
         if (inventory.error) return inventory;
         trustedConnector = inventory.connector;
@@ -680,7 +696,7 @@ export function createPostgresPortalRevampServices(deps) {
         account: inventory.connector.name ?? null,
         scope: 'read_only',
         discovered_at: inventory.discovered_at,
-        items: paged.items,
+        items: paged.items.map(({ poll_revision: _pollRevision, ...item }) => item),
         count: paged.count,
         next_cursor: paged.next_cursor ?? undefined,
         meta: paged.items.length

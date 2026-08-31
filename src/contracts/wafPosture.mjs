@@ -1,5 +1,6 @@
 export const WAF_POSTURE_STATUSES = Object.freeze([
   'protected',
+  'edge_protected',
   'underprotected',
   'unprotected',
   'unknown',
@@ -156,6 +157,7 @@ export const WAF_EXPECTED_ACTIONS = Object.freeze([
 export const WAF_CONNECTOR_STATUSES = Object.freeze([
   'disabled',
   'validating',
+  'polling',
   'active',
   'error',
   'revoked',
@@ -692,6 +694,7 @@ export function normalizeSocOffensiveWafValidationRequest(input) {
 export function classifyWafPosture({
   wafDetected = false,
   validationPassed = false,
+  edgeProtected = false,
   validationFailed = false,
   originBypassConfirmed = false,
   wafRequired = true,
@@ -720,6 +723,13 @@ export function classifyWafPosture({
     || (wafDetected && modeKey && MONITOR_ONLY_CONNECTOR_MODES.has(modeKey))
   ) {
     return { status: 'underprotected', reason_codes };
+  }
+
+  if (edgeProtected && wafDetected && !originBypassConfirmed && !validationFailed) {
+    return {
+      status: 'edge_protected',
+      reason_codes: [...new Set([...reason_codes, 'insufficient_validation_evidence'])],
+    };
   }
 
   if (wafDetected && !validationPassed) {

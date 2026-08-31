@@ -230,6 +230,7 @@ export function summarizePolicyDispatch(result) {
 export async function runPostgresTestPolicies(options) {
   const runtime = await (options.createPostgresRuntimeFn ?? createPostgresRuntime)(options.env, {
     autoMigrate: false,
+    wafPostureServiceOptions: { connectorEncryptionKey: null },
   });
   try {
     const service = runtime.services?.testPolicies;

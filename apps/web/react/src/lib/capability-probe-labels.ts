@@ -81,6 +81,7 @@ export function externalResultTone(result: string): 'success' | 'warn' | 'danger
 
 export const OUTSIDE_IN_POSTURE_LABELS: Record<string, string> = {
   Protected: 'Protected',
+  'Edge protected · not internally validated': 'Edge protected · not internally validated',
   'Detected, not validated': 'Detected, not validated',
   Underprotected: 'Underprotected',
   'Bypass Risk': 'Bypass Risk',
@@ -90,6 +91,7 @@ export const OUTSIDE_IN_POSTURE_LABELS: Record<string, string> = {
 
 const OUTSIDE_IN_POSTURE_TONES: Record<string, BadgeTone> = {
   Protected: 'success',
+  'Edge protected · not internally validated': 'info',
   'Detected, not validated': 'warn',
   Underprotected: 'danger',
   'Bypass Risk': 'danger',
@@ -99,6 +101,7 @@ const OUTSIDE_IN_POSTURE_TONES: Record<string, BadgeTone> = {
 
 const OUTSIDE_IN_POSTURE_STATUS_LABELS: Record<string, string> = {
   protected: 'Protected',
+  edge_protected: 'Edge protected · not internally validated',
   underprotected: 'Underprotected',
   unknown: 'Detected, not validated',
   unprotected: 'Unprotected',
@@ -115,6 +118,8 @@ export const DOM_XSS_VALIDATION_LABELS: Record<string, string> = {
 
 const OUTSIDE_IN_POSTURE_EXPLANATIONS: Record<string, string> = {
   Protected: 'Safe attack markers were blocked at the edge and your agent confirmed enforcement.',
+  'Edge protected · not internally validated':
+    'Bounded probes observed edge blocking, but no matching agent or origin observation confirms internal enforcement.',
   'Detected, not validated':
     'A WAF was detected from the outside, but agent corroboration is still needed to confirm protection.',
   Underprotected: 'Safe attack markers were not consistently blocked by the edge WAF.',

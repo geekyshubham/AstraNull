@@ -60,6 +60,16 @@ describe('alpha platform slice', () => {
     };
     const first = await request(baseUrl, 'POST', '/v1/events', { headers: h, body });
     assert.equal(first.status, 201);
+
+    for (const signalType of ['probe_result', 'agent_observation', 'ownership_observation']) {
+      const reserved = await request(baseUrl, 'POST', '/v1/events', {
+        headers: h,
+        body: { event_id: `evt_reserved_${signalType}`, signal_type: signalType },
+      });
+      assert.equal(reserved.status, 400);
+      assert.equal(reserved.json.error, 'reserved_signal_type');
+    }
+
     const dup = await request(baseUrl, 'POST', '/v1/events', { headers: h, body });
     assert.equal(dup.status, 200);
     assert.equal(dup.json.duplicate, true);

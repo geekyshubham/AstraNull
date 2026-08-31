@@ -164,6 +164,7 @@ export function toMetadataOnlyRollupResult(rollupResult) {
     rollup_date: rollupResult.rollup_date,
     total_assets: rollupResult.total_assets,
     protected: rollupResult.protected,
+    edge_protected: rollupResult.edge_protected,
     underprotected: rollupResult.underprotected,
     unprotected: rollupResult.unprotected,
     unknown: rollupResult.unknown,
@@ -181,7 +182,7 @@ export function toMetadataOnlyTenantRollupResult(tenantResult) {
     tenant_id: tenantResult.tenant_id,
     dry_run: tenantResult.dry_run,
     scope: tenantResult.scope ?? null,
-    rollup_result: tenantResult.rollup_result ?? null,
+    rollup_result: toMetadataOnlyRollupResult(tenantResult.rollup_result),
     ...(tenantResult.error ? { error: tenantResult.error } : {}),
   };
 }

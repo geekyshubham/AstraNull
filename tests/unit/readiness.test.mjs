@@ -26,6 +26,18 @@ function daysAhead(n) {
   return new Date(Date.now() + n * 24 * 60 * 60 * 1000).toISOString();
 }
 
+function addTrustedVerdictEvidence(store, runId, id, timestamp) {
+  store.events.push({
+    id,
+    tenant_id: 'ten_demo',
+    test_run_id: runId,
+    signal_type: 'probe_result',
+    producer_kind: 'signed_probe',
+    timestamp,
+  });
+  return id;
+}
+
 function factor(result, key) {
   return result.factors.find((f) => f.key === key);
 }
@@ -69,13 +81,20 @@ describe('readiness scoring', () => {
       completed_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 5),
       created_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 10),
     });
+    const staleEvidenceAt = daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 5);
+    const staleEvidenceId = addTrustedVerdictEvidence(
+      store,
+      'run_stale',
+      'evt_stale',
+      staleEvidenceAt,
+    );
     store.verdicts.push({
       id: 'v_stale',
       tenant_id: 'ten_demo',
       test_run_id: 'run_stale',
       verdict: 'protected',
-      created_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 5),
-      evidence_ids: [],
+      created_at: staleEvidenceAt,
+      evidence_ids: [staleEvidenceId],
     });
 
     const r = computeReadiness('ten_demo');
@@ -101,6 +120,79 @@ describe('readiness scoring', () => {
     assert.equal(factor(r, 'evidence_freshness').score, 0);
     assert.match(factor(r, 'evidence_freshness').detail, /No evidence-backed validations yet/);
     assert.equal(factor(r, 'coverage').score, 0);
+  });
+
+  it('does not award readiness for vault evidence linked to a legacy reserved event', () => {
+    freshStore();
+    const store = getStore();
+    const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_legacy_link',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_reachability.safe',
+      status: 'completed',
+      completed_at: now,
+      created_at: now,
+    });
+    store.events.push({
+      id: 'evt_legacy_link',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_legacy_link',
+      signal_type: 'probe_result',
+      producer_kind: 'legacy_untrusted',
+      timestamp: now,
+    });
+    store.evidenceVault.push({
+      id: 'evidence_legacy_link',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_legacy_link',
+      related_event_id: 'evt_legacy_link',
+      created_at: now,
+    });
+
+    const readiness = computeReadiness('ten_demo');
+    assert.equal(factor(readiness, 'coverage').score, 0);
+    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
+    assert.match(factor(readiness, 'evidence_freshness').detail, /No evidence-backed validations yet/);
+  });
+
+  it('quarantines a historical verdict that references only a legacy producer event', () => {
+    freshStore();
+    const store = getStore();
+    const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_legacy_verdict',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_reachability.safe',
+      status: 'verdicted',
+      completed_at: now,
+      created_at: now,
+    });
+    store.events.push({
+      id: 'evt_legacy_verdict',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_legacy_verdict',
+      signal_type: 'probe_result',
+      producer_kind: 'legacy_untrusted',
+      timestamp: now,
+    });
+    store.verdicts.push({
+      id: 'verdict_legacy_only',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_legacy_verdict',
+      verdict: 'protected',
+      evidence_ids: ['evt_legacy_verdict'],
+      created_at: now,
+    });
+
+    const readiness = computeReadiness('ten_demo');
+    assert.equal(factor(readiness, 'coverage').score, 0);
+    assert.equal(factor(readiness, 'verdicts').score, 0);
+    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
   });
 
   it('recent run with verdict/evidence earns freshness and coverage', () => {
@@ -282,13 +374,14 @@ describe('readiness scoring', () => {
       completed_at: now,
       created_at: now,
     });
+    const evidenceId = addTrustedVerdictEvidence(store, 'run_v_ok', 'evt_v_ok', now);
     store.verdicts.push({
       id: 'v_ok',
       tenant_id: 'ten_demo',
       test_run_id: 'run_v_ok',
       verdict: 'protected',
       created_at: now,
-      evidence_ids: [],
+      evidence_ids: [evidenceId],
     });
 
     const r = computeReadiness('ten_demo');
@@ -301,13 +394,14 @@ describe('readiness scoring', () => {
     freshStore();
     const store = getStore();
     const now = new Date().toISOString();
+    const evidenceId = addTrustedVerdictEvidence(store, 'run_x', 'evt_penalty', now);
     store.verdicts.push({
       id: 'v_penalty',
       tenant_id: 'ten_demo',
       test_run_id: 'run_x',
       verdict: 'exposed',
       created_at: now,
-      evidence_ids: [],
+      evidence_ids: [evidenceId],
     });
     store.findings.push({
       id: 'f_1',
@@ -493,13 +587,15 @@ describe('readiness scoring', () => {
   it('stale-only verdicts do not earn full verdict factor credit', () => {
     freshStore();
     const store = getStore();
+    const oldEvidenceAt = daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 2);
+    const evidenceId = addTrustedVerdictEvidence(store, 'run_old', 'evt_old', oldEvidenceAt);
     store.verdicts.push({
       id: 'v_old',
       tenant_id: 'ten_demo',
       test_run_id: 'run_old',
       verdict: 'protected',
-      created_at: daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 2),
-      evidence_ids: [],
+      created_at: oldEvidenceAt,
+      evidence_ids: [evidenceId],
     });
 
     const r = computeReadiness('ten_demo');

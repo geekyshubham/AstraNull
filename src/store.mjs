@@ -154,6 +154,35 @@ export function migrateDevStore(target) {
     }
   }
 
+  for (const policy of target.testPolicies) {
+    if (typeof policy.target_id === 'string' && policy.target_id.trim()) continue;
+    if (policy.enabled !== false) {
+      policy.enabled = false;
+      changed = true;
+    }
+    if (policy.state === 'active') {
+      policy.state = 'disabled';
+      changed = true;
+    }
+    if (policy.next_run_at != null) {
+      policy.next_run_at = null;
+      changed = true;
+    }
+    if (policy.lease_token != null || policy.lease_owner != null || policy.lease_expires_at != null) {
+      policy.lease_token = null;
+      policy.lease_owner = null;
+      policy.lease_expires_at = null;
+      changed = true;
+    }
+  }
+
+  for (const event of target.events) {
+    if (!event.producer_kind) {
+      event.producer_kind = 'legacy_untrusted';
+      changed = true;
+    }
+  }
+
   return changed;
 }
 

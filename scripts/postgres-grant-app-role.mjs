@@ -11,6 +11,8 @@ import { closePgPool, createPgPool } from '../src/persistence/postgres/pool.mjs'
 
 export const DEFAULT_APP_ROLE = 'astranull_app';
 export const DEFAULT_BACKUP_ROLE = 'astranull_backup';
+export const DEFAULT_CONNECTOR_SCHEDULER_ROLE = 'astranull_connector_scheduler';
+export const DEFAULT_CONNECTOR_WORKER_ROLE = 'astranull_connector_worker';
 
 function validateDeploymentPassword(value, variableName) {
   const password = String(value ?? '').trim();
@@ -28,6 +30,14 @@ export function validatePostgresAppRolePassword(value) {
 
 export function validatePostgresBackupRolePassword(value) {
   return validateDeploymentPassword(value, 'ASTRANULL_DATABASE_BACKUP_PASSWORD');
+}
+
+export function validatePostgresConnectorSchedulerRolePassword(value) {
+  return validateDeploymentPassword(value, 'ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD');
+}
+
+export function validatePostgresConnectorWorkerRolePassword(value) {
+  return validateDeploymentPassword(value, 'ASTRANULL_DATABASE_CONNECTOR_WORKER_PASSWORD');
 }
 
 function validateRoleName(roleName, label) {
@@ -76,6 +86,43 @@ export async function grantPostgresBackupRolePrivileges(db, roleName = DEFAULT_B
   ].map((sql) => sql.replaceAll('astranull_backup', normalized));
 
   for (const sql of statements) await db.query(sql);
+}
+
+async function resetPurposeRolePrivileges(db, roleName) {
+  const normalized = validateRoleName(roleName, 'connector runtime');
+  await db.query(`REVOKE CREATE ON SCHEMA public FROM ${normalized}`);
+  await db.query(`GRANT USAGE ON SCHEMA public TO ${normalized}`);
+  await db.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${normalized}`);
+  await db.query(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${normalized}`);
+  return normalized;
+}
+
+export async function grantPostgresConnectorSchedulerRolePrivileges(
+  db,
+  roleName = DEFAULT_CONNECTOR_SCHEDULER_ROLE,
+) {
+  const role = await resetPurposeRolePrivileges(db, roleName);
+  await db.query(`GRANT SELECT, INSERT, UPDATE ON tenant_connector_features TO ${role}`);
+  await db.query(`GRANT SELECT, UPDATE ON waf_connectors TO ${role}`);
+  await db.query(`GRANT SELECT, INSERT, UPDATE ON connector_poll_jobs TO ${role}`);
+  await db.query(`GRANT UPDATE ON probe_jobs TO ${role}`);
+  await db.query(`GRANT SELECT ON encrypted_secrets TO ${role}`);
+  await db.query(`GRANT SELECT, INSERT ON audit_logs TO ${role}`);
+  await db.query(`GRANT SELECT, INSERT, UPDATE ON connector_provider_rate_limits TO ${role}`);
+}
+
+export async function grantPostgresConnectorWorkerRolePrivileges(
+  db,
+  roleName = DEFAULT_CONNECTOR_WORKER_ROLE,
+) {
+  const role = await resetPurposeRolePrivileges(db, roleName);
+  await db.query(`GRANT SELECT ON tenant_connector_features TO ${role}`);
+  await db.query(`GRANT SELECT, UPDATE ON waf_connectors TO ${role}`);
+  await db.query(`GRANT SELECT, UPDATE ON connector_poll_jobs TO ${role}`);
+  await db.query(`GRANT UPDATE ON probe_jobs TO ${role}`);
+  await db.query(`GRANT SELECT ON encrypted_secrets TO ${role}`);
+  await db.query(`GRANT SELECT, INSERT ON waf_connector_snapshots TO ${role}`);
+  await db.query(`GRANT SELECT, INSERT ON audit_logs TO ${role}`);
 }
 
 async function provisionRolesTransaction(db, specs) {
@@ -138,6 +185,30 @@ function backupRoleSpec(options) {
   };
 }
 
+function connectorSchedulerRoleSpec(options) {
+  return {
+    roleName: validateRoleName(
+      options.roleName ?? DEFAULT_CONNECTOR_SCHEDULER_ROLE,
+      'connector scheduler',
+    ),
+    password: validatePostgresConnectorSchedulerRolePassword(options.password),
+    attributes: 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS',
+    grantPrivileges: grantPostgresConnectorSchedulerRolePrivileges,
+  };
+}
+
+function connectorWorkerRoleSpec(options) {
+  return {
+    roleName: validateRoleName(
+      options.roleName ?? DEFAULT_CONNECTOR_WORKER_ROLE,
+      'connector worker',
+    ),
+    password: validatePostgresConnectorWorkerRolePassword(options.password),
+    attributes: 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS',
+    grantPrivileges: grantPostgresConnectorWorkerRolePrivileges,
+  };
+}
+
 /** @param {import('pg').Pool | import('pg').PoolClient} db */
 export async function provisionPostgresAppRole(db, options) {
   const [result] = await provisionRolesTransaction(db, [appRoleSpec(options)]);
@@ -151,12 +222,38 @@ export async function provisionPostgresBackupRole(db, options) {
 }
 
 /** @param {import('pg').Pool | import('pg').PoolClient} db */
+export async function provisionPostgresConnectorSchedulerRole(db, options) {
+  const [result] = await provisionRolesTransaction(db, [connectorSchedulerRoleSpec(options)]);
+  return result;
+}
+
+/** @param {import('pg').Pool | import('pg').PoolClient} db */
+export async function provisionPostgresConnectorWorkerRole(db, options) {
+  const [result] = await provisionRolesTransaction(db, [connectorWorkerRoleSpec(options)]);
+  return result;
+}
+
+/** @param {import('pg').Pool | import('pg').PoolClient} db */
 export async function provisionPostgresDatabaseRoles(db, options) {
-  const [app, backup] = await provisionRolesTransaction(db, [
+  const specs = [
     appRoleSpec({ password: options.appPassword, roleName: options.appRoleName }),
     backupRoleSpec({ password: options.backupPassword, roleName: options.backupRoleName }),
-  ]);
-  return { app, backup };
+  ];
+  if (options.connectorSchedulerPassword || options.connectorWorkerPassword) {
+    specs.push(
+      connectorSchedulerRoleSpec({
+        password: options.connectorSchedulerPassword,
+        roleName: options.connectorSchedulerRoleName,
+      }),
+      connectorWorkerRoleSpec({
+        password: options.connectorWorkerPassword,
+        roleName: options.connectorWorkerRoleName,
+      }),
+    );
+  }
+  const [app, backup, connectorScheduler = null, connectorWorker = null] =
+    await provisionRolesTransaction(db, specs);
+  return { app, backup, connectorScheduler, connectorWorker };
 }
 
 export function resolvePostgresAppRoleConfig(env = process.env) {
@@ -164,6 +261,23 @@ export function resolvePostgresAppRoleConfig(env = process.env) {
   if (!adminUrl) throw new Error('postgres-grant-app-role: ASTRANULL_ADMIN_DATABASE_URL is required.');
   const appPassword = validatePostgresAppRolePassword(env.ASTRANULL_DATABASE_APP_PASSWORD);
   const backupPassword = validatePostgresBackupRolePassword(env.ASTRANULL_DATABASE_BACKUP_PASSWORD);
+  const rawConnectorSchedulerPassword = String(
+    env.ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD ?? '',
+  ).trim();
+  const rawConnectorWorkerPassword = String(
+    env.ASTRANULL_DATABASE_CONNECTOR_WORKER_PASSWORD ?? '',
+  ).trim();
+  if (Boolean(rawConnectorSchedulerPassword) !== Boolean(rawConnectorWorkerPassword)) {
+    throw new Error(
+      'postgres-grant-app-role: connector scheduler and worker database passwords must be configured together.',
+    );
+  }
+  const connectorSchedulerPassword = rawConnectorSchedulerPassword
+    ? validatePostgresConnectorSchedulerRolePassword(rawConnectorSchedulerPassword)
+    : null;
+  const connectorWorkerPassword = rawConnectorWorkerPassword
+    ? validatePostgresConnectorWorkerRolePassword(rawConnectorWorkerPassword)
+    : null;
   let parsed;
   try {
     parsed = new URL(adminUrl);
@@ -174,12 +288,26 @@ export function resolvePostgresAppRoleConfig(env = process.env) {
     throw new Error('postgres-grant-app-role: ASTRANULL_ADMIN_DATABASE_URL must be a valid PostgreSQL URL.');
   }
   const adminPassword = decodeURIComponent(parsed.password);
-  if (!adminPassword || new Set([adminPassword, appPassword, backupPassword]).size !== 3) {
+  const configuredPasswords = [
+    adminPassword,
+    appPassword,
+    backupPassword,
+    connectorSchedulerPassword,
+    connectorWorkerPassword,
+  ].filter(Boolean);
+  if (!adminPassword || new Set(configuredPasswords).size !== configuredPasswords.length) {
     throw new Error(
-      'postgres-grant-app-role: admin, application, and backup database passwords must be distinct.',
+      'postgres-grant-app-role: admin, application, backup, connector scheduler, and connector worker database passwords must be distinct.',
     );
   }
-  return { adminUrl, appPassword, backupPassword, password: appPassword };
+  return {
+    adminUrl,
+    appPassword,
+    backupPassword,
+    connectorSchedulerPassword,
+    connectorWorkerPassword,
+    password: appPassword,
+  };
 }
 
 export function resolvePostgresBackupRoleConfig(env = process.env) {
@@ -216,10 +344,19 @@ export async function main(env = process.env, { backupOnly = false } = {}) {
     const result = await provisionPostgresDatabaseRoles(pool, {
       appPassword: config.appPassword,
       backupPassword: config.backupPassword,
+      connectorSchedulerPassword: config.connectorSchedulerPassword,
+      connectorWorkerPassword: config.connectorWorkerPassword,
     });
+    const connectorRoleSummary = result.connectorScheduler && result.connectorWorker
+      ? ` connector_scheduler_role=${result.connectorScheduler.role}`
+        + ` connector_scheduler_created=${result.connectorScheduler.created}`
+        + ` connector_worker_role=${result.connectorWorker.role}`
+        + ` connector_worker_created=${result.connectorWorker.created}`
+      : ' connector_roles=disabled';
     console.log(
       `postgres-grant-app-role: ok app_role=${result.app.role} app_created=${result.app.created} `
-      + `backup_role=${result.backup.role} backup_created=${result.backup.created}`,
+      + `backup_role=${result.backup.role} backup_created=${result.backup.created}`
+      + connectorRoleSummary,
     );
   } finally {
     await closePgPool(pool);

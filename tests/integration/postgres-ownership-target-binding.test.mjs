@@ -96,6 +96,19 @@ describe('postgres target-bound live-egress ownership', () => {
         agent_id: agent.id,
       });
       assert.equal(challenge.error, undefined);
+      const challengeBinding = await withTenantContext(pool, IDS.tenant, async (client) => {
+        const { rows } = await client.query(
+          `SELECT t.created_at AS target_created_at, ov.created_at AS challenge_created_at,
+                  t.created_at <= ov.created_at AS eligible
+           FROM targets t
+           JOIN ownership_verifications ov
+             ON ov.tenant_id = t.tenant_id AND ov.target_group_id = t.target_group_id
+           WHERE t.tenant_id = $1 AND t.id = $2 AND ov.id = $3`,
+          [IDS.tenant, IDS.targetA, challenge.verification.id],
+        );
+        return rows[0];
+      });
+      assert.equal(challengeBinding?.eligible, true, JSON.stringify(challengeBinding));
       const nonceHash = challenge.verification.challenge_nonce_hash;
       await ownership.recordOwnershipSignal(CTX, challenge.verification.id, {
         source: 'probe',
@@ -105,6 +118,7 @@ describe('postgres target-bound live-egress ownership', () => {
         source: 'agent',
         nonce_hash: nonceHash,
       });
+      assert.equal(completed.error, undefined, JSON.stringify(completed));
       assert.equal(completed.verification.status, 'verified');
       assert.equal(completed.target_id, IDS.targetA);
       assert.equal(completed.target_verification.target_id, IDS.targetA);
@@ -395,11 +409,40 @@ describe('postgres target-bound live-egress ownership', () => {
 
       const cancelled = await testRuns.cancelTestRun(CTX, allowed.run.id);
       assert.equal(cancelled.run.status, 'cancelled');
+      await withTenantContext(pool, IDS.tenant, async (client) => {
+        await client.query(
+          `INSERT INTO test_policies (
+             id, tenant_id, target_group_id, target_id, check_id, cadence,
+             state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
+           ) VALUES (
+             'policy_archive_target_a', $1, $2, $3, 'dns.authoritative_response.safe',
+             'daily', 'active', TRUE, now(), 'archive-lease', 'runner', now() + interval '5 minutes'
+           )`,
+          [IDS.tenant, IDS.group, IDS.targetA],
+        );
+      });
       const challengeCreatedMs = Date.parse(challenge.verification.created_at);
       const deleted = await coreCatalog.deleteTarget(CTX, IDS.group, IDS.targetA, {
         now: new Date(challengeCreatedMs + 30_000).toISOString(),
       });
       assert.equal(deleted.deleted, true);
+      assert.equal(deleted.paused_policy_count, 1);
+      const archivedPolicy = await withTenantContext(pool, IDS.tenant, async (client) => {
+        const { rows } = await client.query(
+          `SELECT state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
+           FROM test_policies WHERE tenant_id = $1 AND id = 'policy_archive_target_a'`,
+          [IDS.tenant],
+        );
+        return rows[0];
+      });
+      assert.deepEqual(archivedPolicy, {
+        state: 'paused',
+        enabled: false,
+        next_run_at: null,
+        lease_token: null,
+        lease_owner: null,
+        lease_expires_at: null,
+      });
       const replacement = await coreCatalog.addTarget(
         CTX,
         IDS.group,
@@ -435,6 +478,41 @@ describe('postgres target-bound live-egress ownership', () => {
         return rows[0]?.ownership_status;
       });
       assert.equal(replacementSummary, 'unverified');
+
+      await withTenantContext(pool, IDS.tenant, async (client) => {
+        await client.query(
+          `INSERT INTO test_policies (
+             id, tenant_id, target_group_id, target_id, check_id, cadence,
+             state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
+           ) VALUES (
+             'policy_archive_group', $1, $2, $3, 'waf.fingerprint.safe',
+             'weekly', 'active', TRUE, now(), 'group-lease', 'runner', now() + interval '5 minutes'
+           )`,
+          [IDS.tenant, IDS.group, replacement.id],
+        );
+      });
+      const archivedGroup = await coreCatalog.archiveTargetGroup(CTX, IDS.group, {
+        now: new Date(challengeCreatedMs + 90_000).toISOString(),
+      });
+      assert.equal(archivedGroup.archived, true);
+      assert.equal(archivedGroup.paused_policy_count, 2);
+      const groupPolicies = await withTenantContext(pool, IDS.tenant, async (client) => {
+        const { rows } = await client.query(
+          `SELECT id, state, enabled, next_run_at, lease_token, lease_owner, lease_expires_at
+           FROM test_policies
+           WHERE tenant_id = $1 AND target_group_id = $2
+           ORDER BY id`,
+          [IDS.tenant, IDS.group],
+        );
+        return rows;
+      });
+      assert.ok(groupPolicies.length >= 2);
+      assert.ok(groupPolicies.every((policy) => policy.state === 'paused'
+        && policy.enabled === false
+        && policy.next_run_at === null
+        && policy.lease_token === null
+        && policy.lease_owner === null
+        && policy.lease_expires_at === null));
     }, availability.env ?? process.env);
   });
 });

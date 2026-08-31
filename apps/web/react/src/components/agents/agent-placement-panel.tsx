@@ -72,7 +72,7 @@ function classifyPlacementVerdict(verdict: string): PlacementOutcome {
   if (!key || ['pending', 'planned', 'queued', 'scheduled', 'running', 'collecting', 'in_progress'].includes(key)) {
     return 'unknown';
   }
-  if (['pass', 'passed', 'protected', 'edge_protected', 'allowed_as_expected', 'proven', 'success', 'ok'].includes(key)) {
+  if (['pass', 'passed', 'protected', 'allowed_as_expected', 'proven', 'success', 'ok'].includes(key)) {
     return 'pass';
   }
   if (

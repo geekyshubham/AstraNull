@@ -55,7 +55,7 @@ Optional **Vendor consolidation** panel (read-only): footprint by vendor, overla
 | Column | Details |
 |---|---|
 | Asset | Hostname/URL, target group, environment. |
-| Status | Protected, Underprotected, Unprotected, Unknown, Excluded. |
+| Status | Protected, Edge protected (not internally validated), Underprotected, Unprotected, Unknown, Excluded. |
 | Vendor/Product | Detected WAF/CDN product and confidence. |
 | Validation | Last validation result and time. |
 | Pass rate | Scenario pass rate for lookback window (per asset). |

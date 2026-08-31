@@ -175,15 +175,23 @@ describe('waf orchestrator runner config validation', () => {
     assert.match(config.message ?? '', /signed probe-worker/i);
   });
 
-  it('resolves signed-worker config with explicit tenant scope', () => {
+  it('resolves signed-worker config with explicit tenant scope and no unrelated API secrets', () => {
     const config = resolveWafOrchestratorRunnerConfig(
-      SIGNED_WORKER_ENV,
+      { ...SIGNED_WORKER_ENV, NODE_ENV: 'production' },
       parseWafOrchestratorRunnerArgs(['node', 'script.mjs', '--tenant-id', 'ten_a']),
-      { loadRuntimeConfigFn: () => signedWorkerRuntimeConfig() },
     );
     assert.equal(config.ok, true);
     assert.deepEqual(config.tenantIds, ['ten_a']);
     assert.equal(config.runtimeConfig.probeMode, 'signed-worker');
+  });
+
+  it('rejects short signed probe-worker material without loading API config', () => {
+    const config = resolveWafOrchestratorRunnerConfig(
+      { ...SIGNED_WORKER_ENV, NODE_ENV: 'production', ASTRANULL_PROBE_WORKER_SECRET: 'short' },
+      parseWafOrchestratorRunnerArgs(['node', 'script.mjs', '--tenant-id', 'ten_a']),
+    );
+    assert.equal(config.ok, false);
+    assert.match(config.message ?? '', /at least 32 characters/);
   });
 
   it('redacts loadRuntimeConfig failures that mention database URLs', () => {
@@ -425,6 +433,7 @@ describe('waf orchestrator runner metadata-only summary', () => {
 describe('waf orchestrator runner execution (mocked postgres)', () => {
   it('dry-run lists scheduled plans without calling execute', async () => {
     let executeCalled = false;
+    let runtimeOptions;
     const scheduledPlans = [
       {
         id: 'plan_sched',
@@ -445,7 +454,9 @@ describe('waf orchestrator runner execution (mocked postgres)', () => {
         runtimeConfig: signedWorkerRuntimeConfig(),
       },
       {
-        createPostgresRuntimeFn: async () => ({
+        createPostgresRuntimeFn: async (_env, options) => {
+          runtimeOptions = options;
+          return ({
           services: {
             wafOrchestrator: {
               getScheduledPlans: async () => ({ plans: scheduledPlans }),
@@ -456,10 +467,15 @@ describe('waf orchestrator runner execution (mocked postgres)', () => {
             },
           },
           close: async () => {},
-        }),
+          });
+        },
       },
     );
 
+    assert.deepEqual(runtimeOptions, {
+      autoMigrate: false,
+      wafPostureServiceOptions: { connectorEncryptionKey: null },
+    });
     assert.equal(executeCalled, false);
     assert.equal(exitCode, 0);
     assert.equal(summary.tenants[0].scheduled_count, 1);

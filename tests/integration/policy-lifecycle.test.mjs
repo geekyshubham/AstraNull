@@ -36,6 +36,7 @@ describe('test policy lifecycle (FT-CRUD-POL-01)', () => {
       headers,
       body: {
         target_group_id: 'tg_1',
+        target_id: 'tgt_1',
         check_id: 'dns.authoritative_response.safe',
         cadence: 'weekly',
       },

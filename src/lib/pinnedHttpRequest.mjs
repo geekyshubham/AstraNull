@@ -235,6 +235,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
       settled = true;
       resolve({
         status: res.statusCode ?? 0,
+        ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
         headers: responseHeaders(res.headers),
         url: url.href,
         body: Readable.toWeb(res),

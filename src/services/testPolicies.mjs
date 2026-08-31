@@ -28,6 +28,23 @@ function targetsForGroup(ctx, targetGroupId) {
   );
 }
 
+function targetForGroup(ctx, targetGroupId, targetId) {
+  return targetsForGroup(ctx, targetGroupId).find((target) => target.id === targetId) ?? null;
+}
+
+function targetKindCompatibilityError(check, target) {
+  const kind = /^https?:\/\//i.test(String(target?.value ?? '')) ? 'url' : target?.kind;
+  if (!Array.isArray(check.supported_targets) || check.supported_targets.length === 0
+      || check.supported_targets.includes(kind)) return null;
+  return {
+    error: 'target_kind_not_supported',
+    status: 400,
+    check_id: check.check_id,
+    target_kind: kind ?? null,
+    supported_targets: check.supported_targets,
+  };
+}
+
 function publicCheck(check) {
   if (!check) return null;
   return {
@@ -43,6 +60,7 @@ function publicCheck(check) {
 
 function enrichPolicy(ctx, policy) {
   const targetGroup = activeTargetGroup(ctx, policy.target_group_id);
+  const target = targetGroup ? targetForGroup(ctx, targetGroup.id, policy.target_id) : null;
   const check = getCheckById(policy.check_id);
   return {
     ...policy,
@@ -53,6 +71,9 @@ function enrichPolicy(ctx, policy) {
           environment_id: targetGroup.environment_id,
           expected_behavior_default: targetGroup.expected_behavior_default,
         }
+      : null,
+    target: target
+      ? { id: target.id, kind: target.kind, value: target.value, verify_state: target.verify_state ?? null }
       : null,
     check: publicCheck(check),
     target_count: targetGroup ? targetsForGroup(ctx, targetGroup.id).length : 0,
@@ -91,6 +112,7 @@ function mutationAudit(ctx, policy, action, changedFields) {
     resource_id: policy.id,
     metadata: {
       target_group_id: policy.target_group_id,
+      target_id: policy.target_id ?? null,
       check_id: policy.check_id,
       changed_fields: changedFields,
     },
@@ -118,6 +140,10 @@ export function createTestPolicy(ctx, body = {}, options = {}) {
   if (!targetGroupId) return { error: 'missing_target_group_id', status: 400 };
   const targetGroup = activeTargetGroup(ctx, targetGroupId);
   if (!targetGroup) return { error: 'target_group_not_found', status: 404 };
+  const targetId = String(body.target_id ?? '').trim();
+  if (!targetId) return { error: 'missing_target_id', status: 400 };
+  const target = targetForGroup(ctx, targetGroupId, targetId);
+  if (!target) return { error: 'target_not_found', status: 404 };
 
   const checkId = String(body.check_id ?? '').trim();
   const check = getCheckById(checkId);
@@ -129,9 +155,12 @@ export function createTestPolicy(ctx, body = {}, options = {}) {
       message: 'This check requires a SOC-governed high-scale request, not a customer-runnable policy.',
     };
   }
+  const incompatibleTarget = targetKindCompatibilityError(check, target);
+  if (incompatibleTarget) return incompatibleTarget;
   const duplicate = getStore().testPolicies.find(
     (policy) => policy.tenant_id === ctx.tenantId
       && policy.target_group_id === targetGroupId
+      && policy.target_id === targetId
       && policy.check_id === check.check_id
       && !policy.archived_at,
   );
@@ -148,6 +177,7 @@ export function createTestPolicy(ctx, body = {}, options = {}) {
     id: options.id ?? newId('policy'),
     tenant_id: ctx.tenantId,
     target_group_id: targetGroup.id,
+    target_id: target.id,
     check_id: check.check_id,
     ...normalized,
     next_run_at: nextPolicyRunAt(normalized, { from: new Date(now), initial: true }),
@@ -168,7 +198,7 @@ export function createTestPolicy(ctx, body = {}, options = {}) {
   };
   getStore().testPolicies.push(record);
   mutationAudit(ctx, record, 'test_policy.created', [
-    'target_group_id', 'check_id', 'cadence', 'expected_verdict', 'safe_windows', 'timezone',
+    'target_group_id', 'target_id', 'check_id', 'cadence', 'expected_verdict', 'safe_windows', 'timezone',
     'event_trigger', 'enabled', 'max_concurrent_runs', 'next_run_at', 'safety_policy_snapshot',
   ]);
   persistStore();
@@ -228,6 +258,19 @@ export function listDueTestPolicies(ctx, options = {}) {
   const now = new Date(options.now ?? Date.now());
   if (Number.isNaN(now.getTime())) return { error: 'invalid_now', status: 400 };
   const limit = Math.max(1, Math.min(100, Number(options.limit) || 25));
+  let disabledLegacyPolicy = false;
+  for (const policy of getStore().testPolicies) {
+    if (policy.tenant_id !== ctx.tenantId || policy.archived_at || String(policy.target_id ?? '').trim()) continue;
+    policy.state = 'paused';
+    policy.enabled = false;
+    policy.next_run_at = null;
+    policy.lease_token = null;
+    policy.lease_owner = null;
+    policy.lease_expires_at = null;
+    policy.updated_at = now.toISOString();
+    disabledLegacyPolicy = true;
+  }
+  if (disabledLegacyPolicy) persistStore();
   return getStore().testPolicies
     .filter((policy) => policy.tenant_id === ctx.tenantId
       && !policy.archived_at
@@ -366,6 +409,7 @@ export function completePolicyDispatch(ctx, policyId, input = {}, options = {}) 
         && run.policy_id === policyId
         && run.policy_dispatch_id === dispatch.id
         && run.target_group_id === activePolicy(ctx, policyId)?.target_group_id
+        && run.target_id === activePolicy(ctx, policyId)?.target_id
         && run.check_id === activePolicy(ctx, policyId)?.check_id,
     );
     if (!boundRun) return { error: 'policy_run_binding_mismatch', status: 409 };
@@ -428,6 +472,7 @@ export async function dispatchDueTestPolicies(ctx, options = {}) {
     try {
       started = await options.startTestRun(ctx, {
         target_group_id: lease.target_group_id,
+        target_id: lease.target_id,
         check_id: lease.check_id,
         policy_id: lease.id,
         policy_dispatch_id: lease.dispatch_id,

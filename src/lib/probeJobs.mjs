@@ -432,6 +432,7 @@ export function verifyProbeJobSignature(job, secret) {
  *   check: Record<string, unknown>,
  *   target: Record<string, unknown>,
  *   probeProfile?: unknown,
+ *   ownershipBinding?: Record<string, unknown> | null,
  *   probeWorkerSecret: string,
  *   now: Date,
  *   newId: () => string,
@@ -442,6 +443,7 @@ export function buildSignedProbeJobRecord({
   check,
   target,
   probeProfile,
+  ownershipBinding = null,
   probeWorkerSecret,
   now,
   newId,
@@ -455,7 +457,13 @@ export function buildSignedProbeJobRecord({
     ),
     target,
   );
-  const constraints = normalizeJobConstraints(run.safety_constraints, resolvedProbeProfile);
+  const baseConstraints = normalizeJobConstraints(run.safety_constraints, resolvedProbeProfile);
+  const constraints = {
+    ...baseConstraints,
+    ...(ownershipBinding && typeof ownershipBinding === 'object'
+      ? { ownership_binding: structuredClone(ownershipBinding) }
+      : {}),
+  };
   const job = {
     id: newId(),
     tenant_id: run.tenant_id,

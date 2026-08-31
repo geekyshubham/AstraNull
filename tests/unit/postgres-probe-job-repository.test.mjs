@@ -121,8 +121,10 @@ describe('postgres probe job repository', () => {
     await repo.leasePendingJobsForWorker(CTX, WORKER_ID, { leasedAt: FIXED_NOW });
 
     // Both branches present: fresh work and reclaimable work.
-    assert.match(leaseSql, /status = 'pending'/);
-    assert.match(leaseSql, /status = 'leased' AND leased_at < now\(\) -/);
+    assert.match(leaseSql, /candidate\.status = 'pending'/);
+    assert.match(leaseSql, /candidate\.status = 'leased' AND candidate\.leased_at < now\(\) -/);
+    assert.match(leaseSql, /tr\.status IN \('running', 'collecting'\)/);
+    assert.match(leaseSql, /ov\.status = 'challenge_sent'/);
     // Concurrency protection must survive the widened predicate.
     assert.match(leaseSql, /FOR UPDATE SKIP LOCKED/);
     // Every TTL tunable is a bound parameter, never interpolated.
@@ -224,10 +226,22 @@ describe('postgres probe job repository', () => {
       }
       if (sql.includes("status = 'leased'") && sql.includes("status = 'pending'")) {
         assert.deepEqual(params.slice(0, 4), [CTX.tenantId, 'pjob_1', WORKER_ID, FIXED_NOW]);
+        assert.match(sql, /constraints_json \? 'ownership_binding'/);
+        assert.match(sql, /FROM target_verification_current tvc/);
+        assert.match(sql, /FROM tenant_connector_features feature/);
+        assert.match(sql, /feature\.enabled = TRUE/);
+        assert.match(sql, /feature\.revision =/);
+        assert.match(sql, /connector\.secret_id =/);
+        assert.match(sql, /connector\.last_success_revision =/);
+        assert.match(sql, /connector\.last_success_at =/);
+        assert.match(sql, /snapshot\.id =/);
+        assert.match(sql, /snapshot\.resource_ref_hash =/);
+        assert.match(sql, /snapshot\.poll_revision = connector\.last_success_revision/);
+        assert.match(sql, /snapshot\.observed_at = connector\.last_success_at/);
         return { rows: [sampleRow({ status: 'leased' })] };
       }
       if (sql.includes("status = 'completed'")) {
-        assert.deepEqual(params, [CTX.tenantId, 'pjob_1', FIXED_NOW]);
+        assert.deepEqual(params, [CTX.tenantId, 'pjob_1', FIXED_NOW, WORKER_ID, FIXED_NOW]);
         return { rows: [sampleRow({ status: 'completed' })] };
       }
       return { rows: [] };
@@ -237,7 +251,10 @@ describe('postgres probe job repository', () => {
     assert.equal(found.id, 'pjob_1');
     const claimed = await repo.claimPendingJobForWorker(CTX, 'pjob_1', WORKER_ID, FIXED_NOW);
     assert.equal(claimed.status, 'leased');
-    const completed = await repo.markJobCompleted(CTX, 'pjob_1', FIXED_NOW);
+    const completed = await repo.markJobCompleted(CTX, 'pjob_1', FIXED_NOW, {
+      workerId: WORKER_ID,
+      leasedAt: FIXED_NOW,
+    });
     assert.equal(completed.status, 'completed');
     assertTenantWrapped(pool.client, CTX.tenantId);
   });

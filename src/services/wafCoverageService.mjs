@@ -6,7 +6,7 @@ import {
   hostnameFromCanonicalUrl,
 } from './wafRiskService.mjs';
 
-const STATUS_KEYS = ['protected', 'underprotected', 'unprotected', 'unknown', 'excluded'];
+const STATUS_KEYS = ['protected', 'edge_protected', 'underprotected', 'unprotected', 'unknown', 'excluded'];
 
 const CRITICAL_BUSINESS_VALUES = new Set([
   'critical',
@@ -23,6 +23,7 @@ const CRITICAL_BUSINESS_VALUES = new Set([
 function emptyStatusCounts() {
   return {
     protected: 0,
+    edge_protected: 0,
     underprotected: 0,
     unprotected: 0,
     unknown: 0,
@@ -136,6 +137,7 @@ function normalizeCoverageRollupTrend(coverageRollups = []) {
         date: String(date).slice(0, 10),
         coverage_ratio: Number(row.coverage_ratio ?? 0),
         protected: Number(row.protected ?? 0),
+        edge_protected: Number(row.edge_protected ?? 0),
         underprotected: Number(row.underprotected ?? 0),
         unprotected: Number(row.unprotected ?? 0),
         unknown: Number(row.unknown ?? 0),
@@ -163,6 +165,7 @@ export function computeCoverageDailyRollup({
     rollup_date: rollupDate,
     total_assets: total,
     protected: counts.protected,
+    edge_protected: counts.edge_protected,
     underprotected: counts.underprotected,
     unprotected: counts.unprotected,
     unknown: counts.unknown,
@@ -231,12 +234,14 @@ export function buildVendorBreakdown({
       product,
       asset_count: 0,
       protected_count: 0,
+      edge_protected_count: 0,
       underprotected_count: 0,
       unprotected_count: 0,
       unknown_count: 0,
     };
     bucket.asset_count += 1;
     if (status === 'protected') bucket.protected_count += 1;
+    if (status === 'edge_protected') bucket.edge_protected_count += 1;
     if (status === 'underprotected') bucket.underprotected_count += 1;
     if (status === 'unprotected') bucket.unprotected_count += 1;
     if (status === 'unknown') bucket.unknown_count += 1;
@@ -338,6 +343,7 @@ export function buildEntityRollup({
       entity_type: entity.entity_type,
       name: entity.name,
       protected: 0,
+      edge_protected: 0,
       underprotected: 0,
       unprotected: 0,
       unknown: 0,
@@ -355,6 +361,7 @@ export function buildEntityRollup({
     .map((bucket) => {
       const counts = {
         protected: bucket.protected,
+        edge_protected: bucket.edge_protected,
         underprotected: bucket.underprotected,
         unprotected: bucket.unprotected,
         unknown: bucket.unknown,
@@ -366,6 +373,7 @@ export function buildEntityRollup({
         name: bucket.name,
         coverage_ratio: coverageRatioFromCounts(counts, bucket.asset_count),
         protected: bucket.protected,
+        edge_protected: bucket.edge_protected,
         underprotected: bucket.underprotected,
         unprotected: bucket.unprotected,
         critical_gap_count: bucket.critical_gap_count,
@@ -443,6 +451,7 @@ export function buildCriticalityRollup({
     const bucket = buckets.get(businessCriticality) ?? {
       business_criticality: businessCriticality,
       protected: 0,
+      edge_protected: 0,
       underprotected: 0,
       unprotected: 0,
       unknown: 0,
@@ -460,6 +469,7 @@ export function buildCriticalityRollup({
     .map((bucket) => {
       const counts = {
         protected: bucket.protected,
+        edge_protected: bucket.edge_protected,
         underprotected: bucket.underprotected,
         unprotected: bucket.unprotected,
         unknown: bucket.unknown,
@@ -470,6 +480,7 @@ export function buildCriticalityRollup({
         asset_count: bucket.asset_count,
         coverage_ratio: coverageRatioFromCounts(counts, bucket.asset_count),
         protected: bucket.protected,
+        edge_protected: bucket.edge_protected,
         underprotected: bucket.underprotected,
         unprotected: bucket.unprotected,
         critical_gap_count: bucket.critical_gap_count,
@@ -504,6 +515,7 @@ export function buildGeographyRollup({
       region_code: region.region_code,
       region_label: region.region_label,
       protected: 0,
+      edge_protected: 0,
       underprotected: 0,
       unprotected: 0,
       unknown: 0,
@@ -523,6 +535,7 @@ export function buildGeographyRollup({
     .map((bucket) => {
       const counts = {
         protected: bucket.protected,
+        edge_protected: bucket.edge_protected,
         underprotected: bucket.underprotected,
         unprotected: bucket.unprotected,
         unknown: bucket.unknown,
@@ -533,6 +546,7 @@ export function buildGeographyRollup({
         region_label: bucket.region_label,
         asset_count: bucket.asset_count,
         coverage_ratio: coverageRatioFromCounts(counts, bucket.asset_count),
+        edge_protected: bucket.edge_protected,
         unprotected_critical_count: bucket.unprotected_critical_count,
       };
     })

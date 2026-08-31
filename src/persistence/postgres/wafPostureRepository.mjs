@@ -18,7 +18,7 @@ const WAF_POSTURE_SNAPSHOT_COLUMNS = `id, tenant_id, waf_asset_id, status, reaso
   source_mix_json, created_at, is_current`;
 
 const WAF_COVERAGE_DAILY_ROLLUP_COLUMNS = `id, tenant_id, rollup_date, total_assets, protected,
-  underprotected, unprotected, unknown, excluded, coverage_ratio, created_at`;
+  edge_protected, underprotected, unprotected, unknown, excluded, coverage_ratio, created_at`;
 
 const FINDING_COLUMNS = `id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
   status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id, assignee,
@@ -31,10 +31,16 @@ const WAF_DRIFT_SCAN_RESULT_COLUMNS = `id, tenant_id, scan_type, assets_scanned,
   scan_duration_ms, completed_at, state, assets_with_connector_snapshots, drift_check_types, created_at`;
 
 const WAF_CONNECTOR_COLUMNS = `id, tenant_id, provider, name, secret_id, config_json, status,
-  last_success_at, last_error_at, created_at, updated_at`;
+  last_success_at, last_error_at, poll_revision, last_success_revision, last_poll_requested_at,
+  next_poll_at, consecutive_failures, created_at, updated_at`;
 
 const WAF_CONNECTOR_SNAPSHOT_COLUMNS = `id, tenant_id, connector_id, provider, snapshot_kind,
-  resource_ref_hash, display_ref, summary_json, config_hash, observed_at, created_at`;
+  resource_ref_hash, display_ref, summary_json, config_hash, evidence_source,
+  inventory_complete, inventory_truncated, poll_revision, observed_at, created_at`;
+
+const CONNECTOR_POLL_JOB_COLUMNS = `id, tenant_id, connector_id, provider, poll_revision, status,
+  envelope_json, job_signature, leased_by, leased_at, lease_token, completed_at, error_code,
+  expires_at, created_at, updated_at`;
 
 const WAF_EXCEPTION_COLUMNS = `id, tenant_id, waf_asset_id, owner, reason, expires_at, scope_hash,
   approved_at, approved_by, created_at, updated_at`;
@@ -184,6 +190,7 @@ export function mapWafCoverageDailyRollupRow(row) {
     rollup_date: rollupDate,
     total_assets: Number(row.total_assets ?? 0),
     protected: Number(row.protected ?? 0),
+    edge_protected: Number(row.edge_protected ?? 0),
     underprotected: Number(row.underprotected ?? 0),
     unprotected: Number(row.unprotected ?? 0),
     unknown: Number(row.unknown ?? 0),
@@ -241,6 +248,11 @@ export function mapWafConnectorRow(row) {
     status: row.status,
     last_success_at: row.last_success_at == null ? null : toIso(row.last_success_at),
     last_error_at: row.last_error_at == null ? null : toIso(row.last_error_at),
+    poll_revision: Number(row.poll_revision ?? 0),
+    last_success_revision: Number(row.last_success_revision ?? 0),
+    last_poll_requested_at: row.last_poll_requested_at == null ? null : toIso(row.last_poll_requested_at),
+    next_poll_at: row.next_poll_at == null ? null : toIso(row.next_poll_at),
+    consecutive_failures: Number(row.consecutive_failures ?? 0),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
@@ -258,8 +270,34 @@ export function mapWafConnectorSnapshotRow(row) {
     display_ref: row.display_ref ?? null,
     summary: row.summary_json ?? {},
     config_hash: row.config_hash ?? null,
+    evidence_source: row.evidence_source ?? 'manual_metadata',
+    inventory_complete: row.inventory_complete === true,
+    inventory_truncated: row.inventory_truncated === true,
+    poll_revision: Number(row.poll_revision ?? 0),
     observed_at: toIso(row.observed_at),
     created_at: toIso(row.created_at),
+  };
+}
+
+export function mapConnectorPollJobRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    tenant_id: row.tenant_id,
+    connector_id: row.connector_id,
+    provider: row.provider,
+    poll_revision: Number(row.poll_revision),
+    status: row.status,
+    envelope: row.envelope_json ?? {},
+    job_signature: row.job_signature,
+    leased_by: row.leased_by ?? null,
+    leased_at: row.leased_at == null ? null : toIso(row.leased_at),
+    lease_token: row.lease_token ?? null,
+    completed_at: row.completed_at == null ? null : toIso(row.completed_at),
+    error_code: row.error_code ?? null,
+    expires_at: toIso(row.expires_at),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
   };
 }
 
@@ -274,6 +312,9 @@ export function formatConnectorForApi(connector) {
     status: connector.status,
     last_success_at: connector.last_success_at ?? null,
     last_error_at: connector.last_error_at ?? null,
+    last_poll_requested_at: connector.last_poll_requested_at ?? null,
+    next_poll_at: connector.next_poll_at ?? null,
+    consecutive_failures: Number(connector.consecutive_failures ?? 0),
     created_at: connector.created_at,
     updated_at: connector.updated_at,
   };
@@ -290,6 +331,9 @@ export function formatConnectorSnapshotForApi(snapshot) {
     display_ref: snapshot.display_ref ?? null,
     summary: snapshot.summary ?? snapshot.summary_json ?? {},
     config_hash: snapshot.config_hash ?? null,
+    evidence_source: snapshot.evidence_source ?? 'manual_metadata',
+    inventory_complete: snapshot.inventory_complete === true,
+    inventory_truncated: snapshot.inventory_truncated === true,
     observed_at: snapshot.observed_at,
     created_at: snapshot.created_at,
   };
@@ -330,7 +374,8 @@ export function mapWafExceptionRow(row) {
   };
 }
 
-export function createWafPostureRepository(pool) {
+export function createWafPostureRepository(pool, options = {}) {
+  const auditRepository = options.auditRepository ?? null;
   return {
     async listWafAssets(ctx) {
       const tenantId = ctx.tenantId;
@@ -642,6 +687,24 @@ export function createWafPostureRepository(pool) {
     async finalizeWafValidationBundle(ctx, bundle) {
       const tenantId = ctx.tenantId;
       return withTenantContext(pool, tenantId, async (client) => {
+        if (bundle.test_run_id) {
+          const { rows: testRunRows } = await client.query(
+            `SELECT status
+             FROM test_runs
+             WHERE tenant_id = $1 AND id = $2
+             FOR UPDATE`,
+            [tenantId, bundle.test_run_id],
+          );
+          if (!['completed', 'verdicted'].includes(testRunRows[0]?.status)) {
+            const error = new Error(
+              'Bound test run must be successfully completed before WAF finalization.',
+            );
+            error.code = 'waf_validation_test_run_not_terminal';
+            error.status = 409;
+            throw error;
+          }
+        }
+
         await client.query(
           `UPDATE waf_posture_snapshots
            SET is_current = FALSE
@@ -855,47 +918,27 @@ export function createWafPostureRepository(pool) {
       const afterSummary = record.after_summary ?? record.after_summary_json ?? {};
 
       return withTenantContext(pool, tenantId, async (client) => {
-        const { rows: existingRows } = await client.query(
-          `SELECT ${WAF_DRIFT_EVENT_COLUMNS}
-           FROM waf_drift_events
-           WHERE tenant_id = $1
-             AND waf_asset_id = $2
-             AND drift_type = $3
-             AND status = 'open'`,
-          [tenantId, record.waf_asset_id, record.drift_type],
-        );
-        const existing = existingRows[0] ?? null;
-
-        if (existing) {
-          const { rows } = await client.query(
-            `UPDATE waf_drift_events
-             SET severity = $3,
-                 before_summary_json = $4::jsonb,
-                 after_summary_json = $5::jsonb,
-                 finding_id = $6,
-                 created_at = $7::timestamptz
-             WHERE tenant_id = $1 AND id = $2
-             RETURNING ${WAF_DRIFT_EVENT_COLUMNS}`,
-            [
-              tenantId,
-              existing.id,
-              record.severity ?? 'medium',
-              JSON.stringify(beforeSummary),
-              JSON.stringify(afterSummary),
-              record.finding_id ?? null,
-              createdAt,
-            ],
-          );
-          return { drift_event: mapWafDriftEventRow(rows[0]), inserted: false };
-        }
-
         const { rows } = await client.query(
           `INSERT INTO waf_drift_events (
              id, tenant_id, waf_asset_id, baseline_id, drift_type, severity,
              before_summary_json, after_summary_json, status, finding_id, created_at
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11::timestamptz)
-           RETURNING ${WAF_DRIFT_EVENT_COLUMNS}`,
+           ON CONFLICT (tenant_id, waf_asset_id, drift_type) WHERE status = 'open'
+           DO UPDATE SET
+             severity = CASE
+               WHEN CASE waf_drift_events.severity
+                 WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
+                 WHEN 'low' THEN 1 ELSE 0 END
+                 >= CASE EXCLUDED.severity
+                 WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2
+                 WHEN 'low' THEN 1 ELSE 0 END
+               THEN waf_drift_events.severity
+               ELSE EXCLUDED.severity
+             END,
+             after_summary_json = EXCLUDED.after_summary_json,
+             finding_id = COALESCE(EXCLUDED.finding_id, waf_drift_events.finding_id)
+           RETURNING ${WAF_DRIFT_EVENT_COLUMNS}, (xmax = 0) AS was_inserted`,
           [
             record.id,
             tenantId,
@@ -910,7 +953,11 @@ export function createWafPostureRepository(pool) {
             createdAt,
           ],
         );
-        return { drift_event: mapWafDriftEventRow(rows[0]), inserted: true };
+        const row = rows[0];
+        return {
+          drift_event: mapWafDriftEventRow(row),
+          inserted: row?.was_inserted === true || row?.id === record.id,
+        };
       });
     },
 
@@ -945,6 +992,86 @@ export function createWafPostureRepository(pool) {
           [tenantId],
         );
         return rows.map(mapWafConnectorRow);
+      });
+    },
+
+    async isConnectorFeatureEnabled(ctx) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT enabled
+           FROM tenant_connector_features
+           WHERE tenant_id = $1`,
+          [tenantId],
+        );
+        return rows[0]?.enabled === true;
+      });
+    },
+
+    async setConnectorFeatureState(ctx, enabled, options = {}) {
+      const tenantId = ctx.tenantId;
+      const updatedAt = options.updated_at ?? new Date().toISOString();
+      return withTenantContext(pool, tenantId, async (client) => {
+        const changed = await client.query(
+          `INSERT INTO tenant_connector_features (
+             tenant_id, enabled, updated_at, updated_by, revision
+           ) VALUES ($1, $2, $3::timestamptz, $4, 1)
+           ON CONFLICT (tenant_id) DO UPDATE
+             SET enabled = EXCLUDED.enabled,
+                 updated_at = EXCLUDED.updated_at,
+                 updated_by = EXCLUDED.updated_by,
+                 revision = tenant_connector_features.revision + 1
+             WHERE tenant_connector_features.enabled IS DISTINCT FROM EXCLUDED.enabled
+           RETURNING tenant_id, enabled, updated_at, updated_by, revision`,
+          [tenantId, enabled === true, updatedAt, options.updated_by ?? ctx.userId ?? 'system'],
+        );
+        const state = changed.rows[0] ?? (await client.query(
+          `SELECT tenant_id, enabled, updated_at, updated_by, revision
+           FROM tenant_connector_features WHERE tenant_id = $1`,
+          [tenantId],
+        )).rows[0];
+        if (changed.rows[0] && enabled !== true) {
+          await client.query(
+            `UPDATE waf_connectors
+             SET status = CASE WHEN status IN ('disabled', 'revoked') THEN status ELSE 'validating' END,
+                 last_success_at = NULL,
+                 last_success_revision = 0,
+                 poll_revision = poll_revision + 1,
+                 updated_at = $2::timestamptz
+             WHERE tenant_id = $1`,
+            [tenantId, updatedAt],
+          );
+          await client.query(
+            `UPDATE connector_poll_jobs
+             SET status = 'cancelled', completed_at = $2::timestamptz,
+                 error_code = 'connector_feature_disabled',
+                 leased_by = NULL, leased_at = NULL, lease_token = NULL,
+                 updated_at = $2::timestamptz
+             WHERE tenant_id = $1 AND status IN ('pending', 'leased')`,
+            [tenantId, updatedAt],
+          );
+          await client.query(
+            `UPDATE probe_jobs
+             SET status = 'cancelled', completed_at = $2::timestamptz
+             WHERE tenant_id = $1 AND status IN ('pending', 'leased')
+               AND constraints_json->'ownership_binding'->>'state' = 'provider_verified'`,
+            [tenantId, updatedAt],
+          );
+        }
+        if (changed.rows[0] && options.audit_event) {
+          if (!auditRepository || typeof auditRepository.appendAuditEvent !== 'function') {
+            throw new Error('Connector feature state mutation requires transactional audit persistence.');
+          }
+          await auditRepository.appendAuditEvent(options.audit_event, { client });
+        }
+        return state ? {
+          tenant_id: state.tenant_id,
+          enabled: state.enabled === true,
+          updated_at: toIso(state.updated_at),
+          updated_by: state.updated_by,
+          revision: Number(state.revision),
+          changed: Boolean(changed.rows[0]),
+        } : null;
       });
     },
 
@@ -987,6 +1114,420 @@ export function createWafPostureRepository(pool) {
       });
     },
 
+    async beginConnectorPoll(ctx, id, options = {}) {
+      const tenantId = ctx.tenantId;
+      const execute = options.execute === true;
+      const scheduled = options.scheduled === true;
+      const updatedAt = options.updated_at ?? new Date().toISOString();
+      return withTenantContext(pool, tenantId, async (client) => {
+        const candidate = await client.query(
+          `SELECT provider
+           FROM waf_connectors
+           WHERE tenant_id = $1 AND id = $2
+             AND EXISTS (
+               SELECT 1 FROM tenant_connector_features feature
+               WHERE feature.tenant_id = $1 AND feature.enabled = TRUE
+             )
+             AND status NOT IN ('disabled', 'revoked')
+             AND (
+               ($3::boolean AND next_poll_at <= $4::timestamptz)
+               OR (
+                 NOT $3::boolean
+                 AND (last_poll_requested_at IS NULL
+                      OR last_poll_requested_at <= $4::timestamptz - INTERVAL '5 minutes')
+               )
+             )
+             AND (
+               NOT $5::boolean
+               OR status <> 'polling'
+               OR updated_at <= $4::timestamptz - INTERVAL '5 minutes'
+             )
+           FOR UPDATE`,
+          [tenantId, id, scheduled, updatedAt, execute],
+        );
+        const provider = candidate.rows[0]?.provider;
+        if (!provider) return null;
+
+        const admission = await client.query(
+          `INSERT INTO connector_provider_rate_limits (
+             tenant_id, provider, window_started_at, request_count, next_allowed_at, updated_at
+           ) VALUES (
+             $1, $2, $3::timestamptz, 1,
+             $3::timestamptz + INTERVAL '30 seconds', $3::timestamptz
+           )
+           ON CONFLICT (tenant_id, provider) DO UPDATE
+             SET window_started_at = CASE
+                   WHEN connector_provider_rate_limits.window_started_at <= EXCLUDED.window_started_at - INTERVAL '1 hour'
+                     THEN EXCLUDED.window_started_at
+                   ELSE connector_provider_rate_limits.window_started_at
+                 END,
+                 request_count = CASE
+                   WHEN connector_provider_rate_limits.window_started_at <= EXCLUDED.window_started_at - INTERVAL '1 hour'
+                     THEN 1
+                   ELSE connector_provider_rate_limits.request_count + 1
+                 END,
+                 next_allowed_at = EXCLUDED.next_allowed_at,
+                 updated_at = EXCLUDED.updated_at
+             WHERE connector_provider_rate_limits.window_started_at <= EXCLUDED.window_started_at - INTERVAL '1 hour'
+                OR (
+                  connector_provider_rate_limits.request_count < 20
+                  AND connector_provider_rate_limits.next_allowed_at <= EXCLUDED.window_started_at
+                )
+           RETURNING request_count`,
+          [tenantId, provider, updatedAt],
+        );
+        if (!admission.rows[0]) return null;
+
+        const { rows } = await client.query(
+          `UPDATE waf_connectors
+           SET poll_revision = CASE
+                 WHEN status IN ('validating', 'polling') THEN poll_revision
+                 ELSE poll_revision + 1
+               END,
+               status = CASE
+                 WHEN $3::boolean THEN 'polling'
+                 WHEN status = 'polling' THEN status
+                 ELSE 'validating'
+               END,
+               last_poll_requested_at = $4::timestamptz,
+               next_poll_at = $4::timestamptz + INTERVAL '15 minutes',
+               updated_at = $4::timestamptz
+           WHERE tenant_id = $1 AND id = $2
+           RETURNING poll_revision`,
+          [tenantId, id, execute, updatedAt],
+        );
+        return rows[0] == null ? null : Number(rows[0].poll_revision);
+      });
+    },
+
+    async listConnectorPollScheduleCandidates(ctx, options = {}) {
+      const tenantId = ctx.tenantId;
+      const limit = Math.max(1, Math.min(32, Number(options.limit) || 4));
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT c.id AS connector_id, c.provider
+           FROM waf_connectors c
+           WHERE c.tenant_id = $1
+             AND EXISTS (
+               SELECT 1 FROM tenant_connector_features feature
+               WHERE feature.tenant_id = c.tenant_id AND feature.enabled = TRUE
+             )
+             AND c.provider IN (
+               'cloudflare', 'aws_waf', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1'
+             )
+             AND c.secret_id IS NOT NULL
+             AND c.status NOT IN ('disabled', 'revoked')
+             AND c.next_poll_at <= CURRENT_TIMESTAMP
+             AND COALESCE((c.config_json->>'read_only')::boolean, false)
+             AND NOT EXISTS (
+               SELECT 1
+               FROM connector_poll_jobs j
+               WHERE j.tenant_id = c.tenant_id
+                 AND j.connector_id = c.id
+                 AND j.provider = c.provider
+                 AND j.poll_revision = c.poll_revision
+                 AND j.status IN ('pending', 'leased')
+                 AND j.expires_at > CURRENT_TIMESTAMP + INTERVAL '150 seconds'
+             )
+           ORDER BY c.updated_at, c.id
+           LIMIT $2`,
+          [tenantId, limit],
+        );
+        return rows.map((row) => ({
+          connector_id: row.connector_id,
+          provider: row.provider,
+        }));
+      });
+    },
+
+
+    async listPendingConnectorPollConnectors(ctx, options = {}) {
+      const tenantId = ctx.tenantId;
+      const limit = Math.max(1, Math.min(32, Number(options.limit) || 4));
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT j.connector_id, j.provider
+           FROM connector_poll_jobs j
+           JOIN waf_connectors c
+             ON c.tenant_id = j.tenant_id AND c.id = j.connector_id
+           WHERE j.tenant_id = $1
+             AND EXISTS (
+               SELECT 1 FROM tenant_connector_features feature
+               WHERE feature.tenant_id = j.tenant_id AND feature.enabled = TRUE
+             )
+             AND j.poll_revision = c.poll_revision
+             AND j.provider = c.provider
+             AND j.expires_at > CURRENT_TIMESTAMP + INTERVAL '150 seconds'
+             AND c.status NOT IN ('disabled', 'revoked')
+             AND (
+               j.status = 'pending'
+               OR (j.status = 'leased' AND j.leased_at <= CURRENT_TIMESTAMP - INTERVAL '5 minutes')
+             )
+           ORDER BY j.created_at, j.id
+           LIMIT $2`,
+          [tenantId, limit],
+        );
+        return rows.map((row) => ({
+          connector_id: row.connector_id,
+          provider: row.provider,
+        }));
+      });
+    },
+    async createConnectorPollJob(ctx, record) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const inserted = await client.query(
+          `INSERT INTO connector_poll_jobs (
+             id, tenant_id, connector_id, provider, poll_revision, status,
+             envelope_json, job_signature, expires_at, created_at, updated_at
+           ) VALUES ($1,$2,$3,$4,$5::bigint,'pending',$6::jsonb,$7,$8::timestamptz,$9::timestamptz,$9::timestamptz)
+           ON CONFLICT (tenant_id, connector_id, poll_revision) DO UPDATE
+             SET id = EXCLUDED.id,
+                 status = 'pending',
+                 envelope_json = EXCLUDED.envelope_json,
+                 job_signature = EXCLUDED.job_signature,
+                 leased_by = NULL,
+                 leased_at = NULL,
+                 lease_token = NULL,
+                 completed_at = NULL,
+                 error_code = NULL,
+                 expires_at = EXCLUDED.expires_at,
+                 created_at = EXCLUDED.created_at,
+                 updated_at = EXCLUDED.updated_at
+             WHERE (
+                 connector_poll_jobs.status = 'pending'
+                 AND connector_poll_jobs.expires_at <= EXCLUDED.created_at + INTERVAL '150 seconds'
+               )
+               OR (
+                 connector_poll_jobs.status = 'leased'
+                 AND connector_poll_jobs.leased_at <= EXCLUDED.created_at - INTERVAL '5 minutes'
+               )
+           RETURNING ${CONNECTOR_POLL_JOB_COLUMNS}`,
+          [record.id, tenantId, record.connector_id, record.provider, record.poll_revision,
+            JSON.stringify(record.envelope_json), record.job_signature, record.expires_at, record.created_at],
+        );
+        if (inserted.rows[0]) {
+          if (record.audit_event) {
+            if (!auditRepository || typeof auditRepository.appendAuditEvent !== 'function') {
+              throw new Error('Connector poll job creation requires transactional audit persistence.');
+            }
+            await auditRepository.appendAuditEvent(record.audit_event, { client });
+          }
+          return mapConnectorPollJobRow(inserted.rows[0]);
+        }
+        const existing = await client.query(
+          `SELECT ${CONNECTOR_POLL_JOB_COLUMNS}
+           FROM connector_poll_jobs
+           WHERE tenant_id = $1 AND connector_id = $2 AND poll_revision = $3::bigint`,
+          [tenantId, record.connector_id, record.poll_revision],
+        );
+        return mapConnectorPollJobRow(existing.rows[0] ?? null);
+      });
+    },
+
+    async claimConnectorPollJob(ctx, id, options = {}) {
+      const tenantId = ctx.tenantId;
+      const workerId = String(options.worker_id ?? '').trim();
+      if (!workerId) return null;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const connectorResult = await client.query(
+          `SELECT ${WAF_CONNECTOR_COLUMNS}
+           FROM waf_connectors
+           WHERE tenant_id = $1 AND id = $2
+             AND EXISTS (
+               SELECT 1 FROM tenant_connector_features feature
+               WHERE feature.tenant_id = $1 AND feature.enabled = TRUE
+             )
+             AND status NOT IN ('disabled', 'revoked')
+           FOR UPDATE`,
+          [tenantId, id],
+        );
+        const connector = connectorResult.rows[0];
+        if (!connector) return null;
+        const claimed = await client.query(
+          `UPDATE connector_poll_jobs
+           SET status = 'leased', leased_by = $4, leased_at = CURRENT_TIMESTAMP,
+               lease_token = gen_random_uuid()::text,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE tenant_id = $1 AND connector_id = $2
+             AND poll_revision = $3::bigint
+             AND provider = $5
+             AND expires_at > CURRENT_TIMESTAMP + INTERVAL '150 seconds'
+             AND (
+               status = 'pending'
+               OR (status = 'leased' AND leased_at <= CURRENT_TIMESTAMP - INTERVAL '5 minutes')
+             )
+           RETURNING ${CONNECTOR_POLL_JOB_COLUMNS}`,
+          [tenantId, id, connector.poll_revision, workerId, connector.provider],
+        );
+        if (!claimed.rows[0]) return null;
+        await client.query(
+          `UPDATE waf_connectors
+           SET status = 'polling', updated_at = $3::timestamptz
+           WHERE tenant_id = $1 AND id = $2 AND poll_revision = $4::bigint
+             AND status NOT IN ('disabled', 'revoked')`,
+          [tenantId, id, toIso(claimed.rows[0].leased_at), connector.poll_revision],
+        );
+        return mapConnectorPollJobRow(claimed.rows[0]);
+      });
+    },
+
+
+    async isConnectorPollLeaseCurrent(ctx, id, binding = {}) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT EXISTS (
+             SELECT 1
+             FROM connector_poll_jobs j
+             JOIN waf_connectors c
+               ON c.tenant_id = j.tenant_id AND c.id = j.connector_id
+             JOIN tenant_connector_features feature
+               ON feature.tenant_id = j.tenant_id AND feature.enabled = TRUE
+             JOIN encrypted_secrets s
+               ON s.tenant_id = c.tenant_id AND s.id = c.secret_id
+             WHERE j.tenant_id = $1 AND j.id = $2 AND j.connector_id = $3
+               AND j.status = 'leased' AND j.leased_by = $4 AND j.lease_token = $5
+               AND j.poll_revision = $6::bigint AND j.provider = $7
+               AND j.expires_at > CURRENT_TIMESTAMP
+               AND j.leased_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+               AND c.status = 'polling' AND c.poll_revision = j.poll_revision
+               AND c.provider = j.provider AND c.secret_id = $8
+               AND s.purpose = 'connector' AND s.rotation = $9::integer
+               AND lower(COALESCE(s.metadata_json->>'provider', '')) = lower(j.provider)
+           ) AS current`,
+          [tenantId, binding.job_id, id, binding.worker_id, binding.lease_token,
+            binding.poll_revision, binding.provider, binding.secret_id, binding.secret_rotation],
+        );
+        return rows[0]?.current === true;
+      });
+    },
+    async completeConnectorPoll(ctx, id, completion = {}) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const connectorResult = await client.query(
+          `SELECT ${WAF_CONNECTOR_COLUMNS}
+           FROM waf_connectors
+           WHERE tenant_id = $1 AND id = $2
+           FOR UPDATE`,
+          [tenantId, id],
+        );
+        const connector = connectorResult.rows[0];
+        if (!connector
+          || connector.status !== 'polling'
+          || Number(connector.poll_revision) !== Number(completion.poll_revision)) return null;
+        const jobResult = await client.query(
+          `SELECT ${CONNECTOR_POLL_JOB_COLUMNS}
+           FROM connector_poll_jobs
+           WHERE tenant_id = $1 AND id = $2 AND connector_id = $3
+             AND status = 'leased' AND leased_by = $4 AND lease_token = $5
+             AND poll_revision = $6::bigint AND provider = $7
+             AND expires_at > CURRENT_TIMESTAMP
+             AND leased_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+           FOR UPDATE`,
+          [tenantId, completion.job_id, id, completion.worker_id, completion.lease_token,
+            completion.poll_revision, connector.provider],
+        );
+        const job = jobResult.rows[0];
+        if (!job) return null;
+        if (job.status !== 'leased'
+          || job.leased_by !== completion.worker_id
+          || job.lease_token !== completion.lease_token
+          || Number(job.poll_revision) !== Number(completion.poll_revision)
+          || job.provider !== connector.provider) return null;
+
+        const updates = completion.updates ?? {};
+        const setClauses = ['updated_at = $3::timestamptz'];
+        const params = [tenantId, id, completion.completed_at];
+        let paramIndex = 4;
+        if (updates.status !== undefined) {
+          setClauses.push(`status = $${paramIndex}`);
+          params.push(updates.status);
+          paramIndex += 1;
+        }
+        if (updates.invalidate_success_generation === true) {
+          setClauses.push('last_success_at = NULL', 'last_success_revision = 0');
+        } else if (updates.last_success_at !== undefined) {
+          setClauses.push(`last_success_at = $${paramIndex}::timestamptz`);
+          params.push(updates.last_success_at);
+          paramIndex += 1;
+          setClauses.push(`last_success_revision = $${paramIndex}::bigint`);
+          params.push(completion.poll_revision);
+          paramIndex += 1;
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'last_error_at')) {
+          setClauses.push(`last_error_at = $${paramIndex}::timestamptz`);
+          params.push(updates.last_error_at);
+          paramIndex += 1;
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'next_poll_at')) {
+          setClauses.push(`next_poll_at = $${paramIndex}::timestamptz`);
+          params.push(updates.next_poll_at);
+          paramIndex += 1;
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'consecutive_failures')) {
+          setClauses.push(`consecutive_failures = $${paramIndex}::integer`);
+          params.push(updates.consecutive_failures);
+          paramIndex += 1;
+        }
+        params.push(completion.poll_revision);
+        const updatedConnector = await client.query(
+          `UPDATE waf_connectors
+           SET ${setClauses.join(', ')}
+           WHERE tenant_id = $1 AND id = $2 AND poll_revision = $${paramIndex}::bigint
+             AND status = 'polling'
+           RETURNING ${WAF_CONNECTOR_COLUMNS}`,
+          params,
+        );
+        if (!updatedConnector.rows[0]) return null;
+
+        const persisted = [];
+        for (const record of completion.records ?? []) {
+          const inserted = await client.query(
+            `INSERT INTO waf_connector_snapshots (
+               id, tenant_id, connector_id, provider, snapshot_kind, resource_ref_hash,
+               display_ref, summary_json, config_hash, evidence_source, inventory_complete,
+               inventory_truncated, poll_revision, observed_at, created_at
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13::bigint,$14::timestamptz,$15::timestamptz)
+             RETURNING ${WAF_CONNECTOR_SNAPSHOT_COLUMNS}`,
+            [record.id, tenantId, record.connector_id, record.provider, record.snapshot_kind,
+              record.resource_ref_hash, record.display_ref ?? null, JSON.stringify(record.summary_json ?? {}),
+              record.config_hash ?? null, record.evidence_source ?? 'manual_metadata',
+              record.inventory_complete === true, record.inventory_truncated === true,
+              record.poll_revision ?? 0, record.observed_at, record.created_at],
+          );
+          persisted.push(mapWafConnectorSnapshotRow(inserted.rows[0]));
+        }
+
+        const terminalStatus = completion.error_code ? 'failed' : 'completed';
+        const completedJob = await client.query(
+          `UPDATE connector_poll_jobs
+           SET status = $4, completed_at = CURRENT_TIMESTAMP, error_code = $5,
+               leased_by = NULL, leased_at = NULL, lease_token = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE tenant_id = $1 AND id = $2 AND connector_id = $3
+             AND status = 'leased' AND leased_by = $6 AND lease_token = $7
+             AND expires_at > CURRENT_TIMESTAMP
+             AND leased_at > CURRENT_TIMESTAMP - INTERVAL '5 minutes'
+           RETURNING ${CONNECTOR_POLL_JOB_COLUMNS}`,
+          [tenantId, completion.job_id, id, terminalStatus,
+            completion.error_code ?? null, completion.worker_id, completion.lease_token],
+        );
+        if (!completedJob.rows[0]) throw new Error('Connector poll job completion lease CAS failed.');
+        if (completion.audit_event) {
+          if (!auditRepository || typeof auditRepository.appendAuditEvent !== 'function') {
+            throw new Error('Connector poll completion requires transactional audit persistence.');
+          }
+          await auditRepository.appendAuditEvent(completion.audit_event, { client });
+        }
+        return {
+          connector: mapWafConnectorRow(updatedConnector.rows[0]),
+          snapshots: persisted,
+          job: mapConnectorPollJobRow(completedJob.rows[0]),
+        };
+      });
+    },
+
     async updateConnectorStatus(ctx, id, updates) {
       const tenantId = ctx.tenantId;
       return withTenantContext(pool, tenantId, async (client) => {
@@ -998,23 +1539,72 @@ export function createWafPostureRepository(pool) {
           params.push(updates.status);
           paramIndex += 1;
         }
-        if (updates.last_success_at !== undefined) {
+        if (updates.advance_poll_revision === true) {
+          setClauses.push('poll_revision = poll_revision + 1');
+        }
+        if (updates.invalidate_success_generation === true) {
+          setClauses.push('last_success_at = NULL');
+          setClauses.push('last_success_revision = 0');
+        }
+        if (updates.last_success_at !== undefined
+          && updates.invalidate_success_generation !== true) {
           setClauses.push(`last_success_at = $${paramIndex}::timestamptz`);
           params.push(updates.last_success_at);
           paramIndex += 1;
+          if (updates.expected_poll_revision !== undefined) {
+            setClauses.push(`last_success_revision = $${paramIndex}::bigint`);
+            params.push(updates.expected_poll_revision);
+            paramIndex += 1;
+          }
         }
         if (Object.prototype.hasOwnProperty.call(updates, 'last_error_at')) {
           setClauses.push(`last_error_at = $${paramIndex}::timestamptz`);
           params.push(updates.last_error_at);
           paramIndex += 1;
         }
+        if (Object.prototype.hasOwnProperty.call(updates, 'next_poll_at')) {
+          setClauses.push(`next_poll_at = $${paramIndex}::timestamptz`);
+          params.push(updates.next_poll_at);
+          paramIndex += 1;
+        }
+        if (Object.prototype.hasOwnProperty.call(updates, 'consecutive_failures')) {
+          setClauses.push(`consecutive_failures = $${paramIndex}::integer`);
+          params.push(updates.consecutive_failures);
+          paramIndex += 1;
+        }
+        const whereClauses = ['tenant_id = $1', 'id = $2'];
+        if (updates.expected_poll_revision !== undefined) {
+          whereClauses.push(`poll_revision = $${paramIndex}::bigint`);
+          params.push(updates.expected_poll_revision);
+        }
+        if (updates.poll_completion === true) {
+          whereClauses.push("status = 'polling'");
+        }
         const { rows } = await client.query(
           `UPDATE waf_connectors
            SET ${setClauses.join(', ')}
-           WHERE tenant_id = $1 AND id = $2
+           WHERE ${whereClauses.join(' AND ')}
            RETURNING ${WAF_CONNECTOR_COLUMNS}`,
           params,
         );
+        if (rows[0] && ['disabled', 'revoked'].includes(updates.status)) {
+          await client.query(
+            `UPDATE connector_poll_jobs
+             SET status = 'cancelled', completed_at = $3::timestamptz,
+                 error_code = $4,
+                 leased_by = NULL, leased_at = NULL, lease_token = NULL,
+                 updated_at = $3::timestamptz
+             WHERE tenant_id = $1 AND connector_id = $2 AND status IN ('pending', 'leased')`,
+            [tenantId, id, updates.updated_at, `connector_${updates.status}`],
+          );
+          await client.query(
+            `UPDATE probe_jobs
+             SET status = 'cancelled', completed_at = $3::timestamptz
+             WHERE tenant_id = $1 AND status IN ('pending', 'leased')
+               AND constraints_json->'ownership_binding'->'provider_provenance'->>'connector_id' = $2`,
+            [tenantId, id, updates.updated_at],
+          );
+        }
         return mapWafConnectorRow(rows[0] ?? null);
       });
     },
@@ -1030,9 +1620,10 @@ export function createWafPostureRepository(pool) {
           const { rows } = await client.query(
             `INSERT INTO waf_connector_snapshots (
                id, tenant_id, connector_id, provider, snapshot_kind, resource_ref_hash,
-               display_ref, summary_json, config_hash, observed_at, created_at
+               display_ref, summary_json, config_hash, evidence_source, inventory_complete,
+               inventory_truncated, poll_revision, observed_at, created_at
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11::timestamptz)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13::bigint, $14::timestamptz, $15::timestamptz)
              RETURNING ${WAF_CONNECTOR_SNAPSHOT_COLUMNS}`,
             [
               record.id,
@@ -1044,6 +1635,10 @@ export function createWafPostureRepository(pool) {
               record.display_ref ?? null,
               JSON.stringify(record.summary_json ?? {}),
               record.config_hash ?? null,
+              record.evidence_source ?? 'manual_metadata',
+              record.inventory_complete === true,
+              record.inventory_truncated === true,
+              record.poll_revision ?? 0,
               record.observed_at,
               record.created_at,
             ],
@@ -1214,14 +1809,15 @@ export function createWafPostureRepository(pool) {
       return withTenantContext(pool, tenantId, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO waf_coverage_daily_rollups (
-             id, tenant_id, rollup_date, total_assets, protected, underprotected, unprotected,
-             unknown, excluded, coverage_ratio, created_at
+             id, tenant_id, rollup_date, total_assets, protected, edge_protected, underprotected,
+             unprotected, unknown, excluded, coverage_ratio, created_at
            )
-           VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)
+           VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz)
            ON CONFLICT (tenant_id, rollup_date)
            DO UPDATE SET
              total_assets = EXCLUDED.total_assets,
              protected = EXCLUDED.protected,
+             edge_protected = EXCLUDED.edge_protected,
              underprotected = EXCLUDED.underprotected,
              unprotected = EXCLUDED.unprotected,
              unknown = EXCLUDED.unknown,
@@ -1235,6 +1831,7 @@ export function createWafPostureRepository(pool) {
             record.rollup_date,
             record.total_assets ?? 0,
             record.protected ?? 0,
+            record.edge_protected ?? 0,
             record.underprotected ?? 0,
             record.unprotected ?? 0,
             record.unknown ?? 0,

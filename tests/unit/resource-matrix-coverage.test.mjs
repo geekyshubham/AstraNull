@@ -152,7 +152,7 @@ describe('resource-exhaustion matrix (DET-024)', () => {
     }] }).status, 'not_run');
   });
 
-  it('accepts a persisted detail verdict object or a string bound to evidence by test_run_id', () => {
+  it('keeps an edge-only persisted detail verdict reviewable and accepts evidence-bound legacy strings', () => {
     assert.equal(state({ runs: [{
       id: 'run_nested',
       check: { check_id: CHECK_A },
@@ -167,7 +167,7 @@ describe('resource-exhaustion matrix (DET-024)', () => {
         evidence_ids: ['evt_nested'],
         verdict_at: iso(),
       },
-    }] }).status, 'protected');
+    }] }).status, 'inconclusive');
 
     const legacyRun = {
       id: 'run_legacy', check_id: CHECK_A, target_group_id: 'tg_1', status: 'completed',

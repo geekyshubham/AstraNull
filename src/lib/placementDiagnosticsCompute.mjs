@@ -1,3 +1,4 @@
+import { isTrustedProducerEvent } from './trustedEventProvenance.mjs';
 /** Pure metadata-only placement diagnostics computation (no store/DB imports). */
 
 /** Aligns with readiness evidence freshness window (metadata-only placement checks). */
@@ -33,7 +34,9 @@ function onlineAgentIds(agents) {
 function runIdsForGroup(runs, tenantId, targetGroupId) {
   return new Set(
     runs
-      .filter((r) => r.tenant_id === tenantId && r.target_group_id === targetGroupId)
+      .filter((r) => r.tenant_id === tenantId
+        && r.target_group_id === targetGroupId
+        && ['completed', 'verdicted'].includes(r.status))
       .map((r) => r.id),
   );
 }
@@ -128,7 +131,7 @@ export function computePlacementDiagnosticsFromData(input) {
   const groups = (input.groups ?? []).filter((g) => g.tenant_id == null || g.tenant_id === tenantId);
   const agents = agentsForTenant(input.agents ?? [], tenantId);
   const runs = (input.runs ?? []).filter((r) => r.tenant_id === tenantId);
-  const events = input.events ?? [];
+  const events = (input.events ?? []).filter(isTrustedProducerEvent);
   const unboundOnline = agents.filter((a) => a.status === 'online' && a.target_group_id == null);
   const unboundOnlineIds = unboundOnline.map((a) => a.id);
 

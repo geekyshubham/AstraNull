@@ -11,6 +11,7 @@ export const VERIFICATION_RANK = Object.freeze({
   unverified: 0,
   pending: 1,
   dns_verified: 2,
+  provider_verified: 2,
   agent_verified: 3,
   user_confirmed: 4,
 });

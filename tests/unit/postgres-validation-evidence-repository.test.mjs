@@ -211,6 +211,37 @@ describe('postgres validation evidence repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('cancelTestRunAtomic transitions the run and open probe jobs in one tenant transaction', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/FROM test_runs[\s\S]*FOR UPDATE/i.test(text)) return { rows: [testRunRow] };
+      if (/UPDATE test_runs/i.test(text)) {
+        return { rows: [{ ...testRunRow, status: 'cancelled', completed_at: FIXED_NOW }] };
+      }
+      if (/UPDATE probe_jobs/i.test(text)) {
+        return { rows: [
+          { id: 'pjob_pending', test_run_id: RUN_ID },
+          { id: 'pjob_leased', test_run_id: RUN_ID },
+        ] };
+      }
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+    const result = await repo.cancelTestRunAtomic(CTX, RUN_ID, { completed_at: FIXED_NOW });
+
+    assert.equal(result.cancelled, true);
+    assert.equal(result.run.status, 'cancelled');
+    assert.deepEqual(result.cancelled_jobs.map((job) => job.id), [
+      'pjob_pending',
+      'pjob_leased',
+    ]);
+    const queries = dataQueries(pool.client);
+    assert.match(queries[0].text, /pg_advisory_xact_lock/);
+    assert.match(queries[1].text, /FOR UPDATE/);
+    assert.match(queries[3].text, /status IN \('pending', 'leased'\)/);
+    assert.match(queries[3].text, /ownership_verification_id IS NULL/);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
   it('findEventByTenantEventId uses tenant_id and event_id only', async () => {
     const pool = createRecordingPool((text, params) => {
       if (text.includes('FROM events')) {
@@ -751,6 +782,9 @@ describe('postgres validation evidence repository', () => {
   it('createVerdictIfAbsent preserves an existing verdict and parameterizes evidence_ids', async () => {
     const evidenceIds = ['ev_a', 'ev_b'];
     const pool = createRecordingPool((text, params) => {
+      if (/SELECT status[\s\S]*FROM test_runs/i.test(text)) {
+        return { rows: [{ status: 'running' }] };
+      }
       if (text.startsWith('INSERT INTO verdicts')) {
         assert.match(text, /ON CONFLICT \(test_run_id\)/);
         // A published verdict is immutable: the conflict path must never rewrite it.
@@ -785,7 +819,54 @@ describe('postgres validation evidence repository', () => {
     });
     assert.equal(verdict.verdict, 'fail');
     assert.deepEqual(verdict.evidence_ids, evidenceIds);
+    const verdictQueries = dataQueries(pool.client);
+    assert.match(verdictQueries[0].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(verdictQueries[0].params, [`test_run_mutation:${RUN_ID}`]);
+    assert.match(verdictQueries[1].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(verdictQueries[1].params, [`kill_switch_state:${CTX.tenantId}`]);
+    assert.match(verdictQueries[2].text, /FROM soc_kill_switch/);
+    assert.match(verdictQueries[2].text, /tenant_id = \$1/);
+    assert.deepEqual(verdictQueries[2].params, [CTX.tenantId]);
+    assert.match(verdictQueries[3].text, /FROM test_runs[\s\S]*FOR UPDATE/);
+    assert.match(verdictQueries[3].text, /tenant_id = \$1 AND id = \$2/);
+    assert.deepEqual(verdictQueries[3].params, [CTX.tenantId, RUN_ID]);
+    assert.match(verdictQueries.at(-1).text, /UPDATE test_runs/);
+    assert.match(verdictQueries.at(-1).text, /status = 'verdicted'/);
     assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('createVerdictIfAbsent rejects a canceled run before inserting evidence', async () => {
+    const pool = createRecordingPool((text) => {
+      if (/SELECT status[\s\S]*FROM test_runs/i.test(text)) {
+        return { rows: [{ status: 'cancelled' }] };
+      }
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+    const verdict = await repo.createVerdictIfAbsent(CTX, {
+      id: 'verdict_cancelled',
+      test_run_id: RUN_ID,
+      verdict: 'protected',
+      evidence_ids: ['event_1'],
+      created_at: FIXED_NOW,
+    });
+
+    assert.equal(verdict, null);
+    const guardQueries = dataQueries(pool.client);
+    assert.match(guardQueries[0].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(guardQueries[0].params, [`test_run_mutation:${RUN_ID}`]);
+    assert.match(guardQueries[1].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(guardQueries[1].params, [`kill_switch_state:${CTX.tenantId}`]);
+    assert.match(guardQueries[2].text, /FROM soc_kill_switch/);
+    assert.match(guardQueries[2].text, /tenant_id = \$1/);
+    assert.deepEqual(guardQueries[2].params, [CTX.tenantId]);
+    assert.match(guardQueries[3].text, /FROM test_runs[\s\S]*FOR UPDATE/);
+    assert.deepEqual(guardQueries[3].params, [CTX.tenantId, RUN_ID]);
+    assert.equal(guardQueries.length, 4);
+    assert.equal(
+      guardQueries.some((query) => /INSERT INTO verdicts/i.test(query.text)),
+      false,
+    );
   });
 
   it('upsertOpenFindingFromVerdict uses open-finding partial conflict and updates last_verdict_id', async () => {

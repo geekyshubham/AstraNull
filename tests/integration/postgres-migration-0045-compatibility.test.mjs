@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { POLICY_CADENCES } from '../../src/contracts/testPolicyManagement.mjs';
-import { createPostgresTestPolicyRepository } from '../../src/persistence/postgres/testPolicyRepository.mjs';
 import {
   listMigrationFiles,
   runMigrations,
@@ -133,15 +132,17 @@ describe('postgres migration 0045 rollback compatibility', () => {
         );
         await pool.query('ALTER TABLE test_policies ENABLE TRIGGER test_policies_event_driven_compat');
 
-        const repository = createPostgresTestPolicyRepository(pool);
-        const context = { tenantId: 'ten_0045', userId: 'usr_0045', role: 'engineer' };
-        const due = await repository.listDueTestPolicies(context, { now: new Date() });
-        const leased = await repository.leaseDueTestPolicies(context, {
-          workerId: 'migration-0045-test',
-          now: new Date(),
-        });
-        assert.deepEqual(due, []);
-        assert.deepEqual(leased, []);
+        // The rollback scheduler's supported-cadence query must still see no due rows.
+        // Keep this assertion schema-local: the current repository selects target_id, which
+        // intentionally does not exist until migration 0046.
+        const schedulable = await pool.query(
+          `SELECT id FROM test_policies
+           WHERE archived_at IS NULL AND state = 'active' AND enabled = TRUE
+             AND cadence IN ('daily', 'weekly', 'monthly')
+             AND next_run_at IS NOT NULL AND next_run_at <= now()
+             AND (lease_expires_at IS NULL OR lease_expires_at <= now())`,
+        );
+        assert.deepEqual(schedulable.rows, []);
         assert.equal(POLICY_CADENCES.includes('event_driven'), false);
       },
       availability.env ?? process.env,

@@ -18,13 +18,22 @@ import {
   summarizeWafProductCatalog,
 } from '../../lib/wafProductCatalog.mjs';
 import {
+  buildSignedConnectorPollJob,
+  CONNECTOR_POLL_JOB_TTL_MS,
+  createConnectorPollBudgetedFetch,
+  connectorJobPublicKeyFromPrivate,
+  resolveConnectorJobPrivateKey,
+  resolveConnectorJobPublicKey,
+  verifySignedConnectorPollJob,
+} from '../../lib/connectorPollJobs.mjs';
+import { pinnedFetch } from '../../lib/pinnedHttpRequest.mjs';
+import {
   buildProviderPollFailure,
   executeConnectorProviderPoll,
   shouldAttemptOutboundConnectorPoll,
 } from '../../lib/connectorProviders/pollWorker.mjs';
 import { supportsOutboundProviderPoll } from '../../lib/connectorProviders/index.mjs';
 import {
-  booleanFieldExplicit,
   deriveWafSignalsFromBoundEvents,
 } from '../../lib/wafBoundRunCorrelation.mjs';
 import {
@@ -35,7 +44,11 @@ import {
 } from '../../lib/wafProtectedEvidence.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { redactObject } from '../../lib/redact.mjs';
-import { buildSecretAad, decryptSecret, loadSecretEncryptionKey } from '../../lib/secrets.mjs';
+import {
+  buildSecretAad,
+  decryptSecret,
+  loadConnectorSecretEncryptionKey,
+} from '../../lib/secrets.mjs';
 import {
   buildWafReportPayload,
   prepareWafReportExport,
@@ -86,8 +99,17 @@ export const WAF_POSTURE_REPOSITORY_METHODS = Object.freeze([
   'upsertWafDriftEvent',
   'patchWafDriftEvent',
   'listConnectors',
+  'isConnectorFeatureEnabled',
+  'setConnectorFeatureState',
   'createConnector',
   'getConnector',
+  'beginConnectorPoll',
+  'listConnectorPollScheduleCandidates',
+  'listPendingConnectorPollConnectors',
+  'createConnectorPollJob',
+  'claimConnectorPollJob',
+  'isConnectorPollLeaseCurrent',
+  'completeConnectorPoll',
   'updateConnectorStatus',
   'createConnectorSnapshots',
   'listConnectorSnapshots',
@@ -117,6 +139,10 @@ export const POSTGRES_WAF_POSTURE_SERVICE_METHODS = Object.freeze([
   'listWafDriftEvents',
   'patchWafDriftEvent',
   'listConnectors',
+  'isConnectorFeatureEnabled',
+  'setConnectorFeatureState',
+  'listConnectorPollScheduleCandidates',
+  'listPendingConnectorPollConnectors',
   'createConnector',
   'validateConnector',
   'pollConnector',
@@ -171,6 +197,10 @@ const WAF_DRIFT_RESOLVED_STATUSES = new Set(['resolved', 'accepted_risk', 'false
 const WAF_CONNECTOR_PROVIDERS = new Set([
   'generic_waf',
   'cloudflare',
+  'akamai_edgedns',
+  'namecheap',
+  'godaddy',
+  'ibm_ns1',
   'aws_waf',
   'akamai',
   'fastly',
@@ -185,11 +215,13 @@ const WAF_CONNECTOR_CONFIG_ALLOWLIST = new Set([
   'zone_ref_hash',
   'resource_ref_hash',
   'default_snapshot_kind',
+  'connection_mode',
   'read_only',
   'owner_hint',
   'tag_summary',
   'polling_interval_minutes',
   'region_summary',
+  'scope',
   'notes_hash',
 ]);
 
@@ -231,18 +263,46 @@ function connectorProviderCapabilities(provider, connector = null) {
   };
 }
 
-function connectorPollHealthUpdates(health, now) {
-  if (health?.status === 'active' || health?.status === 'degraded') {
+function connectorNextPollAt(now, delayMinutes) {
+  return new Date(new Date(now).getTime() + delayMinutes * 60_000).toISOString();
+}
+
+function connectorPollHealthUpdates(health, now, connector) {
+  const completeSuccess = (health?.status === 'active' || health?.status === 'degraded')
+    && health?.inventory_complete === true;
+  if (completeSuccess) {
     return {
       status: health.status,
       last_success_at: now,
       last_error_at: null,
+      consecutive_failures: 0,
+      next_poll_at: connectorNextPollAt(now, 15),
+      updated_at: now,
+    };
+  }
+  const consecutiveFailures = Math.min(1_000_000, Number(connector?.consecutive_failures ?? 0) + 1);
+  const exponentialMinutes = Math.min(360, 15 * (2 ** Math.min(5, consecutiveFailures - 1)));
+  const backoffMinutes = health?.status === 'rate_limited'
+    ? Math.max(60, exponentialMinutes)
+    : exponentialMinutes;
+  if (health?.status === 'revoked') {
+    return {
+      status: 'revoked',
+      last_success_at: null,
+      invalidate_success_generation: true,
+      last_error_at: now,
+      consecutive_failures: consecutiveFailures,
+      next_poll_at: connectorNextPollAt(now, 360),
       updated_at: now,
     };
   }
   return {
-    status: health?.status ?? 'error',
+    status: ['active', 'degraded', 'validating', 'polling'].includes(connector?.status)
+      ? 'degraded'
+      : health?.status ?? 'error',
     last_error_at: now,
+    consecutive_failures: consecutiveFailures,
+    next_poll_at: connectorNextPollAt(now, backoffMinutes),
     updated_at: now,
   };
 }
@@ -276,6 +336,14 @@ function normalizeConnectorConfig(input) {
     } else if (normalizedKey === 'polling_interval_minutes') {
       const minutes = Number(value);
       config.polling_interval_minutes = Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+    } else if (normalizedKey === 'scope') {
+      const scope = String(value ?? '').trim().toLowerCase();
+      if (!['regional', 'cloudfront'].includes(scope)) {
+        const err = new Error('Connector scope must be regional or cloudfront.');
+        err.code = 'invalid_connector_config';
+        throw err;
+      }
+      config.scope = scope;
     } else if (normalizedKey === 'tag_summary') {
       config.tag_summary = Array.isArray(value)
         ? value.map((entry) => String(entry).trim()).filter(Boolean)
@@ -517,13 +585,33 @@ async function deriveWafSignalsFromBoundRun(validationEvidence, ctx, testRunId) 
   return deriveWafSignalsFromBoundEvents({ probes, agents });
 }
 
-async function validateWafTestRunBinding(validationEvidence, ctx, testRunId, asset) {
+async function validateWafTestRunBinding(
+  validationEvidence,
+  ctx,
+  testRunId,
+  asset,
+  { requireSuccessfulTerminal = false } = {},
+) {
   const testRun = await validationEvidence.getTestRun(ctx, testRunId);
   if (!testRun) {
     return {
       error: 'test_run_not_found',
       status: 404,
       message: 'test_run_id not found for tenant.',
+    };
+  }
+  if (['cancelled', 'failed', 'error'].includes(testRun.status)) {
+    return {
+      error: 'invalid_request',
+      status: 409,
+      message: 'test_run_id cannot provide WAF evidence from an unsuccessful run.',
+    };
+  }
+  if (requireSuccessfulTerminal && !['completed', 'verdicted'].includes(testRun.status)) {
+    return {
+      error: 'invalid_request',
+      status: 409,
+      message: 'test_run_id must be successfully completed before WAF finalization.',
     };
   }
   if (testRun.target_group_id !== asset.target_group_id) {
@@ -533,13 +621,33 @@ async function validateWafTestRunBinding(validationEvidence, ctx, testRunId, ass
       message: 'test_run_id target group does not match WAF asset target group.',
     };
   }
+  const assetTargetId = typeof asset.target_id === 'string' && asset.target_id.trim()
+    ? asset.target_id
+    : null;
+  const testRunTargetId = typeof testRun.target_id === 'string' && testRun.target_id.trim()
+    ? testRun.target_id
+    : null;
+  if (!assetTargetId || !testRunTargetId) {
+    return {
+      error: 'invalid_request',
+      status: 400,
+      message: 'WAF asset and test_run_id must each have one explicit target_id.',
+    };
+  }
+  if (testRunTargetId !== assetTargetId) {
+    return {
+      error: 'invalid_request',
+      status: 400,
+      message: 'test_run_id target_id does not exactly match WAF asset target_id.',
+    };
+  }
   return { testRun };
 }
 
 function contractError(err, fallbackStatus = 400) {
   return {
     error: err.code ?? 'invalid_request',
-    status: fallbackStatus,
+    status: Number.isInteger(err.status) ? err.status : fallbackStatus,
     message: err.message,
   };
 }
@@ -671,7 +779,7 @@ function deriveWafDriftEventSpecs({
   businessCriticality,
 }) {
   const previousStatus = previousSnapshot?.status ?? null;
-  if (previousStatus !== 'protected') return [];
+  if (!['protected', 'edge_protected'].includes(previousStatus)) return [];
 
   const beforeSummary = buildDriftBeforeSummary(previousSnapshot);
   const afterSummary = buildDriftAfterSummary({
@@ -684,7 +792,14 @@ function deriveWafDriftEventSpecs({
     businessCriticality === 'critical' || businessCriticality === 'high';
   const specs = [];
 
-  if (postureStatus === 'unprotected') {
+  if (previousStatus === 'protected' && postureStatus === 'edge_protected') {
+    specs.push({
+      drift_type: 'mode_change',
+      severity: highCritAsset ? 'high' : 'medium',
+      before_summary: beforeSummary,
+      after_summary: afterSummary,
+    });
+  } else if (postureStatus === 'unprotected') {
     const driftType = wafDetected ? 'mode_change' : 'fingerprint_lost';
     specs.push({
       drift_type: driftType,
@@ -709,7 +824,15 @@ function deriveWafDriftEventSpecs({
         after_summary: afterSummary,
       });
     }
-  } else if (postureStatus === 'unknown') {
+    if (reasonCodes.includes('monitor_only_behavior')) {
+      specs.push({
+        drift_type: 'mode_change',
+        severity: highCritAsset ? 'critical' : 'high',
+        before_summary: beforeSummary,
+        after_summary: afterSummary,
+      });
+    }
+  } else if (previousStatus === 'protected' && postureStatus === 'unknown') {
     const evidenceLost =
       !wafDetected
       || reasonCodes.includes('waf_fingerprint_lost')
@@ -862,18 +985,127 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
   const cveRepo = repositories.cvePipeline;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
-  const encryptionKey = options.encryptionKey
-    ?? loadSecretEncryptionKey(options.env ?? process.env);
+  const encryptionKey = Object.prototype.hasOwnProperty.call(options, 'connectorEncryptionKey')
+    ? options.connectorEncryptionKey
+    : loadConnectorSecretEncryptionKey(options.env ?? process.env);
+  const requireConnectorJobSigner = options.requireConnectorJobSigner === true;
+  const requireConnectorJobVerifier = options.requireConnectorJobVerifier === true;
+  const connectorJobPrivateKey = requireConnectorJobSigner
+    || Boolean(String(options.connectorJobPrivateKey ?? '').trim())
+    ? resolveConnectorJobPrivateKey({
+        privateKey: options.connectorJobPrivateKey,
+        env: options.env,
+        required: requireConnectorJobSigner,
+      })
+    : null;
+  const connectorJobPublicKey = requireConnectorJobVerifier
+    || Boolean(String(options.connectorJobPublicKey ?? '').trim())
+    ? resolveConnectorJobPublicKey({
+        publicKey: options.connectorJobPublicKey,
+        env: options.env,
+        required: requireConnectorJobVerifier,
+      })
+    : connectorJobPrivateKey
+      ? connectorJobPublicKeyFromPrivate(connectorJobPrivateKey)
+      : null;
+  const signedConnectorJobs = Boolean(connectorJobPrivateKey || connectorJobPublicKey);
 
-  async function postgresConnectorSecretResolver(ctx, secretId) {
+  async function postgresConnectorSecretResolver(ctx, secretId, provider, expectedRotation = null) {
     if (!secretVaultRepo || typeof secretVaultRepo.getEncryptedSecretById !== 'function') {
       return { error: 'encryption_not_configured' };
     }
     if (!encryptionKey) return { error: 'encryption_not_configured' };
     const record = await secretVaultRepo.getEncryptedSecretById(ctx, secretId);
     if (!record) return { error: 'secret_not_found' };
+    const boundProvider = String(record.metadata?.provider ?? '').trim().toLowerCase();
+    if (record.id !== secretId
+      || record.purpose !== 'connector'
+      || boundProvider !== String(provider ?? '').trim().toLowerCase()) {
+      return { error: 'connector_secret_binding_invalid' };
+    }
+    if (expectedRotation != null && Number(record.rotation) !== Number(expectedRotation)) {
+      return { error: 'connector_secret_generation_changed' };
+    }
     const plaintext = decryptSecret(record.envelope, encryptionKey, buildSecretAad(record));
+    await auditRepo.appendAuditEvent({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'secret.decrypted_for_use',
+      resource_type: 'encrypted_secret',
+      resource_id: secretId,
+      metadata: { purpose: 'connector', provider, rotation: record.rotation ?? 0 },
+    });
     return { plaintext };
+  }
+
+  async function ensureSignedConnectorPollJob(ctx, connector, pollRevision, now, maxAttempts) {
+    if (!connectorJobPrivateKey) {
+      throw new Error('Connector poll scheduling requires an Ed25519 private signing key.');
+    }
+    if (!secretVaultRepo || typeof secretVaultRepo.getEncryptedSecretMetadataById !== 'function') {
+      throw new Error('Connector poll scheduling requires metadata-only secret generation lookup.');
+    }
+    const secret = await secretVaultRepo.getEncryptedSecretMetadataById(ctx, connector.secret_id);
+    const boundProvider = String(secret?.metadata?.provider ?? '').trim().toLowerCase();
+    if (!secret
+      || secret.id !== connector.secret_id
+      || secret.purpose !== 'connector'
+      || boundProvider !== String(connector.provider).trim().toLowerCase()
+      || !Number.isSafeInteger(Number(secret.rotation))
+      || Number(secret.rotation) < 0) {
+      throw new Error('Connector poll scheduling requires a current provider-bound secret generation.');
+    }
+    const issuedAt = new Date(now);
+    const expiresAt = new Date(issuedAt.getTime() + CONNECTOR_POLL_JOB_TTL_MS).toISOString();
+    const signed = buildSignedConnectorPollJob({
+      tenantId: ctx.tenantId,
+      connectorId: connector.id,
+      provider: connector.provider,
+      pollRevision,
+      secretId: secret.id,
+      secretRotation: Number(secret.rotation),
+      issuedAt: issuedAt.toISOString(),
+      expiresAt,
+      maxAttempts,
+    }, connectorJobPrivateKey);
+    const job = await wafRepo.createConnectorPollJob(ctx, {
+      id: signed.envelope.job_id,
+      connector_id: connector.id,
+      provider: connector.provider,
+      poll_revision: pollRevision,
+      envelope_json: signed.envelope,
+      job_signature: signed.signature,
+      expires_at: expiresAt,
+      created_at: issuedAt.toISOString(),
+      audit_event: {
+        tenant_id: ctx.tenantId,
+        actor_user_id: ctx.userId,
+        actor_role: ctx.role,
+        action: 'connector.poll.requested',
+        resource_type: 'waf_connector',
+        resource_id: connector.id,
+        metadata: redactObject({
+          provider: connector.provider,
+          poll_revision: pollRevision,
+          connector_poll_job_id: signed.envelope.job_id,
+        }),
+      },
+    });
+    const verificationKey = connectorJobPublicKey
+      ?? connectorJobPublicKeyFromPrivate(connectorJobPrivateKey);
+    if (!job || !verifySignedConnectorPollJob(job, verificationKey, {
+      tenantId: ctx.tenantId,
+      connectorId: connector.id,
+      provider: connector.provider,
+      pollRevision,
+      secretId: secret.id,
+      secretRotation: Number(secret.rotation),
+      expiresAt,
+    }, issuedAt)) {
+      throw new Error('Durable signed connector poll job creation or verification failed.');
+    }
+    return job;
   }
 
   return {
@@ -1194,11 +1426,23 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       if (run.status === 'finalized') {
         return { error: 'validation_already_finalized', status: 409 };
       }
+      const asset = await wafRepo.getWafAsset(ctx, run.waf_asset_id);
+      if (!asset) return { error: 'waf_asset_not_found', status: 404 };
+      if (run.test_run_id) {
+        const binding = await validateWafTestRunBinding(
+          validationEvidence,
+          ctx,
+          run.test_run_id,
+          asset,
+          { requireSuccessfulTerminal: true },
+        );
+        if (binding.error) return binding;
+      }
       try {
         assertNoRawWafEvidence(body);
+        const usedBoundRunDerivation = Boolean(run.test_run_id);
         const scenarioInputs = Array.isArray(body.scenario_results) ? body.scenario_results : [];
-        const hasExplicitScenarios = scenarioInputs.length > 0;
-        let normalizedScenarios = hasExplicitScenarios
+        let normalizedScenarios = !usedBoundRunDerivation && scenarioInputs.length > 0
           ? scenarioInputs.map((entry) => {
             const normalized = normalizeScenarioResultInput(entry);
             return {
@@ -1212,18 +1456,15 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
 
         let wafDetected = parseBooleanField(body, 'waf_detected', 'wafDetected', false);
         let validationPassed = parseBooleanField(body, 'validation_passed', 'validationPassed', false);
+        let edgeProtected = false;
         let validationFailed = parseBooleanField(body, 'validation_failed', 'validationFailed', false);
-        let originBypassConfirmed = parseBooleanField(
-          body,
-          'origin_bypass_confirmed',
-          'originBypassConfirmed',
-          false,
-        );
+        // Origin impact is authoritative only when derived below from a bound terminal run and
+        // nonce-matched authenticated agent evidence. Client booleans are informational.
+        let originBypassConfirmed = false;
         let sourceExternal = Boolean(body.source_external);
         let sourceAgent = Boolean(body.source_agent);
         const connectorMode = body.connector_mode ?? body.connectorMode ?? null;
 
-        const usedBoundRunDerivation = Boolean(run.test_run_id && !hasExplicitScenarios);
         let corroboration;
         if (usedBoundRunDerivation) {
           const [probes, agents] = await Promise.all([
@@ -1241,24 +1482,13 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           normalizedScenarios = derived.scenarioResults.map((entry) =>
             normalizeScenarioResultInput(entry),
           );
-          if (!booleanFieldExplicit(body, 'waf_detected', 'wafDetected')) {
-            wafDetected = derived.wafDetected;
-          }
-          if (!booleanFieldExplicit(body, 'validation_passed', 'validationPassed')) {
-            validationPassed = derived.validationPassed;
-          }
-          if (!booleanFieldExplicit(body, 'validation_failed', 'validationFailed')) {
-            validationFailed = derived.validationFailed;
-          }
-          if (!booleanFieldExplicit(body, 'origin_bypass_confirmed', 'originBypassConfirmed')) {
-            originBypassConfirmed = derived.originBypassConfirmed;
-          }
-          if (body.source_external === undefined && body.sourceExternal === undefined) {
-            sourceExternal = derived.source_external;
-          }
-          if (body.source_agent === undefined && body.sourceAgent === undefined) {
-            sourceAgent = derived.source_agent;
-          }
+          wafDetected = derived.wafDetected;
+          validationPassed = derived.validationPassed;
+          edgeProtected = derived.edgeProtected;
+          validationFailed = derived.validationFailed;
+          originBypassConfirmed = derived.originBypassConfirmed;
+          sourceExternal = derived.source_external;
+          sourceAgent = derived.source_agent;
         }
 
         if (!corroboration) {
@@ -1266,7 +1496,6 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
             validationEvidence,
             ctx,
             run.test_run_id ?? null,
-            normalizedScenarios,
           );
         }
         const evidenceGate = protectedFinalizeEvidenceRequired({
@@ -1274,15 +1503,17 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           normalizedScenarios,
           corroboration,
         });
-        if (evidenceGate) return evidenceGate;
-
-        const asset = await wafRepo.getWafAsset(ctx, run.waf_asset_id);
-        if (!asset) return { error: 'waf_asset_not_found', status: 404 };
+        if (evidenceGate?.error) return evidenceGate;
+        if (evidenceGate?.downgrade_to_edge_protected) {
+          validationPassed = false;
+          edgeProtected = true;
+        }
 
         const previous = await wafRepo.getCurrentPostureSnapshot(ctx, asset.id);
         const classification = classifyWafPosture({
           wafDetected,
           validationPassed,
+          edgeProtected,
           validationFailed,
           originBypassConfirmed,
           wafRequired: asset.expected_waf_required !== false,
@@ -1296,6 +1527,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         const summary = {
           waf_detected: wafDetected,
           validation_passed: validationPassed,
+          edge_protected: edgeProtected,
           validation_failed: validationFailed,
           origin_bypass_confirmed: originBypassConfirmed,
           posture_status: classification.status,
@@ -1343,6 +1575,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         const { validation_run: finalizedRun, snapshot: persistedSnapshot } =
           await wafRepo.finalizeWafValidationBundle(ctx, {
             run_id: run.id,
+            test_run_id: run.test_run_id ?? null,
             waf_asset_id: asset.id,
             asset_updated_at: now,
             snapshot,
@@ -1509,6 +1742,39 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       return items.map((item) => formatConnectorForApi(item));
     },
 
+    async isConnectorFeatureEnabled(ctx) {
+      return wafRepo.isConnectorFeatureEnabled(ctx);
+    },
+
+    async setConnectorFeatureState(ctx, enabled) {
+      const now = nowFn().toISOString();
+      return wafRepo.setConnectorFeatureState(ctx, enabled === true, {
+        updated_at: now,
+        updated_by: ctx.userId ?? 'system',
+        audit_event: {
+          tenant_id: ctx.tenantId,
+          actor_user_id: ctx.userId,
+          actor_role: ctx.role,
+          action: enabled === true ? 'connector.feature.enabled' : 'connector.feature.disabled',
+          resource_type: 'tenant_connector_feature',
+          resource_id: ctx.tenantId,
+          metadata: { enabled: enabled === true },
+        },
+      });
+    },
+
+    async listConnectorPollScheduleCandidates(ctx, options = {}) {
+      return wafRepo.listConnectorPollScheduleCandidates(ctx, {
+        limit: Math.max(1, Math.min(32, Number(options.limit) || 4)),
+      });
+    },
+
+    async listPendingConnectorPollConnectors(ctx, options = {}) {
+      return wafRepo.listPendingConnectorPollConnectors(ctx, {
+        limit: Math.max(1, Math.min(32, Number(options.limit) || 4)),
+      });
+    },
+
     async listConnectorsEnvelope(ctx) {
       const items = await wafRepo.listConnectors(ctx);
       const formatted = items.map((item) => formatConnectorForApi(item));
@@ -1524,6 +1790,9 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async createConnector(ctx, body) {
+      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+        return { error: 'connectors_feature_disabled', status: 404 };
+      }
       try {
         assertNoRawWafEvidence(body);
         const provider = String(body.provider ?? '').trim().toLowerCase();
@@ -1574,9 +1843,15 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async validateConnector(ctx, id) {
+      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+        return { error: 'connectors_feature_disabled', status: 404 };
+      }
       const connector = await wafRepo.getConnector(ctx, id);
       if (!connector) {
         return { error: 'connector_not_found', status: 404 };
+      }
+      if (['disabled', 'revoked'].includes(connector.status)) {
+        return { error: 'connector_disabled', status: 409 };
       }
       const now = nowFn().toISOString();
       const readOnly = connector.config?.read_only === true;
@@ -1627,23 +1902,149 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
     },
 
     async pollConnector(ctx, id, body = {}, pollOptions = {}) {
+      if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
+        return { error: 'connectors_feature_disabled', status: 404 };
+      }
       const connector = await wafRepo.getConnector(ctx, id);
       if (!connector) {
         return { error: 'connector_not_found', status: 404 };
+      }
+      if (['disabled', 'revoked'].includes(connector.status)) {
+        return { error: 'connector_disabled', status: 409 };
       }
       try {
         assertNoRawWafEvidence(body);
         const snapshotInputs = Array.isArray(body.snapshots) ? body.snapshots : [];
         const now = nowFn().toISOString();
-        const secretResolver = pollOptions.secretResolver ?? postgresConnectorSecretResolver;
-        const fetchFn = pollOptions.fetchFn ?? fetch;
+        let secretResolver = pollOptions.secretResolver ?? postgresConnectorSecretResolver;
+        let fetchFn = pollOptions.fetchFn;
         const prefetchedMetadata = pollOptions.prefetchedMetadata ?? body.prefetched_metadata ?? null;
+        const outboundRequested = shouldAttemptOutboundConnectorPoll(connector, body);
+
+        if (outboundRequested && pollOptions.executeOutbound !== true) {
+          const requestedRevision = await wafRepo.beginConnectorPoll(ctx, id, {
+            execute: false,
+            scheduled: pollOptions.scheduled === true,
+            updated_at: now,
+          });
+          if (requestedRevision == null) {
+            return {
+              error: pollOptions.scheduled === true
+                ? 'connector_poll_deferred'
+                : 'connector_poll_cooldown',
+              status: 429,
+              retry_after_seconds: pollOptions.scheduled === true ? 30 : 300,
+            };
+          }
+          const durableJob = signedConnectorJobs
+            ? await ensureSignedConnectorPollJob(
+                ctx, connector, requestedRevision, now, pollOptions.maxAttempts,
+              )
+            : null;
+          if (!durableJob) {
+            await auditRepo.appendAuditEvent({
+              tenant_id: ctx.tenantId,
+              actor_user_id: ctx.userId,
+              actor_role: ctx.role,
+              action: 'connector.poll.requested',
+              resource_type: 'waf_connector',
+              resource_id: id,
+              metadata: redactObject({
+                provider: connector.provider,
+                poll_revision: requestedRevision,
+              }),
+            });
+          }
+          return {
+            status: 202,
+            poll_job: {
+              id: durableJob?.id ?? `poll_${id}_${requestedRevision}`,
+              connector_id: id,
+              status: 'pending',
+              snapshot_count: 0,
+              created_at: now,
+            },
+            snapshots: [],
+          };
+        }
+
+        let pollRevision = Number(connector.poll_revision ?? 0);
+        let signedJob = null;
+        let signedLeaseGuard = null;
+        let workerId = null;
+        if (outboundRequested && signedConnectorJobs) {
+          workerId = String(pollOptions.workerId ?? '').trim();
+          if (!workerId) return { error: 'connector_worker_identity_required', status: 403 };
+          signedJob = await wafRepo.claimConnectorPollJob(ctx, id, {
+            worker_id: workerId,
+            leased_at: now,
+          });
+          if (!signedJob) return { error: 'connector_poll_in_progress', status: 409 };
+          pollRevision = signedJob.poll_revision;
+          if (!connectorJobPublicKey || !verifySignedConnectorPollJob(signedJob, connectorJobPublicKey, {
+            tenantId: ctx.tenantId,
+            connectorId: id,
+            provider: connector.provider,
+            pollRevision,
+            secretId: connector.secret_id,
+            secretRotation: signedJob.envelope?.secret_rotation,
+            expiresAt: signedJob.expires_at,
+          }, new Date(now))) {
+            return { error: 'invalid_connector_poll_job_signature', status: 403 };
+          }
+          const configuredSecretResolver = secretResolver;
+          secretResolver = (resolverCtx, secretId, provider) => {
+            if (secretId !== signedJob.envelope.secret_id
+              || secretId !== connector.secret_id
+              || String(provider) !== String(signedJob.envelope.provider)) {
+              return Promise.resolve({ error: 'connector_secret_binding_invalid' });
+            }
+            if (configuredSecretResolver === postgresConnectorSecretResolver) {
+              return postgresConnectorSecretResolver(
+                resolverCtx,
+                secretId,
+                provider,
+                signedJob.envelope.secret_rotation,
+              );
+            }
+            return configuredSecretResolver(
+              resolverCtx,
+              secretId,
+              provider,
+              signedJob.envelope.secret_rotation,
+            );
+          };
+          const leaseBinding = {
+            job_id: signedJob.id,
+            worker_id: workerId,
+            lease_token: signedJob.lease_token,
+            poll_revision: pollRevision,
+            provider: connector.provider,
+            secret_id: signedJob.envelope.secret_id,
+            secret_rotation: signedJob.envelope.secret_rotation,
+          };
+          signedLeaseGuard = () => wafRepo.isConnectorPollLeaseCurrent(ctx, id, leaseBinding);
+          fetchFn = createConnectorPollBudgetedFetch(
+            fetchFn ?? pinnedFetch,
+            signedJob.envelope,
+            { startedAtMs: Date.now(), guard: signedLeaseGuard },
+          );
+        } else if (outboundRequested) {
+          const claimedRevision = await wafRepo.beginConnectorPoll(ctx, id, {
+            execute: true,
+            updated_at: now,
+          });
+          if (claimedRevision == null) {
+            return { error: 'connector_poll_in_progress', status: 409 };
+          }
+          pollRevision = claimedRevision;
+        }
 
         let outboundHealth = null;
         let outboundAttempts = null;
         let outboundSnapshots = [];
 
-        if (shouldAttemptOutboundConnectorPoll(connector, body)) {
+        if (outboundRequested) {
           try {
             const outbound = await executeConnectorProviderPoll({
               connector,
@@ -1652,28 +2053,74 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
               fetchFn,
               prefetchedMetadata,
               now,
-              maxAttempts: pollOptions.maxAttempts,
+              maxAttempts: signedJob
+                ? signedJob.envelope.constraints.max_attempts
+                : pollOptions.maxAttempts,
             });
+            if (signedLeaseGuard && await signedLeaseGuard() !== true) {
+              throw Object.assign(new Error('Connector poll lease was revoked before completion.'), {
+                code: 'connector_poll_lease_lost',
+              });
+            }
             outboundSnapshots = outbound.snapshots ?? [];
             outboundHealth = outbound.health ?? null;
             outboundAttempts = outbound.health?.attempts ?? null;
           } catch (err) {
             const failure = buildProviderPollFailure(connector, err, err?.attempts ?? null);
-            await wafRepo.updateConnectorStatus(ctx, id, connectorPollHealthUpdates(failure.health, now));
-            await auditRepo.appendAuditEvent({
-              tenant_id: ctx.tenantId,
-              actor_user_id: ctx.userId,
-              actor_role: ctx.role,
-              action: 'connector.poll.failed',
-              resource_type: 'waf_connector',
-              resource_id: id,
-              metadata: redactObject({
-                provider: connector.provider,
-                health_status: failure.health.status,
-                health_code: failure.health.health_code,
-                attempts: failure.health.attempts,
-              }),
-            });
+            const completionUpdates = connectorPollHealthUpdates(failure.health, now, connector);
+            const completed = signedJob
+              ? await wafRepo.completeConnectorPoll(ctx, id, {
+                  job_id: signedJob.id,
+                  worker_id: workerId,
+                  lease_token: signedJob.lease_token,
+                  poll_revision: pollRevision,
+                  completed_at: now,
+                  updates: completionUpdates,
+                  records: [],
+                  error_code: failure.health.health_code,
+                  audit_event: {
+                    tenant_id: ctx.tenantId,
+                    actor_user_id: ctx.userId,
+                    actor_role: ctx.role,
+                    action: 'connector.poll.failed',
+                    resource_type: 'waf_connector',
+                    resource_id: id,
+                    metadata: redactObject({
+                      provider: connector.provider,
+                      health_status: failure.health.status,
+                      health_code: failure.health.health_code,
+                      attempts: failure.health.attempts,
+                      connector_poll_job_id: signedJob.id,
+                      poll_revision: pollRevision,
+                      worker_id: workerId,
+                      request_count: fetchFn?.requestCount?.() ?? null,
+                    }),
+                  },
+                })
+              : await wafRepo.updateConnectorStatus(ctx, id, {
+                  ...completionUpdates,
+                  expected_poll_revision: pollRevision,
+                  poll_completion: true,
+                });
+            if (!completed) {
+              return { error: 'connector_poll_superseded', status: 409 };
+            }
+            if (!signedJob) {
+              await auditRepo.appendAuditEvent({
+                tenant_id: ctx.tenantId,
+                actor_user_id: ctx.userId,
+                actor_role: ctx.role,
+                action: 'connector.poll.failed',
+                resource_type: 'waf_connector',
+                resource_id: id,
+                metadata: redactObject({
+                  provider: connector.provider,
+                  health_status: failure.health.status,
+                  health_code: failure.health.health_code,
+                  attempts: failure.health.attempts,
+                }),
+              });
+            }
             return {
               error: 'connector_poll_failed',
               status: failure.health.status === 'rate_limited' ? 429 : 503,
@@ -1695,6 +2142,10 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
               display_ref: normalized.display_ref,
               summary_json: normalized.summary_json,
               config_hash: normalized.config_hash,
+              evidence_source: 'manual_metadata',
+              inventory_complete: false,
+              inventory_truncated: false,
+              poll_revision: pollRevision,
               observed_at: normalized.observed_at ?? now,
               created_at: now,
             };
@@ -1710,52 +2161,89 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
               display_ref: normalized.display_ref,
               summary_json: normalized.summary_json,
               config_hash: normalized.config_hash,
+              evidence_source: outboundHealth?.evidence_source ?? 'manual_metadata',
+              inventory_complete: outboundHealth?.inventory_complete === true,
+              inventory_truncated: outboundHealth?.inventory_truncated === true,
+              poll_revision: pollRevision,
               observed_at: normalized.observed_at ?? now,
               created_at: now,
             };
           }),
         ];
 
-        const snapshots = records.length > 0
-          ? await wafRepo.createConnectorSnapshots(ctx, records)
-          : [];
-
-        if (outboundHealth) {
-          await wafRepo.updateConnectorStatus(ctx, id, connectorPollHealthUpdates(outboundHealth, now));
-        } else if (snapshots.length > 0) {
-          await wafRepo.updateConnectorStatus(ctx, id, {
-            status: connector.status === 'disabled' ? 'disabled' : 'active',
-            last_success_at: now,
-            last_error_at: null,
-            updated_at: now,
+        let snapshots;
+        if (signedJob && outboundHealth) {
+          const completed = await wafRepo.completeConnectorPoll(ctx, id, {
+            job_id: signedJob.id,
+            worker_id: workerId,
+            lease_token: signedJob.lease_token,
+            poll_revision: pollRevision,
+            completed_at: now,
+            updates: connectorPollHealthUpdates(outboundHealth, now, connector),
+            records,
+            error_code: null,
+            audit_event: {
+              tenant_id: ctx.tenantId,
+              actor_user_id: ctx.userId,
+              actor_role: ctx.role,
+              action: 'connector.snapshot.created',
+              resource_type: 'waf_connector',
+              resource_id: id,
+              metadata: redactObject({
+                provider: connector.provider,
+                snapshot_count: records.length,
+                outbound: true,
+                health_status: outboundHealth.status,
+                connector_poll_job_id: signedJob.id,
+                poll_revision: pollRevision,
+                worker_id: workerId,
+                request_count: fetchFn?.requestCount?.() ?? null,
+              }),
+            },
           });
+          if (!completed) return { error: 'connector_poll_superseded', status: 409 };
+          snapshots = completed.snapshots;
         } else {
-          // Same rule as the dev-json path: a poll that completed without error stamps the
-          // poll timestamp even when it produced zero snapshots, so LAST POLL is not stale.
-          await wafRepo.updateConnectorStatus(ctx, id, {
-            last_success_at: now,
-            updated_at: now,
-          });
+          snapshots = records.length > 0
+            ? await wafRepo.createConnectorSnapshots(ctx, records)
+            : [];
+          if (outboundHealth) {
+            const completedConnector = await wafRepo.updateConnectorStatus(ctx, id, {
+              ...connectorPollHealthUpdates(outboundHealth, now, connector),
+              expected_poll_revision: pollRevision,
+              poll_completion: true,
+            });
+            if (!completedConnector) {
+              return { error: 'connector_poll_superseded', status: 409 };
+            }
+          } else {
+            // Manual snapshots are display-only metadata and never define provider ownership generation.
+            await wafRepo.updateConnectorStatus(ctx, id, {
+              updated_at: now,
+            });
+          }
         }
 
-        const pollJobId = newIdFn('poll');
+        const pollJobId = signedJob?.id ?? newIdFn('poll');
         const pollStatus = outboundHealth
           ? (snapshots.length > 0 ? 'completed' : 'completed_empty')
           : 'completed';
-        await auditRepo.appendAuditEvent({
-          tenant_id: ctx.tenantId,
-          actor_user_id: ctx.userId,
-          actor_role: ctx.role,
-          action: 'connector.snapshot.created',
-          resource_type: 'waf_connector',
-          resource_id: id,
-          metadata: redactObject({
-            provider: connector.provider,
-            snapshot_count: snapshots.length,
-            outbound: Boolean(outboundHealth),
-            ...(outboundHealth ? { health_status: outboundHealth.status } : {}),
-          }),
-        });
+        if (!signedJob) {
+          await auditRepo.appendAuditEvent({
+            tenant_id: ctx.tenantId,
+            actor_user_id: ctx.userId,
+            actor_role: ctx.role,
+            action: 'connector.snapshot.created',
+            resource_type: 'waf_connector',
+            resource_id: id,
+            metadata: redactObject({
+              provider: connector.provider,
+              snapshot_count: snapshots.length,
+              outbound: Boolean(outboundHealth),
+              ...(outboundHealth ? { health_status: outboundHealth.status } : {}),
+            }),
+          });
+        }
         return {
           status: 202,
           poll_job: {
@@ -1792,6 +2280,8 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
         const now = nowFn().toISOString();
         const updated = await wafRepo.updateConnectorStatus(ctx, id, {
           status: 'disabled',
+          advance_poll_revision: true,
+          invalidate_success_generation: true,
           updated_at: now,
         });
         await auditRepo.appendAuditEvent({
@@ -1878,6 +2368,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
 
       const counts = {
         protected: 0,
+        edge_protected: 0,
         underprotected: 0,
         unprotected: 0,
         unknown: 0,

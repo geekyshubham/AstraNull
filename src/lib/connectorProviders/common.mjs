@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 export const CONNECTOR_POLL_MAX_ATTEMPTS = 3;
 export const CONNECTOR_POLL_BASE_BACKOFF_MS = 250;
 export const CONNECTOR_POLL_FETCH_DEFAULT_TIMEOUT_MS = 10_000;
+export const CONNECTOR_POLL_FETCH_MAX_TIMEOUT_MS = 30_000;
 export const CONNECTOR_POLL_MAX_INVENTORY_ITEMS = 200;
 export const CONNECTOR_POLL_INVENTORY_PAGE_SIZE = 50;
 
@@ -13,7 +14,7 @@ export function resolveConnectorPollFetchTimeoutMs(env = process.env) {
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return CONNECTOR_POLL_FETCH_DEFAULT_TIMEOUT_MS;
   }
-  return Math.floor(parsed);
+  return Math.min(Math.floor(parsed), CONNECTOR_POLL_FETCH_MAX_TIMEOUT_MS);
 }
 
 const POLICY_MODE_VALUES = new Set(['block', 'monitor', 'disabled', 'unknown']);
@@ -122,11 +123,41 @@ export function parseProviderSecret(plaintext, provider) {
           };
         }
       }
+      if (provider === 'akamai_edgedns') {
+        const fields = ['host', 'access_token', 'client_token', 'client_secret'];
+        if (fields.every((field) => typeof parsed[field] === 'string' && parsed[field].trim())) {
+          return Object.fromEntries(fields.map((field) => [field, parsed[field].trim()]));
+        }
+      }
+      if (provider === 'namecheap') {
+        const apiUsername = parsed.api_username ?? parsed.username;
+        const apiKey = parsed.api_key ?? parsed.key;
+        const clientIp = parsed.client_ip ?? parsed.clientIp;
+        if ([apiUsername, apiKey, clientIp].every((value) => typeof value === 'string' && value.trim())) {
+          return {
+            api_username: apiUsername.trim(),
+            api_key: apiKey.trim(),
+            client_ip: clientIp.trim(),
+            env_type: parsed.environment === 'sandbox' || parsed.env_type === 'sandbox' ? 'sandbox' : 'production',
+          };
+        }
+      }
+      if (provider === 'godaddy') {
+        if (typeof parsed.key === 'string' && parsed.key.trim()
+          && typeof parsed.secret === 'string' && parsed.secret.trim()) {
+          return { key: parsed.key.trim(), secret: parsed.secret.trim() };
+        }
+      }
+      if (provider === 'ibm_ns1') {
+        const apiKey = parsed.api_key ?? parsed.key;
+        if (typeof apiKey === 'string' && apiKey.trim()) return { api_key: apiKey.trim() };
+      }
     }
   } catch {
     // fall through to plain token handling
   }
   if (provider === 'cloudflare') return { api_token: raw };
+  if (provider === 'ibm_ns1') return { api_key: raw };
   return null;
 }
 

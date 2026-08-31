@@ -12,18 +12,34 @@ export function applyPortalBaselineReadinessBoost(store) {
   const agent = store.agents.find((entry) => entry.id === ids.agentId);
   if (agent) agent.status = 'online';
 
-  if (store.testRuns[0]) {
-    store.testRuns[0].status = 'completed';
-    store.testRuns[0].completed_at = NOW;
-    store.testRuns[0].verdict_at = NOW;
+  const run = store.testRuns[0];
+  const evidenceId = 'evt_portal_baseline_boost';
+  if (run) {
+    run.status = 'completed';
+    run.completed_at = NOW;
+    run.verdict_at = NOW;
+    store.events.push({
+      id: evidenceId,
+      tenant_id: ids.tenantId,
+      test_run_id: run.id,
+      target_group_id: ids.targetGroupId,
+      target_id: ids.targetId,
+      signal_type: 'probe_result',
+      source: 'probe_worker',
+      producer_kind: 'signed_probe',
+      timestamp: NOW,
+      metadata: { external_result: 'blocked' },
+    });
   }
 
   store.verdicts.push({
     id: 'vrd_portal_baseline_boost',
     tenant_id: ids.tenantId,
+    test_run_id: run?.id,
     target_group_id: ids.targetGroupId,
     target_id: ids.targetId,
     verdict: 'pass',
+    evidence_ids: run ? [evidenceId] : [],
     created_at: NOW,
   });
 }

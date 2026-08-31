@@ -326,7 +326,7 @@ describe('ownership verification', () => {
     assert.equal(getStore().targetGroups[0].ownership_status, 'unverified');
   });
 
-  it('ingestEvent ownership_observation verifies after probe signal via nonce correlation', () => {
+  it('public ingestEvent rejects ownership_observation producer signals', () => {
     freshStore();
     seedOnlineAgent();
 
@@ -348,17 +348,19 @@ describe('ownership verification', () => {
       signal_type: 'ownership_observation',
       nonce_hash: nonceHash,
     });
-    assert.equal(ingested.error, undefined);
+    assert.deepEqual(ingested, { error: 'reserved_signal_type', status: 400 });
 
     const verification = getStore().ownershipVerifications.find(
       (v) => v.id === created.verification.id,
     );
-    assert.equal(verification.status, 'verified');
-    assert.ok(verification.verified_at);
-    assert.equal(verification.agent_observed, true);
+    assert.equal(verification.status, 'challenge_sent');
+    assert.equal(verification.verified_at, null);
+    assert.equal(verification.agent_observed, false);
 
-    const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
-    assert.equal(group.ownership_status, 'agent_verified');
+    assert.equal(
+      getStore().events.some((event) => event.event_id === 'e-own-1'),
+      false,
+    );
   });
 
   it('confirmOwnership rejects before verified', () => {

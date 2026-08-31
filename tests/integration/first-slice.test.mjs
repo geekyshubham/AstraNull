@@ -30,7 +30,11 @@ describe('integration first validation slice', () => {
     const h = demoHeaders('engineer');
     const tg = await request(baseUrl, 'POST', '/v1/target-groups', {
       headers: h,
-      body: { name: 'Slice TG', environment_id: 'env_demo' },
+      body: {
+        name: 'Slice TG',
+        environment_id: 'env_demo',
+        validation_mode: 'agent_assisted',
+      },
     });
     assert.equal(tg.status, 201);
     const tgId = tg.json.id;

@@ -48,6 +48,10 @@ export function createKillSwitchRepository(pool) {
 
     async upsertKillSwitch(ctx, { active, reason, updated_by, updated_at }) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`kill_switch_state:${ctx.tenantId}`],
+        );
         const { rows } = await client.query(
           `INSERT INTO soc_kill_switch (tenant_id, active, reason, updated_at, updated_by)
            VALUES ($1, $2, $3, $4::timestamptz, $5)

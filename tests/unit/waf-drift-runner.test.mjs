@@ -11,6 +11,7 @@ import {
   resolveTenantIdsFromStore,
   resolveWafDriftRunnerConfig,
   runDevJsonWafDriftScans,
+  runPostgresWafDriftScans,
   runWafDriftRunner,
   summarizeTenantDriftScope,
   toMetadataOnlyScanResult,
@@ -160,10 +161,11 @@ describe('waf drift runner config', () => {
     assert.equal(config.allTenants, true);
   });
 
-  it('selects postgres mode when database URL is set', () => {
+  it('selects postgres mode from a minimal production drift environment', () => {
     const config = resolveWafDriftRunnerConfig(
       {
-        ...wafEnabledEnv(),
+        NODE_ENV: 'production',
+        ASTRANULL_WAF_POSTURE_ENABLED: '1',
         ASTRANULL_DATABASE_URL: 'postgresql://user:secret@db.example.invalid/astranull',
       },
       parseWafDriftRunnerArgs(['node', 'script.mjs', '--tenant-id', 'ten_a']),
@@ -302,6 +304,52 @@ describe('waf drift runner dev-json execution', () => {
 
     const driftTypes = getStore().wafDriftEvents.map((e) => e.drift_type);
     assert.ok(driftTypes.includes('mode_downgrade') || driftTypes.includes('rule_removal'));
+  });
+});
+
+describe('waf drift runner postgres execution', () => {
+  it('uses only drift service configuration and closes the runtime', async () => {
+    let runtimeOptions;
+    let closed = 0;
+    const rows = await runPostgresWafDriftScans({
+      env: {
+        NODE_ENV: 'production',
+        ASTRANULL_DATABASE_URL: 'postgresql://db.example.invalid/astranull',
+        ASTRANULL_WAF_POSTURE_ENABLED: '1',
+      },
+      tenantIds: ['ten_a'],
+      dryRun: false,
+      createPostgresRuntimeFn: async (_env, options) => {
+        runtimeOptions = options;
+        return {
+          services: {
+            wafDrift: {
+              runDriftScan: async (ctx) => ({
+                scan_result: {
+                  tenant_id: ctx.tenantId,
+                  scan_type: 'connector_config_change',
+                  assets_scanned: 0,
+                  drifts_detected: 0,
+                  scan_duration_ms: 1,
+                  completed_at: '2026-06-01T00:00:00.000Z',
+                  state: 'completed',
+                },
+              }),
+              runScheduledDriftScans: async () => ({ scan_results: [] }),
+            },
+          },
+          close: async () => { closed += 1; },
+        };
+      },
+    });
+
+    assert.deepEqual(runtimeOptions, {
+      autoMigrate: false,
+      wafPostureServiceOptions: { connectorEncryptionKey: null },
+      wafDriftServiceOptions: { wafPostureEnabled: true },
+    });
+    assert.equal(rows[0].tenant_id, 'ten_a');
+    assert.equal(closed, 1);
   });
 });
 

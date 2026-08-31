@@ -4,7 +4,10 @@ import {
   validateEdgeDetectionRequest,
   WAF_EDGE_DETECTION_CHECK_ID,
 } from '../../src/lib/edgeDetection.mjs';
-import { runEdgeDetection } from '../../src/services/wafEdgeDetection.mjs';
+import {
+  getEdgeDetection,
+  runEdgeDetection,
+} from '../../src/services/wafEdgeDetection.mjs';
 
 const RUNTIME_CONFIG = {
   probeMode: 'signed-worker',
@@ -108,6 +111,80 @@ describe('edge-detection service delegation', () => {
       test_run_url: '/v1/test-runs/run_edge_1',
       events_url: '/v1/test-runs/run_edge_1/events',
     });
+  });
+
+  it('quarantines legacy-untrusted worker events from edge detection', async () => {
+    const run = edgeRun({ status: 'completed' });
+    const result = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      {
+        runtimeConfig: RUNTIME_CONFIG,
+        testRuns: {
+          getTestRun: async () => run,
+          getRunEvents: async () => [{
+            id: 'event_legacy',
+            signal_type: 'probe_result',
+            producer_kind: 'legacy_untrusted',
+            source: 'probe_worker',
+            check_id: WAF_EDGE_DETECTION_CHECK_ID,
+            nonce_hash: null,
+            metadata: {
+              external_result: 'blocked',
+              waf_fingerprint_detected: true,
+            },
+          }],
+        },
+      },
+    );
+
+    assert.equal(result.status, 'inconclusive');
+    assert.equal(result.reason, 'worker_result_not_observed');
+    assert.equal(result.detection, null);
+
+    const active = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      {
+        runtimeConfig: RUNTIME_CONFIG,
+        testRuns: {
+          getTestRun: async () => edgeRun({ status: 'collecting' }),
+          getRunEvents: async () => [{
+            id: 'event_signed_early',
+            signal_type: 'probe_result',
+            producer_kind: 'signed_probe',
+            source: 'probe_worker',
+            check_id: WAF_EDGE_DETECTION_CHECK_ID,
+            metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+          }],
+        },
+      },
+    );
+    assert.equal(active.status, 'pending');
+    assert.equal(active.reason, 'worker_result_pending');
+    assert.equal(active.detection, null);
+
+    const cancelled = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      {
+        runtimeConfig: RUNTIME_CONFIG,
+        testRuns: {
+          getTestRun: async () => edgeRun({ status: 'cancelled' }),
+          getRunEvents: async () => [{
+            id: 'event_signed',
+            signal_type: 'probe_result',
+            producer_kind: 'signed_probe',
+            source: 'probe_worker',
+            check_id: WAF_EDGE_DETECTION_CHECK_ID,
+            metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+          }],
+        },
+      },
+    );
+    assert.equal(cancelled.status, 'error');
+    assert.equal(cancelled.reason, 'test_run_failed');
+    assert.equal(cancelled.detection, null);
   });
 
   it('rejects raw host/private-IP input before startTestRun can run', async () => {

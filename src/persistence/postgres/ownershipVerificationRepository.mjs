@@ -2,6 +2,7 @@ import {
   VERIFICATION_RANK,
   ownershipSummaryFromTargetStates,
 } from '../../lib/ownershipPolicy.mjs';
+import { isCurrentProviderDnsOwnershipProof } from '../../lib/connectorProviders/domainInventory.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
 const VERIFICATION_COLUMNS = `id, tenant_id, target_group_id, agent_id, declared_fqdn, status,
@@ -27,8 +28,15 @@ function asObject(value) {
 function mapTargetVerificationRow(row) {
   if (!row) return null;
   return {
-    ...row,
+    id: row.id,
+    tenant_id: row.tenant_id,
+    target_id: row.target_id,
+    state: row.state,
+    source_kind: row.source_kind,
+    source_ref: asObject(row.source_ref) ?? {},
     transitioned_at: toIso(row.transitioned_at),
+    transitioned_by: row.transitioned_by ?? null,
+    audit_entry_id: row.audit_entry_id ?? null,
   };
 }
 
@@ -84,6 +92,7 @@ async function lockCurrentTargetVerification(client, tenantId, targetId) {
                 WHEN 'user_confirmed' THEN 4
                 WHEN 'agent_verified' THEN 3
                 WHEN 'dns_verified' THEN 2
+                WHEN 'provider_verified' THEN 2
                 WHEN 'pending' THEN 1
                 ELSE 0
               END DESC,
@@ -107,6 +116,7 @@ async function recomputeTargetGroupOwnershipSummary(client, tenantId, targetGrou
                          WHEN 'user_confirmed' THEN 4
                          WHEN 'agent_verified' THEN 3
                          WHEN 'dns_verified' THEN 2
+                WHEN 'provider_verified' THEN 2
                          WHEN 'pending' THEN 1
                          ELSE 0
                        END DESC,
@@ -131,43 +141,59 @@ async function recomputeTargetGroupOwnershipSummary(client, tenantId, targetGrou
   return ownershipStatus;
 }
 
+async function insertVerificationRow(client, ctx, record) {
+  const { rows } = await client.query(
+    `INSERT INTO ownership_verifications (
+       id, tenant_id, target_group_id, agent_id, declared_fqdn, status,
+       challenge_nonce_hash, probe_observed, agent_observed, verified_at,
+       confirmed_by_user_id, confirmed_at, probe_job_id, created_at, created_by
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz, $13,
+       CURRENT_TIMESTAMP, $14
+     )
+     RETURNING ${VERIFICATION_COLUMNS}`,
+    [
+      record.id,
+      ctx.tenantId,
+      record.target_group_id,
+      record.agent_id ?? null,
+      record.declared_fqdn ?? null,
+      record.status,
+      record.challenge_nonce_hash,
+      record.probe_observed ?? false,
+      record.agent_observed ?? false,
+      record.verified_at ?? null,
+      record.confirmed_by_user_id ?? null,
+      record.confirmed_at ?? null,
+      record.probe_job_id ?? null,
+      record.created_by ?? null,
+    ],
+  );
+  return mapOwnershipVerificationRow(rows[0]);
+}
+
 /**
  * @param {import('pg').Pool} pool
  */
 export function createOwnershipVerificationRepository(pool) {
   return {
     async insertVerification(ctx, record) {
+      return withTenantContext(pool, ctx.tenantId, (client) =>
+        insertVerificationRow(client, ctx, record));
+    },
+
+    async insertVerificationWithProbeJob(ctx, record, probeJob, probeJobsRepo) {
+      if (typeof probeJobsRepo?.createProbeJob !== 'function') {
+        throw new Error('Atomic ownership challenge creation requires probeJobs.createProbeJob().');
+      }
       return withTenantContext(pool, ctx.tenantId, async (client) => {
-        const { rows } = await client.query(
-          `INSERT INTO ownership_verifications (
-             id, tenant_id, target_group_id, agent_id, declared_fqdn, status,
-             challenge_nonce_hash, probe_observed, agent_observed, verified_at,
-             confirmed_by_user_id, confirmed_at, probe_job_id, created_at, created_by
-           )
-           VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz, $11, $12::timestamptz, $13,
-             $14::timestamptz, $15
-           )
-           RETURNING ${VERIFICATION_COLUMNS}`,
-          [
-            record.id,
-            ctx.tenantId,
-            record.target_group_id,
-            record.agent_id ?? null,
-            record.declared_fqdn ?? null,
-            record.status,
-            record.challenge_nonce_hash,
-            record.probe_observed ?? false,
-            record.agent_observed ?? false,
-            record.verified_at ?? null,
-            record.confirmed_by_user_id ?? null,
-            record.confirmed_at ?? null,
-            record.probe_job_id ?? null,
-            record.created_at,
-            record.created_by ?? null,
-          ],
-        );
-        return mapOwnershipVerificationRow(rows[0]);
+        const verification = await insertVerificationRow(client, ctx, {
+          ...record,
+          probe_job_id: probeJob.id,
+        });
+        const job = await probeJobsRepo.createProbeJob(ctx, probeJob, { client });
+        return { verification, job };
       });
     },
 
@@ -547,7 +573,26 @@ export function createOwnershipVerificationRepository(pool) {
       return withTenantContext(pool, ctx.tenantId, async (client) => {
         const { rows } = await client.query(
           `SELECT tv.id, tv.tenant_id, tv.target_id, tv.state, tv.source_kind,
-                  tv.source_ref, tv.transitioned_at, tv.transitioned_by, tv.audit_entry_id
+                  tv.source_ref, tv.transitioned_at, tv.transitioned_by, tv.audit_entry_id,
+                  t.kind AS proof_target_kind, t.value AS proof_target_value,
+                  t.normalized_value AS proof_target_normalized_value,
+                  connector_feature.enabled AS proof_connector_feature_enabled,
+                  connector_feature.revision AS proof_connector_feature_revision,
+                  ownership_connector.id AS proof_connector_id,
+                  ownership_connector.provider AS proof_connector_provider,
+                  ownership_connector.status AS proof_connector_status,
+                  ownership_connector.secret_id AS proof_connector_secret_id,
+                  ownership_connector.last_success_at AS proof_connector_last_success_at,
+                  ownership_connector.last_success_revision AS proof_connector_last_success_revision,
+                  ownership_snapshot.id AS proof_snapshot_id,
+                  ownership_snapshot.connector_id AS proof_snapshot_connector_id,
+                  ownership_snapshot.provider AS proof_snapshot_provider,
+                  ownership_snapshot.snapshot_kind AS proof_snapshot_kind,
+                  ownership_snapshot.resource_ref_hash AS proof_snapshot_resource_ref_hash,
+                  ownership_snapshot.summary_json AS proof_snapshot_summary_json,
+                  ownership_snapshot.evidence_source AS proof_snapshot_evidence_source,
+                  ownership_snapshot.poll_revision AS proof_snapshot_poll_revision,
+                  ownership_snapshot.observed_at AS proof_snapshot_observed_at
            FROM target_groups tg
            JOIN targets t
              ON t.tenant_id = tg.tenant_id AND t.target_group_id = tg.id
@@ -560,18 +605,86 @@ export function createOwnershipVerificationRepository(pool) {
                         WHEN 'user_confirmed' THEN 4
                         WHEN 'agent_verified' THEN 3
                         WHEN 'dns_verified' THEN 2
+                        WHEN 'provider_verified' THEN 2
                         WHEN 'pending' THEN 1
                         ELSE 0
                       END DESC,
                       candidate.id DESC
              LIMIT 1
            ) tv ON true
+           LEFT JOIN tenant_connector_features connector_feature
+             ON connector_feature.tenant_id = tv.tenant_id
+           LEFT JOIN waf_connectors ownership_connector
+             ON ownership_connector.tenant_id = tv.tenant_id
+            AND ownership_connector.id = tv.source_ref->>'connector_id'
+           LEFT JOIN LATERAL (
+             SELECT candidate_snapshot.*
+             FROM waf_connector_snapshots candidate_snapshot
+             WHERE candidate_snapshot.tenant_id = t.tenant_id
+               AND candidate_snapshot.connector_id = ownership_connector.id
+               AND candidate_snapshot.provider = ownership_connector.provider
+               AND candidate_snapshot.snapshot_kind = 'dns_zone'
+               AND candidate_snapshot.evidence_source = 'provider_api'
+               AND candidate_snapshot.resource_ref_hash = tv.source_ref->>'resource_ref_hash'
+               AND candidate_snapshot.observed_at = ownership_connector.last_success_at
+               AND candidate_snapshot.poll_revision = ownership_connector.last_success_revision
+             ORDER BY candidate_snapshot.created_at DESC, candidate_snapshot.id DESC
+             LIMIT 1
+           ) ownership_snapshot ON true
            WHERE tg.tenant_id = $1 AND tg.id = $2 AND t.id = $3
              AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
              AND t.deleted_at IS NULL`,
           [ctx.tenantId, targetGroupId, targetId],
         );
-        return mapTargetVerificationRow(rows[0] ?? null);
+        const row = rows[0] ?? null;
+        const current = mapTargetVerificationRow(row);
+        if (!current || current.state !== 'provider_verified') return current;
+
+        const providerProofCurrent = row.proof_connector_feature_enabled === true
+          && current.source_kind === 'provider_account'
+          && isCurrentProviderDnsOwnershipProof({
+            connector: {
+              id: row.proof_connector_id,
+              provider: row.proof_connector_provider,
+              status: row.proof_connector_status,
+              secret_id: row.proof_connector_secret_id,
+              last_success_at: row.proof_connector_last_success_at,
+              last_success_revision: row.proof_connector_last_success_revision,
+            },
+            snapshot: {
+              id: row.proof_snapshot_id,
+              connector_id: row.proof_snapshot_connector_id,
+              provider: row.proof_snapshot_provider,
+              snapshot_kind: row.proof_snapshot_kind,
+              resource_ref_hash: row.proof_snapshot_resource_ref_hash,
+              summary_json: row.proof_snapshot_summary_json,
+              evidence_source: row.proof_snapshot_evidence_source,
+              poll_revision: row.proof_snapshot_poll_revision,
+              observed_at: row.proof_snapshot_observed_at,
+            },
+            sourceRef: current.source_ref,
+            target: {
+              kind: row.proof_target_kind,
+              value: row.proof_target_value,
+              normalized_value: row.proof_target_normalized_value,
+            },
+          });
+        if (!providerProofCurrent) current.state = 'pending';
+        else {
+          current.provider_provenance = {
+            feature_revision: Number(row.proof_connector_feature_revision),
+            connector_id: row.proof_connector_id,
+            connector_provider: row.proof_connector_provider,
+            connector_secret_id: row.proof_connector_secret_id,
+            connector_revision: Number(row.proof_connector_last_success_revision),
+            connector_generation: toIso(row.proof_connector_last_success_at),
+            snapshot_id: row.proof_snapshot_id,
+            snapshot_resource_ref_hash: row.proof_snapshot_resource_ref_hash,
+            snapshot_revision: Number(row.proof_snapshot_poll_revision),
+            snapshot_observed_at: toIso(row.proof_snapshot_observed_at),
+          };
+        }
+        return current;
       });
     },
 
@@ -602,7 +715,7 @@ export function createOwnershipVerificationRepository(pool) {
         return {
           id: row.id,
           tenant_id: row.tenant_id,
-          validation_mode: row.validation_mode ?? 'agent_assisted',
+          validation_mode: row.validation_mode ?? 'external_only',
           ownership_status: row.ownership_status ?? 'unverified',
           dns_ownership: asObject(row.dns_ownership),
         };

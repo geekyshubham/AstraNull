@@ -13,7 +13,7 @@ function classifyRunVerdict(verdict: string): 'pass' | 'review' | 'gap' | null {
   const key = verdict.trim().toLowerCase();
   if (!key || key === 'pending' || key === 'planned' || key === 'running') return null;
   if (['pass', 'passed', 'protected', 'success', 'ok'].includes(key)) return 'pass';
-  if (['review', 'warn', 'warning', 'info', 'unknown', 'underprotected'].includes(key)) return 'review';
+  if (['review', 'warn', 'warning', 'info', 'unknown', 'underprotected', 'edge_protected'].includes(key)) return 'review';
   if (['gap', 'fail', 'failed', 'danger', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return 'gap';
   return 'review';
 }

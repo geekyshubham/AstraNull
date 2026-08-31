@@ -21,6 +21,7 @@ import {
   lastRunForTargetGroup,
   wouldExceedEventCap,
 } from '../../lib/safeTestGuards.mjs';
+import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
 import { computePlacementConfidence } from '../../lib/placementConfidence.mjs';
 import { ownershipProofFromStates } from '../../lib/ownershipPolicy.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
@@ -56,6 +57,8 @@ export const VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
   'appendEvidence',
   'createTestRun',
   'updateTestRun',
+  'withRunMutationLock',
+  'cancelTestRunAtomic',
   'appendEvent',
   'createVerdictIfAbsent',
   'findOpenFinding',
@@ -148,6 +151,12 @@ function observationBodyContainsRawFields(body) {
   return scan(body);
 }
 
+const RESERVED_PUBLIC_EVENT_SIGNAL_TYPES = new Set([
+  'probe_result',
+  'agent_observation',
+  'ownership_observation',
+]);
+
 const EVENT_RAW_FIELD_DENYLIST = new Set([
   'packet_payload',
   'raw_packet',
@@ -207,7 +216,10 @@ function hasExternalProbeEvidence(run, events) {
   if (run.probe_external_result != null && run.probe_external_result !== '') return true;
   const nonce = run.correlation?.nonce_hash;
   return events.some(
-    (e) => e.test_run_id === run.id && e.signal_type === 'probe_result' && e.nonce_hash === nonce,
+    (e) => e.test_run_id === run.id
+      && e.signal_type === 'probe_result'
+      && isTrustedProducerEvent(e)
+      && e.nonce_hash === nonce,
   );
 }
 
@@ -215,7 +227,10 @@ function findProbeEvent(run, events) {
   const nonce = run.correlation?.nonce_hash;
   return events.find(
     (e) =>
-      e.test_run_id === run.id && e.signal_type === 'probe_result' && e.nonce_hash === nonce,
+      e.test_run_id === run.id
+      && e.signal_type === 'probe_result'
+      && isTrustedProducerEvent(e)
+      && e.nonce_hash === nonce,
   );
 }
 
@@ -224,7 +239,9 @@ function findMatchingObservation(run, events) {
   const windowMs = run.correlation?.window_ms ?? 120_000;
   const nonce = run.correlation?.nonce_hash;
   const obsEvents = events.filter(
-    (e) => e.test_run_id === run.id && e.signal_type === 'agent_observation',
+    (e) => e.test_run_id === run.id
+      && e.signal_type === 'agent_observation'
+      && isTrustedProducerEvent(e),
   );
   return obsEvents.find(
     (e) =>
@@ -410,7 +427,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
     if (policy.state !== 'active' || policy.enabled !== true || policy.archived_at) {
       return { error: 'test_policy_disabled', status: 409 };
     }
-    if (policy.target_group_id !== group.id || policy.check_id !== check.check_id) {
+    if (policy.target_group_id !== group.id
+      || policy.target_id !== body.target_id
+      || policy.check_id !== check.check_id) {
       return { error: 'test_policy_binding_mismatch', status: 409 };
     }
     if (Number(policy.max_concurrent_runs) !== 1) return { error: 'unsafe_policy_concurrency', status: 409 };
@@ -444,7 +463,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
     if (current && String(current.target_id) !== String(target.id)) {
       return { verified: false, state: 'unverified', reason: 'verification_target_mismatch' };
     }
-    return ownershipProofFromStates({ targetState: current?.state ?? null });
+    const proof = ownershipProofFromStates({ targetState: current?.state ?? null });
+    if (!proof.verified) return proof;
+    if (current?.state === 'provider_verified' && !current.provider_provenance) {
+      return {
+        verified: false,
+        state: 'pending',
+        reason: 'provider_provenance_incomplete',
+      };
+    }
+    return {
+      ...proof,
+      ownershipBinding: {
+        kind: current?.source_kind ?? 'unknown',
+        state: current?.state ?? proof.state,
+        target_id: target.id,
+        transitioned_at: current?.transitioned_at ?? null,
+        ...(current?.provider_provenance
+          ? { provider_provenance: current.provider_provenance }
+          : {}),
+      },
+    };
   }
 
   async function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThisHost, dispatchOptions = {}) {
@@ -464,6 +503,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
             : ownership.reason,
         };
       }
+      return { group, target, policy: binding.policy, ownershipBinding: ownership.ownershipBinding };
     }
     return { group, target, policy: binding.policy };
   }
@@ -560,11 +600,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
       created_at: nowIso,
     };
     const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+    if (!verdict) return null;
+    if (!verdictWasInserted(verdict)) return verdict;
 
-    await validationEvidence.updateTestRun(ctx, run.id, {
-      status: 'verdicted',
-      completed_at: nowIso,
-    });
     run.status = 'verdicted';
     run.completed_at = nowIso;
 
@@ -655,6 +693,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       created_at: nowIso,
     };
     const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+    if (!verdict) return null;
 
     // Lost the finalization race: a verdict was already published for this run and
     // DO NOTHING left it untouched. Return the incumbent without running any of the
@@ -664,10 +703,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return verdict;
     }
 
-    await validationEvidence.updateTestRun(ctx, run.id, {
-      status: 'verdicted',
-      completed_at: nowIso,
-    });
     run.status = 'verdicted';
     run.completed_at = nowIso;
 
@@ -715,6 +750,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       check_id: run.check_id,
       source: 'system',
       signal_type: 'agent_no_observation',
+      producer_kind: 'internal_control_plane',
       timestamp: nowIso,
       metadata: {
         reason: 'bounded_observation_window_elapsed',
@@ -959,6 +995,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
             check,
             target,
             probeProfile: body.probe_profile,
+            ownershipBinding: finalValidation.ownershipBinding,
             probeWorkerSecret: runtimeConfig.probeWorkerSecret,
             now: recoveryNow,
             newId: () => newId('pjob'),
@@ -1186,6 +1223,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
           check,
           target,
           probeProfile: body.probe_profile,
+          ownershipBinding: finalValidation.ownershipBinding,
           probeWorkerSecret: runtimeConfig.probeWorkerSecret,
           now,
           newId: () => newId('pjob'),
@@ -1218,7 +1256,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
             429,
           );
         }
-        probeEvent = await validationEvidence.appendEvent(ctx, {
+        try {
+          probeEvent = await validationEvidence.appendEvent(ctx, {
           id: probe.event_id,
           tenant_id: ctx.tenantId,
           test_run_id: runId,
@@ -1226,6 +1265,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
           check_id: check.check_id,
           source: probe.source,
           signal_type: probe.signal_type,
+          producer_kind: 'internal_simulation',
           timestamp: now.toISOString(),
           nonce_hash: probe.nonce_hash,
           metadata: { ...probe.metadata, external_result: probe.external_result },
@@ -1262,6 +1302,19 @@ export function createPostgresValidationServices(repositories, options = {}) {
           // checks never hang in 'collecting'.
           await finalizeOpsReadinessVerdict(ctx, run, probe);
           run = (await validationEvidence.getTestRun(ctx, runId)) ?? run;
+        }
+        } catch (error) {
+          try {
+            await validationEvidence.updateTestRun(ctx, runId, {
+              status: 'cancelled',
+              completed_at: nowFn().toISOString(),
+              summary: { dispatch_failed: true, reason: 'inline_probe_persistence_failed' },
+            });
+          } catch (cancellationError) {
+            cancellationError.cause = error;
+            throw cancellationError;
+          }
+          throw error;
         }
       }
 
@@ -1323,19 +1376,21 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return { run: { ...updatedRun, verdict: storedVerdict ?? null }, verdict };
     },
     async cancelTestRun(ctx, id) {
-      const run = await validationEvidence.getTestRun(ctx, id);
-      if (!run) return null;
-      if (!CANCELLABLE_STATUSES.has(run.status)) {
-        await appendAudit(ctx, 'test_run.cancel_denied', 'test_run', id, { status: run.status });
-        return { error: 'not_cancellable', status: 409 };
-      }
       const completed_at = nowFn().toISOString();
-      const updated = await validationEvidence.updateTestRun(ctx, id, {
-        status: 'cancelled',
+      const cancellation = await validationEvidence.cancelTestRunAtomic(ctx, id, {
         completed_at,
       });
-      await appendAudit(ctx, 'test_run.cancelled', 'test_run', id);
-      return { run: updated };
+      if (!cancellation) return null;
+      if (!cancellation.cancelled) {
+        await appendAudit(ctx, 'test_run.cancel_denied', 'test_run', id, {
+          status: cancellation.run.status,
+        });
+        return { error: 'not_cancellable', status: 409 };
+      }
+      await appendAudit(ctx, 'test_run.cancelled', 'test_run', id, {
+        cancelled_probe_job_ids: cancellation.cancelled_jobs.map((job) => job.id),
+      });
+      return { run: cancellation.run };
     },
     async ingestObservation(ctx, agentId, body) {
       const agent = await agentControl.getAgentById(
@@ -1467,55 +1522,85 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const priorEvents = await validationEvidence.listRunEvents(runCtx, run.id, { limit: 1000 });
-      if (wouldExceedEventCap(run, priorEvents.length, 1)) {
-        return denyEventCapForRun(ctx, run, { agent_id: agentId, phase: 'agent_observation' });
-      }
-
-      const nowIso = nowFn().toISOString();
-      const observedJob = await agentControl.markAgentJobObserved(
-        { tenantId: run.tenant_id, agentId, jobId: agentJobId },
-        nowIso,
-      );
-      if (!observedJob) {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
+      const mutation = await validationEvidence.withRunMutationLock(runCtx, run.id, async () => {
+        if (await killSwitch.isKillSwitchActiveForTenant(runCtx)) {
+          return rejectObservation(
+            ctx,
+            run.tenant_id,
+            agentId,
+            'kill_switch_active',
+            'kill_switch_active',
+            423,
+            run.id,
+            { agent_job_id: agentJobId },
+          );
+        }
+        const freshRun = await validationEvidence.getTestRun(runCtx, run.id);
+        if (!freshRun || !['running', 'collecting'].includes(freshRun.status)) {
+          return { error: 'run_not_collecting', status: 409 };
+        }
+        const freshJob = await agentControl.getAgentJobById({
+          tenantId: freshRun.tenant_id,
           agentId,
-          'agent_job_not_open',
-          'agent_job_not_open',
-          409,
-          run.id,
-          { agent_job_id: agentJobId, status: job.status },
+          jobId: agentJobId,
+        });
+        if (!freshJob || freshJob.status !== 'acked') {
+          return { error: 'agent_job_not_open', status: 409 };
+        }
+        const priorEvents = await validationEvidence.listRunEvents(runCtx, freshRun.id, { limit: 1000 });
+        if (wouldExceedEventCap(freshRun, priorEvents.length, 1)) {
+          return denyEventCapForRun(ctx, freshRun, { agent_id: agentId, phase: 'agent_observation' });
+        }
+
+        const nowIso = nowFn().toISOString();
+        const observedJob = await agentControl.markAgentJobObserved(
+          { tenantId: freshRun.tenant_id, agentId, jobId: agentJobId },
+          nowIso,
         );
-      }
+        if (!observedJob) {
+          return rejectObservation(
+            ctx,
+            freshRun.tenant_id,
+            agentId,
+            'agent_job_not_open',
+            'agent_job_not_open',
+            409,
+            freshRun.id,
+            { agent_job_id: agentJobId, status: freshJob.status },
+          );
+        }
 
-      const obsEvent = await validationEvidence.appendEvent(runCtx, {
-        id: newId('event'),
-        tenant_id: run.tenant_id,
-        test_run_id: run.id,
-        target_id: targetId,
-        check_id: run.check_id,
-        agent_id: agentId,
-        source: 'agent',
-        signal_type: 'agent_observation',
-        timestamp: nowIso,
-        nonce_hash: body.nonce_hash,
-        metadata: redactObject(body.metadata ?? {}),
+        const obsEvent = await validationEvidence.appendEvent(runCtx, {
+          id: newId('event'),
+          tenant_id: freshRun.tenant_id,
+          test_run_id: freshRun.id,
+          target_id: targetId,
+          check_id: freshRun.check_id,
+          agent_id: agentId,
+          source: 'agent',
+          signal_type: 'agent_observation',
+          producer_kind: 'authenticated_agent',
+          timestamp: nowIso,
+          nonce_hash: body.nonce_hash,
+          metadata: redactObject(body.metadata ?? {}),
+        });
+
+        await appendAudit(runCtx, 'observation.ingested', 'test_run', freshRun.id, { agent_id: agentId });
+        return { freshRun, priorEvents, obsEvent };
       });
-
-      await appendAudit(runCtx, 'observation.ingested', 'test_run', run.id, { agent_id: agentId });
-
+      if (!mutation.acquired) return { error: 'run_mutation_in_progress', status: 409 };
+      if (mutation.result?.error) return mutation.result;
+      const { freshRun, priorEvents, obsEvent } = mutation.result;
       const eventsAfter = [...priorEvents, obsEvent];
-      if (run.awaiting_external_probe && !hasExternalProbeEvidence(run, eventsAfter)) {
-        return { observation: obsEvent, run: { ...run, verdict: null } };
+      if (freshRun.awaiting_external_probe && !hasExternalProbeEvidence(freshRun, eventsAfter)) {
+        return { observation: obsEvent, run: { ...freshRun, verdict: null } };
       }
 
       const agents = await agentControl.listAgents(runCtx);
       const verdict =
-        (await finalizeVerdictIfReady(runCtx, run, agents, { agent })) ??
-        (await validationEvidence.getVerdictForRun(runCtx, run.id));
-      const updatedRun = await validationEvidence.getTestRun(runCtx, run.id);
+        (await finalizeVerdictIfReady(runCtx, freshRun, agents, { agent })) ??
+        (await validationEvidence.getVerdictForRun(runCtx, freshRun.id));
+      const updatedRun = await validationEvidence.getTestRun(runCtx, freshRun.id);
       return {
         observation: obsEvent,
         run: { ...updatedRun, verdict: verdict ?? null },
@@ -1622,6 +1707,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const eventId = body.event_id;
       if (!eventId) return { error: 'missing_event_id', status: 400 };
 
+      const signalType = String(body.signal_type ?? 'generic').trim().toLowerCase();
+      if (RESERVED_PUBLIC_EVENT_SIGNAL_TYPES.has(signalType)) {
+        return { error: 'reserved_signal_type', status: 400 };
+      }
+
       const existing = await validationEvidence.findEventByTenantEventId(ctx, eventId);
       if (existing) return { duplicate: true, event: existing };
 
@@ -1637,6 +1727,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         test_run_id: body.test_run_id ?? null,
         source: body.source ?? 'internal',
         signal_type: body.signal_type ?? 'generic',
+        producer_kind: 'public_api',
         timestamp: body.timestamp ?? nowFn().toISOString(),
         nonce_hash: body.nonce_hash ?? null,
         metadata,

@@ -138,6 +138,7 @@ export const EVIDENCE_SHAPE = {
 export const WAF_SUMMARY_SHAPE = {
   assets_total: 'number',
   protected: 'number',
+  edge_protected: 'number',
   underprotected: 'number',
   unknown: 'number',
   coverage_pct: 'number',

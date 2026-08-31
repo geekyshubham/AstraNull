@@ -101,6 +101,33 @@ export function createSecretVaultRepository(pool) {
     },
 
     /**
+     * Metadata-only connector scheduler lookup. Deliberately excludes envelope_json.
+     * @param {{ tenantId: string }} ctx
+     * @param {string} id
+     */
+    async getEncryptedSecretMetadataById(ctx, id) {
+      const tenantId = ctx.tenantId;
+      return withTenantContext(pool, tenantId, async (client) => {
+        const { rows } = await client.query(
+          `SELECT id, tenant_id, purpose, metadata_json, rotation, updated_at
+           FROM encrypted_secrets
+           WHERE tenant_id = $1 AND id = $2`,
+          [tenantId, id],
+        );
+        const row = rows[0];
+        if (!row) return null;
+        return {
+          id: row.id,
+          tenant_id: row.tenant_id,
+          purpose: row.purpose,
+          metadata: row.metadata_json ?? {},
+          rotation: Number(row.rotation),
+          updated_at: toIso(row.updated_at),
+        };
+      });
+    },
+
+    /**
      * @param {{ tenantId: string }} ctx
      * @param {string} id
      * @param {{ metadata?: Record<string, unknown>, rotation: number, envelope: Record<string, unknown>, updated_at: string }} patch
@@ -128,6 +155,38 @@ export function createSecretVaultRepository(pool) {
             patch.updated_at,
           ],
         );
+        if (rows[0]) {
+          await client.query(
+            `WITH invalidated AS (
+               UPDATE waf_connectors
+               SET status = CASE
+                     WHEN status IN ('disabled', 'revoked') THEN status
+                     ELSE 'validating'
+                   END,
+                   last_success_at = NULL,
+                   last_success_revision = 0,
+                   poll_revision = poll_revision + 1,
+                   updated_at = $3::timestamptz
+               WHERE tenant_id = $1 AND secret_id = $2
+               RETURNING id
+             )
+             UPDATE connector_poll_jobs
+             SET status = 'cancelled', completed_at = $3::timestamptz,
+                 error_code = 'connector_secret_rotated',
+                 leased_by = NULL, leased_at = NULL, lease_token = NULL,
+                 updated_at = $3::timestamptz
+             WHERE tenant_id = $1 AND connector_id IN (SELECT id FROM invalidated)
+               AND status IN ('pending', 'leased')`,
+            [tenantId, id, patch.updated_at],
+          );
+          await client.query(
+            `UPDATE probe_jobs
+             SET status = 'cancelled', completed_at = $3::timestamptz
+             WHERE tenant_id = $1 AND status IN ('pending', 'leased')
+               AND constraints_json->'ownership_binding'->'provider_provenance'->>'connector_secret_id' = $2`,
+            [tenantId, id, patch.updated_at],
+          );
+        }
         return mapEncryptedSecretRow(rows[0] ?? null);
       });
     },

@@ -4,7 +4,12 @@ import { newId } from '../lib/ids.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { recordEvidence } from './evidence.mjs';
-import { recordOwnershipSignalByNonce } from './ownershipVerification.mjs';
+
+const RESERVED_PUBLIC_EVENT_SIGNAL_TYPES = new Set([
+  'probe_result',
+  'agent_observation',
+  'ownership_observation',
+]);
 
 const EVENT_RAW_FIELD_DENYLIST = new Set([
   'packet_payload',
@@ -83,6 +88,11 @@ export function ingestEvent(ctx, body) {
   const eventId = body.event_id;
   if (!eventId) return { error: 'missing_event_id', status: 400 };
 
+  const signalType = String(body.signal_type ?? 'generic').trim().toLowerCase();
+  if (RESERVED_PUBLIC_EVENT_SIGNAL_TYPES.has(signalType)) {
+    return { error: 'reserved_signal_type', status: 400 };
+  }
+
   const key = `${tenantId}:${eventId}`;
   if (store.ingestedEventIds[key]) {
     return { duplicate: true, event: store.ingestedEventIds[key] };
@@ -100,19 +110,13 @@ export function ingestEvent(ctx, body) {
     test_run_id: body.test_run_id ?? null,
     source: body.source ?? 'internal',
     signal_type: body.signal_type ?? 'generic',
+    producer_kind: 'public_api',
     timestamp: body.timestamp ?? new Date().toISOString(),
     nonce_hash: body.nonce_hash ?? null,
     metadata,
   };
   store.events.push(record);
   store.ingestedEventIds[key] = record;
-
-  if (record.signal_type === 'ownership_observation' && record.nonce_hash) {
-    recordOwnershipSignalByNonce(
-      { tenantId },
-      { source: 'agent', nonce_hash: record.nonce_hash },
-    );
-  }
 
   if (body.evidence) {
     recordEvidence(ctx, {

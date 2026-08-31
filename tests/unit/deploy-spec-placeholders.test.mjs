@@ -119,7 +119,7 @@ describe('aws deploy env contract', () => {
     assert.match(deploy, /^build_control_plane_from_commit\(\) \{/m);
     assert.match(
       deploy,
-      /git archive "\$commit" \\[\s\S]*\| timeout -k 30 480 docker build -f ops\/aws\/Dockerfile \\[\s\S]*-t "astranull-control-plane:\$commit" -/m,
+      /git archive "\$commit" \\[\s\S]*\| timeout -k 30 480 docker build --iidfile "\$iid_file" \\[\s\S]*-f ops\/aws\/Dockerfile -t "astranull-control-plane:\$commit" -/m,
     );
     assert.match(dockerfile, /^FROM\s+/m);
     assert.match(workflow, /secrets\.ASTRANULL_AWS_SSH_KEY/);

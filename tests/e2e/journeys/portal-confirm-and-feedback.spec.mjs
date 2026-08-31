@@ -38,9 +38,18 @@ function forbidNativeDialogs(page) {
   return raised;
 }
 
+function applyConfirmationFixture(store) {
+  applyPortalBaselineReadinessBoost(store);
+  const connector = store.wafConnectors.find((entry) => entry.provider === 'cloudflare');
+  if (connector) {
+    connector.secret_id = 'sec_playwright_credential';
+    connector.config_json = { ...connector.config_json, read_only: true };
+  }
+}
+
 test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
   test.beforeAll(async () => {
-    await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
+    await startPortalPlaywrightServer({ mutate: applyConfirmationFixture });
   });
   test.afterAll(async () => {
     await stopPortalPlaywrightServer();
@@ -58,20 +67,20 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     });
 
     await gotoPortalRoute(page, 'runs', baseUrl);
-    const startBtn = page.getByRole('button', { name: 'Run safe checks' }).first();
+    const startBtn = page.getByRole('button', { name: 'Run checks' }).first();
     await expect(startBtn).toBeEnabled({ timeout: 15_000 });
     await startBtn.click();
 
     const confirm = page.locator('dialog.modal-confirm[open]');
     await expect(confirm).toBeVisible({ timeout: 10_000 });
-    await expect(confirm).toContainText('Start a safe validation run?');
-    // The native-confirm copy carried the run's scope; the modal must still show it.
+    await expect(confirm).toContainText('Start a validation run?');
+    // The confirmation still shows the immutable run scope before execution.
     await expect(confirm).toContainText(/Target group:/);
     await expect(confirm).toContainText(/Target:/);
     await expect(confirm).toContainText(/Check:/);
     expect(runPosts, 'opening the confirm must not start a run').toHaveLength(0);
 
-    await confirm.getByRole('button', { name: 'Start safe run' }).click();
+    await confirm.getByRole('button', { name: 'Start run' }).click();
     await expect(confirm).toBeHidden({ timeout: 10_000 });
     await expect
       .poll(() => runPosts.length, { timeout: 10_000 })
@@ -91,7 +100,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     });
 
     await gotoPortalRoute(page, 'runs', baseUrl);
-    const startBtn = page.getByRole('button', { name: 'Run safe checks' }).first();
+    const startBtn = page.getByRole('button', { name: 'Run checks' }).first();
     await expect(startBtn).toBeEnabled({ timeout: 15_000 });
     await startBtn.click();
 
@@ -136,6 +145,17 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
   test('connector Poll reports back in a live-region banner and refetches connectors', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
+    await page.route('**/v1/connectors/*/poll', async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          poll_job: { status: 'completed_empty', snapshot_count: 0, created_at: new Date().toISOString() },
+          snapshots: [],
+        }),
+      });
+    });
 
     /** @type {string[]} */
     const polls = [];

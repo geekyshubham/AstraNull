@@ -11,6 +11,7 @@ import {
   resolveTenantIdsFromStore,
   resolveWafCoverageRollupRunnerConfig,
   runDevJsonWafCoverageRollups,
+  toMetadataOnlyRollupResult,
   runWafCoverageRollupRunner,
 } from '../../scripts/waf-coverage-rollup-runner.mjs';
 import { getStore } from '../../src/store.mjs';
@@ -128,7 +129,7 @@ describe('waf coverage rollup runner', () => {
       id: 'snap_1',
       tenant_id: 'ten_demo',
       waf_asset_id: 'waf_asset_1',
-      status: 'protected',
+      status: 'edge_protected',
       is_current: true,
       created_at: '2026-07-01T12:00:00.000Z',
     });
@@ -152,9 +153,30 @@ describe('waf coverage rollup runner', () => {
     assert.equal(summary.rollup_date, '2026-07-02');
     assert.equal(summary.total_assets_rolled_up, 1);
     const written = JSON.parse(readFileSync(outPath, 'utf8'));
-    assert.equal(written.tenants[0].rollup_result.protected, 1);
+    assert.equal(written.tenants[0].rollup_result.protected, 0);
+    assert.equal(written.tenants[0].rollup_result.edge_protected, 1);
     assert.equal(store.wafCoverageDailyRollups.length, 1);
-    assert.equal(store.wafCoverageDailyRollups[0].protected, 1);
+    assert.equal(store.wafCoverageDailyRollups[0].protected, 0);
+    assert.equal(store.wafCoverageDailyRollups[0].edge_protected, 1);
+  });
+
+  it('runner redaction retains edge_protected and drops unrelated fields', () => {
+    const redacted = toMetadataOnlyRollupResult({
+      tenant_id: 'ten_demo',
+      rollup_date: '2026-07-02',
+      total_assets: 2,
+      protected: 1,
+      edge_protected: 1,
+      underprotected: 0,
+      unprotected: 0,
+      unknown: 0,
+      excluded: 0,
+      coverage_ratio: 0.5,
+      created_at: '2026-07-02T00:00:00.000Z',
+      canonical_url: 'https://must-not-leak.example.com',
+    });
+    assert.equal(redacted.edge_protected, 1);
+    assert.equal('canonical_url' in redacted, false);
   });
 
   it('dry-run does not persist rollups', () => {

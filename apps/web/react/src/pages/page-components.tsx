@@ -35,7 +35,12 @@ import { VectorHeatmap } from '../components/charts/vector-heatmap';
 import { ResourceMatrix } from '../components/charts/resource-matrix';
 import { Badge } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { TargetGroupPicker } from '../components/policies/target-group-picker';
+import {
+  effectivePolicyTargetKind,
+  isPolicyTargetCompatible,
+  policySupportedTargetKinds,
+  TargetGroupPicker,
+} from '../components/policies/target-group-picker';
 import { EmptyState } from '../components/ui/empty-state';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../lib/crud-ui';
@@ -145,6 +150,13 @@ const POLICY_VERDICT_OPTIONS: SelectOption[] = [
   { value: 'fail', label: 'Fail' },
   { value: 'manual_review', label: 'Manual review' }
 ];
+
+type PolicyTargetBinding = {
+  targets: DataItem[];
+  selectedTargetId: string;
+  loading: boolean;
+  error: string;
+};
 
 const BOOTSTRAP_EXPIRY_OPTIONS: SelectOption[] = [
   { value: '15m', label: '15 minutes' },
@@ -643,9 +655,9 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
   if (metrics.agentsOnline === 0 && data.agents.length === 0) {
     steps.push({
       key: 'install-agent',
-      title: 'Install an outbound observation agent',
-      detail: 'Issue a bootstrap token and confirm heartbeat so inside observations correlate with probes.',
-      href: '#target-groups',
+      title: 'Optionally add an observation agent',
+      detail: 'External validation works without an agent. Add one only when you want correlated internal or origin evidence.',
+      href: '#agents',
       tone: 'info'
     });
   }
@@ -1342,7 +1354,7 @@ export function DashboardPage({
                     const id = getString(item, ['id'], '');
                     return id ? detailRowProps('agent-detail', id, `Open agent ${id} detail`) : {};
                   }}
-                  empty={<EmptyState icon={Bot} title="No agents registered." body="Install an outbound agent after declaring target scope." actionHref="#agents" actionLabel="Open agents" />}
+                  empty={<EmptyState icon={Bot} title="No agents registered." body="External checks remain available. Add an outbound agent only to enrich results with internal or origin observations." actionHref="#agents" actionLabel="Explore optional agents" />}
                 />
               </CardContent>
             </Card>
@@ -3162,6 +3174,7 @@ export function PolicyPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [policyTargetGroupIds, setPolicyTargetGroupIds] = useState<string[]>([]);
+  const [policyTargetBindings, setPolicyTargetBindings] = useState<Record<string, PolicyTargetBinding>>({});
   const [policyCheckId, setPolicyCheckId] = useState('');
   const [policyCadence, setPolicyCadence] = useState('weekly');
   const [policyExpectedVerdict, setPolicyExpectedVerdict] = useState('pass');
@@ -3185,18 +3198,36 @@ export function PolicyPage({
       label: getString(check, ['name', 'check_id'])
     }))
   ];
+  const selectedPolicyCheck = safeChecks.find(
+    (check) => getString(check, ['check_id', 'id'], '') === policyCheckId
+  ) ?? null;
+  const activePolicyTargetGroups = data.targetGroups.filter(
+    (group) => group.archived_at == null && group.deleted_at == null
+  );
+  const policyBindingsReady = policyTargetGroupIds.length > 0 && policyTargetGroupIds.every((groupId) => {
+    const groupIsActive = activePolicyTargetGroups.some(
+      (group) => getString(group, ['id'], '') === groupId
+    );
+    const binding = policyTargetBindings[groupId];
+    return Boolean(
+      groupIsActive
+      && binding
+      && !binding.loading
+      && !binding.error
+      && binding.selectedTargetId
+      && binding.targets.some(
+        (target) => getString(target, ['id'], '') === binding.selectedTargetId
+          && isPolicyTargetCompatible(selectedPolicyCheck, target)
+      )
+    );
+  });
 
   useEffect(() => {
     if (!showCreateSchedule) return;
     if (!policyCheckId && safeChecks.length > 0) {
       setPolicyCheckId(getString(safeChecks[0], ['check_id'], ''));
     }
-    if (policyTargetGroupIds.length === 0 && data.targetGroups.length > 0) {
-      const firstGroup = data.targetGroups.find((group) => group.archived_at == null) ?? data.targetGroups[0];
-      const groupId = getString(firstGroup, ['id'], '');
-      if (groupId) setPolicyTargetGroupIds([groupId]);
-    }
-  }, [showCreateSchedule, data.targetGroups, policyCheckId, policyTargetGroupIds.length, safeChecks]);
+  }, [showCreateSchedule, policyCheckId, safeChecks]);
   function formatPolicySafeWindow(item: DataItem) {
     const windows = item.safe_windows;
     if (!Array.isArray(windows) || windows.length === 0) return '—';
@@ -3263,7 +3294,23 @@ export function PolicyPage({
     },
     { key: 'safe_window', label: 'Safe window', render: (item) => <span className="mono muted">{formatPolicySafeWindow(item)}</span> },
     { key: 'expected', label: 'Expected verdict', render: (item) => <Badge tone={policyVerdictBadgeTone(getString(item, ['expected_verdict']))}>{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge> },
-    { key: 'targets', label: 'Targets', render: (item) => getNumber(item, ['target_count']) },
+    {
+      key: 'exact_target',
+      label: 'Exact target',
+      render: (item) => {
+        const target = item.target && typeof item.target === 'object' ? item.target as DataItem : {};
+        const targetId = getString(item, ['target_id'], getString(target, ['id'], ''));
+        if (!targetId) return <Badge tone="warn">Unbound legacy schedule</Badge>;
+        const targetValue = getString(target, ['value'], targetId);
+        const targetKind = getString(target, ['kind'], 'target').replace(/_/g, ' ');
+        return (
+          <div className="stack-tight">
+            <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', targetId)}>{targetValue}</AnchorButton>
+            <span className="mono muted small">{targetKind} · {targetId}</span>
+          </div>
+        );
+      }
+    },
     { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
       key: 'actions',
@@ -3306,6 +3353,77 @@ export function PolicyPage({
     }
   }
 
+  async function loadPolicyTargetsForGroup(targetGroupId: string) {
+    setPolicyTargetBindings((current) => ({
+      ...current,
+      [targetGroupId]: {
+        targets: current[targetGroupId]?.targets ?? [],
+        selectedTargetId: current[targetGroupId]?.selectedTargetId ?? '',
+        loading: true,
+        error: ''
+      }
+    }));
+    try {
+      const detail = await requestJson(
+        config,
+        session,
+        `/v1/target-groups/${encodeURIComponent(targetGroupId)}`
+      ) as DataItem;
+      const targets = (Array.isArray(detail.targets) ? detail.targets as DataItem[] : []).filter(
+        (target) => target.deleted_at == null && target.archived_at == null
+      );
+      setPolicyTargetBindings((current) => {
+        const selectedTargetId = targets.some(
+          (target) => getString(target, ['id'], '') === current[targetGroupId]?.selectedTargetId
+            && isPolicyTargetCompatible(selectedPolicyCheck, target)
+        ) ? current[targetGroupId]?.selectedTargetId ?? '' : '';
+        return {
+          ...current,
+          [targetGroupId]: { targets, selectedTargetId, loading: false, error: '' }
+        };
+      });
+    } catch (err) {
+      setPolicyTargetBindings((current) => ({
+        ...current,
+        [targetGroupId]: {
+          targets: current[targetGroupId]?.targets ?? [],
+          selectedTargetId: current[targetGroupId]?.selectedTargetId ?? '',
+          loading: false,
+          error: apiErrorMessage(err, 'Active targets could not be loaded.')
+        }
+      }));
+    }
+  }
+
+  function handlePolicyTargetGroupChange(nextIds: string[]) {
+    const newlySelected = nextIds.filter((id) => !policyTargetGroupIds.includes(id));
+    setPolicyTargetGroupIds(nextIds);
+    for (const targetGroupId of newlySelected) void loadPolicyTargetsForGroup(targetGroupId);
+  }
+
+  function handlePolicyCheckChange(nextCheckId: string) {
+    const nextCheck = safeChecks.find(
+      (check) => getString(check, ['check_id', 'id'], '') === nextCheckId
+    ) ?? null;
+    setPolicyCheckId(nextCheckId);
+    setPolicyTargetBindings((current) => Object.fromEntries(
+      Object.entries(current).map(([targetGroupId, binding]) => {
+        const selectedTarget = binding.targets.find(
+          (target) => getString(target, ['id'], '') === binding.selectedTargetId
+        );
+        return [
+          targetGroupId,
+          {
+            ...binding,
+            selectedTargetId: nextCheck && selectedTarget && isPolicyTargetCompatible(nextCheck, selectedTarget)
+              ? binding.selectedTargetId
+              : ''
+          }
+        ];
+      })
+    ));
+  }
+
   async function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -3313,6 +3431,10 @@ export function PolicyPage({
     const checkId = String(form.get('check_id') ?? '').trim();
     if (policyTargetGroupIds.length === 0) {
       setError('Select at least one declared target group before creating policies.');
+      return;
+    }
+    if (!policyBindingsReady) {
+      setError('Select one exact active target for every selected target group before creating policies.');
       return;
     }
     if (!checkId) {
@@ -3348,18 +3470,20 @@ export function PolicyPage({
     setError('');
     setMessage('');
     try {
-      const successes: Array<{ targetGroupId: string; result: unknown }> = [];
-      const failures: Array<{ targetGroupId: string; message: string }> = [];
+      const successes: Array<{ targetGroupId: string; targetId: string; result: unknown }> = [];
+      const failures: Array<{ targetGroupId: string; targetId: string; message: string }> = [];
       for (const targetGroupId of policyTargetGroupIds) {
+        const targetId = policyTargetBindings[targetGroupId]?.selectedTargetId ?? '';
         try {
           const result = await requestJson(config, session, '/v1/test-policies', {
             method: 'POST',
-            body: { ...bodyBase, target_group_id: targetGroupId }
+            body: { ...bodyBase, target_group_id: targetGroupId, target_id: targetId }
           });
-          successes.push({ targetGroupId, result });
+          successes.push({ targetGroupId, targetId, result });
         } catch (err) {
           failures.push({
             targetGroupId,
+            targetId,
             message: apiErrorMessage(err, 'Policy creation failed.')
           });
         }
@@ -3375,14 +3499,22 @@ export function PolicyPage({
       }
 
       if (failures.length > 0) {
-        setPolicyTargetGroupIds(failures.map((failure) => failure.targetGroupId));
+        const failedGroupIds = new Set(failures.map((failure) => failure.targetGroupId));
+        setPolicyTargetGroupIds([...failedGroupIds]);
+        setPolicyTargetBindings((current) => {
+          const retained: Record<string, PolicyTargetBinding> = {};
+          for (const [targetGroupId, binding] of Object.entries(current)) {
+            if (failedGroupIds.has(targetGroupId)) retained[targetGroupId] = binding;
+          }
+          return retained;
+        });
         const failedResults = failures
-          .map((failure) => `${failure.targetGroupId}: ${failure.message}`)
+          .map((failure) => `${failure.targetGroupId}/${failure.targetId}: ${failure.message}`)
           .join(' ');
         setError(
           `Created ${successes.length} of ${policyTargetGroupIds.length} policies. `
           + `Failed ${failures.length}: ${failedResults} `
-          + 'Successful writes were retained; only failed target groups remain selected for retry.'
+          + 'Successful writes were retained; only failed exact target bindings remain selected for retry.'
           + (refreshFailure ? ` ${refreshFailure}` : '')
         );
         return;
@@ -3392,12 +3524,14 @@ export function PolicyPage({
       const success = `Created ${successes.length} test ${successes.length === 1 ? 'policy' : 'policies'} from declared scope and check catalog.`;
       if (refreshFailure) {
         setPolicyTargetGroupIds([]);
+        setPolicyTargetBindings({});
         formElement.reset();
         setError(`${success} ${refreshFailure} The writes succeeded; refresh the page instead of creating them again.`);
         return;
       }
       setMessage(formatMutationSuccessMessage(success, lastResult));
       setPolicyTargetGroupIds([]);
+      setPolicyTargetBindings({});
       formElement.reset();
       setShowCreateSchedule(false);
     } finally {
@@ -3504,7 +3638,7 @@ export function PolicyPage({
       <FormModal
         open={showCreateSchedule}
         title="Create validation schedule"
-        description="Bind a customer-runnable check to one or more active declared target groups. Each group is written sequentially and any partial result remains visible. SOC-gated checks remain request-only."
+        description="Bind a customer-runnable check to one exact active target in each selected group. Every target is selected explicitly, each group is written sequentially, and failed bindings remain selected for retry. SOC-gated checks remain request-only."
         wide
         onClose={() => setShowCreateSchedule(false)}
       >
@@ -3516,17 +3650,103 @@ export function PolicyPage({
               <input type="hidden" name="cadence" value={policyCadence} />
               <input type="hidden" name="expected_verdict" value={policyExpectedVerdict} />
               <TargetGroupPicker
-                groups={data.targetGroups}
+                groups={activePolicyTargetGroups}
                 selectedIds={policyTargetGroupIds}
-                onChange={setPolicyTargetGroupIds}
-                disabled={data.targetGroups.length === 0 || busy !== ''}
+                onChange={handlePolicyTargetGroupChange}
+                disabled={activePolicyTargetGroups.length === 0 || busy !== ''}
               />
+              {policyTargetGroupIds.length > 0 ? (
+                <div className="full stack-tight" aria-live="polite">
+                  <p className="muted small">Choose one exact active target per group. Ambiguous groups are never assigned a target automatically, and the selected identity is immutable after creation.</p>
+                  {policyTargetGroupIds.map((targetGroupId) => {
+                    const group = activePolicyTargetGroups.find(
+                      (candidate) => getString(candidate, ['id'], '') === targetGroupId
+                    );
+                    const groupName = getString(group ?? {}, ['name'], targetGroupId);
+                    const binding = policyTargetBindings[targetGroupId];
+                    const targets = binding?.targets ?? [];
+                    const compatibleTargets = selectedPolicyCheck
+                      ? targets.filter((target) => isPolicyTargetCompatible(selectedPolicyCheck, target))
+                      : [];
+                    const selectedTarget = compatibleTargets.find(
+                      (target) => getString(target, ['id'], '') === binding?.selectedTargetId
+                    );
+                    const supportedKinds = policySupportedTargetKinds(selectedPolicyCheck);
+                    const selectedCheckName = getString(selectedPolicyCheck ?? {}, ['name', 'check_id'], 'selected check');
+                    const noCompatibleTargets = Boolean(
+                      selectedPolicyCheck && !binding?.loading && !binding?.error && targets.length > 0 && compatibleTargets.length === 0
+                    );
+                    const targetOptions: SelectOption[] = [
+                      {
+                        value: '',
+                        label: binding?.loading
+                          ? 'Loading active targets…'
+                          : targets.length === 0
+                            ? 'No active targets available'
+                            : noCompatibleTargets
+                              ? 'No compatible targets'
+                              : 'Select exact target'
+                      },
+                      ...compatibleTargets.map((target) => {
+                        const targetId = getString(target, ['id'], '');
+                        const kind = effectivePolicyTargetKind(target).replace(/_/g, ' ');
+                        return {
+                          value: targetId,
+                          label: getString(target, ['value'], targetId),
+                          description: `${kind} · ${targetId}`
+                        };
+                      })
+                    ];
+                    return (
+                      <div key={targetGroupId} className="full stack-tight">
+                        <Select
+                          className="full"
+                          label={`${groupName} exact target`}
+                          value={binding?.selectedTargetId ?? ''}
+                          options={targetOptions}
+                          disabled={!selectedPolicyCheck || !binding || binding.loading || Boolean(binding.error) || compatibleTargets.length === 0 || busy !== ''}
+                          onChange={(selectedTargetId) => setPolicyTargetBindings((current) => ({
+                            ...current,
+                            [targetGroupId]: {
+                              targets: current[targetGroupId]?.targets ?? [],
+                              selectedTargetId,
+                              loading: false,
+                              error: ''
+                            }
+                          }))}
+                        />
+                        {binding?.error ? (
+                          <div className="form-banner error" role="alert">
+                            {groupName}: {binding.error}
+                            {' '}
+                            <Button type="button" size="sm" variant="secondary" disabled={busy !== ''} onClick={() => void loadPolicyTargetsForGroup(targetGroupId)}>
+                              Retry targets
+                            </Button>
+                          </div>
+                        ) : selectedTarget ? (
+                          <p className="muted small">
+                            Bound identity: <strong className="mono">{getString(selectedTarget, ['value'], binding.selectedTargetId)}</strong>
+                            {' · '}
+                            <span className="mono">{binding.selectedTargetId}</span>
+                          </p>
+                        ) : noCompatibleTargets ? (
+                          <p className="form-banner neutral" role="status">
+                            {groupName} has no exact target compatible with {selectedCheckName}. This check supports {supportedKinds.join(', ') || 'any declared target kind'}; choose another check or target group.
+                          </p>
+                        ) : !binding?.loading && targets.length === 0 ? (
+                          <p className="form-banner error" role="alert">{groupName} has no active target to schedule.</p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               <Select
                 label="Check"
                 value={policyCheckId}
                 options={policyCheckOptions}
                 disabled={safeChecks.length === 0}
-                onChange={setPolicyCheckId}
+                onChange={handlePolicyCheckChange}
               />
               <Select
                 label="Cadence"
@@ -3562,7 +3782,11 @@ export function PolicyPage({
               </details>
               <div className="form-actions full">
                 <Button type="button" variant="ghost" disabled={busy !== ''} onClick={() => setShowCreateSchedule(false)}>Cancel</Button>
-                <Button type="submit" loading={busy === 'create-test-policy'} disabled={data.targetGroups.length === 0 || safeChecks.length === 0}>
+                <Button
+                  type="submit"
+                  loading={busy === 'create-test-policy'}
+                  disabled={activePolicyTargetGroups.length === 0 || safeChecks.length === 0 || !policyCheckId || !policyBindingsReady || busy !== ''}
+                >
                   Create schedule
                 </Button>
               </div>
@@ -3593,10 +3817,11 @@ type DnsProviderDirectoryEntry = {
   id: string;
   label: string;
   icon: LucideIcon;
-  backendProvider: 'cloudflare' | 'aws_waf' | 'generic_waf';
+  backendProvider: 'cloudflare' | 'akamai_edgedns' | 'namecheap' | 'godaddy' | 'ibm_ns1' | 'aws_waf' | 'generic_waf';
   supportsCredentialPolling: boolean;
   capability: string;
   description: string;
+  credentialExample?: string;
   tone: 'signal' | 'accent' | 'warn' | 'success';
 };
 
@@ -3607,9 +3832,21 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
     icon: CloudSun,
     backendProvider: 'cloudflare',
     supportsCredentialPolling: true,
-    capability: 'Read-only polling available',
-    description: 'Use a vault-backed read-only token for bounded metadata polling, or keep this provider entirely manual.',
+    capability: 'Read-only zone polling',
+    description: 'Poll bounded zone inventory with a vault-backed API token. Successful server-side evidence can verify selected imported domains.',
+    credentialExample: 'API token or {"api_token":"..."}',
     tone: 'accent'
+  },
+  {
+    id: 'akamai_edgedns',
+    label: 'Akamai EdgeDNS',
+    icon: Route,
+    backendProvider: 'akamai_edgedns',
+    supportsCredentialPolling: true,
+    capability: 'Read-only zone polling',
+    description: 'Use bounded EdgeGrid-authenticated polling for EdgeDNS zone inventory. No record mutation permission is requested.',
+    credentialExample: '{"host":"...luna.akamaiapis.net","access_token":"...","client_token":"...","client_secret":"..."}',
+    tone: 'signal'
   },
   {
     id: 'route53',
@@ -3625,21 +3862,34 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
     id: 'godaddy',
     label: 'GoDaddy',
     icon: Globe2,
-    backendProvider: 'generic_waf',
-    supportsCredentialPolling: false,
-    capability: 'Manual metadata',
-    description: 'Declare domains or submit normalized DNS-zone snapshots; provider credentials are not accepted here.',
+    backendProvider: 'godaddy',
+    supportsCredentialPolling: true,
+    capability: 'Read-only domain polling',
+    description: 'List account domains through a bounded, vault-backed API request. Imported domains retain exact provider evidence.',
+    credentialExample: '{"key":"...","secret":"..."}',
     tone: 'success'
   },
   {
     id: 'namecheap',
     label: 'Namecheap',
     icon: Globe2,
-    backendProvider: 'generic_waf',
-    supportsCredentialPolling: false,
-    capability: 'Manual metadata',
-    description: 'Declare domains or submit normalized DNS-zone snapshots; provider credentials are not accepted here.',
+    backendProvider: 'namecheap',
+    supportsCredentialPolling: true,
+    capability: 'Read-only domain polling',
+    description: 'List domains with a vault credential and an explicitly configured allowlisted egress IP; AstraNull never calls an IP-discovery service.',
+    credentialExample: '{"api_username":"...","api_key":"...","client_ip":"203.0.113.10","environment":"production"}',
     tone: 'signal'
+  },
+  {
+    id: 'ibm_ns1',
+    label: 'IBM NS1',
+    icon: Server,
+    backendProvider: 'ibm_ns1',
+    supportsCredentialPolling: true,
+    capability: 'Read-only zone polling',
+    description: 'List NS1 zones with a vault-backed API key through bounded requests to the fixed NS1 API origin.',
+    credentialExample: 'API key or {"api_key":"..."}',
+    tone: 'accent'
   },
   {
     id: 'hetzner_dns',
@@ -4000,6 +4250,8 @@ function connectorDirectoryProvider(connector: DataItem) {
   const provider = getString(connector, ['provider'], '').toLowerCase();
   if (provider === 'cloudflare') return getDirectoryProvider('cloudflare');
   if (provider === 'aws_waf') return getDirectoryProvider('aws');
+  const direct = DNS_PROVIDER_DIRECTORY.find((entry) => entry.backendProvider === provider && entry.backendProvider !== 'generic_waf');
+  if (direct) return direct;
   if (provider !== 'generic_waf') return null;
   const config = getNestedItem(connector, ['config']) ?? getNestedItem(connector, ['config_json']);
   const ownerHint = getString(config ?? {}, ['owner_hint'], '').toLowerCase();
@@ -4115,7 +4367,7 @@ export function IntegrationPage({
       label: 'Capability',
       render: (item) => {
         const provider = getString(item, ['provider'], '').toLowerCase();
-        const hasCredentialPoll = ['cloudflare', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
+        const hasCredentialPoll = ['cloudflare', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
         return <Badge tone={hasCredentialPoll ? 'success' : 'muted'}>{hasCredentialPoll ? 'Credential polling' : 'Manual metadata'}</Badge>;
       }
     },
@@ -4132,7 +4384,7 @@ export function IntegrationPage({
         const status = getString(item, ['status'], '').toLowerCase();
         const provider = getString(item, ['provider'], '').toLowerCase();
         const isDisabled = status === 'disabled';
-        const canPoll = ['cloudflare', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
+        const canPoll = ['cloudflare', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1', 'aws_waf'].includes(provider) && Boolean(getString(item, ['secret_id'], ''));
         const rowBusy = busy === `validate-${id}` || busy === `poll-${id}` || busy === `snapshots-${id}` || busy === `disable-${id}`;
         const rowBlocked = busy !== '' && !rowBusy;
         return (
@@ -4300,6 +4552,7 @@ export function IntegrationPage({
             environment_id: effectiveEnvironmentId,
             description: 'Customer-created from the Integrations single-domain declaration flow.',
             expected_behavior_default: expectedBehavior,
+            validation_mode: 'external_only',
             timezone: 'UTC'
           }
         }) as DataItem;
@@ -4688,7 +4941,7 @@ export function IntegrationPage({
               {connectorsEnabled && selectedCreateProvider.supportsCredentialPolling ? 'Implemented' : 'Unavailable for this provider'}
             </Badge>
             <h3>Connect read-only</h3>
-            <p>Store a vault-backed read-only credential and use the bounded polling worker. Available only for the implemented Cloudflare and AWS WAF contracts.</p>
+            <p>Store a vault-backed read-only credential and use the bounded polling worker for Cloudflare, Akamai EdgeDNS, Namecheap, GoDaddy, IBM NS1, or AWS WAF.</p>
             <Button
               type="button"
               size="sm"
@@ -4761,9 +5014,9 @@ export function IntegrationPage({
                       <textarea
                         name="secret"
                         rows={4}
-                        placeholder={selectedCreateProvider.backendProvider === 'cloudflare'
-                          ? 'Read-only Cloudflare API token'
-                          : 'Read-only AWS credential JSON'}
+                        placeholder={selectedCreateProvider.credentialExample ?? (selectedCreateProvider.backendProvider === 'aws_waf'
+                          ? 'Read-only AWS credential JSON'
+                          : 'Read-only provider credential JSON')}
                       />
                     </label>
                     <label className="full">

@@ -1,7 +1,11 @@
 import { Check, ChevronDown } from 'lucide-react';
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useEffect, useId, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
+
+const SELECT_MENU_MAX_HEIGHT = 280;
+const SELECT_MENU_GAP = 6;
+const SELECT_VIEWPORT_GUTTER = 8;
 
 export type SelectOption = {
   value: string;
@@ -31,8 +35,10 @@ function SelectOptionCopy({ label: optionLabel, description }: { label: string; 
 export function Select({ label, name, value, options, onChange, className, disabled = false }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<'down' | 'up'>('down');
+  const [menuMaxHeight, setMenuMaxHeight] = useState(SELECT_MENU_MAX_HEIGHT);
   const shellRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
   const listId = useId();
   const labelId = useId();
   const selected = options.find((option) => option.value === value) ?? options[0];
@@ -42,6 +48,7 @@ export function Select({ label, name, value, options, onChange, className, disab
     if (disabled) {
       setOpen(false);
       setPlacement('down');
+      setMenuMaxHeight(SELECT_MENU_MAX_HEIGHT);
     }
   }, [disabled]);
 
@@ -72,24 +79,50 @@ export function Select({ label, name, value, options, onChange, className, disab
     buttons[(index + buttons.length) % buttons.length]?.focus();
   }
 
-  function updatePlacement() {
+  const updatePlacement = useCallback(() => {
     if (typeof window === 'undefined') {
       setPlacement('down');
+      setMenuMaxHeight(SELECT_MENU_MAX_HEIGHT);
       return;
     }
 
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) {
       setPlacement('down');
+      setMenuMaxHeight(SELECT_MENU_MAX_HEIGHT);
       return;
     }
 
-    const menuHeight = 288;
-    const gap = 8;
-    const below = window.innerHeight - rect.bottom - gap;
-    const above = rect.top - gap;
-    setPlacement(below < menuHeight && above > below ? 'up' : 'down');
-  }
+    const modalBody = triggerRef.current?.closest<HTMLElement>('.form-modal-body');
+    const modalRect = modalBody?.getBoundingClientRect();
+    const boundaryTop = Math.max(SELECT_VIEWPORT_GUTTER, modalRect?.top ?? SELECT_VIEWPORT_GUTTER);
+    const boundaryBottom = Math.min(
+      window.innerHeight - SELECT_VIEWPORT_GUTTER,
+      modalRect?.bottom ?? window.innerHeight - SELECT_VIEWPORT_GUTTER,
+    );
+    const below = Math.max(0, boundaryBottom - rect.bottom - SELECT_MENU_GAP);
+    const above = Math.max(0, rect.top - boundaryTop - SELECT_MENU_GAP);
+    const desiredHeight = Math.min(
+      SELECT_MENU_MAX_HEIGHT,
+      menuRef.current?.scrollHeight || SELECT_MENU_MAX_HEIGHT,
+    );
+    const nextPlacement = below < desiredHeight && above > below ? 'up' : 'down';
+    const available = nextPlacement === 'up' ? above : below;
+    setPlacement(nextPlacement);
+    setMenuMaxHeight(Math.max(0, Math.min(SELECT_MENU_MAX_HEIGHT, Math.floor(available))));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const modalBody = triggerRef.current?.closest<HTMLElement>('.form-modal-body');
+    updatePlacement();
+    window.addEventListener('resize', updatePlacement);
+    modalBody?.addEventListener('scroll', updatePlacement, { passive: true });
+    return () => {
+      window.removeEventListener('resize', updatePlacement);
+      modalBody?.removeEventListener('scroll', updatePlacement);
+    };
+  }, [open, options.length, updatePlacement]);
 
   function openAndFocus(index = selectedIndex) {
     updatePlacement();
@@ -193,7 +226,15 @@ export function Select({ label, name, value, options, onChange, className, disab
           <SelectOptionCopy label={selected?.label ?? ''} description={selected?.description} />
           <ChevronDown size={16} aria-hidden="true" />
         </button>
-        <span id={listId} className="select-menu" role="listbox" aria-labelledby={labelId} hidden={!open || disabled}>
+        <span
+          ref={menuRef}
+          id={listId}
+          className="select-menu"
+          role="listbox"
+          aria-labelledby={labelId}
+          hidden={!open || disabled}
+          style={{ '--select-menu-max-height': `${menuMaxHeight}px` } as CSSProperties}
+        >
           {options.map((option, index) => (
             <button
               type="button"

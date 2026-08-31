@@ -22,6 +22,11 @@ import { EmptyState } from '../components/ui/empty-state';
 import { Badge } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Tabs, type TabOption } from '../components/ui/tabs';
+import {
+  effectivePolicyTargetKind,
+  isPolicyTargetCompatible,
+  policySupportedTargetKinds,
+} from '../components/policies/target-group-picker';
 
 type OnboardTab = 'fqdn' | 'ip' | 'cloud';
 
@@ -32,7 +37,8 @@ const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
 ];
 
 /** §7.1 verification states that unlock the per-row Run test action. */
-const RUN_ENABLED_STATES = new Set(['dns_verified', 'agent_verified', 'user_confirmed']);
+const RUN_ENABLED_STATES = new Set(['dns_verified', 'provider_verified', 'agent_verified', 'user_confirmed']);
+const DNS_INVENTORY_PROVIDERS = new Set(['cloudflare', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1']);
 const DNS_POLL_INTERVAL_MS = 30_000;
 const DNS_POLL_MAX_MS = 15 * 60 * 1000;
 const EDGE_DETECTION_POLL_INTERVAL_MS = 2_000;
@@ -620,6 +626,7 @@ export function TargetGroupDetailView({
   const [showOnboardModal, setShowOnboardModal] = useState(false);
   const [onboardTab, setOnboardTab] = useState<OnboardTab>('fqdn');
   const [selectedPolicyCheckId, setSelectedPolicyCheckId] = useState('');
+  const [selectedPolicyTargetId, setSelectedPolicyTargetId] = useState('');
   const [ruleQuery, setRuleQuery] = useState('');
   const [ruleLimit, setRuleLimit] = useState(12);
 
@@ -640,14 +647,14 @@ export function TargetGroupDetailView({
   const loaSigned = isSignedLoaState(loaState);
   // KPI row (matches prototype screen-target-group-detail): ownership + validation mode read
   // straight off the target-group API entity (both fields exist in the dev store and Postgres,
-  // defaulting to 'unverified'/'agent_assisted').
+  // defaulting to 'unverified'/'external_only').
   const ownershipStatus = getString(entity, ['ownership_status'], 'unverified');
-  const ownershipTone = ['agent_verified', 'dns_verified', 'user_confirmed', 'verified'].includes(ownershipStatus.trim().toLowerCase())
+  const ownershipTone = ['agent_verified', 'dns_verified', 'provider_verified', 'user_confirmed', 'verified'].includes(ownershipStatus.trim().toLowerCase())
     ? 'success'
     : ownershipStatus.trim().toLowerCase().includes('pending')
       ? 'warn'
       : 'muted';
-  const validationMode = getString(entity, ['validation_mode'], 'agent_assisted');
+  const validationMode = getString(entity, ['validation_mode'], 'external_only');
   const ladderSteps = Array.isArray(ladder?.steps) ? ladder.steps as DataItem[] : [];
   const customerRunnableChecks = checks.filter(isCustomerRunnableCheck);
   const normalizedRuleQuery = ruleQuery.trim().toLowerCase();
@@ -674,6 +681,15 @@ export function TargetGroupDetailView({
   ) ? selectedPolicyCheckId : '';
   const selectedPolicyCheck = customerRunnableChecks.find(
     (check) => getString(check, ['check_id', 'id'], '') === effectiveSelectedPolicyCheckId
+  ) ?? null;
+  const compatiblePolicyTargets = selectedPolicyCheck
+    ? targets.filter((target) => isPolicyTargetCompatible(selectedPolicyCheck, target))
+    : [];
+  const effectiveSelectedPolicyTargetId = compatiblePolicyTargets.some(
+    (target) => getString(target, ['id'], '') === selectedPolicyTargetId
+  ) ? selectedPolicyTargetId : '';
+  const selectedPolicyTarget = compatiblePolicyTargets.find(
+    (target) => getString(target, ['id'], '') === effectiveSelectedPolicyTargetId
   ) ?? null;
   const canCreateScheduledPolicy = ['owner', 'admin', 'engineer'].includes(
     String(session.role ?? '').trim().toLowerCase()
@@ -778,16 +794,18 @@ export function TargetGroupDetailView({
     // Use connectors already loaded by fetchPortalData (gated on the connectorsEnabled
     // deployment feature). Avoids an unconditional GET /v1/connectors that 404s when the
     // connector add-on is disabled for the tenant.
-    setConnectors(Array.isArray(data.connectors) ? (data.connectors as DataItem[]) : []);
-    setConnectorsMeta(null);
+    const loadedConnectors = (Array.isArray(data.connectors) ? (data.connectors as DataItem[]) : [])
+      .filter((connector) => DNS_INVENTORY_PROVIDERS.has(getString(connector, ['provider'], '').toLowerCase()));
+    setConnectors(loadedConnectors);
+    setConnectorsMeta(loadedConnectors.length === 0
+      ? { empty_reason: 'No DNS provider integration is configured for this tenant.' }
+      : null);
   }, [data.connectors]);
 
-  // §7.2 optional background polling: re-check a pending challenge every 30s until resolved.
-  // Disabled under prefers-reduced-motion and capped at 15 minutes.
+  // §7.2 optional background polling: re-check a pending challenge every 30s until resolved,
+  // capped at 15 minutes. This functional network timer does not create visual motion.
   useEffect(() => {
     if (!activeChallengeIsPending || !activeChallengeId) return undefined;
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
 
     const startedAt = Date.now();
     const timer = window.setInterval(() => {
@@ -816,6 +834,21 @@ export function TargetGroupDetailView({
           if (result.verified === true) {
             window.clearInterval(timer);
             await loadDnsChallenges();
+            let baselineMessage = wafEdgeDetectionEnabled
+              ? ' Bounded WAF/CDN detection was not queued; start it from the target row.'
+              : ' WAF/CDN detection is not enabled for this tenant.';
+            if (wafEdgeDetectionEnabled) {
+              try {
+                await requestJson(config, session, '/v1/waf/edge-detection', {
+                  method: 'POST',
+                  body: { target_group_id: entityId, target_id: selectedDnsTargetId }
+                });
+                baselineMessage = ' Bounded WAF/CDN detection started through the signed-worker path.';
+              } catch {
+                // Ownership remains verified even when group-wide concurrency blocks the baseline.
+              }
+            }
+            setMessage(`DNS ownership verified.${baselineMessage}`);
             try {
               await onRefreshRef.current();
             } catch (refreshError) {
@@ -833,7 +866,7 @@ export function TargetGroupDetailView({
     }, DNS_POLL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [config, session, entityId, selectedDnsTargetId, activeChallengeId, activeChallengeIsPending, loadDnsChallenges]);
+  }, [config, session, entityId, selectedDnsTargetId, activeChallengeId, activeChallengeIsPending, loadDnsChallenges, wafEdgeDetectionEnabled]);
 
   useEffect(() => { setEdgeDetection(null); }, [entityId]);
 
@@ -892,13 +925,13 @@ export function TargetGroupDetailView({
     };
   }, [config, session, edgeDetection]);
 
-  async function runAction(label: string, action: () => Promise<void>, success: string) {
+  async function runAction(label: string, action: () => Promise<void>, success: string | (() => string)) {
     setBusy(label);
     setError('');
     setMessage('');
     try {
       await action();
-      setMessage(success);
+      setMessage(typeof success === 'function' ? success() : success);
       await onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Action failed.');
@@ -1125,7 +1158,22 @@ export function TargetGroupDetailView({
       await loadDnsChallenges();
       if (result.verified === true) {
         const verifiedTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === targetId);
-        setMessage(`DNS ownership verified for ${getString(verifiedTarget, ['value'], targetId)}.`);
+        const verifiedLabel = getString(verifiedTarget, ['value'], targetId);
+        let baselineMessage = wafEdgeDetectionEnabled
+          ? ' Bounded WAF/CDN detection was not queued; start it from the target row.'
+          : ' WAF/CDN detection is not enabled for this tenant.';
+        if (wafEdgeDetectionEnabled) {
+          try {
+            await requestJson(config, session, '/v1/waf/edge-detection', {
+              method: 'POST',
+              body: { target_group_id: entityId, target_id: targetId }
+            });
+            baselineMessage = ' Bounded WAF/CDN detection started through the signed-worker path.';
+          } catch {
+            // Ownership remains verified even when group-wide run concurrency blocks the baseline.
+          }
+        }
+        setMessage(`DNS ownership verified for ${verifiedLabel}.${baselineMessage}`);
         try {
           await onRefresh();
         } catch (refreshError) {
@@ -1177,7 +1225,8 @@ export function TargetGroupDetailView({
     const existing = pickActiveChallenge(
       dnsChallengesRef.current.filter((row) => getString(row, ['target_id'], '') === id)
     );
-    const alreadyVerified = targetVerificationState(item).trim().toLowerCase() === 'dns_verified'
+    const verificationState = targetVerificationState(item).trim().toLowerCase();
+    const alreadyVerified = canRunTest(verificationState)
       || getString(existing, ['state'], '').toLowerCase() === 'resolved';
     if (alreadyVerified) {
       if (existing) {
@@ -1186,7 +1235,7 @@ export function TargetGroupDetailView({
           ? { verified: true, challenge: existing }
           : null);
       }
-      setMessage(`DNS ownership is already confirmed for ${getString(item, ['value'], id)}. No new challenge was issued.`);
+      setMessage(`Ownership is already confirmed for ${getString(item, ['value'], id)} (${humanizeLabel(verificationState)}). No new DNS challenge was issued.`);
     } else if (isActiveDnsChallenge(existing)) {
       setDnsChallenge(existing);
       void verifyDnsChallenge(getString(existing, ['id', 'challenge_id'], ''), id);
@@ -1214,32 +1263,71 @@ export function TargetGroupDetailView({
 
   async function importInventory() {
     if (!inventoryProvider || selectedInventory.size === 0) return;
+    let importedCount = 0;
+    let skippedCount = 0;
+    let skippedDetails = '';
+    let baselineLabel = '';
+    let baselineDeferredCount = 0;
+    let baselineStartFailed = false;
     await runAction(`import-${inventoryProvider}`, async () => {
-      for (const rowId of selectedInventory) {
-        const row = inventoryRows.find((item) => getString(item, ['id', 'value'], '') === rowId);
-        if (!row) continue;
-        const connector = connectors.find((item) => getString(item, ['id'], '') === inventoryProvider);
-        const importIntegration = getString(connector, ['provider', 'type', 'name'], 'connector_inventory');
-        const resourceRef = getString(row, ['resource_ref', 'id'], rowId);
-        await requestJson(config, session, `/v1/target-groups/${encodeURIComponent(entityId)}/targets`, {
+      const items = [...selectedInventory]
+        .map((rowId) => inventoryRows.find((item) => getString(item, ['id', 'value'], '') === rowId))
+        .filter((row): row is DataItem => Boolean(row))
+        .map((row) => ({
+          kind: getString(row, ['kind'], 'fqdn'),
+          value: getString(row, ['value', 'name'], ''),
+          expected_behavior: getString(row, ['expected_behavior'], '') || null
+        }));
+      const result = await requestJson(
+        config,
+        session,
+        `/v1/target-groups/${encodeURIComponent(entityId)}/targets:bulk-import`,
+        {
           method: 'POST',
-          body: {
-            kind: getString(row, ['kind'], 'fqdn'),
-            value: getString(row, ['value', 'name'], rowId),
-            expected_behavior: getString(row, ['expected_behavior'], '') || null,
-            metadata: {
-              import_source: importIntegration,
-              import_integration: importIntegration,
-              connector_id: inventoryProvider,
-              resource_ref: resourceRef
-            }
-          }
-        });
+          body: { connector_id: inventoryProvider, source: 'provider_inventory', items }
+        }
+      ) as DataItem;
+      importedCount = typeof result.count === 'number'
+        ? result.count
+        : Array.isArray(result.imported) ? result.imported.length : 0;
+      const skippedRows = Array.isArray(result.skipped) ? result.skipped as DataItem[] : [];
+      skippedCount = skippedRows.length;
+      skippedDetails = skippedRows.slice(0, 5).map((row) => {
+        const value = getString(row, ['value'], 'unnamed row');
+        const reason = getString(row, ['reason', 'message'], 'not imported').replaceAll('_', ' ');
+        return `${value}: ${reason}`;
+      }).join('; ');
+      const importedTargets = Array.isArray(result.imported) ? result.imported as DataItem[] : [];
+      const baselineTargets = importedTargets.filter((target) => canRunTest(targetVerificationState(target)));
+      baselineDeferredCount = Math.max(0, baselineTargets.length - 1);
+      const baselineTarget = baselineTargets[0];
+      const baselineTargetId = getString(baselineTarget, ['id'], '');
+      if (baselineTargetId && wafEdgeDetectionEnabled) {
+        baselineLabel = getString(baselineTarget, ['value'], baselineTargetId);
+        try {
+          await requestJson(config, session, '/v1/waf/edge-detection', {
+            method: 'POST',
+            body: { target_group_id: entityId, target_id: baselineTargetId }
+          });
+        } catch {
+          baselineStartFailed = true;
+          baselineDeferredCount = baselineTargets.length;
+        }
       }
       setInventoryProvider(null);
       setInventoryRows([]);
       setSelectedInventory(new Set());
-    }, 'Selected inventory rows imported.');
+    }, () => {
+      const skippedSummary = skippedCount
+        ? `; ${skippedCount} skipped${skippedDetails ? ` (${skippedDetails}${skippedCount > 5 ? '; more omitted' : ''})` : ''}`
+        : '';
+      const importSummary = `${importedCount} exact ${importedCount === 1 ? 'target' : 'targets'} imported through provider inventory validation${skippedSummary}.`;
+      if (baselineStartFailed) return `${importSummary} The immediate WAF/CDN baseline could not start; no baseline was queued. Start detection from the target row.`;
+      if (baselineLabel) {
+        return `${importSummary} Bounded WAF/CDN detection started for ${baselineLabel}${baselineDeferredCount ? `; ${baselineDeferredCount} remaining ${baselineDeferredCount === 1 ? 'target is' : 'targets are'} not queued because concurrency is group-wide` : ''}.`;
+      }
+      return importSummary;
+    });
   }
 
   async function runBoundedTest(targetId: string) {
@@ -1334,6 +1422,11 @@ export function TargetGroupDetailView({
       setMessage('');
       return;
     }
+    if (!effectiveSelectedPolicyTargetId || !selectedPolicyTarget) {
+      setError('Select the exact target this schedule may validate.');
+      setMessage('');
+      return;
+    }
     const cadence = String(form.get('cadence') ?? 'weekly').trim();
     const expectedVerdict = String(form.get('expected_verdict') ?? 'pass').trim();
     const day = String(form.get('safe_window_day') ?? '').trim();
@@ -1359,6 +1452,7 @@ export function TargetGroupDetailView({
         method: 'POST',
         body: {
           target_group_id: entityId,
+          target_id: effectiveSelectedPolicyTargetId,
           check_id: effectiveSelectedPolicyCheckId,
           cadence,
           expected_verdict: expectedVerdict,
@@ -1367,7 +1461,7 @@ export function TargetGroupDetailView({
       });
       const checkName = getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId);
       setMessage(
-        `${checkName} scheduled ${humanizeLabel(cadence).toLowerCase()} inside ${day} ${start}–${end} ${timezone}.`
+        `${checkName} scheduled ${humanizeLabel(cadence).toLowerCase()} for ${getString(selectedPolicyTarget, ['value'], effectiveSelectedPolicyTargetId)} inside ${day} ${start}–${end} ${timezone}.`
       );
       formElement.reset();
       await onRefresh();
@@ -1576,7 +1670,13 @@ export function TargetGroupDetailView({
               name="target-group-policy-check"
               value={checkId}
               checked={effectiveSelectedPolicyCheckId === checkId}
-              onChange={() => setSelectedPolicyCheckId(checkId)}
+              onChange={() => {
+                setSelectedPolicyCheckId(checkId);
+                setSelectedPolicyTargetId((current) => {
+                  const selectedTarget = targets.find((target) => getString(target, ['id'], '') === current);
+                  return selectedTarget && isPolicyTargetCompatible(item, selectedTarget) ? current : '';
+                });
+              }}
               aria-label={`Select ${checkName} for bounded runs and the scheduled policy`}
             />
           </label>
@@ -1623,6 +1723,7 @@ export function TargetGroupDetailView({
               return (
                 <span className="check-policy-binding" key={getString(policy, ['id', 'policy_id'], `${checkId}-${index}`)}>
                   <Badge tone={state === 'paused' ? 'warn' : 'success'} title={`Policy ${state}`}>{cadence}</Badge>
+                  <span className="mono small">{getString(policy.target as DataItem | undefined, ['value'], getString(policy, ['target_id'], 'Unbound legacy policy'))}</span>
                   <span className="mono muted small">{formatPolicySafeWindow(policy)}</span>
                 </span>
               );
@@ -2093,7 +2194,9 @@ export function TargetGroupDetailView({
                   <h3>Create a schedule</h3>
                   <p>Cadence repeats eligibility only. Every dispatch is still checked against ownership, LOA, catalog bounds, rate limits, safe window, and kill switch.</p>
                 </div>
-                <Badge tone={effectiveSelectedPolicyCheckId ? 'success' : 'warn'}>{effectiveSelectedPolicyCheckId ? 'Check selected' : 'Select a check'}</Badge>
+                <Badge tone={effectiveSelectedPolicyCheckId && effectiveSelectedPolicyTargetId ? 'success' : 'warn'}>
+                  {effectiveSelectedPolicyCheckId && effectiveSelectedPolicyTargetId ? 'Check + target selected' : 'Select check + target'}
+                </Badge>
               </div>
               <p className="schedule-selected full">
                 Selected rule: <strong>{getString(selectedPolicyCheck, ['name', 'check_id'], 'None')}</strong>
@@ -2101,6 +2204,26 @@ export function TargetGroupDetailView({
               </p>
               <fieldset className="schedule-fields full" disabled={busy === 'create-test-policy'}>
                 <legend className="sr-only">Scheduled policy settings</legend>
+                <label>
+                  <span>Exact target</span>
+                  <select
+                    name="target_id"
+                    value={effectiveSelectedPolicyTargetId}
+                    onChange={(event) => setSelectedPolicyTargetId(event.target.value)}
+                    disabled={!selectedPolicyCheck || compatiblePolicyTargets.length === 0}
+                    required
+                  >
+                    <option value="" disabled>
+                      {selectedPolicyCheck && compatiblePolicyTargets.length === 0 ? 'No compatible targets' : 'Choose target'}
+                    </option>
+                    {compatiblePolicyTargets.map((target) => {
+                      const targetId = getString(target, ['id'], '');
+                      const state = humanizeLabel(targetVerificationState(target));
+                      const kind = humanizeLabel(effectivePolicyTargetKind(target));
+                      return <option key={targetId} value={targetId}>{getString(target, ['value'], targetId)} · {kind} · {state}</option>;
+                    })}
+                  </select>
+                </label>
                 <label>
                   <span>Cadence</span>
                   <select name="cadence" defaultValue="weekly" required>
@@ -2150,11 +2273,16 @@ export function TargetGroupDetailView({
                   />
                 </label>
               </fieldset>
+              {selectedPolicyCheck && compatiblePolicyTargets.length === 0 ? (
+                <p className="form-banner neutral full" role="status">
+                  This group has no exact target compatible with {getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId)}. This check supports {policySupportedTargetKinds(selectedPolicyCheck).join(', ') || 'any declared target kind'}; choose another check or add a compatible target.
+                </p>
+              ) : null}
               <div className="form-actions full">
                 <Button
                   type="submit"
                   loading={busy === 'create-test-policy'}
-                  disabled={!effectiveSelectedPolicyCheckId || customerRunnableChecks.length === 0}
+                  disabled={!effectiveSelectedPolicyCheckId || !effectiveSelectedPolicyTargetId || customerRunnableChecks.length === 0}
                 >
                   Create schedule
                 </Button>
@@ -2319,8 +2447,16 @@ export function TargetGroupDetailView({
           ) : null}
           {onboardTab === 'cloud' ? (
             <div className="stack-tight">
-              <p className="muted">Connect a provider once, then pick which zones or instances belong in this target group. AstraNull records connector provenance for each import; ownership verification remains a separate explicit step.</p>
-              {connectors.length === 0 ? emptyStateFromApi({ icon: Bot, meta: connectorsMeta }) : null}
+              <p className="muted">Connect a DNS provider once, then select exact zones for this target group. A current vault-backed server poll can verify the imported zone from durable provider API evidence; manual or prefetched metadata remains pending and still requires DNS proof.</p>
+              {connectors.length === 0 ? (
+                <EmptyState
+                  icon={Bot}
+                  title="No DNS provider connected"
+                  body={getString(connectorsMeta, ['empty_reason'], 'Add a provider integration to load bounded DNS zone inventory.')}
+                  actionLabel="Add provider"
+                  actionHref="#integrations"
+                />
+              ) : null}
               <div className="provider-grid">
                 {connectors.map((connector) => {
                   const connectorId = getString(connector, ['id'], '');

@@ -215,7 +215,7 @@ describe('WAF edge detection delegated API', () => {
   });
 
   it('projects successful WAF vendor and CDN provider signals from run events', async () => {
-    runs.set('run_detected', edgeRun('run_detected', { status: 'collecting' }));
+    runs.set('run_detected', edgeRun('run_detected', { status: 'verdicted' }));
     events.set('run_detected', [{
       id: 'evt_detected',
       tenant_id: 'ten_demo',
@@ -422,6 +422,11 @@ describe('WAF edge detection signed-worker safety path', () => {
     });
     assert.equal(ingested.status, 201);
 
+    // Probe ingestion precedes asynchronous run finalization. Edge evidence is projected only
+    // after the shared finalizer makes the run successfully terminal.
+    assert.equal(run.status, 'collecting');
+    run.status = 'verdicted';
+
     const detected = await request(
       baseUrl,
       'GET',
@@ -441,7 +446,7 @@ describe('WAF edge detection Postgres service parity', () => {
   let server;
   let baseUrl;
   const calls = [];
-  const run = edgeRun('run_pg_1', { status: 'collecting' });
+  const run = edgeRun('run_pg_1', { status: 'verdicted' });
   const workerEvent = {
     id: 'evt_pg_1',
     tenant_id: 'ten_demo',

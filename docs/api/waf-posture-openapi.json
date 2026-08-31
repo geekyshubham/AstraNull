@@ -1238,7 +1238,7 @@
           "waf_asset_id": { "type": "string", "format": "uuid" },
           "status": {
             "type": "string",
-            "enum": ["protected", "underprotected", "unprotected", "unknown", "excluded"]
+            "enum": ["protected", "edge_protected", "underprotected", "unprotected", "unknown", "excluded"]
           },
           "reason_codes": { "type": "array", "items": { "type": "string" } },
           "detected_vendor": { "type": "string" },
@@ -1294,6 +1294,7 @@
           "date": { "type": "string", "format": "date" },
           "coverage_ratio": { "type": "number" },
           "protected": { "type": "integer" },
+          "edge_protected": { "type": "integer" },
           "underprotected": { "type": "integer" },
           "unprotected": { "type": "integer" },
           "unknown": { "type": "integer" },
@@ -1306,6 +1307,7 @@
           "total": { "type": "integer" },
           "total_assets": { "type": "integer" },
           "protected": { "type": "integer" },
+          "edge_protected": { "type": "integer" },
           "underprotected": { "type": "integer" },
           "unprotected": { "type": "integer" },
           "unknown": { "type": "integer" },
@@ -1339,6 +1341,7 @@
           "product": { "type": "string" },
           "asset_count": { "type": "integer" },
           "protected_count": { "type": "integer" },
+          "edge_protected_count": { "type": "integer" },
           "underprotected_count": { "type": "integer" },
           "unprotected_count": { "type": "integer" },
           "unknown_count": { "type": "integer" }
@@ -1371,6 +1374,7 @@
           "name": { "type": "string" },
           "coverage_ratio": { "type": "number" },
           "protected": { "type": "integer" },
+          "edge_protected": { "type": "integer" },
           "underprotected": { "type": "integer" },
           "unprotected": { "type": "integer" },
           "critical_gap_count": { "type": "integer" }
@@ -1392,6 +1396,7 @@
           "region_label": { "type": "string" },
           "asset_count": { "type": "integer" },
           "coverage_ratio": { "type": "number" },
+          "edge_protected": { "type": "integer" },
           "unprotected_critical_count": { "type": "integer" }
         }
       },
@@ -1411,6 +1416,7 @@
           "asset_count": { "type": "integer" },
           "coverage_ratio": { "type": "number" },
           "protected": { "type": "integer" },
+          "edge_protected": { "type": "integer" },
           "underprotected": { "type": "integer" },
           "unprotected": { "type": "integer" },
           "critical_gap_count": { "type": "integer" }

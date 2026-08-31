@@ -123,7 +123,7 @@ function ownershipStatusBadgeTone(status: string): BadgeProps['tone'] {
 }
 
 function validationModeBadgeTone(mode: string): BadgeProps['tone'] {
-  return normalizeStatusKey(mode) === 'external_only' ? 'warn' : 'info';
+  return normalizeStatusKey(mode) === 'agent_assisted' ? 'info' : 'muted';
 }
 
 function probeEndpointStatusBadgeTone(status: string): BadgeProps['tone'] {
@@ -1026,9 +1026,15 @@ function RunDetailView({
 
   const runTitle = detailEntityTitle('run-detail', entity, entityId, { checks: data.checks });
   const groupId = getString(entity, ['target_group_id'], '');
+  const runTargetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === groupId) ?? null;
   const groupName = groupId
-    ? getString(data.targetGroups.find((group) => getString(group, ['id'], '') === groupId) ?? {}, ['name'], groupId)
+    ? getString(runTargetGroup ?? {}, ['name'], groupId)
     : '—';
+  const explicitRunValidationMode = getString(
+    entity,
+    ['validation_mode'],
+    getString(runTargetGroup, ['validation_mode'], '')
+  );
   const verdictValue = getNestedString(entity, ['verdict', 'verdict'], 'pending');
   const primaryFinding = relatedFindings[0] ?? null;
   const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
@@ -1107,7 +1113,7 @@ function RunDetailView({
             </CardHeader>
             <CardContent>
               {agentEvents.length === 0 ? (
-                <EmptyState icon={Bot} title="No agent observations yet." body="Outbound canary observations appear when agents report on this run." />
+                <EmptyState icon={Bot} title="No agent observations for this run." body="This does not block external validation. Add an outbound canary only when internal or origin corroboration is needed." />
               ) : (
                 <div className="kv-list">
                   {agentEvents.map((event, index) => (
@@ -1128,7 +1134,13 @@ function RunDetailView({
       <Card>
         <CardHeader>
           <CardTitle>Correlation matrix</CardTitle>
-          <CardDescription>Verdict = probe ∧ agent. Truth table and verdict explanation from observed facts.</CardDescription>
+          <CardDescription>
+            {explicitRunValidationMode === 'external_only' || isExternalOnlyVerdictSignal(entity)
+              ? 'External-only verdict: probe evidence is authoritative for edge observations; internal or origin impact remains unproven without a matching agent observation.'
+              : explicitRunValidationMode === 'agent_assisted'
+                ? 'Agent-assisted verdict: correlate exact-run probe and agent observations without inferring missing internal evidence.'
+                : 'Correlation mode is not recorded yet. Pending or incomplete evidence is not labeled agent-assisted; external probe results still support edge observations, while internal or origin impact requires a matching agent observation.'}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <VerdictExplanationPanel detail={entity} events={runEvents} />
@@ -1608,7 +1620,7 @@ function TargetGroupDetailView({
   const [ownershipVerifications, setOwnershipVerifications] = useState<DataItem[]>([]);
   const [ownershipVerificationsLoading, setOwnershipVerificationsLoading] = useState(false);
 
-  const validationMode = getString(entity, ['validation_mode'], 'agent_assisted');
+  const validationMode = getString(entity, ['validation_mode'], 'external_only');
   const ownershipStatus = getString(entity, ['ownership_status'], 'unverified');
 
   useEffect(() => {
@@ -1842,7 +1854,7 @@ function TargetGroupDetailView({
       </div>
       <div className="metric-grid four">
         <MetricCard label="Targets" value={targets.length} sub="Declared · never auto-discovered" icon={Target} tone="info" />
-        <MetricCard label="Bound agents" value={relatedAgents.length} sub="Outbound observers for this group" icon={Bot} tone="success" />
+        <MetricCard label="Bound agents" value={relatedAgents.length} sub="Optional internal/origin observers" icon={Bot} tone={relatedAgents.length > 0 ? 'success' : 'muted'} />
         <MetricCard label="Open findings" value={openFindings.length} sub="Unresolved gaps on this group" icon={TriangleAlert} tone={openFindings.length > 0 ? 'danger' : 'muted'} />
         <MetricCard label="Last run" value={lastRun ? checkDisplayName(data.checks, getString(lastRun, ['check_id'], getString(lastRun, ['id']))) : '—'} sub={lastRun ? formatDate(lastRun.updated_at ?? lastRun.created_at) : 'No runs yet'} icon={Activity} tone="muted" />
       </div>
@@ -1914,7 +1926,7 @@ function TargetGroupDetailView({
             <DataTable
               columns={agentColumns}
               items={relatedAgents}
-              empty={<EmptyState icon={Bot} title="No agents bound." body="Install an outbound agent and bind it to this declared group." actionLabel="Open agents" actionHref="#agents" />}
+              empty={<EmptyState icon={Bot} title="No agents bound." body="External validation remains available. Bind an optional outbound agent only when internal or origin observations are needed." actionLabel="Explore optional agents" actionHref="#agents" />}
             />
           </CardContent>
         </Card>
@@ -2009,11 +2021,11 @@ function TargetGroupDetailView({
                   Verify my setup
                 </Button>
               </div>
-              {validationMode === 'external_only' ? (
-                <p className="muted small">
-                  External-only mode: AstraNull scans the declared FQDN/IP only. Verdicts are labeled external_only (edge evidence, origin not proven). Deploy an agent to strengthen.
-                </p>
-              ) : null}
+              <p className="muted small">
+                {validationMode === 'agent_assisted'
+                  ? 'Agent-assisted mode is optional and should be selected only when a check must correlate external probes with an internal or origin observation.'
+                  : 'External-only is the default: AstraNull validates the declared target from outside without an agent. Add an outbound agent only when you need to prove whether traffic reached the origin or another internal observation point.'}
+              </p>
               <Card>
                 <CardHeader>
                   <CardTitle>DNS TXT ownership</CardTitle>
@@ -2593,10 +2605,10 @@ function FindingDetailView({
           <Card>
             <CardHeader>
               <CardTitle>Strengthen this verdict</CardTitle>
-              <CardDescription>This verdict is based on external-only edge evidence. Deploy the AstraNull agent on the target path to prove whether traffic reached origin.</CardDescription>
+              <CardDescription>This verdict is based on external-only edge evidence. An agent is optional for external validation; place one on the target path only when you need to prove whether traffic reached the origin.</CardDescription>
             </CardHeader>
             <CardContent>
-              <AnchorButton size="sm" variant="default" href="#agents">Deploy agent to strengthen</AnchorButton>
+              <AnchorButton size="sm" variant="default" href="#agents">Add optional origin evidence</AnchorButton>
             </CardContent>
           </Card>
         ) : null}
@@ -3799,7 +3811,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
       />
       <div className="metric-grid four">
         <MetricCard label="Target groups" value={row.groupCount} sub="Declared in this environment" icon={Target} tone="info" />
-        <MetricCard label="Agents" value={envAgents.length} sub="Outbound observers in scope" icon={Bot} tone={envAgents.length > 0 ? 'success' : 'warn'} />
+        <MetricCard label="Agents" value={envAgents.length} sub="Optional internal/origin observers" icon={Bot} tone={envAgents.length > 0 ? 'success' : 'muted'} />
         <MetricCard label="Open findings" value={row.openFindings} sub="Unresolved across groups" icon={TriangleAlert} tone={row.openFindings > 0 ? 'danger' : 'muted'} />
         <MetricCard label="Status" value={status.label} sub={`Region ${region} · coverage ${row.coverage}%`} icon={ShieldCheck} tone={status.tone === 'muted' ? 'muted' : status.tone === 'warn' ? 'warn' : 'success'} />
       </div>
@@ -3831,7 +3843,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
                 items={envAgents}
                 getRowId={(item) => getString(item, ['id'], '')}
                 getRowProps={(item) => detailRowNavProps('agent-detail', getString(item, ['id'], ''))}
-                empty={<EmptyState icon={Bot} title="No agents in this environment." body="Install an outbound agent and bind it to a target group in this environment." actionLabel="Open agents" actionHref="#agents" />}
+                empty={<EmptyState icon={Bot} title="No agents in this environment." body="External validation remains available. Add an outbound agent only for internal or origin evidence." actionLabel="Explore optional agents" actionHref="#agents" />}
               />
             </CardContent>
           </Card>
@@ -3886,9 +3898,9 @@ function CheckDetailPage({ entityId, data }: { entityId: string; data: PortalDat
   const family = getString(check, ['vector_family', 'family'], '');
   const safetyClass = getString(check, ['safety_class'], '');
   const bound = checkBoundLabel(check);
-  const description = getString(check, ['description', 'summary'], 'Check correlated with agent observation before a verdict is asserted.');
+  const description = getString(check, ['description', 'summary'], 'Evidence-backed check for a compatible declared target.');
   const latest = latestCheckVerdict(data.runs, entityId);
-  const method = getString(check, ['method'], safetyClass === 'safe' ? `${bound} · agent-corroborated` : 'governed · SOC-scheduled');
+  const method = getString(check, ['method'], safetyClass === 'safe' ? `${bound} · evidence-backed` : 'governed · SOC-scheduled');
   const title = getString(check, ['name', 'check_id', 'id'], entityId);
   const definition = [
     `check_id: ${entityId}`,

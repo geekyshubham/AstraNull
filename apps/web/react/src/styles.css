@@ -1293,8 +1293,9 @@ select.select:focus,
   z-index: 40;
   display: grid;
   gap: 4px;
-  max-height: 280px;
+  max-height: var(--select-menu-max-height, 280px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);

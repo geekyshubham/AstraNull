@@ -89,10 +89,10 @@ async function seedExpiredCollectingRun(pool) {
     await client.query(
       `INSERT INTO events (
          id, tenant_id, test_run_id, target_id, check_id, source, signal_type,
-         nonce_hash, timestamp, metadata_json
+         producer_kind, nonce_hash, timestamp, metadata_json
        ) VALUES (
          'evt_sweep_probe', $1, $2, $3, $4, 'probe_worker', 'probe_result',
-         'nh_sweep', now() - interval '19 minutes', '{"external_result": "connected"}'::jsonb
+         'signed_probe', 'nh_sweep', now() - interval '19 minutes', '{"external_result": "connected"}'::jsonb
        )`,
       [TENANT, RUN, TARGET, CHECK_ID],
     );
@@ -249,6 +249,59 @@ describe('postgres collection-window sweeper (expired collecting runs)', () => {
     });
   });
 
+  it('cancellation wins before finalization without leaving leaseable work or a verdict', async (t) => {
+    const availability = await resolvePostgresHarnessAvailability(process.env);
+    if (!availability.available) {
+      t.skip(availability.reason);
+      return;
+    }
+
+    await withEphemeralPostgres(async (pool) => {
+      await ensureHarnessAppRole(pool);
+      await seedExpiredCollectingRun(pool);
+      await withTenantContext(pool, TENANT, (client) => client.query(
+        `INSERT INTO probe_jobs (
+           id, tenant_id, test_run_id, target_id, check_id, status, nonce_hash,
+           target_descriptor_json
+         ) VALUES (
+           'pjob_cancel_race', $1, $2, $3, $4, 'leased', 'nh_cancel_race',
+           '{"id":"tgt_sweep_a","kind":"ip","value":"203.0.113.10"}'::jsonb
+         )`,
+        [TENANT, RUN, TARGET, CHECK_ID],
+      ));
+
+      const repo = createValidationEvidenceRepository(pool);
+      const cancellation = await repo.cancelTestRunAtomic(CTX, RUN, {
+        completed_at: new Date().toISOString(),
+      });
+      const verdict = await repo.createVerdictIfAbsent(CTX, {
+        id: 'verdict_after_cancel',
+        test_run_id: RUN,
+        target_id: TARGET,
+        check_id: CHECK_ID,
+        verdict: 'protected',
+        confidence: 'high',
+        explanation: 'must not be inserted',
+        evidence_ids: ['evt_sweep_probe'],
+        placement_confidence: {},
+        created_at: new Date().toISOString(),
+      });
+
+      assert.equal(cancellation.cancelled, true);
+      assert.deepEqual(cancellation.cancelled_jobs.map((job) => job.id), ['pjob_cancel_race']);
+      assert.equal(verdict, null);
+      const state = await withTenantContext(pool, TENANT, async (client) => {
+        const run = await client.query('SELECT status FROM test_runs WHERE id = $1', [RUN]);
+        const job = await client.query('SELECT status FROM probe_jobs WHERE id = $1', ['pjob_cancel_race']);
+        const verdicts = await client.query('SELECT id FROM verdicts WHERE test_run_id = $1', [RUN]);
+        return { run: run.rows[0], job: job.rows[0], verdicts: verdicts.rows };
+      });
+      assert.equal(state.run.status, 'cancelled');
+      assert.equal(state.job.status, 'cancelled');
+      assert.deepEqual(state.verdicts, []);
+    });
+  });
+
   it('createVerdictIfAbsent DO NOTHING path returns the live incumbent instead of null', async (t) => {
     const availability = await resolvePostgresHarnessAvailability(process.env);
     if (!availability.available) {
@@ -309,6 +362,12 @@ describe('postgres collection-window sweeper (expired collecting runs)', () => {
       assert.equal(stored.rows.length, 1, 'uniq_verdict_per_test_run must keep exactly one row');
       assert.equal(stored.rows[0].id, 'ver_first');
       assert.equal(stored.rows[0].verdict, 'bypassable');
+
+      const cancellation = await repo.cancelTestRunAtomic(CTX, RUN, {
+        completed_at: new Date().toISOString(),
+      });
+      assert.equal(cancellation.cancelled, false);
+      assert.equal(cancellation.run.status, 'verdicted');
     });
   });
 

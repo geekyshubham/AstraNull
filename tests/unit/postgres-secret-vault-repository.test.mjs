@@ -217,4 +217,55 @@ describe('postgres secret vault repository', () => {
     assert.equal(updated.rotation, 2);
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
+
+  it('rotating a connector secret invalidates authority and cancels open jobs in one tenant transaction', async () => {
+    const rotatedEnvelope = encryptSecret('rotated-connector-secret', ENC_KEY, {
+      id: SECRET_ID,
+      tenant_id: CTX.tenantId,
+      purpose: 'connector',
+      name: 'cloudflare',
+      rotation: 2,
+    });
+    let invalidationSeen = false;
+    const pool = createRecordingPool((sql, params) => {
+      if (/UPDATE encrypted_secrets/i.test(sql)) {
+        return { rows: [{
+          id: SECRET_ID,
+          tenant_id: CTX.tenantId,
+          purpose: 'connector',
+          name: 'cloudflare',
+          metadata_json: { provider: 'cloudflare' },
+          rotation: 2,
+          envelope_json: rotatedEnvelope,
+          created_at: FIXED_NOW,
+          updated_at: '2026-06-02T00:00:00.000Z',
+          created_by: CTX.userId,
+        }] };
+      }
+      if (/WITH invalidated AS/i.test(sql)) {
+        invalidationSeen = true;
+        assert.match(sql, /WHERE tenant_id = \$1 AND secret_id = \$2/i);
+        assert.match(sql, /last_success_at = NULL/i);
+        assert.match(sql, /last_success_revision = 0/i);
+        assert.match(sql, /poll_revision = poll_revision \+ 1/i);
+        assert.match(sql, /status = 'cancelled'/i);
+        assert.match(sql, /error_code = 'connector_secret_rotated'/i);
+        assert.match(sql, /status IN \('pending', 'leased'\)/i);
+        assert.deepEqual(params, [CTX.tenantId, SECRET_ID, '2026-06-02T00:00:00.000Z']);
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const repo = createSecretVaultRepository(pool);
+    const updated = await repo.updateEncryptedSecret(CTX, SECRET_ID, {
+      metadata: { provider: 'cloudflare' },
+      rotation: 2,
+      envelope: rotatedEnvelope,
+      updated_at: '2026-06-02T00:00:00.000Z',
+    });
+
+    assert.equal(updated.rotation, 2);
+    assert.equal(invalidationSeen, true);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
 });

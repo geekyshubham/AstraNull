@@ -23,7 +23,7 @@ services:
   # a long-lived member of the runtime stack.
   migrate:
     profiles: ["ops"]
-    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     environment:
       NODE_ENV: production
       ASTRANULL_DEPLOYMENT_PROFILE: hosted-staging
@@ -31,9 +31,11 @@ services:
       ASTRANULL_ADMIN_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
       ASTRANULL_DATABASE_APP_PASSWORD: ${ASTRANULL_DATABASE_APP_PASSWORD}
       ASTRANULL_DATABASE_BACKUP_PASSWORD: ${ASTRANULL_DATABASE_BACKUP_PASSWORD}
+      ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD: ${ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD:-}
+      ASTRANULL_DATABASE_CONNECTOR_WORKER_PASSWORD: ${ASTRANULL_DATABASE_CONNECTOR_WORKER_PASSWORD:-}
       ASTRANULL_MIGRATION_LOCK_TIMEOUT_MS: "15000"
       ASTRANULL_MIGRATION_STATEMENT_TIMEOUT_MS: "120000"
-    command: ["/bin/sh", "-c", "node scripts/migrate-postgres.mjs && node scripts/postgres-grant-app-role.mjs"]
+    command: ["/bin/sh", "-eu", "-c", "exec timeout -k 10 150 /bin/sh -c 'node scripts/migrate-postgres.mjs && node scripts/postgres-grant-app-role.mjs'"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,7 +45,7 @@ services:
   # It runs before pg_dump but never applies migrations or starts a long-lived service.
   backup-role-bootstrap:
     profiles: ["ops"]
-    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     environment:
       NODE_ENV: production
       ASTRANULL_ADMIN_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
@@ -67,11 +69,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Destructive restore tooling is isolated from the long-lived postgres service. It
+  # receives only exact owner URLs for the maintenance and restored databases.
+  restore-db:
+    profiles: ["ops"]
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      ASTRANULL_MAINTENANCE_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      ASTRANULL_RESTORE_DATABASE_URL: postgresql://astranull:${POSTGRES_PASSWORD}@postgres:5432/astranull
+    command: ["pg_restore", "--version"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   # Encryption/decryption never receives a database credential. Operators pass only a
   # mounted custom dump plus non-secret database-reference CLI fields to the writer.
   backup:
     profiles: ["ops"]
-    image: astranull-control-plane:${ASTRANULL_IMAGE_TAG:-local}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     environment:
       NODE_ENV: production
       ASTRANULL_BACKUP_ENCRYPTION_KEY: ${ASTRANULL_BACKUP_ENCRYPTION_KEY}
@@ -79,7 +95,7 @@ services:
     restart: "no"
 
   control-plane:
-    image: astranull-control-plane:${ASTRANULL_CONTROL_PLANE_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    image: "${ASTRANULL_CONTROL_PLANE_IMAGE_ID:?ASTRANULL_CONTROL_PLANE_IMAGE_ID is required}"
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -103,11 +119,14 @@ services:
       ASTRANULL_DATABASE_URL: postgresql://astranull_app:${ASTRANULL_DATABASE_APP_PASSWORD}@postgres:5432/astranull
       ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
       ASTRANULL_SECRET_ENCRYPTION_KEY: ${ASTRANULL_SECRET_ENCRYPTION_KEY}
+      ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY: ${ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY:-}
       ASTRANULL_ALLOWED_ORIGINS: ${ASTRANULL_ALLOWED_ORIGINS}
       ASTRANULL_HIGH_SCALE_ADAPTER_MODE: ${ASTRANULL_HIGH_SCALE_ADAPTER_MODE}
       ASTRANULL_AGENT_IDENTITY_MODE: ${ASTRANULL_AGENT_IDENTITY_MODE:-bearer}
       ASTRANULL_WAF_POSTURE_ENABLED: ${ASTRANULL_WAF_POSTURE_ENABLED:-0}
       ASTRANULL_CONNECTORS_ENABLED: ${ASTRANULL_CONNECTORS_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED_TENANTS: ${ASTRANULL_CONNECTORS_ENABLED_TENANTS:-}
+      ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY: ${ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY:-}
       ASTRANULL_SIGNUP_MODE: ${ASTRANULL_SIGNUP_MODE:-disabled}
       ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION: ${ASTRANULL_SIGNUP_REQUIRE_EMAIL_VERIFICATION:-1}
       ASTRANULL_RATE_LIMIT_STORE: ${ASTRANULL_RATE_LIMIT_STORE:-memory}
@@ -123,7 +142,7 @@ services:
       start_period: 90s
 
   probe-worker:
-    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -146,7 +165,7 @@ services:
       start_period: 45s
 
   password-recovery-worker:
-    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -179,7 +198,7 @@ services:
       start_period: 90s
 
   test-policy-runner:
-    image: astranull-control-plane:${ASTRANULL_WORKER_IMAGE_TAG:-${ASTRANULL_IMAGE_TAG:-local}}
+    image: "${ASTRANULL_CORE_WORKER_IMAGE_ID:?ASTRANULL_CORE_WORKER_IMAGE_ID is required}"
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -223,6 +242,98 @@ services:
       timeout: 5s
       retries: 3
       start_period: 150s
+
+  connector-poll-scheduler:
+    image: "${ASTRANULL_CONNECTOR_WORKER_IMAGE_ID:?ASTRANULL_CONNECTOR_WORKER_IMAGE_ID is required}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_PERSISTENCE_MODE: postgres
+      ASTRANULL_DATABASE_URL: postgresql://astranull_connector_scheduler:${ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD:-}@postgres:5432/astranull
+      ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
+      ASTRANULL_WAF_POSTURE_ENABLED: ${ASTRANULL_WAF_POSTURE_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED: ${ASTRANULL_CONNECTORS_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED_TENANTS: ${ASTRANULL_CONNECTORS_ENABLED_TENANTS:-}
+      ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY: ${ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY:-}
+      ASTRANULL_CONNECTOR_POLL_TENANT_IDS: ${ASTRANULL_CONNECTOR_POLL_TENANT_IDS}
+      ASTRANULL_CONNECTOR_POLL_CONCURRENCY: ${ASTRANULL_CONNECTOR_POLL_CONCURRENCY:-4}
+      ASTRANULL_CONNECTOR_SCHEDULER_INTERVAL_SECONDS: ${ASTRANULL_CONNECTOR_SCHEDULER_INTERVAL_SECONDS:-60}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        interval=$${ASTRANULL_CONNECTOR_SCHEDULER_INTERVAL_SECONDS:-60};
+        case "$$interval" in
+          ''|*[!0-9]*) echo 'connector-poll-scheduler: interval must be an integer from 15 to 60 seconds' >&2; exit 64 ;;
+        esac;
+        if [ "$$interval" -lt 15 ] || [ "$$interval" -gt 60 ]; then
+          echo 'connector-poll-scheduler: interval must be an integer from 15 to 60 seconds' >&2;
+          exit 64;
+        fi;
+        while true; do
+          if timeout -k 10 60 node scripts/connector-poll-runner.mjs --queue-only --out /tmp/connector-poll-scheduler-summary.json; then
+            date -u +%FT%TZ > /tmp/connector-poll-scheduler.heartbeat;
+          else
+            echo 'connector-poll-scheduler: bounded invocation failed; retrying after interval' >&2;
+          fi;
+          sleep "$$interval";
+        done
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/connector-poll-scheduler.heartbeat", "150"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
+  connector-poll-runner:
+    image: "${ASTRANULL_CONNECTOR_WORKER_IMAGE_ID:?ASTRANULL_CONNECTOR_WORKER_IMAGE_ID is required}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      ASTRANULL_PERSISTENCE_MODE: postgres
+      ASTRANULL_DATABASE_URL: postgresql://astranull_connector_worker:${ASTRANULL_DATABASE_CONNECTOR_WORKER_PASSWORD:-}@postgres:5432/astranull
+      ASTRANULL_ENFORCE_DATABASE_ROLE: "1"
+      ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY: ${ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY:-}
+      ASTRANULL_WAF_POSTURE_ENABLED: ${ASTRANULL_WAF_POSTURE_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED: ${ASTRANULL_CONNECTORS_ENABLED:-0}
+      ASTRANULL_CONNECTORS_ENABLED_TENANTS: ${ASTRANULL_CONNECTORS_ENABLED_TENANTS:-}
+      ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY: ${ASTRANULL_CONNECTOR_JOB_PUBLIC_KEY:-}
+      ASTRANULL_CONNECTOR_WORKER_ID: ${ASTRANULL_CONNECTOR_WORKER_ID:-aws-connector-worker}
+      ASTRANULL_CONNECTOR_POLL_TENANT_IDS: ${ASTRANULL_CONNECTOR_POLL_TENANT_IDS}
+      ASTRANULL_CONNECTOR_POLL_CONCURRENCY: ${ASTRANULL_CONNECTOR_POLL_CONCURRENCY:-4}
+      ASTRANULL_CONNECTOR_POLL_INTERVAL_SECONDS: ${ASTRANULL_CONNECTOR_POLL_INTERVAL_SECONDS:-30}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        interval=$${ASTRANULL_CONNECTOR_POLL_INTERVAL_SECONDS:-30};
+        case "$$interval" in
+          ''|*[!0-9]*) echo 'connector-poll-runner: interval must be an integer from 5 to 60 seconds' >&2; exit 64 ;;
+        esac;
+        if [ "$$interval" -lt 5 ] || [ "$$interval" -gt 60 ]; then
+          echo 'connector-poll-runner: interval must be an integer from 5 to 60 seconds' >&2;
+          exit 64;
+        fi;
+        while true; do
+          if timeout -k 10 150 node scripts/connector-poll-runner.mjs --out /tmp/connector-poll-summary.json; then
+            date -u +%FT%TZ > /tmp/connector-poll-runner.heartbeat;
+          else
+            echo 'connector-poll-runner: bounded invocation failed; retrying after interval' >&2;
+          fi;
+          sleep "$$interval";
+        done
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-heartbeat-health.mjs", "/tmp/connector-poll-runner.heartbeat", "240"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
 
   caddy:
     image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
