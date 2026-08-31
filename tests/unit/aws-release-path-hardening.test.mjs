@@ -19,8 +19,12 @@ describe('AWS release path hardening', () => {
   const workflow = read('.github/workflows/deploy-aws.yml');
   const ci = read('.github/workflows/ci.yml');
   const deploy = read('ops/aws/deploy.sh');
+  const postgresBackup = read('scripts/postgres-backup.mjs');
+  const postgresRetentionHelper = read('scripts/postgres-retention-helper.py');
   const releaseState = read('ops/aws/release-state.sh');
   const compose = read('ops/aws/docker-compose.yml');
+  const awsDockerfile = read('ops/aws/Dockerfile');
+  const releaseArchiveInputs = read('ops/aws/release-archive-inputs.txt');
 
   it('makes docker compose up image-only so it cannot build from the AWS worktree', () => {
     const servicesStart = compose.indexOf('services:\n') + 'services:\n'.length;
@@ -88,15 +92,38 @@ describe('AWS release path hardening', () => {
     assert.match(workflow, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
     assert.match(workflow, /persist-credentials: false/);
     assert.match(workflow, /git rev-parse HEAD[\s\S]*DEPLOY_SHA/);
-    assert.match(workflow, /git diff --exit-code -- ops\/aws\/deploy\.sh/);
+    assert.match(workflow, /transferred_files=\([\s\S]*ops\/aws\/deploy\.sh[\s\S]*ops\/aws\/release-state\.sh[\s\S]*scripts\/postgres-retention-helper\.py[\s\S]*\)/m);
+    assert.match(workflow, /\[\[ -f "\$transferred_file" && ! -L "\$transferred_file" \]\]/);
+    assert.match(workflow, /git ls-files --error-unmatch -- "\$transferred_file"/);
+    assert.match(workflow, /git diff --exit-code HEAD -- "\$\{transferred_files\[@\]\}"/);
     assert.match(workflow, /script_sha256=\$\(sha256sum ops\/aws\/deploy\.sh/);
     assert.match(workflow, /state_lib_sha256=\$\(sha256sum ops\/aws\/release-state\.sh/);
+    assert.match(workflow, /retention_helper_sha256=\$\(sha256sum scripts\/postgres-retention-helper\.py/);
     assert.match(workflow, /scp[\s\S]*ops\/aws\/release-state\.sh[\s\S]*remote_state_lib/m);
     assert.match(workflow, /state_lib_sha256[\s\S]*sha256sum -c -[\s\S]*ASTRANULL_RELEASE_STATE_LIB='\$remote_state_lib'/m);
     assert.match(workflow, /scp[\s\S]*ops\/aws\/deploy\.sh[\s\S]*remote_script/m);
+    assert.match(workflow, /remote_retention_helper="\/tmp\/astranull-postgres-retention-helper-\$\{DEPLOY_SHA\}-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}\.py"/);
+    assert.match(workflow, /scp[\s\S]*scripts\/postgres-retention-helper\.py[\s\S]*remote_retention_helper/m);
+    assert.match(workflow, /chmod 600 '\$remote_state_lib' '\$remote_retention_helper'/);
+    assert.match(workflow, /retention_helper_sha256[\s\S]*remote_retention_helper[\s\S]*sha256sum -c -/m);
+    assert.match(workflow, /ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER='\$remote_retention_helper'/);
     assert.match(workflow, /sha256sum -c -/);
     assert.match(workflow, /bash '\$remote_script' '\$DEPLOY_SHA'/);
     assert.doesNotMatch(workflow, /bash \/opt\/astranull\/ops\/aws\/deploy\.sh/);
+
+    const helperHash = workflow.indexOf('retention_helper_sha256=$(sha256sum');
+    const helperTransfer = workflow.indexOf('scripts/postgres-retention-helper.py "${user}@${HOST}:${remote_retention_helper}"');
+    const remoteDeploy = workflow.indexOf('timeout 1800 ssh');
+    const remoteCommand = workflow.slice(remoteDeploy);
+    assert.ok(helperHash > 0 && helperHash < helperTransfer);
+    assert.ok(helperTransfer > 0 && helperTransfer < remoteDeploy);
+    assert.ok(remoteCommand.indexOf("chmod 600 '$remote_state_lib' '$remote_retention_helper'")
+      < remoteCommand.indexOf("'$retention_helper_sha256' '$remote_retention_helper'"));
+    assert.ok(remoteCommand.indexOf("'$retention_helper_sha256' '$remote_retention_helper'")
+      < remoteCommand.indexOf("ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER='$remote_retention_helper'"));
+    assert.ok(remoteCommand.indexOf("ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER='$remote_retention_helper'")
+      < remoteCommand.indexOf("bash '$remote_script' '$DEPLOY_SHA'"));
+    assert.ok((workflow.match(/rm -f -- [^\n]*\$remote_retention_helper/g) ?? []).length >= 2);
 
     assert.match(workflow, /ASTRANULL_AWS_KNOWN_HOSTS/);
     assert.match(workflow, /StrictHostKeyChecking=yes/);
@@ -225,7 +252,15 @@ describe('AWS release path hardening', () => {
     for (const cleanup of [restoreStaleCleanup, deployOrphanCleanup]) {
       assert.match(cleanup, /\.astranull-plaintext\.deploy\.\*/);
       assert.match(cleanup, /\.astranull-plaintext\.restore\.\*/);
+      assert.match(cleanup, /is_plaintext_scratch_name "\$(?:candidate|plaintext)" \|\| continue/);
       assert.match(cleanup, /delete_plaintext_checked/);
+    }
+    for (const source of [deploy, restore]) {
+      const releaseScratch = source.match(/^is_release_workspace_scratch_name\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+      const plaintextScratch = source.match(/^is_plaintext_scratch_name\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+      assert.match(releaseScratch, /astranull-env\\\.\(deploy\|restore\)\\\.\[A-Za-z0-9\]\{6\}/);
+      assert.match(releaseScratch, /astranull-compose-render\\\.\(deploy\|restore\)\\\.\[1-9\]\[0-9\]\*/);
+      assert.match(plaintextScratch, /astranull-plaintext\\\.\(deploy\|restore\)\\\.\[A-Za-z0-9\]\{6\}/);
     }
 
     const deployCleanup = deploy.match(/^cleanup_compose_snapshots\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
@@ -251,6 +286,7 @@ describe('AWS release path hardening', () => {
       assert.match(lock, /fd_stat\.st_dev, fd_stat\.st_ino/);
       assert.match(staleContainers, /all_release_operation_container_names[\s\S]*remove_named_container_checked/m);
       assert.match(staleWorkspace, /\.astranull-env\.deploy\.\*[\s\S]*\.astranull-env\.restore\.\*/m);
+      assert.match(staleWorkspace, /is_release_workspace_scratch_name "\$candidate" \|\| continue/);
       assert.ok(main.indexOf('cleanup_stale_operation_containers_checked') < main.indexOf('cleanup_stale_release_workspace'));
       assert.ok(main.indexOf('cleanup_stale_release_workspace') < main.indexOf('snapshot_env_file'));
       if (name === 'deploy') {
@@ -377,8 +413,8 @@ describe('AWS release path hardening', () => {
     assert.match(deploy, /compose_ops_run 180 pg-dump[\s\S]*backup-dump[\s\S]*pg_dump[\s\S]*ASTRANULL_BACKUP_DATABASE_URL/m);
     assert.doesNotMatch(deploy, /exec -T postgres pg_dump|pg_dump -U astranull/);
     assert.match(deploy, /scripts\/postgres-backup\.mjs[\s\S]*--input[\s\S]*--database-host postgres --database-port 5432 --database-name astranull/m);
-    assert.match(deploy, /\.dump\.enc/);
-    assert.match(deploy, /tail -n \+11/);
+    assert.ok(deploy.includes('\\.dump\\.enc$'));
+    assert.match(deploy, /expired_count=\$\(\(\$\{#sorted_records\[@\]\} - 10\)\)/);
     assert.match(deploy, /https:\/\/astranull\.site\/health/);
     assert.match(deploy, /probe-worker password-recovery-worker test-policy-runner/);
     assert.match(deploy, /check_control_plane/);
@@ -400,15 +436,87 @@ describe('AWS release path hardening', () => {
     assert.ok(encryptIndex < validateIndex && validateIndex < validateOnlyIndex);
     assert.match(deploy, /validate_plaintext_archive\(\)[\s\S]*pg_restore --list/m);
 
+    const currentNamePredicate = deploy.match(/^is_current_backup_artifact_name\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    assert.match(currentNamePredicate, /LC_ALL=C/);
+    assert.match(currentNamePredicate, /\^postgres-\(\[0-9\]\{4\}\)-\(\[0-9\]\{2\}\)-\(\[0-9\]\{2\}\)T/);
+    assert.match(currentNamePredicate, /10#\$year_raw/);
+    assert.match(currentNamePredicate, /month >= 1 && month <= 12/);
+    assert.match(currentNamePredicate, /year % 4 == 0[\s\S]*year % 100 != 0[\s\S]*year % 400 == 0/m);
+    assert.match(currentNamePredicate, /hour <= 23[\s\S]*minute <= 59[\s\S]*second <= 59/m);
+    const orphanCleanup = deploy.match(/^cleanup_backup_orphans\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    const partialScratchPredicate = deploy.match(/^is_backup_partial_scratch_name\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    assert.match(orphanCleanup, /is_backup_partial_scratch_name "\$partial" \|\| continue/);
+    assert.match(orphanCleanup, /is_plaintext_scratch_name "\$plaintext" \|\| continue/);
+    assert.doesNotMatch(orphanCleanup, /artifacts=|manifests=|unmatched encrypted backup artifact/);
+    assert.match(partialScratchPredicate, /partial-\(artifact\|manifest\)-\[0-9a-f\]\{24\}/);
+    assert.match(partialScratchPredicate, /is_current_backup_artifact_name "\$artifact_name"/);
+
     const inventoryFunction = deploy.match(/^list_valid_backup_artifacts\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
-    assert.match(inventoryFunction, /artifacts\.length > 64/);
-    assert.match(inventoryFunction, /\^postgres-\[A-Za-z0-9-\]\+-\[0-9a-f\]\{12\}/);
-    assert.match(inventoryFunction, /validatePostgresBackupManifestFields\(manifest\)/);
-    assert.match(inventoryFunction, /artifactStat\.nlink !== 1[\s\S]*manifestStat\.nlink !== 1/m);
-    assert.match(inventoryFunction, /manifest\.backup_file !== name \|\| manifest\.bytes !== artifactStat\.size/);
-    assert.match(inventoryFunction, /hash\.digest\("hex"\) !== manifest\.sha256/);
-    assert.match(inventoryFunction, /throw new Error\(`backup encrypted digest mismatch/);
-    assert.ok(deploy.indexOf('valid_artifacts=$(list_valid_backup_artifacts)') < deploy.indexOf('tail -n +11'));
+    const recordValidator = deploy.match(/^is_backup_identity_record_line\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    const retentionHelperValidator = deploy.match(/^prepare_postgres_retention_helper\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    const deleteFunction = deploy.match(/^delete_inventoried_backup_records\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    const pruneFunction = deploy.match(/^prune_backups\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
+    assert.match(inventoryFunction, /inventoryPostgresBackupArtifacts/);
+    assert.match(inventoryFunction, /records\.join\("\\n"\)/);
+    assert.match(recordValidator, /fields\[@\].*== 19/);
+    assert.match(recordValidator, /is_current_backup_artifact_name/);
+    assert.match(recordValidator, /fields\[9\].*== 1[\s\S]*fields\[18\].*== 1/m);
+    assert.match(retentionHelperValidator, /ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER/);
+    assert.match(retentionHelperValidator, /ROOT\/scripts\/postgres-retention-helper\.py/);
+    assert.match(retentionHelperValidator, /\/tmp\/astranull-postgres-retention-helper-\$\{SHA\}-\[0-9\]\+-\[0-9\]\+\\\.py/);
+    assert.match(retentionHelperValidator, /\[\[ -f "\$candidate" && ! -L "\$candidate" \]\]/);
+    assert.match(retentionHelperValidator, /backup_file_owner/);
+    assert.match(retentionHelperValidator, /backup_file_links/);
+    assert.match(retentionHelperValidator, /numeric_mode & 8#022/);
+    assert.match(retentionHelperValidator, /transferred PostgreSQL retention helper must have mode 0600/);
+    assert.match(retentionHelperValidator, /command -v python3/);
+    assert.match(deleteFunction, /prepare_postgres_retention_helper/);
+    assert.match(deleteFunction, /timeout -k 10 600 "\$POSTGRES_RETENTION_PYTHON3"[\s\S]*"\$POSTGRES_RETENTION_HELPER" --root "\$BACKUP_DIR" -- "\$@"/m);
+    assert.doesNotMatch(deleteFunction, /compose_ops_run|node --input-type/);
+    assert.match(pruneFunction, /complete_records\[@\][\s\S]*<= 64/m);
+    assert.match(pruneFunction, /LC_ALL=C sort/);
+    assert.match(pruneFunction, /expired_count=.*- 10/);
+    assert.match(pruneFunction, /delete_inventoried_backup_records/);
+    assert.doesNotMatch(pruneFunction, /\[\[ -f "\$artifact"|remove_backup_file_checked/);
+
+    assert.match(postgresBackup, /CURRENT_BACKUP_ARTIFACT_RE = \/\^postgres-\(\[0-9\]\{4\}\)/);
+    assert.match(postgresBackup, /daysInMonth[\s\S]*leapYear/m);
+    assert.match(postgresBackup, /roundTrip\.toISOString\(\) === isoTimestamp/);
+    assert.match(postgresBackup, /O_NOFOLLOW/);
+    assert.match(postgresBackup, /openFile\(artifactPath, noFollowReadFlags\(\)\)/);
+    assert.match(postgresBackup, /openFile\(manifestPath, noFollowReadFlags\(\)\)/);
+    assert.match(postgresBackup, /artifactHandle\.stat\(\{ bigint: true \}\)/);
+    assert.match(postgresBackup, /manifestHandle\.stat\(\{ bigint: true \}\)/);
+    assert.match(postgresBackup, /handle\.read\(buffer, 0, buffer\.length, position\)/);
+    assert.match(postgresBackup, /lstatPath\(artifactPath, \{ bigint: true \}\)/);
+    assert.match(postgresBackup, /lstatPath\(manifestPath, \{ bigint: true \}\)/);
+    for (const field of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink']) {
+      assert.match(postgresBackup, new RegExp(`['"]${field}['"]`), `missing exact identity field ${field}`);
+    }
+    assert.match(postgresBackup, /artifacts\.length > MAX_BACKUP_INVENTORY_ARTIFACTS/);
+    assert.match(postgresBackup, /classification === 'legacy'\) continue/);
+    assert.match(postgresBackup, /classification !== 'current'/);
+    assert.match(postgresBackup, /encryptedSha256 !== manifest\.sha256/);
+    assert.match(postgresBackup, /POSTGRES_RETENTION_HELPER/);
+    assert.match(postgresBackup, /pythonCommand = options\.pythonCommand \?\? 'python3'/);
+    assert.match(postgresBackup, /maxTombstoneDirectories: MAX_RETENTION_TOMBSTONE_DIRECTORIES/);
+    assert.doesNotMatch(postgresBackup, /filesystem\.rename|filesystem\.unlink/);
+
+    assert.match(postgresRetentionHelper, /renameat2/);
+    assert.match(postgresRetentionHelper, /RENAME_NOREPLACE = 1/);
+    assert.match(postgresRetentionHelper, /rename\(source_directory_fd, source, destination_directory_fd, destination, flags\)/);
+    assert.match(postgresRetentionHelper, /os\.open\([\s\S]*dir_fd=root_fd/m);
+    assert.match(postgresRetentionHelper, /def _assert_pair_final_barrier/);
+    assert.match(postgresRetentionHelper, /_assert_pair_final_barrier[\s\S]*retention_final_capture_barrier_complete[\s\S]*os\.ftruncate\(manifest_fd, 0\)[\s\S]*os\.ftruncate\(artifact_fd, 0\)/m);
+    assert.match(postgresRetentionHelper, /MAX_RETENTION_TOMBSTONE_DIRECTORIES = 4_096/);
+    assert.match(postgresRetentionHelper, /len\(tombstones\) \+ requested > MAX_RETENTION_TOMBSTONE_DIRECTORIES/);
+    assert.match(postgresRetentionHelper, /manifest_quarantine[\s\S]*manifest_root[\s\S]*retention_manifest_public_removal_durable[\s\S]*captured_name="artifact"/m);
+    assert.doesNotMatch(postgresRetentionHelper, /os\.(?:unlink|remove|rmdir)\(/);
+    assert.match(awsDockerfile, /COPY scripts \.\/scripts/);
+    assert.match(releaseArchiveInputs, /^scripts$/m);
+    assert.ok(deploy.indexOf('valid_artifacts=$(list_valid_backup_artifacts)')
+      < deploy.indexOf('delete_inventoried_backup_records "${expired_records[@]}"'));
+    assert.match(deploy, /backup_container_path" == "\/backup\/\$backup_name"[\s\S]*is_current_backup_artifact_name "\$backup_name"/m);
 
     const targetMain = deploy.slice(deploy.lastIndexOf('\n  else\n'), deploy.indexOf('\n  finished=1'));
     assert.ok(targetMain.indexOf('backup_database') < targetMain.indexOf('compose_ops_run 180 migrate migrate'));
@@ -418,6 +526,23 @@ describe('AWS release path hardening', () => {
     const runbook = read('ops/aws/README.md');
     assert.match(runbook, /backup-dump[\s\S]*?ASTRANULL_BACKUP_DATABASE_URL[\s\S]*?postgres-backup\.mjs --input/m);
     assert.match(runbook, /--database-host postgres --database-port 5432 --database-name astranull/);
+    assert.match(runbook, /calendar-valid pre-nonce legacy artifacts[\s\S]*preserved byte-for-byte[\s\S]*never validated/m);
+    assert.match(runbook, /unknown `\*\.dump\.enc` fails deploy inventory closed/);
+    assert.match(runbook, /including ignored legacy and unknown names, counts toward the 64-item inventory cap/);
+    assert.match(runbook, /`O_NOFOLLOW`[\s\S]*post-read `fstat`[\s\S]*final pathname `lstat`/m);
+    assert.match(runbook, /fixed 19-field/);
+    assert.match(runbook, /device, inode, size[\s\S]*uid, gid, and link count/m);
+    assert.match(runbook, /Every other file, directory, or symlink is preserved[\s\S]*every name ending in final `\.dump\.enc`/m);
+    assert.match(runbook, /Any path swap, hard-link change[\s\S]*fsync failure aborts/m);
+    assert.match(runbook, /captured mismatch remains in the private quarantine[\s\S]*source-path replacement is never unlinked/m);
+    assert.match(runbook, /artifact capture cannot begin before durable completion-marker removal/);
+    assert.match(runbook, /identity-bound `ftruncate\(0\)` and `fsync`/);
+    assert.match(runbook, /does \*\*not\*\* unlink either captured pathname or remove its quarantine directory/);
+    assert.match(runbook, /zero-byte tombstones/);
+    assert.match(runbook, /at most 4096 total[\s\S]*fails before creating or capturing a new quarantine/m);
+    assert.match(runbook, /ignored by backup inventory/);
+    assert.match(runbook, /must never rename a tombstone[\s\S]*back into the public backup inventory namespace/m);
+    assert.doesNotMatch(runbook, /verified captured entries unlinked|retention then fsyncs quarantine, removes it/);
     assert.match(runbook, /`deploy\.sh` implements this exact handoff/);
   });
 

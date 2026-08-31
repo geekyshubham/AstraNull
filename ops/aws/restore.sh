@@ -942,6 +942,20 @@ if fd_stat.st_uid != os.getuid():
 PY
 }
 
+is_release_workspace_scratch_name() {
+  local name=${1##*/} LC_ALL=C
+  [[ "$name" =~ ^\.astranull-env\.(deploy|restore)\.[A-Za-z0-9]{6}$ \
+    || "$name" =~ ^\.astranull-build-iid\.[A-Za-z0-9]{6}$ \
+    || "$name" =~ ^\.astranull-compose\.(previous|target)\.[A-Za-z0-9]{6}\.yml$ \
+    || "$name" =~ ^\.astranull-compose-render\.(deploy|restore)\.[1-9][0-9]*$ \
+    || "$name" =~ ^\.astranull-compose-source\.restore\.[1-9][0-9]*$ ]]
+}
+
+is_plaintext_scratch_name() {
+  local name=${1##*/} LC_ALL=C
+  [[ "$name" =~ ^\.astranull-plaintext\.(deploy|restore)\.[A-Za-z0-9]{6}$ ]]
+}
+
 cleanup_stale_release_workspace() {
   local candidate mode owner links failed=0 stale=()
   ensure_restore_backup_dir_secure || return
@@ -952,6 +966,7 @@ cleanup_stale_release_workspace() {
     "$BACKUP_DIR"/.astranull-compose.target.*.yml "$BACKUP_DIR"/.astranull-build-iid.*)
   shopt -u nullglob
   for candidate in ${stale[@]+"${stale[@]}"}; do
+    is_release_workspace_scratch_name "$candidate" || continue
     if [[ -f "$candidate" && ! -L "$candidate" ]]; then
       mode=$(private_file_mode "$candidate") || mode=''
       owner=$(stat -c '%u' -- "$candidate" 2>/dev/null || stat -f '%u' "$candidate") || owner=''
@@ -980,6 +995,7 @@ cleanup_stale_plaintext_archives() {
   stale=("$BACKUP_DIR"/.astranull-plaintext.deploy.* "$BACKUP_DIR"/.astranull-plaintext.restore.*)
   shopt -u nullglob
   for candidate in ${stale[@]+"${stale[@]}"}; do
+    is_plaintext_scratch_name "$candidate" || continue
     delete_plaintext_checked "$candidate" || failed=1
   done
   ((failed == 0))

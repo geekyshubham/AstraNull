@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import os from 'node:os';
@@ -12,11 +23,16 @@ import {
   BACKUP_STREAM_MAGIC,
   LEGACY_BACKUP_ENVELOPE_VERSION,
   MANIFEST_VERSION,
+  MAX_RETENTION_TOMBSTONE_DIRECTORIES,
   backupPostgres,
+  classifyPostgresBackupArtifactName,
   collectManifestForbiddenFields,
   decryptBackupPayload,
   encryptBackupPayload,
+  inventoryPostgresBackupArtifacts,
   parsePostgresBackupCliArgs,
+  parsePostgresBackupIdentityRecord,
+  pruneInventoriedPostgresBackups,
   resolveDatabaseUrl,
   resolvePostgresBackupConfig,
   sha256Hex,
@@ -78,6 +94,30 @@ function tempDir() {
 }
 function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+function writeInventoryBackupPair(directory, name, bytes = Buffer.from(`encrypted-${name}`)) {
+  const artifactPath = path.join(directory, name);
+  const manifestPath = `${artifactPath}.manifest.json`;
+  writeFileSync(artifactPath, bytes, { mode: 0o600 });
+  writeFileSync(manifestPath, `${JSON.stringify({
+    version: MANIFEST_VERSION,
+    artifact_type: ARTIFACT_TYPE,
+    created_at: '2026-08-31T12:00:00.000Z',
+    backup_file: name,
+    sha256: sha256Hex(bytes),
+    bytes: bytes.length,
+    label: null,
+    database_reference: DATABASE_REFERENCE,
+    dump_format: 'pg_custom',
+    encryption: {
+      algorithm: 'AES-256-GCM',
+      key_reference: 'env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
+      envelope_version: BACKUP_ENVELOPE_VERSION,
+    },
+  }, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(artifactPath, 0o600);
+  chmodSync(manifestPath, 0o600);
+  return { artifactPath, manifestPath, bytes };
 }
 function testEnv(overrides = {}) {
   return {
@@ -169,6 +209,559 @@ describe('postgres backup config', () => {
   });
 });
 
+describe('postgres backup artifact filename classification', () => {
+  it('recognizes only exact calendar-valid current and pre-nonce legacy generated names', () => {
+    const current = 'postgres-2026-08-30T16-47-04-492Z-abcdef123456.dump.enc';
+    const productionLegacy = 'postgres-2026-08-30T16-47-04-492Z.dump.enc';
+    const leapCurrent = 'postgres-2024-02-29T23-59-59-999Z-012345abcdef.dump.enc';
+    const leapLegacy = 'postgres-2000-02-29T00-00-00-000Z.dump.enc';
+    assert.equal(classifyPostgresBackupArtifactName(current), 'current');
+    assert.equal(classifyPostgresBackupArtifactName(productionLegacy), 'legacy');
+    assert.equal(classifyPostgresBackupArtifactName(leapCurrent), 'current');
+    assert.equal(classifyPostgresBackupArtifactName(leapLegacy), 'legacy');
+
+    const impossibleTimestamps = [
+      '2026-00-15T12-00-00-000Z',
+      '2026-13-15T12-00-00-000Z',
+      '2026-01-00T12-00-00-000Z',
+      '2026-04-31T12-00-00-000Z',
+      '2025-02-29T12-00-00-000Z',
+      '2024-02-30T12-00-00-000Z',
+      '2026-08-30T24-00-00-000Z',
+      '2026-08-30T16-60-00-000Z',
+      '2026-08-30T16-47-60-000Z',
+    ];
+    for (const timestamp of impossibleTimestamps) {
+      assert.equal(
+        classifyPostgresBackupArtifactName(`postgres-${timestamp}-abcdef123456.dump.enc`),
+        'unknown',
+        timestamp,
+      );
+      assert.equal(
+        classifyPostgresBackupArtifactName(`postgres-${timestamp}.dump.enc`),
+        'unknown',
+        `legacy ${timestamp}`,
+      );
+    }
+
+    for (const unsafe of [
+      'postgres-2026-08-30T16-47-04-492Z-ABCDEF123456.dump.enc',
+      'postgres-2026-08-30T16-47-04-492Z-abcdef12345.dump.enc',
+      'postgres-2026-08-30T16-47-04-492Z-abcdef1234567.dump.enc',
+      'postgres-2026-08-30T16-47-04Z.dump.enc',
+      'postgres-2026-08-30T16-47-04-492Z-manual.dump.enc',
+      `${current}\n`,
+      `postgres-2026-08-30T16-47-04-492Z-abc\ndef123456.dump.enc`,
+      `postgres-2026-08-30T16-47-04-492Z-abc\u0001def123456.dump.enc`,
+      `../${current}`,
+      `/backup/${current}`,
+      `backup\\${current}`,
+    ]) {
+      assert.equal(classifyPostgresBackupArtifactName(unsafe), 'unknown', JSON.stringify(unsafe));
+    }
+    assert.equal(classifyPostgresBackupArtifactName(null), 'unknown');
+  });
+});
+
+describe('postgres backup secure inventory and retention', () => {
+  it('emits one line-safe exact identity record for an unchanged current pair', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-00-000Z-abcdef123456.dump.enc';
+    writeInventoryBackupPair(root, name);
+    const records = await inventoryPostgresBackupArtifacts(root);
+    assert.equal(records.length, 1);
+    assert.doesNotMatch(records[0], /[\r\n]/);
+    const parsed = parsePostgresBackupIdentityRecord(records[0]);
+    assert.equal(parsed.name, name);
+    assert.equal(parsed.artifactIdentity.nlink, 1n);
+    assert.equal(parsed.manifestIdentity.nlink, 1n);
+  });
+
+  it('rejects a hard link created deterministically during artifact hashing', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-01-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    const linkedPath = path.join(root, 'attacker-hard-link');
+    let linked = false;
+    await assert.rejects(
+      () => inventoryPostgresBackupArtifacts(root, {
+        checkpoint(step) {
+          if (step === 'artifact_hash_chunk' && !linked) {
+            linked = true;
+            linkSync(artifactPath, linkedPath);
+          }
+        },
+      }),
+      /singly linked|identity changed/,
+    );
+    assert.equal(linked, true);
+    assert.equal(existsSync(artifactPath), true);
+    assert.equal(existsSync(manifestPath), true);
+    assert.equal(existsSync(linkedPath), true);
+  });
+
+  it('rejects a deterministic final-path swap after reading through open handles', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-02-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const displacedPath = `${artifactPath}.displaced`;
+    let swapped = false;
+    await assert.rejects(
+      () => inventoryPostgresBackupArtifacts(root, {
+        checkpoint(step) {
+          if (step === 'before_final_path_check' && !swapped) {
+            swapped = true;
+            renameSync(artifactPath, displacedPath);
+            writeFileSync(artifactPath, bytes, { mode: 0o600 });
+          }
+        },
+      }),
+      /artifact path .* identity changed/,
+    );
+    assert.equal(swapped, true);
+    assert.equal(existsSync(artifactPath), true);
+    assert.equal(existsSync(displacedPath), true);
+    assert.equal(existsSync(manifestPath), true);
+  });
+
+  it('rejects deterministic manifest metadata drift while hashing the artifact', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-03-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    let drifted = false;
+    await assert.rejects(
+      () => inventoryPostgresBackupArtifacts(root, {
+        checkpoint(step) {
+          if (step === 'artifact_hash_chunk' && !drifted) {
+            drifted = true;
+            chmodSync(manifestPath, 0o640);
+          }
+        },
+      }),
+      /manifest .* during artifact hash/,
+    );
+    assert.equal(drifted, true);
+    assert.equal(existsSync(artifactPath), true);
+    assert.equal(existsSync(manifestPath), true);
+  });
+
+  it('fails an inventory-to-prune identity drift before deleting any pair', async () => {
+    const root = tempDir();
+    const names = Array.from({ length: 11 }, (_, index) => (
+      `postgres-2026-08-${String(index + 1).padStart(2, '0')}T12-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`
+    ));
+    for (const name of names) writeInventoryBackupPair(root, name);
+    const records = await inventoryPostgresBackupArtifacts(root);
+    chmodSync(path.join(root, `${names[0]}.manifest.json`), 0o640);
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [records[0]]),
+      /identity changed/,
+    );
+    assert.equal(readdirSync(root).length, names.length * 2);
+    for (const name of names) {
+      assert.equal(existsSync(path.join(root, name)), true, name);
+      assert.equal(existsSync(path.join(root, `${name}.manifest.json`)), true, `${name} manifest`);
+    }
+  });
+
+  it('atomically refuses a pre-existing manifest capture without changing source or destination', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-03-100Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const replacement = Buffer.from('pre-existing-quarantine-destination');
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    let capturedManifestPath;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, context) {
+          if (step === 'retention_quarantine_created') {
+            capturedManifestPath = context.capturedManifestPath;
+            writeFileSync(capturedManifestPath, replacement, { mode: 0o600 });
+          }
+        },
+      }),
+      (error) => error?.code === 'EEXIST',
+    );
+
+    assert.ok(capturedManifestPath);
+    assert.deepEqual(readFileSync(capturedManifestPath), replacement);
+    assert.deepEqual(readFileSync(artifactPath), bytes);
+    assert.deepEqual(readFileSync(manifestPath), originalManifest);
+    assert.equal(existsSync(path.join(path.dirname(capturedManifestPath), 'artifact')), false);
+  });
+
+  it('atomically refuses a pre-existing artifact capture without clobbering either entry', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-03-150Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const replacement = Buffer.from('pre-existing-artifact-destination');
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    let context;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, current) {
+          if (step === 'retention_manifest_public_removal_durable') {
+            context = current;
+            writeFileSync(current.capturedArtifactPath, replacement, { mode: 0o600 });
+          }
+        },
+      }),
+      (error) => error?.code === 'EEXIST',
+    );
+
+    assert.ok(context);
+    assert.deepEqual(readFileSync(context.capturedArtifactPath), replacement);
+    assert.deepEqual(readFileSync(context.capturedManifestPath), originalManifest);
+    assert.deepEqual(readFileSync(artifactPath), bytes);
+    assert.equal(existsSync(manifestPath), false);
+  });
+
+  it('validates both captured members before reclaiming either one', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-03-200Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const mutatedArtifact = Buffer.concat([bytes, Buffer.from('-mutated-before-final-barrier')]);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    let context;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, current) {
+          if (step === 'retention_artifact_public_removal_durable') {
+            context = current;
+            writeFileSync(current.capturedArtifactPath, mutatedArtifact);
+          }
+        },
+      }),
+      /captured artifact held handle at final capture barrier identity changed/,
+    );
+
+    assert.ok(context);
+    assert.equal(existsSync(artifactPath), false);
+    assert.equal(existsSync(manifestPath), false);
+    assert.deepEqual(readFileSync(context.capturedManifestPath), originalManifest);
+    assert.deepEqual(readFileSync(context.capturedArtifactPath), mutatedArtifact);
+  });
+
+  it('never deletes a replacement injected after the pair-wide final lstat barrier', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-03-300Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    const replacement = Buffer.from('post-final-lstat-replacement-must-survive');
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    let context;
+    let displacedArtifactPath;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, current) {
+          if (step === 'retention_final_capture_barrier_complete') {
+            context = current;
+            displacedArtifactPath = `${current.capturedArtifactPath}.displaced`;
+            renameSync(current.capturedArtifactPath, displacedArtifactPath);
+            writeFileSync(current.capturedArtifactPath, replacement, { mode: 0o600 });
+          }
+        },
+      }),
+      /captured artifact live tombstone/,
+    );
+
+    assert.ok(context);
+    assert.deepEqual(readFileSync(context.capturedArtifactPath), replacement);
+    assert.equal(existsSync(context.capturedManifestPath), true);
+    assert.equal(existsSync(displacedArtifactPath), true);
+    assert.equal(statSync(context.capturedManifestPath).size, 0);
+    assert.equal(statSync(displacedArtifactPath).size, 0);
+    assert.equal(existsSync(artifactPath), false);
+    assert.equal(existsSync(manifestPath), false);
+  });
+
+  it('quarantines and preserves a manifest replacement swapped after the last source-path check', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-04-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    const displacedPath = `${manifestPath}.retention-displaced`;
+    const replacement = Buffer.from('replacement-manifest');
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    const checkpoints = [];
+    let swapped = false;
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step) {
+          checkpoints.push(step);
+          if (step === 'before_retention_manifest_capture' && !swapped) {
+            swapped = true;
+            renameSync(manifestPath, displacedPath);
+            writeFileSync(manifestPath, replacement, { mode: 0o600 });
+          }
+        },
+      }),
+      /captured manifest identity changed/,
+    );
+    const quarantines = readdirSync(root).filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+    assert.equal(swapped, true);
+    assert.equal(quarantines.length, 1);
+    const quarantine = path.join(root, quarantines[0]);
+    assert.deepEqual(readFileSync(path.join(quarantine, 'manifest')), replacement);
+    assert.equal(statSync(quarantine).mode & 0o777, 0o700);
+    assert.equal(existsSync(manifestPath), false);
+    assert.equal(existsSync(displacedPath), true);
+    assert.equal(existsSync(artifactPath), true);
+    assert.equal(existsSync(path.join(quarantine, 'artifact')), false);
+    assert.equal(checkpoints.includes('before_retention_artifact_capture'), false);
+    assert.equal(checkpoints.some((step) => step.startsWith('retention_captured_')), false);
+  });
+
+  it('quarantines and preserves an artifact replacement swapped after the last source-path check', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-05-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const displacedPath = `${artifactPath}.retention-displaced`;
+    const replacement = Buffer.from(bytes);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    const checkpoints = [];
+    let swapped = false;
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step) {
+          checkpoints.push(step);
+          if (step === 'before_retention_artifact_capture' && !swapped) {
+            swapped = true;
+            renameSync(artifactPath, displacedPath);
+            writeFileSync(artifactPath, replacement, { mode: 0o600 });
+          }
+        },
+      }),
+      /captured artifact identity changed/,
+    );
+    const quarantines = readdirSync(root).filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+    assert.equal(swapped, true);
+    assert.equal(quarantines.length, 1);
+    const quarantine = path.join(root, quarantines[0]);
+    assert.deepEqual(readFileSync(path.join(quarantine, 'artifact')), replacement);
+    assert.deepEqual(readFileSync(path.join(quarantine, 'manifest')), originalManifest);
+    assert.equal(existsSync(artifactPath), false);
+    assert.equal(existsSync(displacedPath), true);
+    assert.equal(existsSync(manifestPath), false);
+    assert.equal(checkpoints.some((step) => step.startsWith('retention_captured_')), false);
+  });
+
+  it('fails immediately after manifest capture when the quarantine pathname is swapped', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-07-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    const checkpoints = [];
+    const syncPhases = [];
+    let swapped = false;
+    let quarantinePath;
+    let displacedQuarantinePath;
+    let replacementSentinelPath;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, context) {
+          checkpoints.push(step);
+          if (step === 'retention_sync') syncPhases.push(context.phase);
+          if (step === 'before_retention_manifest_capture' && !swapped) {
+            const preparedReplacement = mkdtempSync(path.join(root, '.attacker-quarantine-'));
+            replacementSentinelPath = path.join(preparedReplacement, 'replacement-sentinel');
+            writeFileSync(replacementSentinelPath, 'do-not-delete', { mode: 0o600 });
+            quarantinePath = context.quarantinePath;
+            displacedQuarantinePath = `${quarantinePath}.displaced`;
+            renameSync(quarantinePath, displacedQuarantinePath);
+            renameSync(preparedReplacement, quarantinePath);
+            replacementSentinelPath = path.join(quarantinePath, 'replacement-sentinel');
+            swapped = true;
+          }
+        },
+      }),
+      /retention quarantine .* after manifest capture identity changed/,
+    );
+
+    assert.equal(swapped, true);
+    assert.equal(checkpoints.at(-1), 'retention_manifest_captured');
+    assert.equal(checkpoints.includes('before_retention_artifact_capture'), false);
+    assert.equal(checkpoints.some((step) => step.startsWith('retention_captured_')), false);
+    assert.equal(syncPhases.includes('manifest_quarantine'), false);
+    assert.equal(syncPhases.includes('manifest_root'), false);
+    assert.equal(existsSync(artifactPath), true, 'artifact capture must not start');
+    assert.equal(existsSync(manifestPath), false, 'manifest was captured before the barrier');
+    assert.equal(readFileSync(replacementSentinelPath, 'utf8'), 'do-not-delete');
+    assert.deepEqual(readdirSync(quarantinePath), ['replacement-sentinel']);
+    assert.deepEqual(readFileSync(path.join(displacedQuarantinePath, 'manifest')), originalManifest);
+  });
+
+  it('fails immediately after artifact capture when the quarantine pathname is swapped', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-08-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    const checkpoints = [];
+    const syncPhases = [];
+    let swapped = false;
+    let quarantinePath;
+    let displacedQuarantinePath;
+    let replacementSentinelPath;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, context) {
+          checkpoints.push(step);
+          if (step === 'retention_sync') syncPhases.push(context.phase);
+          if (step === 'before_retention_artifact_capture' && !swapped) {
+            const preparedReplacement = mkdtempSync(path.join(root, '.attacker-quarantine-'));
+            replacementSentinelPath = path.join(preparedReplacement, 'replacement-sentinel');
+            writeFileSync(replacementSentinelPath, 'do-not-delete', { mode: 0o600 });
+            quarantinePath = context.quarantinePath;
+            displacedQuarantinePath = `${quarantinePath}.displaced`;
+            renameSync(quarantinePath, displacedQuarantinePath);
+            renameSync(preparedReplacement, quarantinePath);
+            replacementSentinelPath = path.join(quarantinePath, 'replacement-sentinel');
+            swapped = true;
+          }
+        },
+      }),
+      /retention quarantine .* after artifact capture identity changed/,
+    );
+
+    assert.equal(swapped, true);
+    assert.equal(checkpoints.at(-1), 'retention_artifact_captured');
+    assert.equal(checkpoints.some((step) => step.startsWith('retention_captured_')), false);
+    assert.equal(syncPhases.includes('artifact_quarantine'), false);
+    assert.equal(syncPhases.includes('artifact_root'), false);
+    assert.equal(existsSync(artifactPath), false, 'artifact was captured before the barrier');
+    assert.equal(existsSync(manifestPath), false, 'manifest was already durably captured');
+    assert.equal(readFileSync(replacementSentinelPath, 'utf8'), 'do-not-delete');
+    assert.deepEqual(readdirSync(quarantinePath), ['replacement-sentinel']);
+    assert.deepEqual(readFileSync(path.join(displacedQuarantinePath, 'manifest')), originalManifest);
+    assert.deepEqual(readFileSync(path.join(displacedQuarantinePath, 'artifact')), bytes);
+  });
+
+  it('never starts artifact capture when durable public manifest removal fsync fails', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-06-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath } = writeInventoryBackupPair(root, name);
+    const originalManifest = readFileSync(manifestPath);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    const events = [];
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, context) {
+          if (step === 'before_retention_sync') {
+            events.push(`sync:${context.phase}`);
+            if (context.phase === 'manifest_root') {
+              throw new Error('injected manifest root fsync failure');
+            }
+            return;
+          }
+          if (step !== 'retention_sync') events.push(`checkpoint:${step}`);
+        },
+      }),
+      /injected manifest root fsync failure/,
+    );
+    const quarantines = readdirSync(root).filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+    assert.equal(quarantines.length, 1);
+    assert.deepEqual(readFileSync(path.join(root, quarantines[0], 'manifest')), originalManifest);
+    assert.equal(existsSync(manifestPath), false);
+    assert.equal(existsSync(artifactPath), true);
+    assert.ok(events.includes('checkpoint:retention_manifest_captured'));
+    assert.ok(events.includes('sync:manifest_quarantine'));
+    assert.ok(events.includes('sync:manifest_root'));
+    assert.equal(events.includes('checkpoint:retention_manifest_public_removal_durable'), false);
+    assert.equal(events.includes('checkpoint:before_retention_artifact_capture'), false);
+    assert.equal(events.some((event) => event.includes('artifact_captured')), false);
+    assert.equal(events.some((event) => event.includes('captured_manifest_deleted')), false);
+  });
+
+  it('preserves a bounded private pair when interrupted between held-inode reclaims', async () => {
+    const root = tempDir();
+    const name = 'postgres-2026-08-31T12-00-09-000Z-abcdef123456.dump.enc';
+    const { artifactPath, manifestPath, bytes } = writeInventoryBackupPair(root, name);
+    const [record] = await inventoryPostgresBackupArtifacts(root);
+    let context;
+
+    await assert.rejects(
+      () => pruneInventoriedPostgresBackups(root, [record], {
+        checkpoint(step, current) {
+          if (step === 'retention_captured_manifest_reclaimed') {
+            context = current;
+            throw new Error('injected interruption after manifest inode reclaim');
+          }
+        },
+      }),
+      /injected interruption after manifest inode reclaim/,
+    );
+
+    assert.ok(context);
+    assert.equal(existsSync(artifactPath), false);
+    assert.equal(existsSync(manifestPath), false);
+    assert.equal(existsSync(context.capturedManifestPath), true);
+    assert.equal(existsSync(context.capturedArtifactPath), true);
+    assert.equal(statSync(context.capturedManifestPath).size, 0);
+    assert.deepEqual(readFileSync(context.capturedArtifactPath), bytes);
+    assert.ok(
+      readdirSync(root).filter((entry) => entry.startsWith('.postgres-retention-quarantine-')).length
+      <= MAX_RETENTION_TOMBSTONE_DIRECTORIES,
+    );
+  });
+
+  it('orders durable manifest capture before artifact capture and held-inode reclamation', async () => {
+    const root = tempDir();
+    const names = Array.from({ length: 11 }, (_, index) => (
+      `postgres-2026-07-${String(index + 1).padStart(2, '0')}T12-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`
+    ));
+    for (const name of names) writeInventoryBackupPair(root, name);
+    const records = await inventoryPostgresBackupArtifacts(root);
+    const events = [];
+    await pruneInventoriedPostgresBackups(root, [records[0]], {
+      checkpoint(step, context) {
+        if (step === 'retention_sync') events.push(`sync:${context.phase}`);
+        else if (step !== 'before_retention_sync') events.push(`checkpoint:${step}`);
+      },
+    });
+    assert.equal(existsSync(path.join(root, names[0])), false);
+    assert.equal(existsSync(path.join(root, `${names[0]}.manifest.json`)), false);
+    const quarantines = readdirSync(root)
+      .filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+    assert.equal(quarantines.length, 1);
+    assert.ok(quarantines.length <= MAX_RETENTION_TOMBSTONE_DIRECTORIES);
+    const tombstoneDirectory = path.join(root, quarantines[0]);
+    assert.deepEqual(readdirSync(tombstoneDirectory).sort(), ['artifact', 'manifest']);
+    assert.equal(statSync(path.join(tombstoneDirectory, 'artifact')).size, 0);
+    assert.equal(statSync(path.join(tombstoneDirectory, 'manifest')).size, 0);
+    for (const name of names.slice(1)) {
+      assert.equal(existsSync(path.join(root, name)), true, name);
+      assert.equal(existsSync(path.join(root, `${name}.manifest.json`)), true, `${name} manifest`);
+    }
+    const ordered = new Set([
+      'checkpoint:retention_manifest_captured',
+      'sync:manifest_quarantine',
+      'sync:manifest_root',
+      'checkpoint:retention_manifest_public_removal_durable',
+      'checkpoint:retention_artifact_captured',
+      'sync:artifact_quarantine',
+      'sync:artifact_root',
+      'checkpoint:retention_artifact_public_removal_durable',
+      'checkpoint:retention_final_capture_barrier_complete',
+      'checkpoint:retention_captured_manifest_reclaimed',
+      'checkpoint:retention_captured_artifact_reclaimed',
+      'sync:retained_tombstones_quarantine',
+      'sync:retained_tombstones_root',
+      'checkpoint:retention_tombstones_durable',
+    ]);
+    assert.deepEqual(events.filter((event) => ordered.has(event)), [...ordered]);
+  });
+});
+
 describe('postgres backup manifest safety', () => {
   it('rejects forbidden secret-like manifest fields', () => {
     const manifest = {
@@ -201,7 +794,13 @@ describe('postgres streaming backup and restore', () => {
     const { backupPath, manifestPath, manifest } = await createV2Backup(root, {
       label: 'drill',
       now: fixedNow,
+      filenameNonce: 'abcdef123456',
     });
+    assert.equal(
+      path.basename(backupPath),
+      'postgres-2026-07-03T12-00-00-000Z-abcdef123456.dump.enc',
+    );
+    assert.equal(classifyPostgresBackupArtifactName(path.basename(backupPath)), 'current');
     const backupBytes = readFileSync(backupPath);
     assert.ok(backupBytes.subarray(0, BACKUP_STREAM_MAGIC.length).equals(BACKUP_STREAM_MAGIC));
     assert.equal(backupBytes.includes(PG_CUSTOM_DUMP), false);

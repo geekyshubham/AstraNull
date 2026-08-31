@@ -24,9 +24,21 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     env:
-      IMAGE: ghcr.io/astranull/astranull-worker
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      - name: Derive trusted GHCR image repository
+        id: image
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "$REPOSITORY_OWNER" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          if (( ${#owner} > 39 )) || [[ ! "$owner" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "Invalid GitHub repository owner for GHCR publication." >&2
+            exit 1
+          fi
+          printf 'repository=ghcr.io/%s/astranull-worker\n' "$owner" >> "$GITHUB_OUTPUT"
+
       - name: Check out exact CI-tested revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -38,6 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$RELEASE_SHA" ]]
           [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
 
       - name: Authenticate to GHCR
@@ -54,7 +67,10 @@ jobs:
           context: .
           file: ops/kubernetes/Dockerfile.worker
           push: true
-          tags: ${{ env.IMAGE }}:${{ env.RELEASE_SHA }}
+          tags: ${{ steps.image.outputs.repository }}:${{ env.RELEASE_SHA }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.RELEASE_SHA }}
           provenance: false
 
       - name: Install cosign
@@ -63,48 +79,58 @@ jobs:
       - name: Keyless-sign exact digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
         run: |
           set -euo pipefail
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          cosign sign --yes "$IMAGE@$DIGEST"
+          IMAGE_REFERENCE="$IMAGE_REPOSITORY@$DIGEST"
+          cosign sign --yes "$IMAGE_REFERENCE"
 
       - name: Publish GitHub build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-name: ${{ env.IMAGE }}
+          subject-name: ${{ steps.image.outputs.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
       - name: Verify registry signature and provenance
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          IMAGE_REFERENCE="$IMAGE_REPOSITORY@$DIGEST"
           identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish-kubernetes-worker.yml@refs/heads/main$"
           issuer="https://token.actions.githubusercontent.com"
           cosign verify \
             --certificate-identity-regexp "$identity" \
             --certificate-oidc-issuer "$issuer" \
-            "$IMAGE@$DIGEST" >/dev/null
+            "$IMAGE_REFERENCE" >/dev/null
           cosign verify-attestation \
             --type slsaprovenance \
             --certificate-identity-regexp "$identity" \
             --certificate-oidc-issuer "$issuer" \
-            "$IMAGE@$DIGEST" >/dev/null
+            "$IMAGE_REFERENCE" >/dev/null
 
       - name: Render exact-digest Kubernetes release
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          IMAGE_REFERENCE="$IMAGE_REPOSITORY@$DIGEST"
           mkdir -p output/kubernetes-worker
           node scripts/render-kubernetes-worker-manifests.mjs \
             --digest "$DIGEST" \
+            --image-repository "$IMAGE_REPOSITORY" \
             --out-dir output/kubernetes-worker/manifests
           node scripts/render-kubernetes-worker-manifests.mjs \
-            --validate-dir output/kubernetes-worker/manifests
-          printf '{"release_sha":"%s","image":"%s","digest":"%s","signature_verified":true,"provenance_verified":true,"workflow_run_id":"%s"}\n' \
-            "$RELEASE_SHA" "$IMAGE" "$DIGEST" "$GITHUB_RUN_ID" \
+            --validate-dir output/kubernetes-worker/manifests \
+            --image-repository "$IMAGE_REPOSITORY"
+          printf '{"release_sha":"%s","image_repository":"%s","image":"%s","digest":"%s","signature_verified":true,"provenance_verified":true,"workflow_run_id":"%s"}\n' \
+            "$RELEASE_SHA" "$IMAGE_REPOSITORY" "$IMAGE_REFERENCE" "$DIGEST" "$GITHUB_RUN_ID" \
             > output/kubernetes-worker/release-evidence.json
 
       - name: Upload verified release bundle

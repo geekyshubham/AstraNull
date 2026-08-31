@@ -1,5 +1,4 @@
 apiVersion: batch/v1
-apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: astranull-notification-retry-scheduler
@@ -27,7 +26,7 @@ spec:
           containers:
             - name: runner
               # Render out-of-tree with scripts/render-kubernetes-worker-manifests.mjs.
-              image: ghcr.io/astranull/astranull-worker@__ASTRANULL_WORKER_IMAGE_DIGEST__
+              image: __ASTRANULL_WORKER_IMAGE_REPOSITORY__@__ASTRANULL_WORKER_IMAGE_DIGEST__
               imagePullPolicy: IfNotPresent
               command: ["node", "scripts/notification-retry-scheduler.mjs"]
               args:

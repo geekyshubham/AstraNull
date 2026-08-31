@@ -3,6 +3,7 @@ import { spawn as defaultSpawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import {
   closeSync,
+  constants as fsConstants,
   createReadStream,
   createWriteStream,
   fsyncSync,
@@ -13,6 +14,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import {
+  lstat as lstatPath,
+  open as openFile,
+  readdir,
+} from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
@@ -41,6 +48,14 @@ const SHA256_HEX_RE = /^[a-fA-F0-9]{64}$/;
 const PG_CUSTOM_DUMP_MAGIC = Buffer.from('PGDMP', 'ascii');
 const DEFAULT_STREAM_HIGH_WATER_MARK = 64 * 1024;
 const MAX_PG_DUMP_STDERR_BYTES = 16 * 1024;
+const CURRENT_BACKUP_ARTIFACT_RE = /^postgres-([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{3})Z-([0-9a-f]{12})\.dump\.enc$/;
+const LEGACY_BACKUP_ARTIFACT_RE = /^postgres-([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{3})Z\.dump\.enc$/;
+const BACKUP_IDENTITY_FIELDS = [
+  'dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink',
+];
+const MAX_BACKUP_INVENTORY_ARTIFACTS = 64;
+const MAX_BACKUP_MANIFEST_BYTES = 65_536;
+const BACKUP_READ_CHUNK_BYTES = 64 * 1024;
 
 const MANIFEST_FORBIDDEN_KEYS = new Set([
   'auth_tag',
@@ -166,6 +181,400 @@ export function collectManifestForbiddenFields(value, fieldPath = '') {
     findings.push(...collectManifestForbiddenFields(nested, keyPath));
   }
   return findings;
+}
+
+/** @param {RegExpExecArray | null} match */
+function hasValidBackupTimestamp(match) {
+  if (!match) return false;
+  const [year, month, day, hour, minute, second, millisecond] = match
+    .slice(1, 8)
+    .map((component) => Number(component));
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12
+    || day < 1 || day > daysInMonth[month - 1]
+    || hour < 0 || hour > 23
+    || minute < 0 || minute > 59
+    || second < 0 || second > 59
+    || millisecond < 0 || millisecond > 999) return false;
+
+  const isoTimestamp = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}.${match[7]}Z`;
+  const roundTrip = new Date(isoTimestamp);
+  return Number.isFinite(roundTrip.getTime()) && roundTrip.toISOString() === isoTimestamp;
+}
+
+/** @param {unknown} name @returns {'current' | 'legacy' | 'unknown'} */
+export function classifyPostgresBackupArtifactName(name) {
+  if (typeof name !== 'string') return 'unknown';
+  const currentMatch = CURRENT_BACKUP_ARTIFACT_RE.exec(name);
+  if (currentMatch?.[0] === name && hasValidBackupTimestamp(currentMatch)) return 'current';
+  const legacyMatch = LEGACY_BACKUP_ARTIFACT_RE.exec(name);
+  if (legacyMatch?.[0] === name && hasValidBackupTimestamp(legacyMatch)) return 'legacy';
+  return 'unknown';
+}
+
+function backupIdentityFromStat(stat) {
+  return Object.fromEntries(BACKUP_IDENTITY_FIELDS.map((field) => [field, stat[field]]));
+}
+
+function backupIdentityEquals(left, right) {
+  return BACKUP_IDENTITY_FIELDS.every((field) => left[field] === right[field]);
+}
+
+function assertSafeBackupStat(stat, label, { manifest = false } = {}) {
+  if (!stat.isFile() || stat.nlink !== 1n) {
+    throw new Error(`unsafe backup ${label}: expected a singly linked regular file`);
+  }
+  if (manifest && (stat.size < 1n || stat.size > BigInt(MAX_BACKUP_MANIFEST_BYTES))) {
+    throw new Error(`unsafe backup ${label}: manifest size is outside the bounded range`);
+  }
+}
+
+function assertExactBackupIdentity(actualStat, expectedIdentity, label, options) {
+  assertSafeBackupStat(actualStat, label, options);
+  const actualIdentity = backupIdentityFromStat(actualStat);
+  if (!backupIdentityEquals(actualIdentity, expectedIdentity)) {
+    throw new Error(`backup ${label} identity changed`);
+  }
+}
+
+function noFollowReadFlags() {
+  if (!Number.isInteger(fsConstants.O_NOFOLLOW)) {
+    throw new Error('backup inventory requires O_NOFOLLOW support');
+  }
+  return fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+}
+
+async function closeBackupHandles(handles) {
+  let firstError;
+  for (const handle of handles.reverse()) {
+    if (!handle) continue;
+    try {
+      await handle.close();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+async function readBoundedBackupHandle(handle, maximumBytes, label) {
+  const chunks = [];
+  let position = 0;
+  while (position <= maximumBytes) {
+    const available = maximumBytes + 1 - position;
+    const buffer = Buffer.allocUnsafe(Math.min(BACKUP_READ_CHUNK_BYTES, available));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) return Buffer.concat(chunks, position);
+    position += bytesRead;
+    if (position > maximumBytes) throw new Error(`backup ${label} exceeded its bounded size while reading`);
+    chunks.push(buffer.subarray(0, bytesRead));
+  }
+  throw new Error(`backup ${label} exceeded its bounded size while reading`);
+}
+
+async function hashBackupHandle(handle, expectedBytes, checkpoint, context) {
+  if (expectedBytes < 0n || expectedBytes > BigInt(Number.MAX_SAFE_INTEGER - 1)) {
+    throw new Error(`backup artifact is too large for exact manifest size validation: ${context.name}`);
+  }
+  const maximumBytes = Number(expectedBytes) + 1;
+  const hash = crypto.createHash('sha256');
+  let position = 0;
+  let checkpointCalled = false;
+  while (position <= maximumBytes) {
+    const available = maximumBytes + 1 - position;
+    const buffer = Buffer.allocUnsafe(Math.min(BACKUP_READ_CHUNK_BYTES, available));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (bytesRead === 0) break;
+    position += bytesRead;
+    if (position > maximumBytes) {
+      throw new Error(`backup artifact changed size while hashing: ${context.name}`);
+    }
+    hash.update(buffer.subarray(0, bytesRead));
+    if (!checkpointCalled) {
+      checkpointCalled = true;
+      await checkpoint('artifact_hash_chunk', context);
+    }
+  }
+  if (BigInt(position) !== expectedBytes) {
+    throw new Error(`backup artifact changed size while hashing: ${context.name}`);
+  }
+  return hash.digest('hex');
+}
+
+async function inspectCurrentBackupPair(root, name, checkpoint) {
+  const artifactPath = path.join(root, name);
+  const manifestPath = `${artifactPath}.manifest.json`;
+  const context = { name, artifactPath, manifestPath };
+  let artifactHandle;
+  let manifestHandle;
+  try {
+    artifactHandle = await openFile(artifactPath, noFollowReadFlags());
+    manifestHandle = await openFile(manifestPath, noFollowReadFlags());
+    const artifactBefore = await artifactHandle.stat({ bigint: true });
+    const manifestBefore = await manifestHandle.stat({ bigint: true });
+    assertSafeBackupStat(artifactBefore, `artifact ${name}`);
+    assertSafeBackupStat(manifestBefore, `manifest ${name}`, { manifest: true });
+    const artifactIdentity = backupIdentityFromStat(artifactBefore);
+    const manifestIdentity = backupIdentityFromStat(manifestBefore);
+
+    await checkpoint('pair_handles_opened', context);
+    const manifestBytes = await readBoundedBackupHandle(
+      manifestHandle,
+      MAX_BACKUP_MANIFEST_BYTES,
+      `manifest ${name}`,
+    );
+    const manifestAfterRead = await manifestHandle.stat({ bigint: true });
+    assertExactBackupIdentity(
+      manifestAfterRead,
+      manifestIdentity,
+      `manifest ${name} during read`,
+      { manifest: true },
+    );
+
+    const manifest = JSON.parse(manifestBytes.toString('utf8'));
+    validatePostgresBackupManifestFields(manifest);
+    if (!Number.isSafeInteger(manifest.bytes)
+      || manifest.backup_file !== name
+      || BigInt(manifest.bytes) !== artifactBefore.size) {
+      throw new Error(`backup manifest identity/size mismatch: ${name}`);
+    }
+
+    const encryptedSha256 = await hashBackupHandle(
+      artifactHandle,
+      artifactBefore.size,
+      checkpoint,
+      context,
+    );
+    const artifactAfterRead = await artifactHandle.stat({ bigint: true });
+    const manifestAfterArtifactRead = await manifestHandle.stat({ bigint: true });
+    assertExactBackupIdentity(
+      artifactAfterRead,
+      artifactIdentity,
+      `artifact ${name} during hash`,
+    );
+    assertExactBackupIdentity(
+      manifestAfterArtifactRead,
+      manifestIdentity,
+      `manifest ${name} during artifact hash`,
+      { manifest: true },
+    );
+    if (encryptedSha256 !== manifest.sha256) {
+      throw new Error(`backup encrypted digest mismatch: ${name}`);
+    }
+
+    await checkpoint('before_final_path_check', context);
+    const artifactAtPath = await lstatPath(artifactPath, { bigint: true });
+    const manifestAtPath = await lstatPath(manifestPath, { bigint: true });
+    assertExactBackupIdentity(artifactAtPath, artifactIdentity, `artifact path ${name}`);
+    assertExactBackupIdentity(
+      manifestAtPath,
+      manifestIdentity,
+      `manifest path ${name}`,
+      { manifest: true },
+    );
+    return { name, artifactIdentity, manifestIdentity };
+  } finally {
+    await closeBackupHandles([artifactHandle, manifestHandle]);
+  }
+}
+
+function serializeBackupIdentity(identity) {
+  return BACKUP_IDENTITY_FIELDS.map((field) => identity[field].toString());
+}
+
+function serializeBackupIdentityRecord({ name, artifactIdentity, manifestIdentity }) {
+  return [
+    name,
+    ...serializeBackupIdentity(artifactIdentity),
+    ...serializeBackupIdentity(manifestIdentity),
+  ].join('\t');
+}
+
+function parseCanonicalIdentityInteger(value, { signed = false } = {}) {
+  const pattern = signed ? /^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$/ : /^(?:0|[1-9][0-9]*)$/;
+  if (!pattern.test(value)) throw new Error('backup identity record contains a non-canonical integer');
+  return BigInt(value);
+}
+
+/** Parse a line-safe current-backup identity record emitted by secure inventory. */
+export function parsePostgresBackupIdentityRecord(record) {
+  if (typeof record !== 'string' || record.length === 0 || record.length > 2048
+    || record.includes('\n') || record.includes('\r')) {
+    throw new Error('backup identity record must be one bounded line');
+  }
+  const fields = record.split('\t');
+  if (fields.length !== 1 + (BACKUP_IDENTITY_FIELDS.length * 2)
+    || classifyPostgresBackupArtifactName(fields[0]) !== 'current') {
+    throw new Error('backup identity record has an unsafe artifact name or field count');
+  }
+  const parseIdentity = (offset) => Object.fromEntries(BACKUP_IDENTITY_FIELDS.map((field, index) => [
+    field,
+    parseCanonicalIdentityInteger(fields[offset + index], {
+      signed: field === 'mtimeNs' || field === 'ctimeNs',
+    }),
+  ]));
+  const parsed = {
+    name: fields[0],
+    artifactIdentity: parseIdentity(1),
+    manifestIdentity: parseIdentity(1 + BACKUP_IDENTITY_FIELDS.length),
+  };
+  if (parsed.artifactIdentity.nlink !== 1n || parsed.manifestIdentity.nlink !== 1n) {
+    throw new Error('backup identity record must describe singly linked files');
+  }
+  return parsed;
+}
+
+/**
+ * Inventory only exact current backup pairs. Every byte is read through O_NOFOLLOW
+ * handles and the handle/path identities must remain exact through final lstat.
+ */
+export async function inventoryPostgresBackupArtifacts(root, options = {}) {
+  const checkpoint = options.checkpoint ?? (async () => {});
+  const artifacts = (await readdir(root))
+    .filter((name) => name.endsWith('.dump.enc'))
+    .sort();
+  if (artifacts.length > MAX_BACKUP_INVENTORY_ARTIFACTS) {
+    throw new Error(`backup inventory exceeds bounded maximum ${MAX_BACKUP_INVENTORY_ARTIFACTS}`);
+  }
+  const validated = [];
+  for (const name of artifacts) {
+    const classification = classifyPostgresBackupArtifactName(name);
+    if (classification === 'legacy') continue;
+    if (classification !== 'current') {
+      throw new Error(`unsafe backup artifact name: ${JSON.stringify(name)}`);
+    }
+    validated.push(serializeBackupIdentityRecord(
+      await inspectCurrentBackupPair(root, name, checkpoint),
+    ));
+  }
+  return validated;
+}
+
+export const MAX_RETENTION_TOMBSTONE_DIRECTORIES = 4_096;
+const POSTGRES_RETENTION_HELPER = path.join(__dirname, 'postgres-retention-helper.py');
+const MAX_RETENTION_HELPER_STDERR_BYTES = 16 * 1024;
+
+function retentionHelperError(message, code) {
+  const error = new Error(message || 'postgres retention helper failed');
+  if (typeof code === 'string' && code) error.code = code;
+  return error;
+}
+
+/**
+ * Node 22 exposes neither renameat2 nor openat/unlinkat. The production AWS host
+ * already requires Python 3 for deploy locking, so retention runs the adjacent
+ * stdlib-only helper there instead of adding a runtime dependency to node:22-alpine.
+ * The helper uses directory-fd-anchored renameat2(RENAME_NOREPLACE) on Linux.
+ *
+ * Linux has no compare-and-unlink-by-inode primitive. The helper therefore
+ * ftruncates only the two held O_NOFOLLOW descriptors after one pair-wide final
+ * barrier and leaves bounded zero-byte tombstones rather than unlinking a raced
+ * pathname. It fails before capture at MAX_RETENTION_TOMBSTONE_DIRECTORIES.
+ */
+async function runPostgresRetentionHelper(root, identityRecords, options) {
+  const checkpoint = options.checkpoint ?? (async () => {});
+  const spawnFn = options.spawnFn ?? defaultSpawn;
+  const pythonCommand = options.pythonCommand ?? 'python3';
+  const child = spawnFn(
+    pythonCommand,
+    [POSTGRES_RETENTION_HELPER, '--protocol'],
+    { stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  if (!child?.stdin || !child?.stdout || !child?.stderr) {
+    throw new Error('postgres retention helper did not expose protocol streams');
+  }
+  child.stdin.on('error', () => {});
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    if (stderr.length >= MAX_RETENTION_HELPER_STDERR_BYTES) return;
+    stderr += Buffer.from(chunk).toString('utf8')
+      .slice(0, MAX_RETENTION_HELPER_STDERR_BYTES - stderr.length);
+  });
+  const completion = new Promise((resolve) => {
+    let settled = false;
+    const settle = (outcome) => {
+      if (settled) return;
+      settled = true;
+      resolve(outcome);
+    };
+    child.once('error', (error) => settle({ error }));
+    child.once('close', (code, signal) => settle({ code, signal }));
+  });
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  let helperResult;
+  let helperFailure;
+
+  child.stdin.write(`${JSON.stringify({
+    root: path.resolve(root),
+    identityRecords,
+    maxTombstoneDirectories: MAX_RETENTION_TOMBSTONE_DIRECTORIES,
+  })}\n`);
+
+  try {
+    for await (const line of lines) {
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        throw new Error('postgres retention helper emitted invalid protocol JSON');
+      }
+      if (message?.type === 'checkpoint') {
+        try {
+          await checkpoint(message.step, message.context);
+        } catch (error) {
+          child.stdin.write('{"abort":true}\n');
+          child.stdin.end();
+          await completion;
+          throw error;
+        }
+        child.stdin.write('{"continue":true}\n');
+      } else if (message?.type === 'result') {
+        helperResult = message;
+      } else if (message?.type === 'error') {
+        helperFailure = retentionHelperError(message.message, message.code);
+      } else {
+        throw new Error('postgres retention helper emitted an unknown protocol message');
+      }
+    }
+  } catch (error) {
+    if (!child.killed) child.kill('SIGKILL');
+    await completion;
+    throw error;
+  }
+
+  const outcome = await completion;
+  if (helperFailure) throw helperFailure;
+  if (outcome.error) throw outcome.error;
+  if (outcome.code !== 0 || !helperResult?.ok) {
+    const detail = stderr.trim();
+    throw new Error(
+      `postgres retention helper exited ${outcome.code ?? `signal ${outcome.signal ?? 'unknown'}`}`
+      + (detail ? `: ${detail}` : ''),
+    );
+  }
+  if (helperResult.maxTombstoneDirectories !== MAX_RETENTION_TOMBSTONE_DIRECTORIES) {
+    throw new Error('postgres retention helper returned a mismatched tombstone bound');
+  }
+  return helperResult;
+}
+
+/**
+ * Revalidate every identity, atomically capture completion-marker first, then
+ * reclaim only held inodes. Production AWS invokes the same helper directly on
+ * the host because the pinned Node Alpine release image intentionally has no
+ * Python interpreter.
+ */
+export async function pruneInventoriedPostgresBackups(root, identityRecords, options = {}) {
+  if (!Array.isArray(identityRecords) || identityRecords.length > MAX_BACKUP_INVENTORY_ARTIFACTS) {
+    throw new Error('backup retention identity record set is invalid or unbounded');
+  }
+  const parsed = identityRecords.map(parsePostgresBackupIdentityRecord);
+  if (new Set(parsed.map(({ name }) => name)).size !== parsed.length) {
+    throw new Error('backup retention identity record set contains duplicate names');
+  }
+  return runPostgresRetentionHelper(root, identityRecords, options);
 }
 
 /** @param {unknown} name */
@@ -629,6 +1038,9 @@ export async function backupPostgres(options) {
     throw new Error('postgres-backup: filename nonce must be 12 lowercase hexadecimal characters.');
   }
   const backupName = `postgres-${timestampForFilename(now)}-${filenameNonce}.dump.enc`;
+  if (classifyPostgresBackupArtifactName(backupName) !== 'current') {
+    throw new Error('postgres-backup: generated backup filename is not exact current format.');
+  }
   const backupPath = path.join(out, backupName);
   const manifestPath = `${backupPath}.manifest.json`;
   const backupPartialPath = privatePartialPath(out, backupName, 'artifact');

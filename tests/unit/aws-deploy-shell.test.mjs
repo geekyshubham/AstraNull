@@ -18,6 +18,13 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { after, describe, it } from 'node:test';
+import {
+  ARTIFACT_TYPE,
+  BACKUP_ENCRYPTION_ALGORITHM,
+  BACKUP_ENVELOPE_VERSION,
+  MANIFEST_VERSION,
+  classifyPostgresBackupArtifactName,
+} from '../../scripts/postgres-backup.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SHELL_BACKUP_DIR = mkdtempSync(path.join(tmpdir(), 'astranull-shell-backups-'));
@@ -60,6 +67,66 @@ function runBash(source, env = {}, script = DEPLOY) {
   );
   assert.notEqual(result.error?.code, 'ETIMEDOUT', 'Python process-group watchdog itself stalled');
   return result;
+}
+
+function runLocalBackupInventory(backupDir, body, env = {}) {
+  return runBash(`
+    source "$1"
+    ROOT="$REPO_ROOT_FIXTURE"
+    BACKUP_DIR="$BACKUP_DIR_FIXTURE"
+    timeout() {
+      if [[ \${1:-} == -k ]]; then shift 2; fi
+      shift
+      "$@"
+    }
+    compose_ops_run() {
+      shift 2
+      while (( $# > 0 )) && [[ "$1" != node ]]; do shift; done
+      (( $# > 0 )) || return 97
+      local args=("$@") last
+      last=$((\${#args[@]} - 1))
+      args[$last]="$BACKUP_DIR_FIXTURE"
+      command "\${args[@]}"
+    }
+    ${body}
+  `, { BACKUP_DIR_FIXTURE: backupDir, REPO_ROOT_FIXTURE: ROOT, ...env });
+}
+
+function writeInventoryBackupPair(directory, name, manifestOverrides = {}) {
+  const bytes = Buffer.from('encrypted-backup');
+  writeFileSync(path.join(directory, name), bytes, { mode: 0o600 });
+  writeFileSync(path.join(directory, `${name}.manifest.json`), `${JSON.stringify({
+    version: MANIFEST_VERSION,
+    artifact_type: ARTIFACT_TYPE,
+    created_at: '2026-08-31T12:00:00.000Z',
+    backup_file: name,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    bytes: bytes.length,
+    label: null,
+    database_reference: { host: 'postgres', port: 5432, database: 'astranull' },
+    dump_format: 'pg_custom',
+    encryption: {
+      algorithm: BACKUP_ENCRYPTION_ALGORITHM,
+      key_reference: 'env:ASTRANULL_BACKUP_ENCRYPTION_KEY',
+      envelope_version: BACKUP_ENVELOPE_VERSION,
+    },
+    ...manifestOverrides,
+  }, null, 2)}\n`, { mode: 0o600 });
+}
+
+function backupIdentityRecord(directory, name, recordName = name) {
+  const fields = (target) => {
+    const value = statSync(target, { bigint: true });
+    return [
+      value.dev, value.ino, value.size, value.mtimeNs, value.ctimeNs,
+      value.mode, value.uid, value.gid, value.nlink,
+    ].map(String);
+  };
+  return [
+    recordName,
+    ...fields(path.join(directory, name)),
+    ...fields(path.join(directory, `${name}.manifest.json`)),
+  ].join('\t');
 }
 
 function writeFakeTimeout(directory) {
@@ -127,6 +194,44 @@ describe('AWS deploy shell lifecycle', () => {
     assert.equal(result.stdout, 'source-ok');
   });
 
+  it('keeps the shell cleanup predicate aligned with exact Node current classification', () => {
+    const current = 'postgres-2026-08-30T16-47-04-492Z-abcdef123456.dump.enc';
+    const cases = [
+      [current, 'current'],
+      ['postgres-2024-02-29T23-59-59-999Z-abcdef123456.dump.enc', 'current'],
+      ['postgres-2026-08-30T16-47-04-492Z.dump.enc', 'legacy'],
+      ['postgres-2000-02-29T00-00-00-000Z.dump.enc', 'legacy'],
+      ['postgres-2026-00-15T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-13-15T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-01-00T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-04-31T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2025-02-29T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2024-02-30T12-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T24-00-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-60-00-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-47-60-000Z-abcdef123456.dump.enc', 'unknown'],
+      ['postgres-2025-02-29T12-00-00-000Z.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-47-04-492Z-ABCDEF123456.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-47-04-492Z-abcdef12345.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-47-04-492Z-abcdef1234567.dump.enc', 'unknown'],
+      ['postgres-2026-08-30T16-47-04Z-abcdef123456.dump.enc', 'unknown'],
+      [`${current}\n`, 'unknown'],
+      [`postgres-2026-08-30T16-47-04-492Z-abc\ndef123456.dump.enc`, 'unknown'],
+      [`../${current}`, 'unknown'],
+      [`/backup/${current}`, 'unknown'],
+      [`backup\\${current}`, 'unknown'],
+    ];
+    for (const [name, expected] of cases) {
+      assert.equal(classifyPostgresBackupArtifactName(name), expected, JSON.stringify(name));
+      const shell = runBash(`
+        source "$1"
+        if is_current_backup_artifact_name "$CANDIDATE"; then printf current; else printf not-current; fi
+      `, { CANDIDATE: name });
+      assert.equal(shell.status, 0, shell.stderr);
+      assert.equal(shell.stdout, expected === 'current' ? 'current' : 'not-current', JSON.stringify(name));
+    }
+  });
+
   it('rejects a symlinked private deploy lock and never mutates its target', () => {
     for (const [name, script] of [['deploy', DEPLOY], ['restore', RESTORE]]) {
       const temp = mkdtempSync(path.join(tmpdir(), `astranull-${name}-lock-safety-`));
@@ -178,6 +283,128 @@ exit 91
       } finally {
         rmSync(temp, { recursive: true, force: true });
       }
+    }
+  });
+
+  it('deploy cleanup removes only allocator-exact scratch basenames and preserves collisions', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-deploy-scratch-collisions-'));
+    const backupDir = path.join(temp, 'backups');
+    mkdirSync(backupDir, { mode: 0o700 });
+    const current = 'postgres-2026-08-31T12-00-00-000Z-abcdef123456.dump.enc';
+    const exactScratch = [
+      '.astranull-env.deploy.Ab3xY9',
+      '.astranull-env.restore.z9Y8x7',
+      '.astranull-plaintext.deploy.A1b2C3',
+      '.astranull-plaintext.restore.d4E5f6',
+      '.astranull-build-iid.G7h8I9',
+      '.astranull-compose.previous.J1k2L3.yml',
+      '.astranull-compose.target.m4N5o6.yml',
+      '.astranull-compose-render.deploy.12345',
+      '.astranull-compose-render.restore.67890',
+      '.astranull-compose-source.restore.24680',
+      `.${current}.partial-artifact-${'a'.repeat(24)}`,
+      `.${current}.partial-manifest-${'b'.repeat(24)}`,
+    ];
+    const collisions = [
+      '.postgres-operator.partial-copy.dump.enc',
+      '.astranull-plaintext.deploy.operator.dump.enc',
+      '.astranull-env.deploy.operator.dump.enc',
+      '.astranull-env.deploy.Ab3xY',
+      '.astranull-env.restore.Ab3xY90',
+      '.astranull-plaintext.restore.Ab3_x9',
+      '.astranull-build-iid.operator',
+      '.astranull-compose.previous.operator.yml',
+      '.astranull-compose-render.deploy.123.dump.enc',
+      '.astranull-compose-render.deploy.0',
+      '.astranull-compose-source.restore.0123',
+      '.astranull-compose-source.restore.operator',
+      `.postgres-2026-02-30T12-00-00-000Z-abcdef123456.dump.enc.partial-artifact-${'c'.repeat(24)}`,
+      `.${current}.partial-artifact-${'D'.repeat(24)}`,
+      current,
+      `${current}.manifest.json`,
+    ];
+    try {
+      for (const name of [...exactScratch, ...collisions]) {
+        writeFileSync(path.join(backupDir, name), `content:${name}`, { mode: 0o600 });
+      }
+      const preservedDirectory = path.join(backupDir, '.astranull-env.restore.operator.dump.enc');
+      const victim = path.join(backupDir, 'victim');
+      const preservedSymlink = path.join(backupDir, '.astranull-plaintext.restore.operator.dump.enc');
+      mkdirSync(preservedDirectory);
+      writeFileSync(victim, 'victim', { mode: 0o600 });
+      symlinkSync(victim, preservedSymlink);
+
+      const result = runBash(
+        'source "$1"; cleanup_stale_release_workspace; cleanup_backup_orphans',
+        { ASTRANULL_TEST_BACKUP_DIR: backupDir },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      for (const name of exactScratch) assert.equal(existsSync(path.join(backupDir, name)), false, name);
+      for (const name of collisions) assert.equal(existsSync(path.join(backupDir, name)), true, name);
+      assert.equal(existsSync(preservedDirectory), true);
+      assert.equal(existsSync(preservedSymlink), true);
+      assert.equal(readFileSync(victim, 'utf8'), 'victim');
+
+      const inventory = runLocalBackupInventory(backupDir, 'list_valid_backup_artifacts');
+      assert.notEqual(inventory.status, 0);
+      assert.match(inventory.stderr, /unsafe backup artifact name/);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('restore cleanup removes exact allocator scratch basenames and preserves collisions', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-restore-scratch-collisions-'));
+    const backupDir = path.join(temp, 'backups');
+    mkdirSync(backupDir, { mode: 0o700 });
+    const exactScratch = [
+      '.astranull-env.deploy.Ab3xY9',
+      '.astranull-env.restore.z9Y8x7',
+      '.astranull-plaintext.deploy.A1b2C3',
+      '.astranull-plaintext.restore.d4E5f6',
+      '.astranull-build-iid.G7h8I9',
+      '.astranull-compose.previous.J1k2L3.yml',
+      '.astranull-compose.target.m4N5o6.yml',
+      '.astranull-compose-render.deploy.12345',
+      '.astranull-compose-render.restore.67890',
+      '.astranull-compose-source.restore.24680',
+    ];
+    const collisions = [
+      '.astranull-env.deploy.operator.dump.enc',
+      '.astranull-plaintext.restore.operator.dump.enc',
+      '.astranull-env.deploy.Ab3xY',
+      '.astranull-plaintext.deploy.A1b2C34',
+      '.astranull-build-iid.operator',
+      '.astranull-compose.target.operator.yml',
+      '.astranull-compose-render.restore.operator',
+      '.astranull-compose-render.restore.0',
+      '.astranull-compose-source.restore.0123',
+      '.astranull-compose-source.restore.123.dump.enc',
+    ];
+    try {
+      for (const name of [...exactScratch, ...collisions]) {
+        writeFileSync(path.join(backupDir, name), `content:${name}`, { mode: 0o600 });
+      }
+      const preservedDirectory = path.join(backupDir, '.astranull-env.restore.operator.dump.enc');
+      const victim = path.join(backupDir, 'victim');
+      const preservedSymlink = path.join(backupDir, '.astranull-plaintext.deploy.operator-link.dump.enc');
+      mkdirSync(preservedDirectory);
+      writeFileSync(victim, 'victim', { mode: 0o600 });
+      symlinkSync(victim, preservedSymlink);
+
+      const result = runBash(
+        'source "$1"; cleanup_stale_release_workspace; cleanup_stale_plaintext_archives',
+        { ASTRANULL_TEST_BACKUP_DIR: backupDir },
+        RESTORE,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      for (const name of exactScratch) assert.equal(existsSync(path.join(backupDir, name)), false, name);
+      for (const name of collisions) assert.equal(existsSync(path.join(backupDir, name)), true, name);
+      assert.equal(existsSync(preservedDirectory), true);
+      assert.equal(existsSync(preservedSymlink), true);
+      assert.equal(readFileSync(victim, 'utf8'), 'victim');
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
     }
   });
 
@@ -1692,7 +1919,7 @@ fi
       assert.equal(readFileSync(path.join(temp, 'state/control-plane-image-tag'), 'utf8'), `${sameSha}\n${oldImageId}\n`);
       assert.equal(readFileSync(path.join(temp, 'state/core-worker-image-state'), 'utf8'), `${sameSha}\n${oldImageId}\n`);
       const calls = readFileSync(callLog, 'utf8');
-      assert.match(calls, /build --iidfile \S+\/\.astranull-build-iid\.[A-Za-z0-9]+ -f ops\/aws\/Dockerfile -t astranull-control-plane:[0-9a-f]{40} -/);
+      assert.match(calls, /build --iidfile \S+\/\.astranull-build-iid\.[A-Za-z0-9]{6} -f ops\/aws\/Dockerfile -t astranull-control-plane:[0-9a-f]{40} -/);
       assert.match(calls, new RegExp(`image tag ${oldImageId} astranull-control-plane:[0-9a-f]{40}`));
     } finally {
       rmSync(temp, { recursive: true, force: true });
@@ -1844,7 +2071,7 @@ fi
       assert.equal(buildArgs[0], 'build');
       assert.equal(buildArgs[1], '--iidfile');
       assert.equal(path.dirname(buildArgs[2]), SHELL_BACKUP_DIR);
-      assert.match(path.basename(buildArgs[2]), /^\.astranull-build-iid\.[A-Za-z0-9]+$/);
+      assert.match(path.basename(buildArgs[2]), /^\.astranull-build-iid\.[A-Za-z0-9]{6}$/);
       assert.deepEqual(buildArgs.slice(3), [
         '-f',
         'ops/aws/Dockerfile',
@@ -2224,7 +2451,7 @@ PY
     const temp = mkdtempSync(path.join(tmpdir(), 'astranull-plaintext-hardlink-'));
     const backupDir = path.join(temp, 'backups');
     const original = path.join(backupDir, 'original');
-    const linked = path.join(backupDir, '.astranull-plaintext.deploy.attacker');
+    const linked = path.join(backupDir, '.astranull-plaintext.deploy.aB3dE6');
     mkdirSync(backupDir, { mode: 0o700 });
     writeFileSync(original, '', { mode: 0o600 });
     linkSync(original, linked);
@@ -2278,10 +2505,10 @@ PY
         printf '%s|%s' "\${plain_host##*/}" "$([[ -e "$plain_host" || -L "$plain_host" ]] && printf present || printf absent)"
       `, { BACKUP_DIR_FIXTURE: backupDir }, RESTORE);
       assert.equal(allocated.status, 0, allocated.stderr);
-      assert.match(allocated.stdout, /^\.astranull-plaintext\.restore\.[A-Za-z0-9]+\|absent$/);
+      assert.match(allocated.stdout, /^\.astranull-plaintext\.restore\.[A-Za-z0-9]{6}\|absent$/);
 
       const original = path.join(backupDir, 'stolen-restore-plaintext');
-      const linked = path.join(backupDir, '.astranull-plaintext.restore.attacker');
+      const linked = path.join(backupDir, '.astranull-plaintext.restore.aB3dE6');
       writeFileSync(original, 'sensitive', { mode: 0o600 });
       linkSync(original, linked);
       const cleanup = runBash(`
@@ -2302,59 +2529,311 @@ PY
     }
   });
 
-  it('retains only complete backup pairs and never lets newer orphans evict restore points', () => {
+  it('preserves non-scratch backup names and prunes only inventoried current pairs', () => {
     const temp = mkdtempSync(path.join(tmpdir(), 'astranull-backup-retention-'));
     chmodSync(temp, 0o700);
     const valid = [
       'postgres-2026-01-01T00-00-00-000Z-aaaaaaaaaaaa.dump.enc',
       'postgres-2026-01-02T00-00-00-000Z-bbbbbbbbbbbb.dump.enc',
     ];
+    const productionLegacy = 'postgres-2026-08-30T16-47-04-492Z.dump.enc';
+    const manifestlessLegacy = 'postgres-2026-08-29T16-47-04-492Z.dump.enc';
+    const unknownManifest = 'operator-copy.dump.enc.manifest.json';
+    const impossibleFinals = [
+      'postgres-2026-13-01T00-00-00-000Z-111111111111.dump.enc',
+      'postgres-2026-04-31T00-00-00-000Z-222222222222.dump.enc',
+      'postgres-2025-02-29T00-00-00-000Z.dump.enc',
+      'postgres-2026-01-01T24-00-00-000Z-333333333333.dump.enc',
+      'postgres-2026-01-01T00-60-00-000Z.dump.enc',
+      'postgres-2026-01-01T00-00-60-000Z-444444444444.dump.enc',
+    ];
     for (const name of valid) {
       writeFileSync(path.join(temp, name), 'encrypted', { mode: 0o600 });
       writeFileSync(path.join(temp, `${name}.manifest.json`), '{}', { mode: 0o600 });
     }
-    for (let index = 0; index < 10; index += 1) {
-      writeFileSync(path.join(temp, `postgres-2099-12-${String(index + 1).padStart(2, '0')}T00-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`), 'orphan', { mode: 0o600 });
+    writeFileSync(path.join(temp, productionLegacy), 'legacy-encrypted', { mode: 0o600 });
+    writeFileSync(path.join(temp, `${productionLegacy}.manifest.json`), 'not-json', { mode: 0o600 });
+    writeFileSync(path.join(temp, manifestlessLegacy), 'legacy-without-manifest', { mode: 0o600 });
+    writeFileSync(path.join(temp, unknownManifest), 'unknown-manifest-data', { mode: 0o600 });
+    for (const name of impossibleFinals) {
+      writeFileSync(path.join(temp, name), `impossible:${name}`, { mode: 0o600 });
+      if (name.includes('-111111111111.') || name.endsWith('Z.dump.enc')) {
+        writeFileSync(path.join(temp, `${name}.manifest.json`), `impossible-manifest:${name}`, { mode: 0o600 });
+      }
     }
-    writeFileSync(path.join(temp, '.postgres-stale.dump.enc.partial-artifact-deadbeef'), 'partial', { mode: 0o600 });
-    writeFileSync(path.join(temp, 'postgres-2099-12-31T00-00-00-000Z-cccccccccccc.dump.enc.manifest.json'), '{}', { mode: 0o600 });
+    const currentOrphans = Array.from({ length: 10 }, (_, index) => (
+      `postgres-2099-12-${String(index + 1).padStart(2, '0')}T00-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`
+    ));
+    const partialCollision = '.postgres-stale.dump.enc.partial-artifact-deadbeef';
+    const orphanManifest = 'postgres-2099-12-31T00-00-00-000Z-cccccccccccc.dump.enc.manifest.json';
+    for (const name of currentOrphans) {
+      writeFileSync(path.join(temp, name), 'orphan', { mode: 0o600 });
+    }
+    writeFileSync(path.join(temp, partialCollision), 'partial', { mode: 0o600 });
+    writeFileSync(path.join(temp, orphanManifest), '{}', { mode: 0o600 });
+    const validRecords = valid.map((name) => backupIdentityRecord(temp, name));
     try {
       const result = runBash(`
         source "$1"
         BACKUP_DIR="$BACKUP_DIR_FIXTURE"
         cleanup_backup_orphans
-        list_valid_backup_artifacts() {
-          printf '%s\n' \
-            'postgres-2026-01-01T00-00-00-000Z-aaaaaaaaaaaa.dump.enc' \
-            'postgres-2026-01-02T00-00-00-000Z-bbbbbbbbbbbb.dump.enc'
-        }
+        list_valid_backup_artifacts() { printf '%s\n' "$VALID_RECORDS"; }
         prune_backups
-      `, { BACKUP_DIR_FIXTURE: temp });
+      `, { BACKUP_DIR_FIXTURE: temp, VALID_RECORDS: validRecords.join('\n') });
       assert.equal(result.status, 0, result.stderr);
-      for (const name of valid) {
-        assert.equal(existsSync(path.join(temp, name)), true);
-        assert.equal(existsSync(path.join(temp, `${name}.manifest.json`)), true);
+      const impossibleManifests = impossibleFinals
+        .filter((name) => name.includes('-111111111111.') || name.endsWith('Z.dump.enc'))
+        .map((name) => `${name}.manifest.json`);
+      const preserved = [
+        ...valid.flatMap((name) => [name, `${name}.manifest.json`]),
+        productionLegacy,
+        `${productionLegacy}.manifest.json`,
+        manifestlessLegacy,
+        unknownManifest,
+        ...impossibleFinals,
+        ...impossibleManifests,
+        ...currentOrphans,
+        partialCollision,
+        orphanManifest,
+      ];
+      assert.deepEqual(readdirSync(temp).sort(), preserved.sort());
+      assert.equal(readFileSync(path.join(temp, productionLegacy), 'utf8'), 'legacy-encrypted');
+      assert.equal(readFileSync(path.join(temp, `${productionLegacy}.manifest.json`), 'utf8'), 'not-json');
+      assert.equal(readFileSync(path.join(temp, manifestlessLegacy), 'utf8'), 'legacy-without-manifest');
+      assert.equal(readFileSync(path.join(temp, unknownManifest), 'utf8'), 'unknown-manifest-data');
+      for (const name of impossibleFinals) {
+        assert.equal(readFileSync(path.join(temp, name), 'utf8'), `impossible:${name}`);
       }
-      assert.deepEqual(readdirSync(temp).sort(), valid.flatMap((name) => [name, `${name}.manifest.json`]).sort());
 
       const malformed = 'manual.dump.enc';
       writeFileSync(path.join(temp, malformed), 'encrypted', { mode: 0o600 });
       writeFileSync(path.join(temp, `${malformed}.manifest.json`), '{}', { mode: 0o600 });
+      const malformedRecord = backupIdentityRecord(temp, malformed);
       const rejected = runBash(`
         source "$1"
         BACKUP_DIR="$BACKUP_DIR_FIXTURE"
-        list_valid_backup_artifacts() { printf '%s\\n' 'manual.dump.enc'; }
+        cleanup_backup_orphans
+        list_valid_backup_artifacts() { printf '%s\n' "$MALFORMED_RECORD"; }
         set +e
         prune_backups
         rc=$?
         set -e
         printf '%s' "$rc"
-      `, { BACKUP_DIR_FIXTURE: temp });
+      `, { BACKUP_DIR_FIXTURE: temp, MALFORMED_RECORD: malformedRecord });
       assert.equal(rejected.status, 0, rejected.stderr);
       assert.match(rejected.stdout, /^[1-9][0-9]*$/);
-      assert.match(rejected.stderr, /unsafe artifact name/);
+      assert.match(rejected.stderr, /unsafe identity record/);
       assert.equal(existsSync(path.join(temp, malformed)), true);
       assert.equal(existsSync(path.join(temp, `${malformed}.manifest.json`)), true);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('inventory validates and emits only current names while ignoring exact legacy names', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-backup-inventory-'));
+    chmodSync(temp, 0o700);
+    const current = 'postgres-2026-08-31T12-00-00-000Z-abcdef123456.dump.enc';
+    const productionLegacy = 'postgres-2026-08-30T16-47-04-492Z.dump.enc';
+    const manifestlessLegacy = 'postgres-2026-08-29T16-47-04-492Z.dump.enc';
+    const unknownManifest = 'operator-copy.dump.enc.manifest.json';
+    writeInventoryBackupPair(temp, current);
+    writeFileSync(path.join(temp, productionLegacy), 'legacy-encrypted', { mode: 0o600 });
+    writeFileSync(path.join(temp, `${productionLegacy}.manifest.json`), 'not-json', { mode: 0o600 });
+    writeFileSync(path.join(temp, manifestlessLegacy), 'legacy-without-manifest', { mode: 0o600 });
+    writeFileSync(path.join(temp, unknownManifest), 'unknown-manifest-data', { mode: 0o600 });
+    try {
+      const accepted = runLocalBackupInventory(temp, `
+        cleanup_backup_orphans
+        inventory=$(list_valid_backup_artifacts)
+        prune_backups
+        printf '%s' "$inventory"
+      `);
+      assert.equal(accepted.status, 0, accepted.stderr);
+      const acceptedFields = accepted.stdout.split('\t');
+      assert.equal(acceptedFields.length, 19);
+      assert.equal(acceptedFields[0], current);
+      assert.ok(acceptedFields.slice(1).every((field) => /^-?[0-9]+$/.test(field)));
+      for (const preserved of [
+        productionLegacy,
+        `${productionLegacy}.manifest.json`,
+        manifestlessLegacy,
+        unknownManifest,
+      ]) assert.equal(existsSync(path.join(temp, preserved)), true, preserved);
+
+      const unknownArtifact = 'zz-operator-copy.dump.enc';
+      writeFileSync(path.join(temp, unknownArtifact), 'unknown-artifact', { mode: 0o600 });
+      const unknownRejected = runLocalBackupInventory(temp, 'cleanup_backup_orphans; list_valid_backup_artifacts');
+      assert.notEqual(unknownRejected.status, 0);
+      assert.equal(unknownRejected.stdout, '', 'failed inventory must not emit a partial current-name list');
+      assert.match(unknownRejected.stderr, /unsafe backup artifact name/);
+      assert.equal(existsSync(path.join(temp, unknownArtifact)), true);
+      rmSync(path.join(temp, unknownArtifact));
+
+      const hostileArtifact = 'postgres-2099-01-01T00-00-00-000Z-abc\ndef123456.dump.enc';
+      writeFileSync(path.join(temp, hostileArtifact), 'hostile-artifact', { mode: 0o600 });
+      const hostileRejected = runLocalBackupInventory(temp, 'cleanup_backup_orphans; list_valid_backup_artifacts');
+      assert.notEqual(hostileRejected.status, 0);
+      assert.equal(hostileRejected.stdout, '');
+      assert.match(hostileRejected.stderr, /unsafe backup artifact name/);
+      assert.match(hostileRejected.stderr, /\\n/);
+      assert.equal(existsSync(path.join(temp, hostileArtifact)), true);
+      rmSync(path.join(temp, hostileArtifact));
+
+      const impossibleArtifacts = [
+        'postgres-2026-13-01T00-00-00-000Z-111111111111.dump.enc',
+        'postgres-2026-04-31T00-00-00-000Z-222222222222.dump.enc',
+        'postgres-2025-02-29T00-00-00-000Z.dump.enc',
+        'postgres-2026-01-01T24-00-00-000Z-333333333333.dump.enc',
+        'postgres-2026-01-01T00-60-00-000Z.dump.enc',
+        'postgres-2026-01-01T00-00-60-000Z-444444444444.dump.enc',
+      ];
+      for (const impossibleArtifact of impossibleArtifacts) {
+        const impossiblePath = path.join(temp, impossibleArtifact);
+        writeFileSync(impossiblePath, `preserve:${impossibleArtifact}`, { mode: 0o600 });
+        const impossibleRejected = runLocalBackupInventory(
+          temp,
+          'cleanup_backup_orphans; list_valid_backup_artifacts',
+        );
+        assert.notEqual(impossibleRejected.status, 0, impossibleArtifact);
+        assert.equal(impossibleRejected.stdout, '');
+        assert.match(impossibleRejected.stderr, /unsafe backup artifact name/);
+        assert.equal(readFileSync(impossiblePath, 'utf8'), `preserve:${impossibleArtifact}`);
+        rmSync(impossiblePath);
+      }
+
+      const invalidCurrent = 'postgres-2099-01-02T00-00-00-000Z-deadbeefcafe.dump.enc';
+      writeInventoryBackupPair(temp, invalidCurrent, { sha256: '0'.repeat(64) });
+      const invalidRejected = runLocalBackupInventory(temp, 'cleanup_backup_orphans; prune_backups');
+      assert.notEqual(invalidRejected.status, 0);
+      assert.equal(invalidRejected.stdout, '');
+      assert.match(invalidRejected.stderr, /backup encrypted digest mismatch/);
+      assert.equal(existsSync(path.join(temp, invalidCurrent)), true);
+      assert.equal(existsSync(path.join(temp, `${invalidCurrent}.manifest.json`)), true);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps only the newest ten current pairs and rejects validation-to-prune drift', () => {
+    const names = Array.from({ length: 11 }, (_, index) => (
+      `postgres-2026-06-${String(index + 1).padStart(2, '0')}T00-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`
+    ));
+
+    const retained = mkdtempSync(path.join(tmpdir(), 'astranull-identity-retention-'));
+    chmodSync(retained, 0o700);
+    try {
+      for (const name of names) writeInventoryBackupPair(retained, name);
+      const pruned = runLocalBackupInventory(retained, 'cleanup_backup_orphans; prune_backups');
+      assert.equal(pruned.status, 0, pruned.stderr);
+      assert.equal(existsSync(path.join(retained, names[0])), false);
+      assert.equal(existsSync(path.join(retained, `${names[0]}.manifest.json`)), false);
+      for (const name of names.slice(1)) {
+        assert.equal(existsSync(path.join(retained, name)), true, name);
+        assert.equal(existsSync(path.join(retained, `${name}.manifest.json`)), true, `${name} manifest`);
+      }
+      const quarantines = readdirSync(retained)
+        .filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+      assert.equal(quarantines.length, 1);
+      assert.equal(readdirSync(retained).length, 21);
+      assert.deepEqual(readdirSync(path.join(retained, quarantines[0])).sort(), ['artifact', 'manifest']);
+      assert.equal(statSync(path.join(retained, quarantines[0], 'artifact')).size, 0);
+      assert.equal(statSync(path.join(retained, quarantines[0], 'manifest')).size, 0);
+    } finally {
+      rmSync(retained, { recursive: true, force: true });
+    }
+
+    const drifted = mkdtempSync(path.join(tmpdir(), 'astranull-identity-drift-'));
+    chmodSync(drifted, 0o700);
+    try {
+      for (const name of names) writeInventoryBackupPair(drifted, name);
+      const boundary = runLocalBackupInventory(drifted, `
+        records=$(list_valid_backup_artifacts)
+        chmod 640 "$DRIFT_MANIFEST"
+        list_valid_backup_artifacts() { printf '%s\n' "$records"; }
+        set +e
+        prune_backups
+        rc=$?
+        set -e
+        printf '%s' "$rc"
+      `, { DRIFT_MANIFEST: path.join(drifted, `${names[0]}.manifest.json`) });
+      assert.equal(boundary.status, 0, boundary.stderr);
+      assert.match(boundary.stdout, /^[1-9][0-9]*$/);
+      assert.match(boundary.stderr, /identity changed/);
+      assert.equal(readdirSync(drifted).length, 22);
+      for (const name of names) {
+        assert.equal(existsSync(path.join(drifted, name)), true, name);
+        assert.equal(existsSync(path.join(drifted, `${name}.manifest.json`)), true, `${name} manifest`);
+      }
+    } finally {
+      rmSync(drifted, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the exact transferred retention helper before checkout when the host ROOT lacks it', () => {
+    const names = Array.from({ length: 11 }, (_, index) => (
+      `postgres-2026-07-${String(index + 1).padStart(2, '0')}T00-00-00-000Z-${String(index).padStart(12, '0')}.dump.enc`
+    ));
+    const oldRoot = mkdtempSync(path.join(tmpdir(), 'astranull-old-aws-root-'));
+    const backupDir = mkdtempSync(path.join(tmpdir(), 'astranull-transferred-helper-backups-'));
+    const deploySha = 'a'.repeat(40);
+    const remoteHelper = `/tmp/astranull-postgres-retention-helper-${deploySha}-${process.pid}-${Date.now()}.py`;
+    chmodSync(oldRoot, 0o700);
+    chmodSync(backupDir, 0o700);
+    writeFileSync(remoteHelper, readFileSync(path.join(ROOT, 'scripts/postgres-retention-helper.py')), { mode: 0o600 });
+    chmodSync(remoteHelper, 0o600);
+    try {
+      for (const name of names) writeInventoryBackupPair(backupDir, name);
+      const records = names.map((name) => backupIdentityRecord(backupDir, name));
+      const result = runLocalBackupInventory(backupDir, `
+        ROOT="$OLD_ROOT_FIXTURE"
+        SHA="$DEPLOY_SHA_FIXTURE"
+        ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER="$TRANSFERRED_HELPER_FIXTURE"
+        export ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER
+        [[ ! -e "$ROOT/scripts/postgres-retention-helper.py" ]]
+        list_valid_backup_artifacts() { printf '%s\n' "$VALID_RECORDS"; }
+        prune_backups
+      `, {
+        OLD_ROOT_FIXTURE: oldRoot,
+        DEPLOY_SHA_FIXTURE: deploySha,
+        TRANSFERRED_HELPER_FIXTURE: remoteHelper,
+        VALID_RECORDS: records.join('\n'),
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(path.join(backupDir, names[0])), false);
+      assert.equal(existsSync(path.join(backupDir, `${names[0]}.manifest.json`)), false);
+      assert.equal(existsSync(remoteHelper), true, 'deploy helper must not remove the workflow-owned transfer');
+      const quarantines = readdirSync(backupDir)
+        .filter((entry) => entry.startsWith('.postgres-retention-quarantine-'));
+      assert.equal(quarantines.length, 1);
+      assert.equal(statSync(path.join(backupDir, quarantines[0], 'artifact')).size, 0);
+      assert.equal(statSync(path.join(backupDir, quarantines[0], 'manifest')).size, 0);
+    } finally {
+      rmSync(remoteHelper, { force: true });
+      rmSync(oldRoot, { recursive: true, force: true });
+      rmSync(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it('counts ignored legacy artifacts toward the bounded 64-item inventory cap', () => {
+    const temp = mkdtempSync(path.join(tmpdir(), 'astranull-legacy-backup-cap-'));
+    chmodSync(temp, 0o700);
+    const legacyName = (index) => `postgres-2026-08-30T16-47-04-${String(index).padStart(3, '0')}Z.dump.enc`;
+    try {
+      for (let index = 0; index < 64; index += 1) {
+        writeFileSync(path.join(temp, legacyName(index)), `legacy-${index}`, { mode: 0o600 });
+      }
+      const atCap = runLocalBackupInventory(temp, 'cleanup_backup_orphans; prune_backups');
+      assert.equal(atCap.status, 0, atCap.stderr);
+      assert.equal(atCap.stdout, '');
+      assert.equal(readdirSync(temp).length, 64);
+
+      writeFileSync(path.join(temp, legacyName(64)), 'legacy-64', { mode: 0o600 });
+      const overCap = runLocalBackupInventory(temp, 'cleanup_backup_orphans; prune_backups');
+      assert.notEqual(overCap.status, 0);
+      assert.equal(overCap.stdout, '');
+      assert.match(overCap.stderr, /backup inventory exceeds bounded maximum 64/);
+      assert.equal(readdirSync(temp).length, 65);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }

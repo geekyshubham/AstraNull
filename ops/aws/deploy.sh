@@ -18,6 +18,8 @@ CORE_WORKER_IMAGE_STATE_FILE="$DEPLOY_STATE_DIR/core-worker-image-state"
 CONNECTOR_IMAGE_STATE_FILE="$DEPLOY_STATE_DIR/connector-image-state"
 RELEASE_VALIDATOR_IMAGE_STATE_FILE="$DEPLOY_STATE_DIR/release-validator-image-state"
 STATE_LOG_PREFIX=deploy
+POSTGRES_RETENTION_HELPER=''
+POSTGRES_RETENTION_PYTHON3=''
 
 load_release_state_library() {
   local candidate=${ASTRANULL_RELEASE_STATE_LIB:-}
@@ -34,6 +36,52 @@ load_release_state_library() {
   }
   # shellcheck source=ops/aws/release-state.sh
   source "$candidate"
+}
+
+prepare_postgres_retention_helper() {
+  local candidate=${ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER:-}
+  local explicit_transfer=0 mode owner links numeric_mode python3_bin
+  if [[ -n "$candidate" ]]; then
+    explicit_transfer=1
+    [[ "$SHA" =~ ^[0-9a-f]{40}$ \
+      && "$candidate" =~ ^/tmp/astranull-postgres-retention-helper-${SHA}-[0-9]+-[0-9]+\.py$ ]] || {
+      echo 'deploy: transferred PostgreSQL retention helper path is not bound to this release' >&2
+      return 1
+    }
+  else
+    candidate="$ROOT/scripts/postgres-retention-helper.py"
+  fi
+  [[ -f "$candidate" && ! -L "$candidate" ]] || {
+    echo "deploy: missing or unsafe PostgreSQL retention helper $candidate" >&2
+    return 1
+  }
+  mode=$(private_file_mode "$candidate") || return
+  owner=$(backup_file_owner "$candidate") || return
+  links=$(backup_file_links "$candidate") || return
+  [[ "$mode" =~ ^[0-7]{3,4}$ ]] || {
+    echo "deploy: could not validate PostgreSQL retention helper mode for $candidate" >&2
+    return 1
+  }
+  numeric_mode=$((8#$mode))
+  [[ "$owner" == "$(id -u)" && "$links" == 1 ]] \
+    && (( (numeric_mode & 8#022) == 0 )) || {
+    echo 'deploy: PostgreSQL retention helper must be singly linked, owned by the deploy user, and not writable by group or other' >&2
+    return 1
+  }
+  if ((explicit_transfer)) && [[ "$mode" != 600 ]]; then
+    echo 'deploy: transferred PostgreSQL retention helper must have mode 0600' >&2
+    return 1
+  fi
+  python3_bin=$(command -v python3) || {
+    echo 'deploy: python3 is required for atomic backup retention' >&2
+    return 1
+  }
+  [[ "$python3_bin" == /* && -x "$python3_bin" ]] || {
+    echo 'deploy: python3 must resolve to an executable absolute path' >&2
+    return 1
+  }
+  POSTGRES_RETENTION_HELPER=$candidate
+  POSTGRES_RETENTION_PYTHON3=$python3_bin
 }
 
 MODE=deploy
@@ -1499,6 +1547,20 @@ if fd_stat.st_uid != os.getuid():
 PY
 }
 
+is_release_workspace_scratch_name() {
+  local name=${1##*/} LC_ALL=C
+  [[ "$name" =~ ^\.astranull-env\.(deploy|restore)\.[A-Za-z0-9]{6}$ \
+    || "$name" =~ ^\.astranull-build-iid\.[A-Za-z0-9]{6}$ \
+    || "$name" =~ ^\.astranull-compose\.(previous|target)\.[A-Za-z0-9]{6}\.yml$ \
+    || "$name" =~ ^\.astranull-compose-render\.(deploy|restore)\.[1-9][0-9]*$ \
+    || "$name" =~ ^\.astranull-compose-source\.restore\.[1-9][0-9]*$ ]]
+}
+
+is_plaintext_scratch_name() {
+  local name=${1##*/} LC_ALL=C
+  [[ "$name" =~ ^\.astranull-plaintext\.(deploy|restore)\.[A-Za-z0-9]{6}$ ]]
+}
+
 cleanup_stale_release_workspace() {
   local candidate mode owner links failed=0 stale=()
   ensure_backup_dir_secure || return
@@ -1509,6 +1571,7 @@ cleanup_stale_release_workspace() {
     "$BACKUP_DIR"/.astranull-compose.target.*.yml "$BACKUP_DIR"/.astranull-build-iid.*)
   shopt -u nullglob
   for candidate in ${stale[@]+"${stale[@]}"}; do
+    is_release_workspace_scratch_name "$candidate" || continue
     if [[ -f "$candidate" && ! -L "$candidate" ]]; then
       mode=$(private_file_mode "$candidate") || mode=''
       owner=$(backup_file_owner "$candidate") || owner=''
@@ -1571,39 +1634,63 @@ remove_backup_file_checked() {
   }
 }
 
+is_current_backup_artifact_name() {
+  local name=${1:-} LC_ALL=C
+  local year_raw month_raw day_raw hour_raw minute_raw second_raw millisecond_raw
+  local year month day hour minute second millisecond days_in_month
+  [[ "$name" =~ ^postgres-([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-([0-9]{3})Z-[0-9a-f]{12}\.dump\.enc$ ]] || return 1
+  year_raw=${BASH_REMATCH[1]}
+  month_raw=${BASH_REMATCH[2]}
+  day_raw=${BASH_REMATCH[3]}
+  hour_raw=${BASH_REMATCH[4]}
+  minute_raw=${BASH_REMATCH[5]}
+  second_raw=${BASH_REMATCH[6]}
+  millisecond_raw=${BASH_REMATCH[7]}
+  year=$((10#$year_raw))
+  month=$((10#$month_raw))
+  day=$((10#$day_raw))
+  hour=$((10#$hour_raw))
+  minute=$((10#$minute_raw))
+  second=$((10#$second_raw))
+  millisecond=$((10#$millisecond_raw))
+  ((month >= 1 && month <= 12 && day >= 1 \
+    && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 \
+    && second >= 0 && second <= 59 && millisecond >= 0 && millisecond <= 999)) || return 1
+  case $month in
+    2)
+      days_in_month=28
+      if ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))); then
+        days_in_month=29
+      fi
+      ;;
+    4|6|9|11) days_in_month=30 ;;
+    *) days_in_month=31 ;;
+  esac
+  ((day <= days_in_month))
+}
+
+is_backup_partial_scratch_name() {
+  local name=${1##*/} artifact_name LC_ALL=C
+  [[ "$name" =~ ^\.(postgres-.*\.dump\.enc)\.partial-(artifact|manifest)-[0-9a-f]{24}$ ]] || return 1
+  artifact_name=${BASH_REMATCH[1]}
+  is_current_backup_artifact_name "$artifact_name"
+}
+
 cleanup_backup_orphans() {
-  local partial plaintext artifact manifest failed=0
-  local partials=() plaintexts=() artifacts=() manifests=()
+  local partial plaintext failed=0
+  local partials=() plaintexts=()
   ensure_backup_dir_secure || return
   shopt -s nullglob
   partials=("$BACKUP_DIR"/.postgres-*.partial-*)
   plaintexts=("$BACKUP_DIR"/.astranull-plaintext.deploy.* "$BACKUP_DIR"/.astranull-plaintext.restore.*)
-  artifacts=("$BACKUP_DIR"/*.dump.enc)
-  manifests=("$BACKUP_DIR"/*.dump.enc.manifest.json)
   shopt -u nullglob
   for partial in ${partials[@]+"${partials[@]}"}; do
+    is_backup_partial_scratch_name "$partial" || continue
     remove_backup_file_checked "$partial" 'stale private backup partial' || failed=1
   done
   for plaintext in ${plaintexts[@]+"${plaintexts[@]}"}; do
+    is_plaintext_scratch_name "$plaintext" || continue
     delete_plaintext_checked "$plaintext" || failed=1
-  done
-  for artifact in ${artifacts[@]+"${artifacts[@]}"}; do
-    manifest="$artifact.manifest.json"
-    if [[ ! -f "$artifact" || -L "$artifact" || ! -f "$manifest" || -L "$manifest" ]]; then
-      remove_backup_file_checked "$artifact" 'unmatched encrypted backup artifact' || failed=1
-      if [[ -e "$manifest" || -L "$manifest" ]]; then
-        remove_backup_file_checked "$manifest" 'unmatched backup manifest' || failed=1
-      fi
-    fi
-  done
-  for manifest in ${manifests[@]+"${manifests[@]}"}; do
-    artifact=${manifest%.manifest.json}
-    if [[ ! -f "$manifest" || -L "$manifest" || ! -f "$artifact" || -L "$artifact" ]]; then
-      remove_backup_file_checked "$manifest" 'unmatched backup manifest' || failed=1
-      if [[ -e "$artifact" || -L "$artifact" ]]; then
-        remove_backup_file_checked "$artifact" 'unmatched encrypted backup artifact' || failed=1
-      fi
-    fi
   done
   ((failed == 0))
 }
@@ -1612,67 +1699,72 @@ list_valid_backup_artifacts() {
   compose_ops_run 600 backup-inventory \
     -u "$(id -u):$(id -g)" -v "$BACKUP_DIR:/backup:ro" backup \
     node --input-type=module -e '
-      import crypto from "node:crypto";
-      import { createReadStream } from "node:fs";
-      import { lstat, readFile, readdir } from "node:fs/promises";
-      import { validatePostgresBackupManifestFields } from "./scripts/postgres-backup.mjs";
-      const root = "/backup";
-      const artifacts = (await readdir(root))
-        .filter(name => !name.startsWith(".") && name.endsWith(".dump.enc"))
-        .sort();
-      if (artifacts.length > 64) throw new Error("backup inventory exceeds bounded maximum 64");
-      for (const name of artifacts) {
-        if (!/^postgres-[A-Za-z0-9-]+-[0-9a-f]{12}\.dump\.enc$/.test(name)) {
-          throw new Error(`unsafe backup artifact name: ${JSON.stringify(name)}`);
-        }
-        const artifactPath = `${root}/${name}`;
-        const manifestPath = `${artifactPath}.manifest.json`;
-        const artifactStat = await lstat(artifactPath);
-        const manifestStat = await lstat(manifestPath);
-        if (!artifactStat.isFile() || artifactStat.isSymbolicLink() || artifactStat.nlink !== 1
-          || !manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1
-          || manifestStat.size < 1 || manifestStat.size > 65536) {
-          throw new Error(`unsafe or incomplete backup pair: ${name}`);
-        }
-        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-        validatePostgresBackupManifestFields(manifest);
-        if (manifest.backup_file !== name || manifest.bytes !== artifactStat.size) {
-          throw new Error(`backup manifest identity/size mismatch: ${name}`);
-        }
-        const hash = crypto.createHash("sha256");
-        for await (const chunk of createReadStream(artifactPath)) hash.update(chunk);
-        if (hash.digest("hex") !== manifest.sha256) {
-          throw new Error(`backup encrypted digest mismatch: ${name}`);
-        }
-        process.stdout.write(`${name}\n`);
-      }
-    '
+      import { inventoryPostgresBackupArtifacts } from "./scripts/postgres-backup.mjs";
+      const records = await inventoryPostgresBackupArtifacts(process.argv[1]);
+      if (records.length > 0) process.stdout.write(`${records.join("\n")}\n`);
+    ' /backup
+}
+
+is_backup_identity_record_line() {
+  local record=${1:-} value index LC_ALL=C
+  local fields=()
+  IFS=$'\t' read -r -a fields <<< "$record"
+  ((${#fields[@]} == 19)) || return 1
+  is_current_backup_artifact_name "${fields[0]}" || return 1
+  for ((index = 1; index < 19; index++)); do
+    value=${fields[$index]}
+    case $index in
+      4|5|13|14) [[ "$value" =~ ^(0|-[1-9][0-9]*|[1-9][0-9]*)$ ]] || return 1 ;;
+      *) [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]] || return 1 ;;
+    esac
+  done
+  [[ "${fields[9]}" == 1 && "${fields[18]}" == 1 ]]
+}
+
+delete_inventoried_backup_records() {
+  (($# > 0)) || return 0
+  prepare_postgres_retention_helper || return
+  timeout -k 10 600 "$POSTGRES_RETENTION_PYTHON3" \
+    "$POSTGRES_RETENTION_HELPER" --root "$BACKUP_DIR" -- "$@"
 }
 
 prune_backups() {
-  local complete=() artifact_name artifact old failed=0 valid_artifacts
+  local artifact_name previous_name='' record valid_artifacts expired_count index
+  local complete_records=() sorted_records=() expired_records=()
   valid_artifacts=$(list_valid_backup_artifacts) || return
-  while IFS= read -r artifact_name; do
-    [[ -n "$artifact_name" ]] || continue
-    [[ "$artifact_name" =~ ^postgres-[A-Za-z0-9-]+-[0-9a-f]{12}\.dump\.enc$ ]] || {
-      echo "deploy: backup inventory returned an unsafe artifact name: $artifact_name" >&2
+  while IFS= read -r record; do
+    [[ -n "$record" ]] || continue
+    is_backup_identity_record_line "$record" || {
+      echo 'deploy: backup inventory returned an unsafe identity record' >&2
       return 1
     }
-    artifact="$BACKUP_DIR/$artifact_name"
-    [[ -f "$artifact" && ! -L "$artifact" && -f "$artifact.manifest.json" && ! -L "$artifact.manifest.json" ]] || {
-      echo "deploy: validated backup pair changed before retention: $artifact_name" >&2
+    complete_records+=("$record")
+    ((${#complete_records[@]} <= 64)) || {
+      echo 'deploy: backup inventory returned more than 64 identity records' >&2
       return 1
     }
-    complete+=("$artifact")
   done <<< "$valid_artifacts"
-  if ((${#complete[@]} > 10)); then
-    while IFS= read -r old; do
-      [[ -n "$old" ]] || continue
-      remove_backup_file_checked "$old.manifest.json" 'expired backup completion manifest' || failed=1
-      remove_backup_file_checked "$old" 'expired encrypted backup artifact' || failed=1
-    done < <(printf '%s\n' "${complete[@]}" | sort -r | tail -n +11)
+
+  if ((${#complete_records[@]} > 0)); then
+    while IFS= read -r record; do
+      [[ -n "$record" ]] || continue
+      artifact_name=${record%%$'\t'*}
+      [[ "$artifact_name" != "$previous_name" ]] || {
+        echo 'deploy: backup inventory returned duplicate artifact identities' >&2
+        return 1
+      }
+      previous_name=$artifact_name
+      sorted_records+=("$record")
+    done < <(printf '%s\n' "${complete_records[@]}" | LC_ALL=C sort)
   fi
-  ((failed == 0))
+
+  if ((${#sorted_records[@]} > 10)); then
+    expired_count=$((${#sorted_records[@]} - 10))
+    for ((index = 0; index < expired_count; index++)); do
+      expired_records+=("${sorted_records[$index]}")
+    done
+    delete_inventoried_backup_records "${expired_records[@]}"
+  fi
 }
 
 validate_plaintext_archive() {
@@ -1702,7 +1794,7 @@ delete_plaintext_checked() {
 }
 
 backup_database() {
-  local backup_output backup_container_path plain_name
+  local backup_output backup_container_path backup_name plain_name
   cleanup_backup_orphans
   allocate_plaintext_backup
   plain_name=${plain_host##*/}
@@ -1723,8 +1815,13 @@ backup_database() {
   delete_plaintext_checked "$plain_host"
   plain_host=''
   backup_container_path=$(printf '%s\n' "$backup_output" | sed -n 's/^  backup: //p' | tail -1)
-  [[ "$backup_container_path" == /backup/*.dump.enc ]]
-  backup="$BACKUP_DIR/${backup_container_path##*/}"
+  backup_name=${backup_container_path##*/}
+  [[ "$backup_container_path" == "/backup/$backup_name" ]] \
+    && is_current_backup_artifact_name "$backup_name" || {
+    echo 'deploy: backup writer returned an unsafe artifact path' >&2
+    return 1
+  }
+  backup="$BACKUP_DIR/$backup_name"
   [[ -f "$backup" && ! -L "$backup" && -s "$backup" \
     && -f "$backup.manifest.json" && ! -L "$backup.manifest.json" \
     && -s "$backup.manifest.json" ]]
@@ -2070,6 +2167,7 @@ main() {
   if [[ ${1:-} == --rollback ]]; then MODE=rollback; shift; fi
   SHA=${1:-}
   [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'deploy: exact 40-char SHA required' >&2; exit 1; }
+  prepare_postgres_retention_helper
 
   acquire_deploy_lock
   cd "$ROOT"

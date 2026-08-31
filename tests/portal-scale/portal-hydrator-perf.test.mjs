@@ -70,7 +70,9 @@ function p95(samples) {
  * index for a path; do not remove the older one while its migration still creates it.
  */
 const HYDRATOR_INDEXES = Object.freeze({
-  targetsByGroup: ['targets_by_group_kind'],
+  // The production getTargetGroup query filters deleted rows and orders by created_at; only
+  // 0044's matching partial ordered index is valid for this guarded path.
+  targetsByGroup: ['idx_targets_tenant_group_active'],
   targetsByTenant: ['targets_by_tenant'],
   // 0040 first: it is the one the planner should pick for the ordered keyset page.
   findingsByTarget: ['idx_findings_tenant_target_created', 'findings_by_target'],
@@ -319,12 +321,67 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
       await seedPortalScalePostgres(pool, { profile: pgProfile });
 
       await withTenantContext(pool, pgIds.tenantId, async (client) => {
+        // Keep this path nontrivial without inflating the shared 10k-scale fixture or its latency
+        // budgets: active rows must be ordered, while deleted rows must be excluded by the partial
+        // index predicate. Every active canonical tuple is distinct.
+        await client.query(
+          `INSERT INTO targets (
+             id, tenant_id, target_group_id, kind, value, normalized_value,
+             expected_behavior, metadata_json, created_at, deleted_at
+           )
+           SELECT 'tgt_scale_explain_active_' || seed.n,
+                  $2, $1, 'fqdn',
+                  'explain-active-' || seed.n || '.scale.test',
+                  'explain-active-' || seed.n || '.scale.test',
+                  'cloud_baseline', '{}'::jsonb,
+                  TIMESTAMPTZ '2026-06-01T00:00:00Z' + seed.n * INTERVAL '1 hour',
+                  NULL
+           FROM generate_series(1, 32) AS seed(n)
+           UNION ALL
+           SELECT 'tgt_scale_explain_deleted_' || seed.n,
+                  $2, $1, 'fqdn',
+                  'explain-deleted-' || seed.n || '.scale.test',
+                  'explain-deleted-' || seed.n || '.scale.test',
+                  'cloud_baseline', '{}'::jsonb,
+                  TIMESTAMPTZ '2026-06-15T00:00:00Z' + seed.n * INTERVAL '1 hour',
+                  TIMESTAMPTZ '2026-07-15T00:00:00Z' + seed.n * INTERVAL '1 hour'
+           FROM generate_series(1, 8) AS seed(n)`,
+          [pgIds.targetGroupId, pgIds.tenantId],
+        );
+        await client.query('ANALYZE targets');
+
+        const { rows: targetFixtureRows } = await client.query(
+          `SELECT
+             (COUNT(*) FILTER (WHERE deleted_at IS NULL))::int AS active_count,
+             (COUNT(*) FILTER (WHERE deleted_at IS NOT NULL))::int AS deleted_count,
+             (COUNT(DISTINCT ROW(kind, normalized_value))
+               FILTER (WHERE deleted_at IS NULL))::int AS active_canonical_count,
+             COUNT(DISTINCT created_at)::int AS created_at_count
+           FROM targets
+           WHERE target_group_id = $1 AND tenant_id = $2`,
+          [pgIds.targetGroupId, pgIds.tenantId],
+        );
+        const targetFixture = targetFixtureRows[0];
+        assert.ok(targetFixture.active_count > 1, 'EXPLAIN fixture needs multiple active targets');
+        assert.ok(targetFixture.deleted_count > 1, 'EXPLAIN fixture needs multiple deleted targets');
+        assert.equal(
+          targetFixture.active_canonical_count,
+          targetFixture.active_count,
+          'active targets must have unique canonical identities',
+        );
+        assert.ok(targetFixture.created_at_count > 2, 'EXPLAIN fixture needs varied created_at');
+
+        // Exact target-list SQL issued by both getTargetGroup paths in coreCatalogRepository.
         const targetsByGroupPlan = await explainHydratorQuery(
           client,
-          `SELECT id, tenant_id, target_group_id, kind, value, expected_behavior, metadata_json, created_at
-           FROM targets
-           WHERE target_group_id = $1 AND tenant_id = $2
-           ORDER BY created_at`,
+          `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
+                  t.expected_behavior, t.metadata_json, t.created_at,
+                  verification.state AS verification_state
+           FROM targets t
+           LEFT JOIN target_verification_current verification
+             ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
+           WHERE t.target_group_id = $1 AND t.tenant_id = $2 AND t.deleted_at IS NULL
+           ORDER BY t.created_at`,
           [pgIds.targetGroupId, pgIds.tenantId],
         );
         assertPlanUsesIndex(

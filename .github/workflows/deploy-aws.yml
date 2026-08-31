@@ -36,32 +36,47 @@ jobs:
           : "${SSH_KEY:?missing SSH key}"; : "${HOST:?missing host}"; : "${KNOWN_HOSTS:?missing pinned host key}"
           [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$(git rev-parse HEAD)" == "$DEPLOY_SHA" ]]
+          transferred_files=(
+            ops/aws/deploy.sh
+            ops/aws/release-state.sh
+            scripts/postgres-retention-helper.py
+          )
+          for transferred_file in "${transferred_files[@]}"; do
+            [[ -f "$transferred_file" && ! -L "$transferred_file" ]]
+            git ls-files --error-unmatch -- "$transferred_file" >/dev/null
+          done
           [[ -x ops/aws/deploy.sh ]]
-          [[ -f ops/aws/release-state.sh ]]
-          git diff --exit-code -- ops/aws/deploy.sh ops/aws/release-state.sh
+          git diff --exit-code HEAD -- "${transferred_files[@]}"
           script_sha256=$(sha256sum ops/aws/deploy.sh | awk '{print $1}')
           state_lib_sha256=$(sha256sum ops/aws/release-state.sh | awk '{print $1}')
+          retention_helper_sha256=$(sha256sum scripts/postgres-retention-helper.py | awk '{print $1}')
           [[ "$script_sha256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$state_lib_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$retention_helper_sha256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
 
           user="${SSH_USER:-ubuntu}"
           remote_script="/tmp/astranull-deploy-${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
           remote_state_lib="/tmp/astranull-release-state-${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          remote_retention_helper="/tmp/astranull-postgres-retention-helper-${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
           mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
           printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/astranull-deploy"; chmod 600 "$HOME/.ssh/astranull-deploy"
           printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; chmod 600 "$HOME/.ssh/known_hosts"
           uploaded=0
           cleanup() {
             if ((uploaded)); then
-              timeout -k 5 30 ssh -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "${user}@${HOST}" "rm -f -- '$remote_script' '$remote_state_lib'" >/dev/null 2>&1 || true
+              timeout -k 5 30 ssh -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 "${user}@${HOST}" "rm -f -- '$remote_script' '$remote_state_lib' '$remote_retention_helper'" >/dev/null 2>&1 || true
             fi
             rm -f "$HOME/.ssh/astranull-deploy"
           }
           trap cleanup EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
 
           uploaded=1
           timeout -k 5 60 scp -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 ops/aws/deploy.sh "${user}@${HOST}:${remote_script}"
           timeout -k 5 60 scp -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 ops/aws/release-state.sh "${user}@${HOST}:${remote_state_lib}"
+          timeout -k 5 60 scp -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 scripts/postgres-retention-helper.py "${user}@${HOST}:${remote_retention_helper}"
           timeout 1800 ssh -i "$HOME/.ssh/astranull-deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${user}@${HOST}" \
-            "set -euo pipefail; trap 'rm -f -- \"$remote_script\" \"$remote_state_lib\"' EXIT; chmod 700 '$remote_script'; chmod 600 '$remote_state_lib'; printf '%s  %s\n' '$script_sha256' '$remote_script' | sha256sum -c -; printf '%s  %s\n' '$state_lib_sha256' '$remote_state_lib' | sha256sum -c -; ASTRANULL_RELEASE_STATE_LIB='$remote_state_lib' bash '$remote_script' '$DEPLOY_SHA'"
+            "set -euo pipefail; cleanup() { rm -f -- '$remote_script' '$remote_state_lib' '$remote_retention_helper'; }; trap cleanup EXIT; trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; chmod 700 '$remote_script'; chmod 600 '$remote_state_lib' '$remote_retention_helper'; printf '%s  %s\n' '$script_sha256' '$remote_script' | sha256sum -c -; printf '%s  %s\n' '$state_lib_sha256' '$remote_state_lib' | sha256sum -c -; printf '%s  %s\n' '$retention_helper_sha256' '$remote_retention_helper' | sha256sum -c -; ASTRANULL_RELEASE_STATE_LIB='$remote_state_lib' ASTRANULL_DEPLOY_POSTGRES_RETENTION_HELPER='$remote_retention_helper' bash '$remote_script' '$DEPLOY_SHA'"
