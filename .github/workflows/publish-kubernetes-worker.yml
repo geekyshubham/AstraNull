@@ -75,6 +75,8 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382 # v3.8.1
+        with:
+          cosign-release: v3.1.3
 
       - name: Keyless-sign exact digest
         env:

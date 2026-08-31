@@ -378,6 +378,17 @@ describe('Kubernetes worker exact-digest manifests', () => {
       true,
     );
     const installCosign = workflow.indexOf('uses: sigstore/cosign-installer@');
+    assert.equal(
+      workflow.includes([
+        '      - name: Install cosign',
+        '        uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382 # v3.8.1',
+        '        with:',
+        '          cosign-release: v3.1.3',
+      ].join('\n')),
+      true,
+    );
+    assert.equal((workflow.match(/cosign-release:/g) ?? []).length, 1);
+    assert.equal(workflow.includes('cosign-release: v2.4.0'), false);
     const buildStep = workflow.slice(buildAction, installCosign);
     assert.equal(buildStep.includes('          push: true'), true);
     assert.equal(
