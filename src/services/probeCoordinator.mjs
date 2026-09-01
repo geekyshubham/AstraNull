@@ -15,6 +15,8 @@ import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { recordEvidence } from './evidence.mjs';
+import { recordTargetEdgeDetectionFromEvent } from './targetEdgeDetectionStore.mjs';
+import { WAF_EDGE_DETECTION_CHECK_ID } from '../lib/edgeDetection.mjs';
 import * as ownershipVerification from './ownershipVerification.mjs';
 
 const PROBE_WORKER_SIG_VERSION = 'pw1';
@@ -488,6 +490,17 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
       related_event_id: probeEvent.id,
     },
   );
+
+  if (job.check_id === WAF_EDGE_DETECTION_CHECK_ID && job.target_id) {
+    recordTargetEdgeDetectionFromEvent({
+      tenantId: run.tenant_id,
+      targetGroupId: run.target_group_id ?? job.target_group_id ?? null,
+      targetId: job.target_id,
+      testRunId: run.id,
+      metadata: probeMetadata,
+      observedAt: probeEvent.timestamp,
+    });
+  }
 
   run.correlation.nonce_hash = job.nonce_hash;
   run.probe_external_result = externalResult;

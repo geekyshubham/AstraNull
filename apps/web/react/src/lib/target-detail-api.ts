@@ -5,6 +5,7 @@ export type TargetDetailPayload = {
   target: DataItem | null;
   verification: DataItem | null;
   waf_posture: DataItem | null;
+  edge_detection: DataItem | null;
   checks_applied: DataItem[];
   runs_recent: DataItem[];
   findings: DataItem[];
@@ -45,6 +46,7 @@ export async function populateTargetDetail(
       target: null,
       verification: null,
       waf_posture: null,
+      edge_detection: null,
       checks_applied: [],
       runs_recent: [],
       findings: [],
@@ -65,6 +67,9 @@ export async function populateTargetDetail(
       : null;
     const wafPosture = payload.waf_posture && typeof payload.waf_posture === 'object' && !Array.isArray(payload.waf_posture)
       ? payload.waf_posture as DataItem
+      : null;
+    const edgeDetection = payload.edge_detection && typeof payload.edge_detection === 'object' && !Array.isArray(payload.edge_detection)
+      ? payload.edge_detection as DataItem
       : null;
     const checksApplied = Array.isArray(payload.checks_applied) ? payload.checks_applied as DataItem[] : [];
     const runsRecent = Array.isArray(payload.runs_recent) ? payload.runs_recent as DataItem[] : [];
@@ -90,6 +95,7 @@ export async function populateTargetDetail(
         target: null,
         verification,
         waf_posture: wafPosture,
+        edge_detection: edgeDetection,
         checks_applied: checksApplied,
         runs_recent: runsRecent,
         findings,
@@ -105,6 +111,7 @@ export async function populateTargetDetail(
       target,
       verification,
       waf_posture: wafPosture,
+      edge_detection: edgeDetection,
       checks_applied: checksApplied,
       runs_recent: runsRecent,
       findings,
@@ -129,6 +136,7 @@ export async function populateTargetDetail(
       target: null,
       verification: null,
       waf_posture: null,
+      edge_detection: null,
       checks_applied: [],
       runs_recent: [],
       findings: [],

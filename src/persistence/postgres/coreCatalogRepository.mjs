@@ -11,6 +11,7 @@ import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../.
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { runMetadataRetentionInTransaction } from './retentionRepository.mjs';
+import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
 function toIso(value) {
@@ -214,6 +215,30 @@ function mapTargetRow(row) {
   if (Object.keys(metadata).length > 0) mapped.metadata = metadata;
   return mapped;
 }
+
+/**
+ * Current WAF/CDN edge detection for a target, shaped for `presentTargetEdgeDetection()`.
+ * Label-only evidence: the table stores no raw header, cookie, or block-page values.
+ */
+const TARGET_EDGE_DETECTION_JSON = `jsonb_build_object(
+  'status', ed.status,
+  'reason', ed.reason,
+  'waf_status', ed.waf_status,
+  'waf_vendor', ed.waf_vendor,
+  'waf_type', ed.waf_type,
+  'waf_providers', to_jsonb(ed.waf_providers),
+  'cdn_status', ed.cdn_status,
+  'cdn_provider', ed.cdn_provider,
+  'cdn_type', ed.cdn_type,
+  'cdn_providers', to_jsonb(ed.cdn_providers),
+  'confidence', ed.confidence,
+  'conflicting_vendor_signals', ed.conflicting_vendor_signals,
+  'corpus_version', ed.corpus_version,
+  'test_run_id', ed.test_run_id,
+  'evidence_json', ed.evidence_json,
+  'observed_at', ed.observed_at,
+  'updated_at', ed.updated_at
+)`;
 
 function mapDetailTargetRow(row) {
   const mapped = mapTargetRow(row);
@@ -624,17 +649,29 @@ export function createCoreCatalogRepository(pool, options = {}) {
         const targets = await client.query(
           `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
                   t.expected_behavior, t.metadata_json, t.created_at,
-                  verification.state AS verification_state
+                  verification.state AS verification_state,
+                  edge.detection AS edge_detection
            FROM targets t
            LEFT JOIN target_verification_current verification
              ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
+           -- The edge detection rides the targets read as a LATERAL, keeping the detail page at
+           -- two round trips. The unique index guarantees at most one row per target.
+           LEFT JOIN LATERAL (
+             SELECT ${TARGET_EDGE_DETECTION_JSON} AS detection
+             FROM target_edge_detections ed
+             WHERE ed.tenant_id = t.tenant_id AND ed.target_id = t.id
+           ) edge ON TRUE
            WHERE t.target_group_id = $1 AND t.tenant_id = $2 AND t.deleted_at IS NULL
            ORDER BY t.created_at`,
           [id, ctx.tenantId],
         );
+        const detailTargets = targets.rows.map((targetRow) => ({
+          ...mapDetailTargetRow(targetRow),
+          edge_detection: presentTargetEdgeDetection(targetRow.edge_detection ?? null),
+        }));
         return {
           ...group,
-          ...mapTargetGroupDetail(row, targets.rows.map(mapDetailTargetRow)),
+          ...mapTargetGroupDetail(row, detailTargets),
         };
       });
     },

@@ -245,6 +245,7 @@ describe('dev store migration', () => {
       agentUpdateReleases: [],
       agentUpdateStatuses: [],
       agentUpdateTrustKeys: [],
+      targetEdgeDetections: [],
       wafAssets: [],
       wafProducts: [],
       wafScenarioIntakes: [],

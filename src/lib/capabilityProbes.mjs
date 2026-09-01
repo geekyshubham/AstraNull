@@ -222,6 +222,12 @@ function withKind(job, kind, metadata) {
   return { profile_kind: kind, probe_kind: kind, ...metadata };
 }
 
+/** True when the signed probe profile explicitly grants an optional collector capability. */
+function probeProfileGrantsCollect(job, capability) {
+  const collect = job?.probe_profile?.collect;
+  return Array.isArray(collect) && collect.includes(capability);
+}
+
 function apexDomain(job) {
   const value = String(job.target?.value ?? '').trim();
   if (!value) return null;
@@ -1599,6 +1605,9 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     budget,
     timeoutMs: remainingProbeTimeoutMs(job, deps),
     followRedirects: job.probe_profile?.follow_redirects === true,
+    // The resolver chain sits outside the static HTTP scan plan, so it stays off until the signed
+    // profile grants `dns_chain_hint`. Without that cap the CDN half of the corpus never evaluates.
+    collectNetworkHints: probeProfileGrantsCollect(job, 'dns_chain_hint'),
     wafRequired: job.probe_profile?.waf_required !== false,
     customerVendorHint: job.probe_profile?.expected_vendor_hint ?? job.target?.metadata?.expected_vendor_hint,
     agentCorroborated: job.probe_profile?.agent_corroborated === true

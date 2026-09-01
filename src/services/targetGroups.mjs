@@ -16,6 +16,8 @@ import {
 } from '../lib/ownershipPolicy.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { normalizeSafetyPolicy } from './safeTestPolicy.mjs';
+import { listTargetEdgeDetectionsForGroup } from './targetEdgeDetectionStore.mjs';
+import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['planned', 'running', 'collecting']);
 
@@ -220,11 +222,13 @@ export function getTargetGroup(ctx, id) {
   );
   if (!g) return null;
   const verifications = latestTargetVerifications(ctx.tenantId);
+  const edgeDetections = listTargetEdgeDetectionsForGroup(ctx.tenantId, id);
   const targets = getStore().targets
     .filter((t) => t.target_group_id === id && t.tenant_id === ctx.tenantId && !isArchivedTarget(t))
     .map((target) => ({
       ...target,
       verification_state: verifications.get(target.id)?.state ?? 'unverified',
+      edge_detection: presentTargetEdgeDetection(edgeDetections[target.id] ?? null),
     }));
   const runsRecent = (getStore().testRuns ?? [])
     .filter((run) => run.tenant_id === ctx.tenantId && run.target_group_id === id)

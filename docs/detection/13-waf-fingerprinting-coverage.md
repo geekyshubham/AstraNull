@@ -157,14 +157,23 @@ Unknown vendors must still produce `waf_present` or `cdn_detected` with explicit
 
 Beyond the versioned product catalog, AstraNull vendors a generated edge signature corpus:
 
-- **WAF vendors:** 168 vendor signature sets ported from wafw00f plugin data (186 passive
-  header/cookie signatures decidable from one ordinary GET; 320 block-page signatures evaluated
+- **WAF vendors:** 172 vendor signature sets ported from wafw00f plugin data (188 passive
+  header/cookie signatures decidable from one ordinary GET; 330 block-page signatures evaluated
   only against block evidence an authorized bounded check already captured).
 - **Address + CNAME:** cdncheck CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
-  suffixes, matched metadata-only against resolved DNS chain data.
+  suffixes, matched metadata-only against the resolved DNS chain. The signed `waf.fingerprint.safe`
+  probe carries the `dns_chain_hint` capability so its bounded CNAME/A/AAAA lookups feed this layer;
+  without that capability the CDN half of the corpus never evaluates.
 - **Module:** `src/lib/edgeFingerprint.mjs` over the generated `src/lib/data/edgeSignatureData.mjs`;
   scanner results carry `edge_signature` and `edge_signature_corpus_version`, and signed
   `waf.fingerprint.safe` probe jobs carry corpus version metadata.
+- **Projection:** `src/lib/edgeDetectionProjection.mjs` is the single source of truth that turns a
+  signed probe result into the WAF/CDN answer. The API, the durable row, and the portal all read it,
+  so they cannot disagree. `src/lib/edgeDetectionPresenter.mjs` renders a stored row for the API.
+- **Persistence:** each resolved detection upserts one current row per target into
+  `target_edge_detections` (migration `0052`), keyed `(tenant_id, target_id)`. The row records WAF
+  and CDN status/provider/type independently, both typed provider lists, confidence, corpus version,
+  and label-only evidence. Target detail and target-group responses expose it as `edge_detection`.
 - **Provenance, licenses, and regeneration:** [edge-fingerprint-sources](../attribution/edge-fingerprint-sources.md);
   decision record in [ADR-0005](../adr/0005-edge-signature-corpus-port.md).
 

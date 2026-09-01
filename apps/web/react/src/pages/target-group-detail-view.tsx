@@ -132,6 +132,9 @@ const tgDetailStyles = `
 .tg-detail-view .target-primary-copy .target-id { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .tg-detail-view .target-status-stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 .tg-detail-view .target-status-note { color: var(--muted); font-size: var(--text-xs); }
+.tg-detail-view .target-edge-stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); min-width: 0; }
+.tg-detail-view .target-edge-badges { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+.tg-detail-view .target-edge-note { color: var(--warn); font-size: var(--text-xs); }
 .tg-detail-view .target-actions { justify-content: flex-end; flex-wrap: wrap; gap: var(--space-1); }
 .tg-detail-view .target-actions .btn { display: inline-flex; align-items: center; gap: var(--space-1); }
 .tg-detail-view .safety-boundary { display: flex; align-items: flex-start; gap: var(--space-3); margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--accent) 4%); color: var(--fg-2); }
@@ -230,6 +233,18 @@ function finiteEdgeNumber(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Bounded string list projection for provider/DNS evidence arrays returned by the API. */
+function boundedEdgeList(value: unknown, maxItems = 6) {
+  if (!Array.isArray(value)) return [];
+  const items: string[] = [];
+  for (const entry of value) {
+    const text = boundedEdgeString(entry);
+    if (text && !items.includes(text)) items.push(text);
+    if (items.length >= maxItems) break;
+  }
+  return items;
 }
 
 function firstDataItem(value: unknown) {
@@ -390,6 +405,13 @@ export function projectEdgeDetectionResult(requestState: DataItem, runValue: unk
     : null;
   const corpusVersion = boundedEdgeString(metadata.edge_signature_corpus_version);
   const requestsSent = finiteEdgeNumber(metadata.requests_sent);
+  const wafProviders = boundedEdgeList(edgeSignature.waf_providers);
+  const cdnProviders = boundedEdgeList(edgeSignature.cdn_providers);
+  const topVendorMatch = firstDataItem(edgeSignature.vendor_matches);
+  const topVendorName = boundedEdgeString(topVendorMatch?.name) || boundedEdgeString(topVendorMatch?.vendor);
+  const topVendorConfidence = finiteEdgeNumber(topVendorMatch?.confidence ?? bestVendor?.confidence);
+  const dnsCnameChain = boundedEdgeList(metadata.dns_cname_chain);
+  const dnsResolvedIps = boundedEdgeList(metadata.dns_resolved_ips);
 
   return {
     ...base,
@@ -398,6 +420,12 @@ export function projectEdgeDetectionResult(requestState: DataItem, runValue: unk
     detection: {
       waf,
       cdn,
+      ...(wafProviders.length > 0 ? { waf_providers: wafProviders } : {}),
+      ...(cdnProviders.length > 0 ? { cdn_providers: cdnProviders } : {}),
+      ...(topVendorName ? { top_vendor: topVendorName } : {}),
+      ...(topVendorName && topVendorConfidence !== null ? { top_vendor_confidence: topVendorConfidence } : {}),
+      ...(dnsCnameChain.length > 0 ? { dns_cname_chain: dnsCnameChain } : {}),
+      ...(dnsResolvedIps.length > 0 ? { dns_resolved_ips: dnsResolvedIps } : {}),
       ...(conflictingVendorSignals ? { conflicting_vendor_signals: true } : {}),
       ...(corpusVersion ? { corpus_version: corpusVersion } : {}),
       ...(requestsSent !== null ? { requests_sent: requestsSent } : {}),
@@ -413,6 +441,24 @@ function edgeStatusTone(status: string): 'success' | 'warn' | 'danger' | 'info' 
   if (status === 'inconclusive') return 'warn';
   if (status === 'pending' || status === 'queued') return 'info';
   return 'muted';
+}
+
+/**
+ * Terse per-family label for the table cell: the asserted provider when the API named one,
+ * otherwise the first reported provider, otherwise the honest status word.
+ */
+function edgeFamilyLabel(family: DataItem | null, providers: string[]) {
+  const provider = getString(family, ['provider', 'vendor'], '');
+  if (provider) return provider;
+  if (providers.length > 0) return providers[0];
+  return humanizeLabel(getString(family, ['status'], 'inconclusive'));
+}
+
+/** Percentage rendering for the 0..1 detection confidence; empty when the API reported none. */
+function edgeConfidenceLabel(value: unknown) {
+  const confidence = finiteEdgeNumber(value);
+  if (confidence === null) return '';
+  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
 }
 
 function edgeStatusSummary(state: DataItem) {
@@ -1584,6 +1630,41 @@ export function TargetGroupDetailView({
       }
     },
     {
+      key: 'edge_detection',
+      label: 'WAF / CDN',
+      render: (item) => {
+        // Durable per-target detection from the target API. Absent until a detection has run.
+        const detection = asDataItem(item.edge_detection);
+        if (!detection) return <span className="muted small">Not detected yet</span>;
+        const waf = asDataItem(detection.waf);
+        const cdn = asDataItem(detection.cdn);
+        const wafStatus = getString(waf, ['status'], 'inconclusive');
+        const cdnStatus = getString(cdn, ['status'], 'inconclusive');
+        const observedAt = getString(detection, ['observed_at', 'updated_at'], '');
+        const observedNote = observedAt ? ` · observed ${formatDate(observedAt)}` : '';
+        const conflicting = detection.conflicting_vendor_signals === true;
+        return (
+          <span className="target-edge-stack">
+            <span className="target-edge-badges" aria-label="Persisted WAF and CDN edge detection">
+              <Badge
+                tone={edgeStatusTone(wafStatus)}
+                title={`WAF ${humanizeLabel(wafStatus)}${observedNote}`}
+              >
+                WAF {edgeFamilyLabel(waf, boundedEdgeList(detection.waf_providers))}
+              </Badge>
+              <Badge
+                tone={edgeStatusTone(cdnStatus)}
+                title={`CDN ${humanizeLabel(cdnStatus)}${observedNote}`}
+              >
+                CDN {edgeFamilyLabel(cdn, boundedEdgeList(detection.cdn_providers))}
+              </Badge>
+            </span>
+            {conflicting ? <span className="target-edge-note">Vendor signals conflict</span> : null}
+          </span>
+        );
+      }
+    },
+    {
       key: 'actions',
       label: 'Actions',
       render: (item) => {
@@ -1789,6 +1870,12 @@ export function TargetGroupDetailView({
   const edgeDetectionEvidence = asDataItem(edgeDetection?.detection);
   const edgeWaf = asDataItem(edgeDetectionEvidence?.waf);
   const edgeCdn = asDataItem(edgeDetectionEvidence?.cdn);
+  const edgeWafProviders = boundedEdgeList(edgeDetectionEvidence?.waf_providers);
+  const edgeCdnProviders = boundedEdgeList(edgeDetectionEvidence?.cdn_providers);
+  const edgeTopVendor = getString(edgeDetectionEvidence, ['top_vendor'], '');
+  const edgeTopVendorConfidence = edgeConfidenceLabel(edgeDetectionEvidence?.top_vendor_confidence);
+  const edgeCnameChain = boundedEdgeList(edgeDetectionEvidence?.dns_cname_chain);
+  const edgeResolvedIps = boundedEdgeList(edgeDetectionEvidence?.dns_resolved_ips);
 
   return (
     <div className="content tg-detail-view" aria-busy={loading || undefined}>
@@ -2069,6 +2156,7 @@ export function TargetGroupDetailView({
                     <dl>
                       {getString(edgeWaf, ['provider'], '') ? <><dt>Provider</dt><dd>{getString(edgeWaf, ['provider'], '')}</dd></> : null}
                       {getString(edgeWaf, ['type'], '') ? <><dt>Type</dt><dd>{humanizeLabel(getString(edgeWaf, ['type'], ''))}</dd></> : null}
+                      {edgeWafProviders.length > 0 ? <><dt>Reported</dt><dd>{edgeWafProviders.join(', ')}</dd></> : null}
                     </dl>
                   </section>
                   <section className="edge-evidence-card" aria-labelledby="edge-cdn-evidence-title">
@@ -2084,12 +2172,18 @@ export function TargetGroupDetailView({
                     <dl>
                       {getString(edgeCdn, ['provider'], '') ? <><dt>Provider</dt><dd>{getString(edgeCdn, ['provider'], '')}</dd></> : null}
                       {getString(edgeCdn, ['type'], '') ? <><dt>Type</dt><dd>{humanizeLabel(getString(edgeCdn, ['type'], ''))}</dd></> : null}
+                      {edgeCdnProviders.length > 0 ? <><dt>Reported</dt><dd>{edgeCdnProviders.join(', ')}</dd></> : null}
                     </dl>
                   </section>
                 </div>
               ) : null}
               {edgeDetectionEvidence ? (
                 <div className="edge-evidence-meta">
+                  {edgeTopVendor ? (
+                    <span>Top vendor match {edgeTopVendor}{edgeTopVendorConfidence ? ` (${edgeTopVendorConfidence} confidence)` : ''}</span>
+                  ) : null}
+                  {edgeCnameChain.length > 0 ? <span className="mono">CNAME {edgeCnameChain.join(' → ')}</span> : null}
+                  {edgeResolvedIps.length > 0 ? <span className="mono">Resolved {edgeResolvedIps.join(', ')}</span> : null}
                   {getString(edgeDetectionEvidence, ['corpus_version'], '') ? <span>Corpus v{getString(edgeDetectionEvidence, ['corpus_version'], '')}</span> : null}
                   {getString(edgeDetectionEvidence, ['requests_sent'], '') ? <span>{getString(edgeDetectionEvidence, ['requests_sent'], '')} bounded requests</span> : null}
                   {getString(edgeDetectionEvidence, ['observed_at'], '') ? <span>Observed {formatDate(edgeDetectionEvidence.observed_at)}</span> : null}

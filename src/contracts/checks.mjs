@@ -202,7 +202,6 @@ const ALLOWED_WAF_COLLECT_KEYS = new Set([
   'evasion_bypass_suspected',
   'agent_corroboration_required',
   'dns_chain_hint',
-  'tls_fingerprint_hint',
 ]);
 
 export const WAF_SAFE_CHECK_IDS = Object.freeze([
@@ -230,9 +229,9 @@ function applyWafSafeProbeMetadata(profile, meta = {}) {
     profile.nonce_hash_only = true;
   }
   if (Array.isArray(meta.collect)) {
-    const collect = meta.collect
-      .filter((key) => typeof key === 'string' && ALLOWED_WAF_COLLECT_KEYS.has(key))
-      .slice(0, 8);
+    const collect = [...new Set(meta.collect
+      .filter((key) => typeof key === 'string' && ALLOWED_WAF_COLLECT_KEYS.has(key)))]
+      .slice(0, ALLOWED_WAF_COLLECT_KEYS.size);
     if (collect.length > 0) profile.collect = collect;
   }
 }
@@ -753,6 +752,9 @@ export const CHECK_CATALOG = [
         'origin_bypass_confirmed',
         'evasion_bypass_suspected',
         'agent_corroboration_required',
+        // Signed capability for the bounded CNAME/A/AAAA chain the pinned address and CNAME
+        // corpora match against. Without it the CDN half of the corpus never evaluates.
+        'dns_chain_hint',
       ],
     },
     safety_constraints: { max_events: 13, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },

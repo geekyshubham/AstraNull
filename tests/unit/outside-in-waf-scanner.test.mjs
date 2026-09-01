@@ -125,6 +125,7 @@ describe('outside-in WAF scanner', () => {
       budget: 6,
       timeoutMs: 1000,
       followRedirects: true,
+      collectNetworkHints: true,
       resolveCname: async (host) => {
         if (host === 'edge.cdn.cloudflare.net') return [];
         return ['edge.cdn.cloudflare.net'];

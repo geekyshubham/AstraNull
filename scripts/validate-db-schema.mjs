@@ -76,6 +76,7 @@ const REQUIRED_TABLES = [
   'targets',
   'dns_challenges',
   'target_verifications',
+  'target_edge_detections',
   'bootstrap_tokens',
   'agents',
   'agent_jobs',
@@ -291,6 +292,7 @@ const TENANT_RLS_TABLES = [
   'targets',
   'dns_challenges',
   'target_verifications',
+  'target_edge_detections',
   'bootstrap_tokens',
   'agents',
   'test_runs',
@@ -352,6 +354,7 @@ const REQUIRED_MIGRATION_FILES = [
   '0045_ownership_and_policy_dispatch_hardening.sql',
   '0046_exact_target_provider_onboarding.sql',
   '0047_signed_connector_poll_jobs.sql',
+  '0052_target_edge_detections.sql',
 ];
 
 const REQUIRED_RLS = [
@@ -416,6 +419,7 @@ export const TENANT_PARENT_UNIQUE_KEYS = [
   'discovery_entities_tenant_id_id_key',
   'supply_chain_risks_tenant_id_id_key',
   'waf_action_items_tenant_id_id_key',
+  'target_edge_detections_tenant_id_id_key',
   'waf_coverage_daily_rollups_tenant_id_id_key',
   'waf_scenario_intakes_tenant_id_id_key',
 ];
@@ -464,6 +468,9 @@ export const TENANT_CONSISTENT_FK_CONSTRAINTS = [
   'fk_waf_assets_target_tenant',
   'fk_waf_assets_environment_tenant',
   'fk_waf_assets_entity_tenant',
+  'fk_target_edge_detections_target_tenant',
+  'fk_target_edge_detections_target_group_tenant',
+  'fk_target_edge_detections_test_run_tenant',
   'fk_waf_fingerprints_waf_asset_tenant',
   'fk_waf_fingerprints_test_run_tenant',
   'fk_waf_validation_runs_test_run_tenant',

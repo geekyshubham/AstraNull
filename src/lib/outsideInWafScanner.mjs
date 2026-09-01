@@ -6,7 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { resolve4, resolveCname } from 'node:dns/promises';
+import { resolve4, resolve6, resolveCname } from 'node:dns/promises';
 import tls from 'node:tls';
 import { classifyWafPosture } from '../contracts/wafPosture.mjs';
 import { classifyWafProductFromSignals } from './wafProductCatalog.mjs';
@@ -466,46 +466,83 @@ function normalizeDnsHostname(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\.$/, '');
 }
 
+/** Bounded CNAME-chain depth. cdncheck suffix matching only needs the edge-facing hops. */
+const DNS_CNAME_CHAIN_MAX = 8;
+/** Bounded address count per family, keeping the metadata summary small and comparable. */
+const DNS_ADDRESSES_PER_FAMILY_MAX = 4;
+
 /**
- * Single CNAME/A lookup chain for metadata-only WAF catalog matching.
+ * Optional standalone CNAME/A/AAAA lookup chain for metadata-only WAF/CDN catalog matching.
+ * Signed-worker execution enables this collector only when the signed probe profile declares the
+ * `dns_chain_hint` collect capability, because its DNS operations sit outside the HTTP budget.
+ *
+ * Returns the display `dns_chain` string plus the structured `cname_chain`/`resolved_ips` the
+ * pinned cdncheck corpus consumes. Structured fields avoid re-parsing the display string.
+ *
  * @param {string} hostname
- * @param {{ resolveCname?: typeof resolveCname, resolve4?: typeof resolve4 }} [deps]
+ * @param {{
+ *   resolveCname?: typeof resolveCname,
+ *   resolve4?: typeof resolve4,
+ *   resolve6?: typeof resolve6,
+ * }} [deps]
  */
 export async function resolveOutsideInDnsHints(hostname, deps = {}) {
   const host = normalizeDnsHostname(hostname);
   if (!host) {
-    return { dns_chain: null, error_class: 'missing_hostname' };
+    return { dns_chain: null, cname_chain: [], resolved_ips: [], error_class: 'missing_hostname' };
   }
 
   const resolveCnameFn = deps.resolveCname ?? resolveCname;
   const resolve4Fn = deps.resolve4 ?? resolve4;
-  const chain = [host];
+  // A caller that injects resolvers is running hermetically. Falling back to the real AAAA
+  // resolver for the one function it did not stub would put live DNS behind an injected test.
+  const partiallyInjected = Boolean(deps.resolveCname || deps.resolve4);
+  const resolve6Fn = deps.resolve6 ?? (partiallyInjected ? async () => [] : resolve6);
+  const cnameChain = [host];
+  const seen = new Set([host]);
+  const resolvedIps = [];
 
   try {
-    try {
-      const cnames = await resolveCnameFn(host);
-      const cname = normalizeDnsHostname(cnames?.[0]);
-      if (cname && cname !== host) chain.push(cname);
-    } catch {
-      /* ENODATA / ENOTFOUND — proceed to A lookup */
+    // Follow the delegation chain hop by hop. A single hop only reveals the first edge provider;
+    // stacked CDN/WAF deployments expose their vendor further down the chain.
+    while (cnameChain.length < DNS_CNAME_CHAIN_MAX) {
+      let next = null;
+      try {
+        const cnames = await resolveCnameFn(cnameChain[cnameChain.length - 1]);
+        next = normalizeDnsHostname(cnames?.[0]);
+      } catch {
+        /* ENODATA / ENOTFOUND — chain ends here, proceed to address lookup */
+      }
+      if (!next || seen.has(next)) break;
+      seen.add(next);
+      cnameChain.push(next);
     }
 
-    const lookupHost = chain[chain.length - 1];
-    try {
-      const addresses = await resolve4Fn(lookupHost);
-      const address = String(addresses?.[0] ?? '').trim();
-      if (address) chain.push(address);
-    } catch {
-      /* A lookup optional for dns_chain hint */
+    const lookupHost = cnameChain[cnameChain.length - 1];
+    const [v4, v6] = await Promise.all([
+      resolve4Fn(lookupHost).catch(() => []),
+      resolve6Fn(lookupHost).catch(() => []),
+    ]);
+    for (const list of [v4, v6]) {
+      for (const entry of (Array.isArray(list) ? list : []).slice(0, DNS_ADDRESSES_PER_FAMILY_MAX)) {
+        const address = String(entry ?? '').trim();
+        if (address && !resolvedIps.includes(address)) resolvedIps.push(address);
+      }
     }
   } catch (err) {
     return {
-      dns_chain: host,
+      dns_chain: cnameChain.join(' '),
+      cname_chain: cnameChain,
+      resolved_ips: resolvedIps,
       error_class: err?.code ?? err?.name ?? 'dns_lookup_failed',
     };
   }
 
-  return { dns_chain: chain.join(' ') };
+  return {
+    dns_chain: [...cnameChain, ...resolvedIps].join(' '),
+    cname_chain: cnameChain,
+    resolved_ips: resolvedIps,
+  };
 }
 
 /**
@@ -729,6 +766,7 @@ export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
  *   requireAgentForProtected?: boolean,
  *   domXssValidation?: string,
  *   followRedirects?: boolean,
+ *   collectNetworkHints?: boolean,
  *   fetchFn?: typeof fetch,
  *   resolveCname?: typeof resolveCname,
  *   resolve4?: typeof resolve4,
@@ -748,10 +786,12 @@ export async function runOutsideInWafScan(options = {}) {
     : OUTSIDE_IN_SCAN_DEFAULT_BUDGET;
   const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 5000;
   const followRedirects = options.followRedirects === true;
+  const collectNetworkHints = options.collectNetworkHints === true;
   const deps = {
     fetchFn: options.fetchFn,
     resolveCname: options.resolveCname,
     resolve4: options.resolve4,
+    resolve6: options.resolve6,
     tlsConnect: options.tlsConnect,
     tlsHost: options.tlsHost,
   };
@@ -771,18 +811,24 @@ export async function runOutsideInWafScan(options = {}) {
   );
   const phasesDropped = phasesPlanned.filter((phase) => !plannedPhases.has(phase));
 
-  const [initialDnsHints, tlsHints] = await Promise.all([
-    hostname ? resolveOutsideInDnsHints(hostname, deps) : Promise.resolve({ dns_chain: null }),
-    resolveOutsideInTlsHints(url, {
-      tlsConnect: deps.tlsConnect,
-      connectHost: deps.tlsHost,
-      timeoutMs: Math.min(timeoutMs, 3000),
-    }),
-  ]);
+  const [initialDnsHints, tlsHints] = collectNetworkHints
+    ? await Promise.all([
+        hostname
+          ? resolveOutsideInDnsHints(hostname, deps)
+          : Promise.resolve({ dns_chain: null, cname_chain: [], resolved_ips: [] }),
+        resolveOutsideInTlsHints(url, {
+          tlsConnect: deps.tlsConnect,
+          connectHost: deps.tlsHost,
+          timeoutMs: Math.min(timeoutMs, 3000),
+        }),
+      ])
+    : [{ dns_chain: null, cname_chain: [], resolved_ips: [] }, {}];
 
   let redirectHops = 0;
   let finalUrlHostname = null;
   let dnsChainHint = initialDnsHints.dns_chain ?? null;
+  const dnsCnameChain = [...(initialDnsHints.cname_chain ?? [])];
+  const dnsResolvedIps = [...(initialDnsHints.resolved_ips ?? [])];
 
   async function runGetPhase(phase, requestUrl, headers) {
     if (requestsSent >= budget) return null;
@@ -817,10 +863,21 @@ export async function runOutsideInWafScan(options = {}) {
     finalUrlHostname = baselineResult.final_url_hostname;
     phaseLog.push({ phase: 'baseline', status_code: baseline.status_code, redirect_hops: redirectHops });
 
-    if (followRedirects && finalUrlHostname && finalUrlHostname !== hostname) {
+    if (
+      followRedirects
+      && collectNetworkHints
+      && finalUrlHostname
+      && finalUrlHostname !== hostname
+    ) {
       const finalDnsHints = await resolveOutsideInDnsHints(finalUrlHostname, deps);
       if (finalDnsHints.dns_chain) {
         dnsChainHint = [dnsChainHint, finalDnsHints.dns_chain].filter(Boolean).join(' ');
+      }
+      for (const cname of finalDnsHints.cname_chain ?? []) {
+        if (!dnsCnameChain.includes(cname)) dnsCnameChain.push(cname);
+      }
+      for (const ip of finalDnsHints.resolved_ips ?? []) {
+        if (!dnsResolvedIps.includes(ip)) dnsResolvedIps.push(ip);
       }
     }
   }
@@ -1036,9 +1093,10 @@ export async function runOutsideInWafScan(options = {}) {
   const attackBlocked = Boolean(attackSnapshot
     && !attackSnapshot.connection_dropped
     && (attackSnapshot.block_page_signature_id || BLOCK_STATUSES.has(attackSnapshot.status_code)));
-  const dnsTokens = String(dnsChainHint ?? '').split(/\s+/).filter(Boolean);
-  const resolvedIps = dnsTokens.filter((token) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(token) || token.includes(':'));
-  const cnameChain = dnsTokens.filter((token) => !resolvedIps.includes(token));
+  // Structured chain data straight from the resolver. Re-splitting the display string lost IPv6
+  // addresses and mislabelled every non-IP token as a CNAME.
+  const resolvedIps = dnsResolvedIps;
+  const cnameChain = dnsCnameChain;
   const edgeSignature = classifyEdgeFingerprint({
     headerEntries: dedupeHeaderEntries([
       ...(baseline?.fingerprint_header_entries ?? []),
@@ -1119,10 +1177,12 @@ export async function runOutsideInWafScan(options = {}) {
     origin_bypass_confirmed: originBypassConfirmed,
     origin_bypass_status_code: originBypassStatus,
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),
-    vendor_chain_hints: vendorChainHints,
+    ...(collectNetworkHints ? { vendor_chain_hints: vendorChainHints } : {}),
     edge_signature: {
       waf_present: edgeSignature.waf_present,
+      waf_providers: edgeSignature.waf_providers,
       cdn_detected: edgeSignature.cdn_detected,
+      cdn_providers: edgeSignature.cdn_providers,
       conflicting_vendor_signals: edgeSignature.conflicting_vendor_signals,
       best_vendor: edgeSignature.best_vendor
         ? {
@@ -1142,9 +1202,17 @@ export async function runOutsideInWafScan(options = {}) {
       cname_matches: edgeSignature.cname_matches,
     },
     edge_signature_corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
-    dns_chain_hint: dnsChainHint,
-    tls_protocol_hint: tlsHints.tls_protocol_hint ?? null,
-    tls_cipher_hint: tlsHints.tls_cipher_hint ?? null,
+    network_hints_collected: collectNetworkHints,
+    redirect_following_enabled: followRedirects,
+    ...(collectNetworkHints
+      ? {
+          dns_chain_hint: dnsChainHint,
+          dns_cname_chain: dnsCnameChain,
+          dns_resolved_ips: dnsResolvedIps,
+          tls_protocol_hint: tlsHints.tls_protocol_hint ?? null,
+          tls_cipher_hint: tlsHints.tls_cipher_hint ?? null,
+        }
+      : {}),
     redirect_hops: redirectHops,
     final_url_hostname: finalUrlHostname,
     ...posture,

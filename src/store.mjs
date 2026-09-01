@@ -66,6 +66,7 @@ function emptyStore() {
     agentUpdateReleases: [],
     agentUpdateStatuses: [],
     agentUpdateTrustKeys: [],
+    targetEdgeDetections: [],
     wafAssets: [],
     wafProducts: [],
     wafScenarioIntakes: [],

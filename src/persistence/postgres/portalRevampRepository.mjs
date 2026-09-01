@@ -7,7 +7,13 @@ import {
   encodeKeysetCursor,
 } from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { withTenantContext } from './tenantContext.mjs';
+
+/** Durable edge-detection columns. Label-only evidence; the table holds no raw header/body data. */
+const TARGET_EDGE_DETECTION_COLUMNS = `target_id, status, reason, waf_status, waf_vendor, waf_type,
+  waf_providers, cdn_status, cdn_provider, cdn_type, cdn_providers, confidence,
+  conflicting_vendor_signals, corpus_version, test_run_id, evidence_json, observed_at, updated_at`;
 
 function toIso(value) {
   if (value == null) return value;
@@ -888,6 +894,7 @@ export function createPortalRevampRepository(pool) {
           wafAsset,
           agentBinding,
           wafSnapshot,
+          edgeDetection,
         ] = await Promise.all([
           // Capped, but ordered DESC and reversed below so the newest rows survive the
           // cap. An ASC order with a LIMIT would keep the OLDEST rows and make the
@@ -951,6 +958,13 @@ export function createPortalRevampRepository(pool) {
              JOIN waf_assets wa ON wa.id = ps.waf_asset_id AND wa.tenant_id = ps.tenant_id
              WHERE wa.tenant_id = $1 AND wa.target_id = $2 AND ps.is_current = TRUE
              ORDER BY ps.created_at DESC LIMIT 1`,
+            [ctx.tenantId, targetId],
+          ),
+          client.query(
+            `SELECT ${TARGET_EDGE_DETECTION_COLUMNS}
+             FROM target_edge_detections
+             WHERE tenant_id = $1 AND target_id = $2
+             LIMIT 1`,
             [ctx.tenantId, targetId],
           ),
         ]);
@@ -1058,6 +1072,7 @@ export function createPortalRevampRepository(pool) {
             })),
           },
           waf_posture: wafPosture,
+          edge_detection: presentTargetEdgeDetection(edgeDetection.rows[0] ?? null),
           checks_applied: [],
           runs_recent: runsRecent,
           findings: findingsPage,

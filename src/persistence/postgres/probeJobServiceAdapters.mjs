@@ -4,6 +4,12 @@ import { validateProbeResultBody } from '../../lib/probeResultValidation.mjs';
 import { enrichOutsideInWafProbeMetadata } from '../../lib/outsideInWafAgentEvidence.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../../lib/wafProductCatalog.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
+import { WAF_EDGE_DETECTION_CHECK_ID } from '../../lib/edgeDetection.mjs';
+import {
+  projectEdgeDetection,
+  edgeDetectionRowFields,
+  isPersistableEdgeDetection,
+} from '../../lib/edgeDetectionProjection.mjs';
 
 /** @type {readonly string[]} */
 export const PROBE_JOB_REPOSITORY_METHODS = Object.freeze([
@@ -174,6 +180,41 @@ async function findDuplicateProbeEvent(validationEvidence, ctx, runId, nonceHash
  *   ownershipVerification?: { recordOwnershipSignalByNonce?: Function },
  * }} [options]
  */
+/** Persist the current WAF/CDN edge detection for a signed fingerprint probe result. */
+async function recordProbeResultEdgeDetection(
+  validationEvidence,
+  evidenceCtx,
+  { run, job, probeMetadata, observedAt, newIdFn, client },
+) {
+  if (job.check_id !== WAF_EDGE_DETECTION_CHECK_ID || !job.target_id) return null;
+  const targetGroupId = run.target_group_id ?? job.target_group_id ?? null;
+  if (!targetGroupId) return null;
+  if (!isPersistableEdgeDetection(probeMetadata)) return null;
+
+  // Deliberately not in VALIDATION_PROBE_METHODS: existing callers build partial repository sets,
+  // and only this check id reaches the write. Fail loudly rather than drop the detection.
+  if (typeof validationEvidence.upsertTargetEdgeDetection !== 'function') {
+    throw new Error(
+      'Postgres probe result ingest requires validationEvidence.upsertTargetEdgeDetection().',
+    );
+  }
+
+  const fields = edgeDetectionRowFields(projectEdgeDetection(probeMetadata), {
+    testRunId: run.id,
+    observedAt,
+  });
+  return validationEvidence.upsertTargetEdgeDetection(
+    evidenceCtx,
+    {
+      id: newIdFn('edgedet'),
+      target_group_id: targetGroupId,
+      target_id: job.target_id,
+      ...fields,
+    },
+    { client },
+  );
+}
+
 export function createPostgresProbeJobServices(repositories, options = {}) {
   assertProbeJobRepositories(repositories);
   const ownershipVerification = options.ownershipVerification;
@@ -485,6 +526,15 @@ export function createPostgresProbeJobServices(repositories, options = {}) {
         ),
         related_event_id: probeEvent.id,
         created_at: nowIso,
+      });
+
+      await recordProbeResultEdgeDetection(validationEvidence, evidenceCtx, {
+        run,
+        job,
+        probeMetadata,
+        observedAt: probeEvent.timestamp ?? nowIso,
+        newIdFn,
+        client: undefined,
       });
 
       const correlation = { ...run.correlation, nonce_hash: job.nonce_hash };

@@ -51,6 +51,7 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
       hostname: 'shop.example.test',
       budget: 4,
       timeoutMs: 500,
+      collectNetworkHints: true,
       resolveCname: async () => ['edge.example.net'],
       resolve4: async () => ['108.138.5.5'],
       tlsConnect: TLS_STUB,
@@ -73,6 +74,58 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
     assert.equal(outcome.waf_detected, true);
     assert.equal(outcome.cdn_detected, true);
     assert.equal(outcome.edge_signature_corpus_version, '2');
+  });
+
+  it('detects a CDN from cdncheck ranges and CNAME suffixes with no vendor headers at all', async () => {
+    // The cdncheck half of the corpus is only reachable through the resolver chain. Before the
+    // dns_chain_hint capability was wired through, this scan could never report a CDN.
+    const outcome = await runOutsideInWafScan({
+      url: 'https://plain.example.test/',
+      hostname: 'plain.example.test',
+      budget: 2,
+      timeoutMs: 500,
+      collectNetworkHints: true,
+      resolveCname: async (host) => (host === 'plain.example.test' ? ['d123.cloudfront.net'] : []),
+      resolve4: async () => ['108.138.5.5'],
+      resolve6: async () => ['2606:4700::6810:85e5'],
+      tlsConnect: TLS_STUB,
+      fetchFn: async () => mockResponse(200, {}),
+    });
+
+    assert.deepEqual(
+      outcome.dns_cname_chain,
+      ['plain.example.test', 'd123.cloudfront.net'],
+      'follows the delegation chain rather than a single hop',
+    );
+    assert.ok(
+      outcome.dns_resolved_ips.includes('2606:4700::6810:85e5'),
+      'AAAA records reach the address corpus',
+    );
+    assert.equal(outcome.edge_signature.cdn_detected, true);
+    assert.deepEqual(outcome.edge_signature.cdn_providers, ['cloudfront']);
+    assert.deepEqual(
+      outcome.edge_signature.cname_matches,
+      [{ provider: 'amazon', type: 'waf', suffix: 'cloudfront.net' }],
+      'CNAME item type stays the pinned cdncheck value, not a provider-name guess',
+    );
+    assert.equal(outcome.edge_signature.vendor_matches.length, 0, 'no wafw00f header evidence');
+  });
+
+  it('stops following a self-referential CNAME chain', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://loop.example.test/',
+      hostname: 'loop.example.test',
+      budget: 2,
+      timeoutMs: 500,
+      collectNetworkHints: true,
+      resolveCname: async () => ['loop-edge.example.test'],
+      resolve4: async () => [],
+      resolve6: async () => [],
+      tlsConnect: TLS_STUB,
+      fetchFn: async () => mockResponse(200, {}),
+    });
+
+    assert.deepEqual(outcome.dns_cname_chain, ['loop.example.test', 'loop-edge.example.test']);
   });
 
   it('adds block-page vendor classification from an authorized blocked marker response', async () => {

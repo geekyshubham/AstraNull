@@ -37,8 +37,21 @@ const targetDetailStyles = `
 .target-detail-view .history-summary { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--text-xs); }
 .target-detail-view .target-eligibility-callout[data-eligible="true"] { border-color: color-mix(in oklab, var(--success), transparent 55%); background: color-mix(in oklab, var(--surface), var(--success) 7%); }
 .target-detail-view .target-eligibility-callout[data-eligible="true"] .callout-icon { color: var(--success); }
+.target-detail-view .edge-family-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: var(--space-4) 0; }
+.target-detail-view .edge-family-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface); }
+.target-detail-view .edge-family-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.target-detail-view .edge-family-card-head strong { font-size: var(--text-sm); }
+.target-detail-view .edge-family-card dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; }
+.target-detail-view .edge-family-card dt { color: var(--muted); font-size: var(--text-xs); }
+.target-detail-view .edge-family-card dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.target-detail-view .edge-evidence-block { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-soft); }
+.target-detail-view .edge-evidence-block h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
+.target-detail-view .edge-chip-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.target-detail-view .edge-chain { margin: var(--space-2) 0 0; color: var(--fg-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.target-detail-view .edge-chain .edge-chain-label { color: var(--muted); margin-right: var(--space-2); }
 @media (max-width: 760px) {
   .target-detail-view .target-history-head { align-items: flex-start; flex-direction: column; }
+  .target-detail-view .edge-family-grid { grid-template-columns: minmax(0, 1fr); }
 }
 `;
 
@@ -82,6 +95,50 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function asDataItem(value: unknown): DataItem | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as DataItem : null;
+}
+
+function dataItemList(value: unknown, maxItems = 8): DataItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asDataItem).filter((entry): entry is DataItem => Boolean(entry)).slice(0, maxItems);
+}
+
+function stringList(value: unknown, maxItems = 8) {
+  if (!Array.isArray(value)) return [];
+  const items: string[] = [];
+  for (const entry of value) {
+    const text = typeof entry === 'string' ? entry.trim() : '';
+    if (text && !items.includes(text)) items.push(text);
+    if (items.length >= maxItems) break;
+  }
+  return items;
+}
+
+function edgeStatusTone(status: string): StatTone {
+  const key = status.trim().toLowerCase();
+  if (key === 'detected') return 'success';
+  if (key === 'not_detected') return 'muted';
+  if (key === 'error') return 'danger';
+  if (key === 'inconclusive') return 'warn';
+  if (key === 'pending') return 'info';
+  return 'muted';
+}
+
+/** Percentage rendering for the 0..1 detection confidence; empty when the API reported none. */
+function edgeConfidenceLabel(value: unknown) {
+  if (value === null || value === undefined || value === '') return '';
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return `${Math.round(Math.max(0, Math.min(1, parsed)) * 100)}%`;
+}
+
+/** Providers the API actually reported for a family, used when no single provider is asserted. */
+function edgeFamilyProviders(family: DataItem | null, providers: string[]) {
+  const asserted = getString(family, ['provider'], '');
+  return asserted ? providers.filter((entry) => entry !== asserted) : providers;
+}
+
 function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {
   if (!id) return <strong>—</strong>;
   return <AnchorButton size="sm" variant="ghost" href={buildDetailHref(route, id)} onClick={(event) => event.stopPropagation()}>{label ?? id}</AnchorButton>;
@@ -121,6 +178,7 @@ export function TargetDetailView({
       target: null,
       verification: null,
       waf_posture: null,
+      edge_detection: null,
       checks_applied: [],
       runs_recent: [],
       findings: [],
@@ -314,6 +372,44 @@ export function TargetDetailView({
     : null;
   const agentBindingId = getString(agentBinding, ['agent_id'], 'none');
   const agentBindingAt = agentBinding?.bound_at ?? agentBinding?.last_heartbeat_at ?? agentBinding?.updated_at;
+  const edgeDetection = detail.edge_detection ?? null;
+  const edgeStatus = getString(edgeDetection, ['status'], 'inconclusive');
+  const edgeReason = getString(edgeDetection, ['reason'], '');
+  const edgeWaf = asDataItem(edgeDetection?.waf);
+  const edgeCdn = asDataItem(edgeDetection?.cdn);
+  const edgeWafProviders = stringList(edgeDetection?.waf_providers);
+  const edgeCdnProviders = stringList(edgeDetection?.cdn_providers);
+  const edgeConfidence = edgeConfidenceLabel(edgeDetection?.confidence);
+  const edgeEvidence = asDataItem(edgeDetection?.evidence);
+  const edgeVendorMatches = dataItemList(edgeEvidence?.vendor_matches, 5);
+  const edgeAddressMatches = dataItemList(edgeEvidence?.address_matches, 8);
+  const edgeCnameMatches = dataItemList(edgeEvidence?.cname_matches, 8);
+  const edgeCnameChain = stringList(edgeEvidence?.dns_cname_chain);
+  const edgeResolvedIps = stringList(edgeEvidence?.dns_resolved_ips);
+  const edgeTestRunId = getString(edgeDetection, ['test_run_id'], '');
+  const edgeObservedAt = edgeDetection?.observed_at ?? edgeDetection?.updated_at ?? null;
+  const edgeVendorColumns: TableColumn<DataItem>[] = [
+    { key: 'vendor', label: 'Vendor', render: (item) => <span>{getString(item, ['name', 'vendor'], 'Not reported')}</span> },
+    { key: 'confidence', label: 'Confidence', render: (item) => <span className="mono">{edgeConfidenceLabel(item.confidence) || 'Not reported'}</span> },
+    { key: 'signals', label: 'Matched signals', render: (item) => {
+      const signals = dataItemList(item.matched_signals, 4);
+      if (signals.length === 0) return <span className="muted">Not reported</span>;
+      return (
+        <span className="edge-chip-row">
+          {signals.map((signal, index) => (
+            <Badge
+              key={`${getString(signal, ['signal'], 'signal')}-${index}`}
+              tone="muted"
+              mono
+              title={`Corpus tier ${getString(signal, ['tier'], 'unknown')}`}
+            >
+              {getString(signal, ['signal'], 'Not reported')}
+            </Badge>
+          ))}
+        </span>
+      );
+    } }
+  ];
   const ownershipMethod = ownershipMethodLabel(verification);
   const expectedBehavior = getString(target, ['expected_behavior', 'expected'], '—');
   const reportedEligibilityReason = getString(target, ['eligibility_reason'], '');
@@ -409,6 +505,129 @@ export function TargetDetailView({
           </CardContent>
         </Card>
       ) : null}
+
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>WAF / CDN edge detection</CardTitle>
+            <CardDescription>Durable per-target fingerprint evidence recorded by the last signed edge-detection run.</CardDescription>
+          </div>
+          {edgeDetection ? (
+            <Badge
+              tone={edgeStatusTone(edgeStatus)}
+              title={`Edge detection status ${edgeStatus}${edgeReason ? ` · reason ${edgeReason}` : ''}`}
+            >
+              {formatTargetLabel(edgeStatus)}
+            </Badge>
+          ) : (
+            <Badge tone="muted">Not detected yet</Badge>
+          )}
+        </CardHeader>
+        <CardContent>
+          {edgeDetection ? (
+            <>
+              <div className="kpi-row">
+                <div className="kpi-cell"><div className="kpi-label">Overall</div><div className="kpi-value">{formatTargetLabel(edgeStatus)}</div></div>
+                <div className="kpi-cell"><div className="kpi-label">Confidence</div><div className="kpi-value">{edgeConfidence || 'Not reported'}</div></div>
+                <div className="kpi-cell"><div className="kpi-label">Corpus version</div><div className="kpi-value mono">{getString(edgeDetection, ['corpus_version'], 'Not reported')}</div></div>
+                <div className="kpi-cell"><div className="kpi-label">Observed</div><div className="kpi-value">{edgeObservedAt ? formatDate(edgeObservedAt) : 'Not reported'}</div></div>
+                <div className="kpi-cell"><div className="kpi-label">Source run</div><div className="kpi-value">{edgeTestRunId ? <DetailEntityLink route="run-detail" id={edgeTestRunId} /> : <span className="mono">Not reported</span>}</div></div>
+              </div>
+              {edgeReason ? <p className="muted">Reported reason: {formatTargetLabel(edgeReason)}.</p> : null}
+              {edgeDetection.conflicting_vendor_signals === true ? (
+                <p className="muted">Vendor signals conflict, so no single WAF provider is asserted.</p>
+              ) : null}
+
+              <div className="edge-family-grid" aria-label="Independent WAF and CDN detection">
+                <section className="edge-family-card" aria-labelledby="target-edge-waf-title">
+                  <div className="edge-family-card-head">
+                    <strong id="target-edge-waf-title">WAF</strong>
+                    <Badge
+                      tone={edgeStatusTone(getString(edgeWaf, ['status'], 'inconclusive'))}
+                      title="WAF fingerprint status recorded for this target"
+                    >
+                      {formatTargetLabel(getString(edgeWaf, ['status'], 'inconclusive'))}
+                    </Badge>
+                  </div>
+                  <dl>
+                    <dt>Provider</dt><dd>{getString(edgeWaf, ['provider'], 'Not asserted')}</dd>
+                    <dt>Type</dt><dd>{formatTargetLabel(getString(edgeWaf, ['type'], ''), 'Not reported')}</dd>
+                    <dt>Reported providers</dt>
+                    <dd>{edgeFamilyProviders(edgeWaf, edgeWafProviders).join(', ') || 'None reported'}</dd>
+                  </dl>
+                </section>
+                <section className="edge-family-card" aria-labelledby="target-edge-cdn-title">
+                  <div className="edge-family-card-head">
+                    <strong id="target-edge-cdn-title">CDN</strong>
+                    <Badge
+                      tone={edgeStatusTone(getString(edgeCdn, ['status'], 'inconclusive'))}
+                      title="CDN fingerprint status recorded for this target"
+                    >
+                      {formatTargetLabel(getString(edgeCdn, ['status'], 'inconclusive'))}
+                    </Badge>
+                  </div>
+                  <dl>
+                    <dt>Provider</dt><dd>{getString(edgeCdn, ['provider'], 'Not asserted')}</dd>
+                    <dt>Type</dt><dd>{formatTargetLabel(getString(edgeCdn, ['type'], ''), 'Not reported')}</dd>
+                    <dt>Reported providers</dt>
+                    <dd>{edgeFamilyProviders(edgeCdn, edgeCdnProviders).join(', ') || 'None reported'}</dd>
+                  </dl>
+                </section>
+              </div>
+
+              <div className="edge-evidence-block">
+                <h3 id="target-edge-vendor-title">Vendor fingerprint matches</h3>
+                <DataTable
+                  columns={edgeVendorColumns}
+                  items={edgeVendorMatches}
+                  getRowId={(item, index) => `${getString(item, ['vendor', 'name'], 'vendor')}-${index}`}
+                  empty={<span className="muted">No vendor fingerprint matches were recorded.</span>}
+                />
+              </div>
+
+              <div className="edge-evidence-block">
+                <h3 id="target-edge-cdncheck-title">cdncheck range and CNAME matches</h3>
+                <div className="edge-chip-row" aria-labelledby="target-edge-cdncheck-title">
+                  {edgeAddressMatches.map((match, index) => (
+                    <Badge
+                      key={`address-${getString(match, ['provider'], 'provider')}-${index}`}
+                      tone="info"
+                      title={`Resolved address falls inside a published ${getString(match, ['family'], 'edge')} range`}
+                    >
+                      {formatTargetLabel(getString(match, ['family'], 'edge'))} · {getString(match, ['provider'], 'Not reported')}
+                    </Badge>
+                  ))}
+                  {edgeCnameMatches.map((match, index) => (
+                    <Badge
+                      key={`cname-${getString(match, ['suffix'], 'suffix')}-${index}`}
+                      tone="info"
+                      mono
+                      title={`CNAME suffix ${getString(match, ['suffix'], 'not reported')} maps to ${getString(match, ['type'], 'edge')} provider ${getString(match, ['provider'], 'not reported')}`}
+                    >
+                      {getString(match, ['provider'], 'Not reported')} · {getString(match, ['suffix'], '—')}
+                    </Badge>
+                  ))}
+                  {edgeAddressMatches.length === 0 && edgeCnameMatches.length === 0 ? (
+                    <span className="muted">No cdncheck address or CNAME matches were recorded.</span>
+                  ) : null}
+                </div>
+                <p className="edge-chain">
+                  <span className="edge-chain-label">CNAME chain</span>
+                  <span className="mono">{edgeCnameChain.length > 0 ? edgeCnameChain.join(' → ') : 'Not reported'}</span>
+                </p>
+                <p className="edge-chain">
+                  <span className="edge-chain-label">Resolved IPs</span>
+                  <span className="mono">{edgeResolvedIps.length > 0 ? edgeResolvedIps.join(', ') : 'Not reported'}</span>
+                </p>
+              </div>
+
+              <p className="muted small">Fingerprint detection is not a protection verdict. A successful no-match does not prove that no edge control exists.</p>
+            </>
+          ) : (
+            <p className="muted">No edge detection has been recorded for this target yet. Run WAF/CDN detection from the target group to populate this section.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="dash-grid target-detail-workspace">
         <Card>

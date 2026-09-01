@@ -679,6 +679,80 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
+    /**
+     * Upsert the current WAF/CDN edge detection for a target.
+     * `uniq_target_edge_detection_target` keeps exactly one current row per target.
+     * Accepts an optional caller transaction client so the write can join probe-result ingest.
+     */
+    async upsertTargetEdgeDetection(ctx, record, options = {}) {
+      const tenantId = ctx.tenantId;
+      if (!tenantId || !record?.id || !record?.target_id || !record?.target_group_id) return null;
+
+      const runQuery = async (client) => {
+        const { rows } = await client.query(
+          `INSERT INTO target_edge_detections (
+             id, tenant_id, target_group_id, target_id, test_run_id, status, reason,
+             waf_status, waf_vendor, waf_type, waf_providers,
+             cdn_status, cdn_provider, cdn_type, cdn_providers,
+             confidence, conflicting_vendor_signals, corpus_version, evidence_json, observed_at
+           )
+           VALUES (
+             $1, $2, $3, $4, $5, $6, $7,
+             $8, $9, $10, $11,
+             $12, $13, $14, $15,
+             $16, $17, $18, $19::jsonb, $20::timestamptz
+           )
+           ON CONFLICT (tenant_id, target_id) DO UPDATE SET
+             target_group_id = EXCLUDED.target_group_id,
+             test_run_id = EXCLUDED.test_run_id,
+             status = EXCLUDED.status,
+             reason = EXCLUDED.reason,
+             waf_status = EXCLUDED.waf_status,
+             waf_vendor = EXCLUDED.waf_vendor,
+             waf_type = EXCLUDED.waf_type,
+             waf_providers = EXCLUDED.waf_providers,
+             cdn_status = EXCLUDED.cdn_status,
+             cdn_provider = EXCLUDED.cdn_provider,
+             cdn_type = EXCLUDED.cdn_type,
+             cdn_providers = EXCLUDED.cdn_providers,
+             confidence = EXCLUDED.confidence,
+             conflicting_vendor_signals = EXCLUDED.conflicting_vendor_signals,
+             corpus_version = EXCLUDED.corpus_version,
+             evidence_json = EXCLUDED.evidence_json,
+             observed_at = EXCLUDED.observed_at,
+             updated_at = NOW()
+           RETURNING id, target_id, target_group_id, status, updated_at`,
+          [
+            record.id,
+            tenantId,
+            record.target_group_id,
+            record.target_id,
+            record.test_run_id ?? null,
+            record.status ?? 'inconclusive',
+            record.reason ?? null,
+            record.waf_status ?? 'inconclusive',
+            record.waf_vendor ?? null,
+            record.waf_type ?? null,
+            Array.isArray(record.waf_providers) ? record.waf_providers : [],
+            record.cdn_status ?? 'inconclusive',
+            record.cdn_provider ?? null,
+            record.cdn_type ?? null,
+            Array.isArray(record.cdn_providers) ? record.cdn_providers : [],
+            Number(record.confidence) || 0,
+            record.conflicting_vendor_signals === true,
+            record.corpus_version ?? null,
+            JSON.stringify(asObject(record.evidence_json)),
+            record.observed_at ?? null,
+          ],
+        );
+        return rows[0] ?? null;
+      };
+
+      return options.client
+        ? runQuery(options.client)
+        : withTenantContext(pool, tenantId, runQuery);
+    },
+
     async appendEvidence(ctx, record) {
       const tenantId = ctx.tenantId;
       const metadataJson = JSON.stringify(asObject(record.metadata ?? record.metadata_json));

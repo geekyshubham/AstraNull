@@ -12,6 +12,7 @@ import {
   WAF_EDGE_DETECTION_CHECK_ID,
 } from '../lib/edgeDetection.mjs';
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
+import { projectEdgeDetection } from '../lib/edgeDetectionProjection.mjs';
 
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'planned', 'queued', 'running', 'collecting']);
 const SUCCESSFUL_TERMINAL_RUN_STATUSES = new Set(['completed', 'verdicted']);
@@ -44,30 +45,6 @@ function notFound() {
   return { error: 'edge_detection_not_found', status: 404 };
 }
 
-function explicitBoolean(values) {
-  const observed = values.filter((value) => typeof value === 'boolean');
-  return {
-    observed: observed.length > 0,
-    value: observed.includes(true),
-    conflict: observed.includes(true) && observed.includes(false),
-  };
-}
-
-function providerMatch(edgeSignature, family) {
-  for (const [field, discriminator, type] of [
-    ['address_matches', 'family', 'address_range'],
-    ['cname_matches', 'type', 'cname_suffix'],
-  ]) {
-    for (const raw of Array.isArray(edgeSignature[field]) ? edgeSignature[field].slice(0, 64) : []) {
-      const match = asRecord(raw);
-      if (!match || boundedString(match[discriminator]).toLowerCase() !== family) continue;
-      const provider = boundedString(match.provider);
-      if (provider) return { provider, type };
-    }
-  }
-  return null;
-}
-
 function workerMetadata(event) {
   const outer = asRecord(event?.metadata) ?? {};
   const nested = asRecord(outer.metadata) ?? {};
@@ -88,22 +65,6 @@ function latestTrustedWorkerEvent(events, run) {
     return event;
   }
   return null;
-}
-
-function signalProjection(signal, details, providerField) {
-  const status = signal.conflict
-    ? 'inconclusive'
-    : signal.observed
-      ? signal.value ? 'detected' : 'not_detected'
-      : 'inconclusive';
-  return {
-    status,
-    ...(status === 'detected' && details?.provider
-      ? { [providerField]: details.provider, type: details.type }
-      : {}),
-    ...(signal.conflict ? { reason: 'conflicting_edge_signals' } : {}),
-    ...(!signal.observed ? { reason: 'signal_not_reported' } : {}),
-  };
 }
 
 function projectWorkerResult(run, events) {
@@ -141,52 +102,20 @@ function projectWorkerResult(run, events) {
     return { status: 'inconclusive', reason: 'worker_result_incomplete', detection: null };
   }
 
-  const edgeSignature = asRecord(metadata.edge_signature) ?? {};
-  const bestVendor = asRecord(edgeSignature.best_vendor);
-  // `edge_signature` is the canonical classifier output. Legacy top-level posture summaries may
-  // be recomputed during agent enrichment without that nested input, so consult them only when the
-  // canonical boolean is absent rather than manufacturing a contradiction.
-  const wafSignal = explicitBoolean(typeof edgeSignature.waf_present === 'boolean'
-    ? [edgeSignature.waf_present]
-    : [metadata.waf_fingerprint_detected, metadata.waf_detected]);
-  const cdnSignal = explicitBoolean(typeof edgeSignature.cdn_detected === 'boolean'
-    ? [edgeSignature.cdn_detected]
-    : [metadata.cdn_detected]);
-  const wafTypedMatch = providerMatch(edgeSignature, 'waf');
-  const cdnTypedMatch = providerMatch(edgeSignature, 'cdn');
-  const responseProvider = boundedString(metadata.detected_vendor)
-    || boundedString(bestVendor?.vendor);
-  const conflictingVendorSignals = edgeSignature.conflicting_vendor_signals === true;
-  const waf = signalProjection(
-    wafSignal,
-    conflictingVendorSignals ? null : {
-      provider: responseProvider || wafTypedMatch?.provider,
-      type: responseProvider ? 'response_fingerprint' : wafTypedMatch?.type,
-    },
-    'vendor',
-  );
-  const cdn = signalProjection(cdnSignal, cdnTypedMatch, 'provider');
-  const positive = (wafSignal.value && !wafSignal.conflict)
-    || (cdnSignal.value && !cdnSignal.conflict);
-  const completeNoMatch = wafSignal.observed && cdnSignal.observed
-    && !wafSignal.conflict && !cdnSignal.conflict
-    && !wafSignal.value && !cdnSignal.value;
-  const status = positive ? 'detected' : completeNoMatch ? 'not_detected' : 'inconclusive';
+  const projection = projectEdgeDetection(metadata);
 
   return {
-    status,
-    reason: status === 'not_detected'
-      ? 'completed_no_signature_match'
-      : status === 'inconclusive'
-        ? 'edge_signature_incomplete'
-        : null,
+    status: projection.status,
+    reason: projection.reason,
     detection: {
-      waf,
-      cdn,
-      ...(conflictingVendorSignals ? { conflicting_vendor_signals: true } : {}),
-      ...(boundedString(metadata.edge_signature_corpus_version)
-        ? { corpus_version: boundedString(metadata.edge_signature_corpus_version) }
-        : {}),
+      waf: projection.waf,
+      cdn: projection.cdn,
+      ...(projection.waf_providers.length ? { waf_providers: projection.waf_providers } : {}),
+      ...(projection.cdn_providers.length ? { cdn_providers: projection.cdn_providers } : {}),
+      ...(projection.confidence ? { confidence: projection.confidence } : {}),
+      ...(projection.conflicting_vendor_signals ? { conflicting_vendor_signals: true } : {}),
+      ...(projection.corpus_version ? { corpus_version: projection.corpus_version } : {}),
+      evidence: projection.evidence,
       observed_at: boundedString(event.timestamp ?? event.created_at),
     },
   };

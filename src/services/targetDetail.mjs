@@ -1,6 +1,8 @@
 import { decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { getStore } from '../store.mjs';
+import { getTargetEdgeDetection } from './targetEdgeDetectionStore.mjs';
+import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
 
 function toIso(value) {
   if (value == null) return value;
@@ -252,6 +254,7 @@ export function getTargetDetail(ctx, targetId, query = {}) {
     waf_posture: target.kind === 'ip' && !getStore().wafAssets?.some((a) => a.target_id === target.id)
       ? null
       : buildWafPosture(ctx, target),
+    edge_detection: presentTargetEdgeDetection(getTargetEdgeDetection(ctx.tenantId, target.id)),
     checks_applied: buildChecksApplied(target.target_group_id),
     runs_recent: buildRunsRecent(targetId, Number(query.runs_limit) || 5),
     findings,

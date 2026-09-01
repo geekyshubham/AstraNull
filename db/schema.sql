@@ -432,6 +432,42 @@ CREATE OR REPLACE VIEW target_verification_current AS
   FROM target_verifications
   ORDER BY target_id, transitioned_at DESC;
 
+-- Current WAF/CDN edge fingerprint per target, from the pinned edge signature corpus.
+-- Evidence is label-only: no raw header/cookie values and no block-page bodies (ADR-0005).
+CREATE TABLE target_edge_detections (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_group_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  test_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'inconclusive'
+    CHECK (status IN ('detected', 'not_detected', 'inconclusive', 'error', 'pending')),
+  reason TEXT,
+  waf_status TEXT NOT NULL DEFAULT 'inconclusive'
+    CHECK (waf_status IN ('detected', 'not_detected', 'inconclusive')),
+  waf_vendor TEXT,
+  waf_type TEXT,
+  waf_providers TEXT[] NOT NULL DEFAULT '{}',
+  cdn_status TEXT NOT NULL DEFAULT 'inconclusive'
+    CHECK (cdn_status IN ('detected', 'not_detected', 'inconclusive')),
+  cdn_provider TEXT,
+  cdn_type TEXT,
+  cdn_providers TEXT[] NOT NULL DEFAULT '{}',
+  confidence NUMERIC NOT NULL DEFAULT 0,
+  conflicting_vendor_signals BOOLEAN NOT NULL DEFAULT FALSE,
+  corpus_version TEXT,
+  evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  observed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uniq_target_edge_detection_target
+  ON target_edge_detections (tenant_id, target_id);
+
+CREATE INDEX idx_target_edge_detections_group
+  ON target_edge_detections (tenant_id, target_group_id, updated_at DESC);
+
 CREATE TABLE bootstrap_tokens (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -1637,6 +1673,7 @@ ALTER TABLE targets ADD CONSTRAINT targets_tenant_id_id_key UNIQUE (tenant_id, i
 ALTER TABLE targets ADD CONSTRAINT targets_tenant_group_id_key UNIQUE (tenant_id, target_group_id, id);
 ALTER TABLE dns_challenges ADD CONSTRAINT dns_challenges_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE target_verifications ADD CONSTRAINT target_verifications_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE target_edge_detections ADD CONSTRAINT target_edge_detections_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT bootstrap_tokens_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE agents ADD CONSTRAINT agents_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1775,6 +1812,12 @@ ALTER TABLE waf_assets ADD CONSTRAINT fk_waf_assets_environment_tenant
   FOREIGN KEY (tenant_id, environment_id) REFERENCES environments (tenant_id, id);
 ALTER TABLE waf_assets ADD CONSTRAINT fk_waf_assets_entity_tenant
   FOREIGN KEY (tenant_id, entity_id) REFERENCES discovery_entities (tenant_id, id);
+ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_target_tenant
+  FOREIGN KEY (tenant_id, target_id) REFERENCES targets (tenant_id, id);
+ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_target_group_tenant
+  FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
+ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_test_run_tenant
+  FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
 ALTER TABLE waf_fingerprints ADD CONSTRAINT fk_waf_fingerprints_waf_asset_tenant
   FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets (tenant_id, id);
 ALTER TABLE waf_fingerprints ADD CONSTRAINT fk_waf_fingerprints_test_run_tenant
@@ -2117,6 +2160,8 @@ ALTER TABLE dns_challenges ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dns_challenges FORCE ROW LEVEL SECURITY;
 ALTER TABLE target_verifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE target_verifications FORCE ROW LEVEL SECURITY;
+ALTER TABLE target_edge_detections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE target_edge_detections FORCE ROW LEVEL SECURITY;
 ALTER TABLE bootstrap_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bootstrap_tokens FORCE ROW LEVEL SECURITY;
 ALTER TABLE agents ENABLE ROW LEVEL SECURITY;
@@ -2268,6 +2313,9 @@ CREATE POLICY dns_challenges_tenant_isolation ON dns_challenges
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY target_verifications_tenant_isolation ON target_verifications
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY tenant_isolation_target_edge_detections ON target_edge_detections
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_bootstrap_tokens ON bootstrap_tokens
