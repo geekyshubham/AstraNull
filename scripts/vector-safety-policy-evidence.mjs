@@ -33,6 +33,25 @@ export const SOC_REQUEST_MARKER_REQUIRED_FIELDS = Object.freeze([
 const CUSTOMER_APPROVAL_LEVEL = 'customer_self_service';
 const SOC_APPROVAL_LEVEL = 'soc_request_only';
 
+const NEW_PROBE_KIND_SAFETY_RULES = Object.freeze({
+  reflection_service_probe: { max_requests: 2, required_fields: ['service_port', 'payload_profile', 'expected_response_shape'] },
+  dns_wire_query: { max_requests: 3, required_fields: ['dns_qtype', 'dns_transport'] },
+  http_method_matrix: { max_requests: 2, required_fields: [] },
+  header_size_probe: { max_requests: 2, required_fields: ['oversize_header_bytes'] },
+  slow_header_probe: { max_requests: 1, required_fields: [] },
+  http2_frame_probe: { max_requests: 4, required_fields: [] },
+  http3_control_probe: { max_requests: 2, required_fields: [] },
+  waf_inspection_limit_probe: { max_requests: 6, required_fields: [] },
+});
+
+const RAW_PAYLOAD_PROFILE_KEYS = new Set([
+  'body',
+  'payload',
+  'packet_payload',
+  'raw_body',
+  'request_body',
+]);
+
 const FORBIDDEN_POLICY_KEYS = new Set([
   'amplification',
   'attack_command',
@@ -102,6 +121,15 @@ export function extractCustomerRunnablePolicy(check) {
           timeout_ms: profile.timeout_ms,
           ...(profile.method ? { method: profile.method } : {}),
           ...(profile.marker ? { marker: profile.marker } : {}),
+          ...(profile.service_port ? { service_port: profile.service_port } : {}),
+          ...(profile.payload_profile ? { payload_profile: profile.payload_profile } : {}),
+          ...(profile.expected_response_shape ? { expected_response_shape: profile.expected_response_shape } : {}),
+          ...(profile.http_method ? { http_method: profile.http_method } : {}),
+          ...(profile.dns_qtype ? { dns_qtype: profile.dns_qtype } : {}),
+          ...(profile.dns_transport ? { dns_transport: profile.dns_transport } : {}),
+          ...(profile.oversize_header_bytes ? { oversize_header_bytes: profile.oversize_header_bytes } : {}),
+          ...(profile.probe_path ? { probe_path: profile.probe_path } : {}),
+          ...(profile.nonce_hash_only === true ? { nonce_hash_only: true } : {}),
         }
       : null,
     failure_handling: hasValue(check.remediation_template)
@@ -183,6 +211,31 @@ function invalidCustomerRunnableFields(check, policy) {
     }
     if (profile.kind === 'http_head' && profile.method && profile.method !== 'HEAD') {
       invalid.push({ field: 'probe_profile.method', reason: 'http_head_must_use_HEAD' });
+    }
+    const newKindRule = NEW_PROBE_KIND_SAFETY_RULES[profile.kind];
+    if (newKindRule) {
+      if (profile.max_requests > newKindRule.max_requests) {
+        invalid.push({ field: 'probe_profile.max_requests', reason: `${profile.kind}_exceeds_safety_bound` });
+      }
+      for (const field of newKindRule.required_fields) {
+        if (!hasValue(profile[field])) {
+          invalid.push({ field: `probe_profile.${field}`, reason: `${profile.kind}_requires_${field}` });
+        }
+      }
+    }
+    if (profile.http_method === 'POST' && profile.nonce_hash_only !== true) {
+      invalid.push({ field: 'probe_profile.nonce_hash_only', reason: 'POST_requires_inert_marker_body' });
+    }
+    for (const key of Object.keys(check.probe_profile ?? {})) {
+      if (RAW_PAYLOAD_PROFILE_KEYS.has(normalizeKey(key))) {
+        invalid.push({ field: `probe_profile.${key}`, reason: 'raw_payload_body_forbidden' });
+      }
+    }
+    if (
+      profile.kind === 'reflection_service_probe'
+      && profile.expected_response_shape !== 'amplifying_response'
+    ) {
+      invalid.push({ field: 'probe_profile.expected_response_shape', reason: 'reflection_probe_must_only_capture_response_ratio' });
     }
   }
   if (check.safety_constraints?.customer_runnable === false) {

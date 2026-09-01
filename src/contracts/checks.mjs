@@ -32,9 +32,18 @@ export const ALLOWED_PROBE_PROFILE_KINDS = Object.freeze([
   'websocket_upgrade_posture',
   'outside_in_waf_scan',
   'grpc_reflection_probe',
+  'reflection_service_probe',
+  'dns_wire_query',
+  'http_method_matrix',
+  'header_size_probe',
+  'slow_header_probe',
+  'http2_frame_probe',
+  'http3_control_probe',
+  'waf_inspection_limit_probe',
 ]);
 
 export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
+  quic_reachability: 2,
   origin_leak_scan: 15,
   host_sni_bypass: 1,
   port_scan_bounded: 15,
@@ -51,8 +60,16 @@ export const MAX_REQUESTS_BY_PROBE_KIND = Object.freeze({
   bot_challenge_probe: 1,
   graphql_posture_probe: 1,
   websocket_upgrade_posture: 1,
-  outside_in_waf_scan: 10,
+  outside_in_waf_scan: 13,
   grpc_reflection_probe: 1,
+  reflection_service_probe: 2,
+  dns_wire_query: 3,
+  http_method_matrix: 2,
+  header_size_probe: 2,
+  slow_header_probe: 1,
+  http2_frame_probe: 4,
+  http3_control_probe: 2,
+  waf_inspection_limit_probe: 6,
 });
 
 export function maxProbeRequestsForKind(kind) {
@@ -64,6 +81,76 @@ const ALLOWED_OPS_READINESS_SCENARIOS = new Set(['runbook_contacts', 'kill_switc
 const ALLOWED_PROBE_KINDS = new Set(ALLOWED_PROBE_PROFILE_KINDS);
 export const MAX_PROBE_PROFILE_TIMEOUT_MS = 5000;
 export const MAX_PROBE_PROFILE_REQUESTS = 10;
+
+export const ALLOWED_PAYLOAD_PROFILES = Object.freeze([
+  'ssdp_msearch',
+  'snmp_v2c_get_sysdescr',
+  'mdns_ptr_query',
+  'netbios_nbstat',
+  'ws_discovery_probe',
+  'chargen_trigger',
+  'coap_get_wellknown',
+  'stun_binding_request',
+  'ipmi_rmcp_ping',
+  'mssql_resolution_request',
+  'tftp_read_request',
+  'memcached_udp_stats',
+  'dtls_client_hello',
+  'portmap_dump',
+  'ntp_mode6_readvar',
+  'cldap_root_dse',
+  'openvpn_reset',
+  'jenkins_discovery',
+  'rip_v1_request',
+  'quic_initial',
+  'generic_probe',
+]);
+
+export const ALLOWED_EXPECTED_RESPONSE_SHAPES = Object.freeze([
+  'none',
+  'service_banner',
+  'amplifying_response',
+  'error_response',
+]);
+
+export const ALLOWED_PROBE_HTTP_METHODS = Object.freeze([
+  'GET',
+  'HEAD',
+  'POST',
+  'OPTIONS',
+  'TRACE',
+  'PUT',
+  'DELETE',
+  'PATCH',
+]);
+
+export const ALLOWED_DNS_QTYPES = Object.freeze([
+  'A',
+  'AAAA',
+  'ANY',
+  'TXT',
+  'NS',
+  'SOA',
+  'MX',
+  'DNSKEY',
+  'CNAME',
+  'PTR',
+  'SRV',
+]);
+
+export const ALLOWED_DNS_TRANSPORTS = Object.freeze(['udp', 'tcp', 'auto']);
+
+const ALLOWED_PAYLOAD_PROFILE_SET = new Set(ALLOWED_PAYLOAD_PROFILES);
+const ALLOWED_EXPECTED_RESPONSE_SHAPE_SET = new Set(ALLOWED_EXPECTED_RESPONSE_SHAPES);
+const ALLOWED_PROBE_HTTP_METHOD_SET = new Set(ALLOWED_PROBE_HTTP_METHODS);
+const ALLOWED_DNS_QTYPE_SET = new Set(ALLOWED_DNS_QTYPES);
+const ALLOWED_DNS_TRANSPORT_SET = new Set(ALLOWED_DNS_TRANSPORTS);
+const HTTP_METHOD_PROFILE_KINDS = new Set([
+  'rate_limit_sequence',
+  'header_size_probe',
+  'slow_header_probe',
+  'waf_inspection_limit_probe',
+]);
 
 export const WAF_SAFE_PROBE_METADATA_KEYS = Object.freeze([
   'scenario_family',
@@ -184,6 +271,7 @@ export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'require_agent_for_protected',
   'agent_corroborated',
   'follow_redirects',
+  'probe_path',
 ]);
 
 export function buildProbeProfile({
@@ -197,6 +285,13 @@ export function buildProbeProfile({
   expected_action,
   nonce_hash_only,
   collect,
+  service_port,
+  payload_profile,
+  expected_response_shape,
+  http_method,
+  dns_qtype,
+  dns_transport,
+  oversize_header_bytes,
   ...capabilityFields
 } = {}) {
   if (!ALLOWED_PROBE_KINDS.has(kind)) {
@@ -218,6 +313,47 @@ export function buildProbeProfile({
   };
   if (marker) profile.marker = String(marker).slice(0, 128);
   if (kind === 'http_head') profile.method = 'HEAD';
+  // An explicit customer target.port overrides this canonical service port at execution time.
+  if (Number.isInteger(service_port) && service_port >= 1 && service_port <= 65535) {
+    profile.service_port = service_port;
+  }
+  if (typeof payload_profile === 'string' && ALLOWED_PAYLOAD_PROFILE_SET.has(payload_profile)) {
+    profile.payload_profile = payload_profile;
+  }
+  if (
+    typeof expected_response_shape === 'string'
+    && ALLOWED_EXPECTED_RESPONSE_SHAPE_SET.has(expected_response_shape)
+  ) {
+    profile.expected_response_shape = expected_response_shape;
+  }
+  if (
+    HTTP_METHOD_PROFILE_KINDS.has(kind)
+    && typeof http_method === 'string'
+    && ALLOWED_PROBE_HTTP_METHOD_SET.has(http_method)
+  ) {
+    if (http_method === 'POST' && nonce_hash_only !== true) {
+      throw new Error('POST probe profiles require nonce_hash_only: true');
+    }
+    profile.http_method = http_method;
+  }
+  if (kind === 'dns_wire_query' && typeof dns_qtype === 'string' && ALLOWED_DNS_QTYPE_SET.has(dns_qtype)) {
+    profile.dns_qtype = dns_qtype;
+  }
+  if (
+    kind === 'dns_wire_query'
+    && typeof dns_transport === 'string'
+    && ALLOWED_DNS_TRANSPORT_SET.has(dns_transport)
+  ) {
+    profile.dns_transport = dns_transport;
+  }
+  if (
+    kind === 'header_size_probe'
+    && Number.isInteger(oversize_header_bytes)
+    && oversize_header_bytes >= 1024
+    && oversize_header_bytes <= 16384
+  ) {
+    profile.oversize_header_bytes = oversize_header_bytes;
+  }
   if (kind === 'ops_readiness' && typeof scenario === 'string' && ALLOWED_OPS_READINESS_SCENARIOS.has(scenario)) {
     profile.scenario = scenario;
   }
@@ -230,7 +366,7 @@ export function buildProbeProfile({
   });
   for (const key of CAPABILITY_PROFILE_PASSTHROUGH_KEYS) {
     if (capabilityFields[key] == null) continue;
-    if (key === 'graphql_path' || key === 'grpc_path') {
+    if (key === 'graphql_path' || key === 'grpc_path' || key === 'probe_path') {
       const path = normalizeProbeHttpPath(capabilityFields[key]);
       if (path) profile[key] = path;
       continue;
@@ -501,7 +637,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_authoritative_zone'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Single DNS lookup must return healthy authoritative response metadata for declared name.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 1, timeout_ms: 5000, dns_qtype: 'SOA', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -517,7 +653,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_zone_for_random_prefix'],
     evidence_required: ['probe_result'],
     verdict_logic: 'One labeled random-prefix lookup observes NXDOMAIN or mitigation behavior without high QPS.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 1, timeout_ms: 5000, dns_qtype: 'A', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -569,10 +705,10 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_fingerprint_probe'],
     evidence_required: ['probe_result'],
     verdict_logic:
-      'Up to ten bounded GET/POST/HEAD probes fingerprint the edge, validate plain and evasion-class markers, test content-type confusion and origin bypass, and emit posture (Protected only with agent corroboration).',
+      'Up to thirteen bounded GET/POST/HEAD probes fingerprint the edge, validate plain and evasion-class markers, test content-type confusion and origin bypass, and emit posture (Protected only with agent corroboration).',
     probe_profile: {
       kind: 'outside_in_waf_scan',
-      max_requests: 10,
+      max_requests: 13,
       timeout_ms: 5000,
       scenario_family: 'fingerprint',
       expected_action: 'block',
@@ -590,7 +726,7 @@ export const CHECK_CATALOG = [
         'agent_corroboration_required',
       ],
     },
-    safety_constraints: { max_events: 10, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
+    safety_constraints: { max_events: 13, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -672,13 +808,13 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'HTTP Method Restriction (Safe)',
     vector_family: 'l7',
-    description: 'Unusual HTTP method restriction metadata check (TRACE/unsafe methods).',
+    description: 'HEAD/OPTIONS method-policy metadata observation; no TRACE or state-changing methods are sent.',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
     required_customer_setup: ['url_target_with_method_policy'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Safe HEAD-only probe metadata; method policy validated via edge response codes (no unsafe methods sent).',
-    probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
+    verdict_logic: 'HEAD and OPTIONS collect status and Allow metadata only; rejection of unsafe methods is not executed or proven.',
+    probe_profile: { kind: 'http_method_matrix', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -694,7 +830,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['url_target'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Minimal HEAD probe confirms edge handles boundary policy without oversized request bodies.',
-    probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'header_size_probe', max_requests: 2, timeout_ms: 5000, oversize_header_bytes: 8192 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -710,7 +846,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['customer_rate_limit_threshold'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Up to five spaced HEAD probes observe rate-limit signals without load generation.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker', probe_path: '/', http_method: 'HEAD' },
     safety_constraints: { max_events: 5, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -841,7 +977,7 @@ export const CHECK_CATALOG = [
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Bounded DNS resolve collects response-size/class metadata; verdict when target is not usable as an unintended amplifier.',
     remediation_template: 'Restrict open resolvers, limit ANY/TXT responses, and align with provider anti-amplification guidance.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 1, timeout_ms: 5000, dns_qtype: 'ANY', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -885,14 +1021,14 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'Zone Transfer Exposure (Safe)',
     vector_family: 'dns',
-    description: 'Safe AXFR exposure metadata where customer authorizes a single bounded lookup (no zone scraping).',
+    description: 'Safe AXFR exposure metadata using one NS resolution plus one bounded TCP AXFR attempt (no zone scraping).',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['fqdn', 'dns'],
     required_customer_setup: ['declared_zone_for_axfr_check', 'customer_authorizes_axfr_probe'],
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single bounded AXFR attempt confirms zone transfer is refused or restricted when unauthorized.',
-    probe_profile: { kind: 'dns_axfr_leak', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_axfr_leak', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -926,6 +1062,7 @@ export const CHECK_CATALOG = [
     evidence_required: ['probe_result', 'agent_observation'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single HEAD to declared URL observes latency/status for quota or challenge signals.',
+    // TODO(D-05): HEAD cannot observe response-generation cost for an expensive endpoint.
     probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -939,11 +1076,11 @@ export const CHECK_CATALOG = [
     description: 'Benign marker flow on customer-declared auth endpoints with isolated synthetic identity intent.',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_auth_endpoint', 'isolated_synthetic_test_identity', 'customer_approves_auth_probe'],
+    required_customer_setup: ['declared_login_probe_path', 'isolated_synthetic_test_identity', 'customer_approves_auth_probe'],
     evidence_required: ['probe_result', 'agent_observation'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Rapid HEAD sequence correlates rate-limit or challenge headers without credential stuffing.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker', probe_path: '/', http_method: 'POST', nonce_hash_only: true },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -960,6 +1097,7 @@ export const CHECK_CATALOG = [
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single safe probe observes throttle/challenge behavior on declared reset URL.',
+    // TODO(D-05): HEAD cannot observe the cost of the password-reset action.
     probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -973,11 +1111,11 @@ export const CHECK_CATALOG = [
     description: 'Safe token/user quota visibility check — not a quota burn-down attack.',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_api_endpoint', 'test_api_identity_or_key_scope'],
+    required_customer_setup: ['declared_api_probe_path', 'test_api_identity_or_key_scope'],
     evidence_required: ['probe_result', 'agent_observation'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Up to five spaced HEAD probes read quota/rate-limit headers without exhausting customer quotas.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, marker: 'astranull-safe-marker', probe_path: '/', http_method: 'GET' },
     safety_constraints: { max_events: 5, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1028,7 +1166,7 @@ export const CHECK_CATALOG = [
     evidence_required: ['probe_result'],
     stop_conditions: ['max_events_reached', 'max_duration_elapsed', 'customer_cancel', 'tenant_kill_switch'],
     verdict_logic: 'Single HEAD within strict timeout collects edge timeout behavior metadata only.',
-    probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'slow_header_probe', max_requests: 1, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1851,10 +1989,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP service fingerprint on the declared host documents whether an open discovery responder exists (response size class metadata only).',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_ssdp_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An unexpected UDP discovery-response size class from the declared host raises a reflector-exposure finding; customer hosts must not run open responders.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 1900, payload_profile: 'ssdp_msearch', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1867,10 +2005,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents whether an open SNMP responder answers on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_snmp_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected SNMP response metadata from the declared host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 161, payload_profile: 'snmp_v2c_get_sysdescr', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1883,10 +2021,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents legacy character/quote/echo responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_chargen_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Any legacy responder answer (CHARGEN, QOTD, Echo class) from the declared host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 19, payload_profile: 'chargen_trigger', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1899,10 +2037,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents local-discovery responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_mdns_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected local-discovery answers from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 5353, payload_profile: 'mdns_ptr_query', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1915,10 +2053,10 @@ export const CHECK_CATALOG = [
     description: 'One bounded TCP connect to the declared portmapper/RPC port documents open-RPC and legacy routing-service exposure.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_rpc_host'],
+    required_customer_setup: ['declared_portmap_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An open portmapper/rpcbind (or unexpected legacy routing service such as RIPv1) on an Internet-facing host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 111, payload_profile: 'portmap_dump', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1931,10 +2069,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents session-protocol responder exposure classes on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_tftp_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected session-protocol responses from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 69, payload_profile: 'tftp_read_request', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1944,13 +2082,13 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'QUIC Responder Exposure (Safe)',
     vector_family: 'reflection',
-    description: 'Single bounded QUIC reachability datagram documents whether an unexpected QUIC responder exists on the declared host.',
+    description: 'One bounded HTTPS HEAD plus one UDP datagram observes whether an unexpected QUIC responder answers on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
     required_customer_setup: ['declared_udp_fingerprint_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected QUIC response metadata from the declared host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'quic_reachability', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'quic_reachability', max_requests: 2, timeout_ms: 3000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1979,10 +2117,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents SQL Browser resolver exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_mssql_resolver_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An open SQL Browser responder on an Internet-facing host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 1434, payload_profile: 'mssql_resolution_request', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -1995,10 +2133,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents CI discovery responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_jenkins_discovery_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected CI discovery responses from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 33848, payload_profile: 'jenkins_discovery', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2011,10 +2149,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents IoT CoAP responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_coap_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected CoAP responses from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 5683, payload_profile: 'coap_get_wellknown', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2027,10 +2165,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents legacy device-management and game/voice discovery responder exposure (Ubiquiti, Lantronix, VxWorks/WDBRPC, TeamSpeak 3 classes) on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_ws_discovery_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected legacy discovery/management answers from the declared host raise a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 3702, payload_profile: 'ws_discovery_probe', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2043,10 +2181,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents open STUN/TURN responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_stun_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An unrestricted STUN/TURN responder on an Internet-facing host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 3478, payload_profile: 'stun_binding_request', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2059,10 +2197,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents BMC remote-management responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_ipmi_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An Internet-reachable BMC responder raises a critical reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 623, payload_profile: 'ipmi_rmcp_ping', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2091,10 +2229,10 @@ export const CHECK_CATALOG = [
     description: 'Single bounded UDP fingerprint documents VPN responder exposure on the declared host.',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_udp_fingerprint_host'],
+    required_customer_setup: ['declared_openvpn_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Unexpected VPN handshake metadata from the declared host raises a reflector-exposure finding.',
-    probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 1194, payload_profile: 'openvpn_reset', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2109,10 +2247,10 @@ export const CHECK_CATALOG = [
     description: 'NTP mode-6/mode-7 restriction and monotonic-clock configuration posture metadata (no NTP queries sent).',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['ntp_policy_declaration'],
+    required_customer_setup: ['declared_ntp_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Declared NTP restriction policy must disable legacy modes on Internet-facing hosts; absence raises an amplification-exposure finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 5000, service_port: 123, payload_profile: 'ntp_mode6_readvar', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2125,10 +2263,10 @@ export const CHECK_CATALOG = [
     description: 'Exposed anonymous-LDAP configuration posture metadata (no LDAP queries sent).',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['ldap_exposure_declaration'],
+    required_customer_setup: ['declared_cldap_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Anonymous LDAP on Internet-facing hosts must be disabled per declared policy; absence raises an amplification-exposure finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 5000, service_port: 389, payload_profile: 'cldap_root_dse', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2141,10 +2279,10 @@ export const CHECK_CATALOG = [
     description: 'One bounded TCP connect documents whether an open cache service answers on the declared host (no UDP cache queries).',
     required_agent_modes: ['packet', 'heartbeat'],
     supported_targets: ['fqdn', 'ip'],
-    required_customer_setup: ['declared_tcp_fingerprint_host'],
+    required_customer_setup: ['declared_memcached_udp_responder_host'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'An open cache-service port on an Internet-facing host raises an amplification-exposure finding.',
-    probe_profile: { kind: 'tcp_connect', max_requests: 1, timeout_ms: 3000 },
+    probe_profile: { kind: 'reflection_service_probe', max_requests: 1, timeout_ms: 3000, service_port: 11211, payload_profile: 'memcached_udp_stats', expected_response_shape: 'amplifying_response' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2160,7 +2298,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_dns_zone'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Declared response-rate-limiting and large-record policy must be present; absence raises an amplification-exposure finding.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 2, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 2, timeout_ms: 5000, dns_qtype: 'TXT', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2176,6 +2314,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['broadcast_filtering_declaration'],
     evidence_required: ['probe_result'],
     verdict_logic: 'Directed-broadcast forwarding must be disabled per declared policy; absence raises an amplification-exposure finding.',
+    // A directed-broadcast probe cannot be run safely from an outside-in service.
     probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -2192,7 +2331,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_dns_zone', 'rrl_policy_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Declared RRL plus restricted recursion must be present on authoritative infrastructure; absence raises an amplification-exposure finding.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 2, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 2, timeout_ms: 5000, dns_qtype: 'NS', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2226,7 +2365,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_dns_zone'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Fast authoritative NXDOMAIN handling and declared query caps must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 3, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 3, timeout_ms: 5000, dns_qtype: 'A', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2274,7 +2413,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_dns_zone'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Additional-section delegation pruning / bounded referral handling must be declared; absence raises a readiness finding.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 2, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 2, timeout_ms: 5000, dns_qtype: 'NS', dns_transport: 'udp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2338,7 +2477,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['declared_dns_zone'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Declared TCP-fallback limits and truncation handling must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'dns_resolve', max_requests: 2, timeout_ms: 5000 },
+    probe_profile: { kind: 'dns_wire_query', max_requests: 2, timeout_ms: 5000, dns_qtype: 'ANY', dns_transport: 'tcp' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2369,10 +2508,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate bounded request sequence on the declared path documents per-client rate-limit enforcement (no flood).',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_validation_path', 'rps_limit_declaration'],
+    required_customer_setup: ['rps_limit_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Bounded low-rate sequence observes throttle/challenge behavior consistent with declared RPS limits.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000 },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, probe_path: '/', http_method: 'GET' },
     safety_constraints: { max_events: 5, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2513,10 +2652,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate bounded sequence on the declared search endpoint documents query-cost throttling (no expensive query flood).',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_search_endpoint', 'search_limit_declaration'],
+    required_customer_setup: ['declared_search_probe_path', 'search_limit_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Bounded sequence observes throttle behavior consistent with declared search-rate limits.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000 },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, probe_path: '/', http_method: 'GET' },
     safety_constraints: { max_events: 5, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2529,10 +2668,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate bounded sequence on the declared export endpoint documents job-cost throttling (no bulk export flood).',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_export_endpoint', 'export_limit_declaration'],
+    required_customer_setup: ['declared_export_probe_path', 'export_limit_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Bounded sequence observes queue/throttle behavior consistent with declared export-job limits.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000 },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, probe_path: '/', http_method: 'GET' },
     safety_constraints: { max_events: 5, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2561,10 +2700,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate bounded sequence on the declared token endpoint documents credential-stuffing cost controls (no credential attempts).',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_token_endpoint', 'token_limit_declaration'],
+    required_customer_setup: ['declared_token_probe_path', 'token_limit_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Bounded sequence observes throttle/lockout behavior consistent with declared token-endpoint limits; no credentials transmitted.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000 },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, probe_path: '/', http_method: 'POST', nonce_hash_only: true },
     safety_constraints: { max_events: 5, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2609,10 +2748,10 @@ export const CHECK_CATALOG = [
     description: 'Low-rate bounded sequence on the declared signup endpoint documents registration cost controls (no accounts created).',
     required_agent_modes: ['canary', 'heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['declared_signup_endpoint', 'signup_limit_declaration'],
+    required_customer_setup: ['declared_signup_probe_path', 'signup_limit_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'Bounded sequence observes throttle/verification behavior consistent with declared signup limits.',
-    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000 },
+    probe_profile: { kind: 'rate_limit_sequence', max_requests: 5, timeout_ms: 5000, probe_path: '/', http_method: 'POST', nonce_hash_only: true },
     safety_constraints: { max_events: 5, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2660,6 +2799,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['xmlrpc_policy_declaration'],
     evidence_required: ['probe_result', 'agent_observation'],
     verdict_logic: 'XML-RPC endpoints that are not intentionally public must be blocked or limited per declared policy.',
+    // TODO(D-05): XML-RPC requires POST; HEAD can only document endpoint posture.
     probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
@@ -2872,7 +3012,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['http2_enabled_endpoint', 'rapid_reset_mitigation_declaration'],
     evidence_required: ['probe_result', 'health_signal'],
     verdict_logic: 'Observed SETTINGS limits plus declared reset-rate budgets must match rapid-reset guidance; gaps raise a readiness finding.',
-    probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2888,7 +3028,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['http2_enabled_endpoint', 'flow_control_policy_declaration'],
     evidence_required: ['probe_result', 'health_signal'],
     verdict_logic: 'Declared flow-control hardening (window caps, RESET budget accounting) must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2904,7 +3044,7 @@ export const CHECK_CATALOG = [
     required_customer_setup: ['http2_enabled_endpoint', 'header_frame_limit_declaration'],
     evidence_required: ['probe_result', 'health_signal'],
     verdict_logic: 'Declared header-frame size/count limits (RFC 9113 hardening) must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 5000 },
+    probe_profile: { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -2994,13 +3134,13 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'HTTP/3 Control Stream Readiness (Safe)',
     vector_family: 'protocol',
-    description: 'Single bounded QUIC reachability datagram plus declared control-stream budget posture (no SETTINGS flood).',
+    description: 'One bounded HTTPS HEAD plus one UDP datagram observes QUIC reachability alongside declared control-stream budget posture (no SETTINGS flood).',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['url', 'fqdn'],
     required_customer_setup: ['http3_endpoint_declaration'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Declared control-stream/create limits must be present for HTTP/3 endpoints; absence raises a readiness finding.',
-    probe_profile: { kind: 'quic_reachability', max_requests: 1, timeout_ms: 5000 },
+    verdict_logic: 'One HEAD plus one bounded QUIC datagram observes reachability only; it does not open or validate HTTP/3 control streams or SETTINGS.',
+    probe_profile: { kind: 'http3_control_probe', max_requests: 2, timeout_ms: 5000 },
     safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
@@ -3237,6 +3377,13 @@ export function isCustomerRunnable(check) {
 export function checkRequiresAdditionalInput(check) {
   if (!check) return false;
   if (check.probe_profile?.kind === 'host_sni_bypass') return true;
+  if (
+    (check.required_customer_setup ?? []).some((requirement) => (
+      typeof requirement === 'string' && requirement.startsWith('declared_') && requirement.endsWith('_probe_path')
+    ))
+  ) {
+    return true;
+  }
   if (
     Array.isArray(check.prerequisites)
     && check.prerequisites.some((p) => String(p).startsWith('agent_mode:'))

@@ -3,14 +3,17 @@
  * Validates resource-exhaustion taxonomy registry against CHECK_CATALOG.
  * Emits metadata-only coverage summary; does not run attack traffic.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CHECK_CATALOG, getCheckById } from '../src/contracts/checks.mjs';
 import {
   ATTACK_VECTOR_REGISTRY,
+  ATTACK_SURFACE_DOMAINS,
+  COVERAGE_STATUS_SEMANTICS,
   EXHAUSTED_RESOURCE_FAMILIES,
   FAMILY_BUILD_SPECS,
   NON_DDOS_AVAILABILITY_THREATS,
+  OUT_OF_SCOPE_VECTORS,
   RESOURCE_EXHAUSTION_TASKS,
   WAF_VULNERABILITY_REGISTRY,
   buildResourceExhaustionCheckMetadata,
@@ -18,8 +21,47 @@ import {
   getAttackIdsByFamily,
   summarizeCoverage,
 } from '../src/contracts/resourceExhaustionTaxonomy.mjs';
+import { evidenceTierForCheck } from '../src/lib/readinessVerdicts.mjs';
 
 const DEFAULT_OUT = 'output/resource-exhaustion-taxonomy-validation.json';
+const CATALOG_PATH = 'one_sheet_global_ddos_waf_attack_vector_catalog_2026-09-01.csv';
+
+// Keep this profile-kind routing contract in sync with workers/probe-worker.mjs until the worker exports it.
+export const WORKER_EXECUTED_KIND_BY_DECLARED_KIND = Object.freeze(
+  Object.fromEntries([
+    'http_head', 'tcp_connect', 'dns_resolve', 'metadata_marker', 'udp_probe',
+    'quic_reachability', 'alert_webhook_ping', 'ops_readiness', 'ownership_challenge',
+    'tls_session', 'http2_settings', 'origin_leak_scan', 'host_sni_bypass',
+    'port_scan_bounded', 'rate_limit_sequence', 'waf_enforcement_probe',
+    'dnssec_posture', 'dns_open_recursion', 'dns_failover_posture', 'dns_axfr_leak',
+    'tls_audit', 'cache_abuse_probe', 'api_surface_scan', 'cors_posture_probe',
+    'bot_challenge_probe', 'graphql_posture_probe', 'websocket_upgrade_posture',
+    'outside_in_waf_scan', 'grpc_reflection_probe', 'reflection_service_probe',
+    'dns_wire_query', 'http_method_matrix', 'header_size_probe', 'slow_header_probe',
+    'http2_frame_probe', 'http3_control_probe', 'waf_inspection_limit_probe',
+  ].map((kind) => [kind, kind])),
+);
+
+export function validateDeclaredProbeKinds(
+  catalog,
+  executedKindByDeclaredKind = WORKER_EXECUTED_KIND_BY_DECLARED_KIND,
+) {
+  const errors = [];
+  for (const check of catalog) {
+    const declaredKind = check.probe_profile?.kind;
+    if (!declaredKind) continue;
+    const executedKind = executedKindByDeclaredKind[declaredKind];
+    if (executedKind !== declaredKind) {
+      errors.push(`${check.check_id}: declared probe kind ${declaredKind} executes as ${executedKind ?? 'unsupported'}`);
+    }
+  }
+  return errors;
+}
+
+function readExternalCatalogIds() {
+  const csv = readFileSync(CATALOG_PATH, 'utf8');
+  return [...csv.matchAll(/^(NET|AMP|APP|WAF|EVA)-\d{3}(?=,)/gm)].map((match) => match[0]);
+}
 
 function parseArgs(argv) {
   let out = DEFAULT_OUT;
@@ -56,9 +98,12 @@ export function validateResourceExhaustionTaxonomy() {
       }
     }
   }
-  for (const familyId of familyIds) {
-    if (!FAMILY_BUILD_SPECS.some((s) => s.id === familyId)) {
-      errors.push(`missing FAMILY_BUILD_SPECS for family ${familyId}`);
+  for (const family of EXHAUSTED_RESOURCE_FAMILIES) {
+    if (
+      family.scored_for_ddos_readiness
+      && !FAMILY_BUILD_SPECS.some((spec) => spec.id === family.id)
+    ) {
+      errors.push(`missing FAMILY_BUILD_SPECS for family ${family.id}`);
     }
   }
 
@@ -92,6 +137,7 @@ export function validateResourceExhaustionTaxonomy() {
   const familyIdSet = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id));
   const expectedMetadata = buildResourceExhaustionCheckMetadata();
   const metadataFields = [
+    'exhausted_resources',
     'attack_vector_ids',
     'delivery_patterns',
     'waf_vulnerability_ids',
@@ -99,6 +145,7 @@ export function validateResourceExhaustionTaxonomy() {
   ];
   const emptyMetadata = {
     exhausted_resource: null,
+    exhausted_resources: [],
     attack_vector_ids: [],
     delivery_patterns: [],
     waf_vulnerability_ids: [],
@@ -112,8 +159,19 @@ export function validateResourceExhaustionTaxonomy() {
       catalogWithoutMetadata.push(check.check_id);
       continue;
     }
+    if (check.evidence_tier !== evidenceTierForCheck(check)) {
+      errors.push(`${check.check_id}: evidence_tier is not derived from probe_profile.kind`);
+    }
     if (check.exhausted_resource !== null && !familyIdSet.has(check.exhausted_resource)) {
       errors.push(`${check.check_id}: exhausted_resource ${check.exhausted_resource} is not a known family id`);
+    }
+    for (const familyId of check.exhausted_resources) {
+      if (!familyIdSet.has(familyId)) {
+        errors.push(`${check.check_id}: exhausted_resources includes unknown family id ${familyId}`);
+      }
+    }
+    if (check.exhausted_resource !== (check.exhausted_resources[0] ?? null)) {
+      errors.push(`${check.check_id}: exhausted_resource must remain the first exhausted_resources compatibility alias`);
     }
     const expected = expectedMetadata.get(check.check_id) ?? emptyMetadata;
     if (check.exhausted_resource !== expected.exhausted_resource) {
@@ -125,7 +183,7 @@ export function validateResourceExhaustionTaxonomy() {
       }
     }
     if (
-      check.exhausted_resource === null
+      check.exhausted_resources.length === 0
       && check.waf_vulnerability_ids.length === 0
       && check.non_ddos_threat_ids.length === 0
     ) {
@@ -137,6 +195,7 @@ export function validateResourceExhaustionTaxonomy() {
   }
 
   for (const threat of NON_DDOS_AVAILABILITY_THREATS) {
+    if (threat.evidence_tier !== 'E5') errors.push(`${threat.id}: non-DDoS threat evidence_tier must be E5`);
     for (const checkId of threat.check_ids ?? []) {
       if (!catalogIds.has(checkId)) {
         errors.push(`${threat.id}: unknown check_id ${checkId}`);
@@ -145,48 +204,139 @@ export function validateResourceExhaustionTaxonomy() {
   }
 
   for (const entry of ATTACK_VECTOR_REGISTRY) {
-    if (!entry.id || !entry.name || !entry.exhausted_resource || !entry.coverage_status || !entry.task_id) {
+    if (
+      !entry.id
+      || !entry.name
+      || !entry.exhausted_resource
+      || !entry.coverage_status
+      || !entry.evidence_tier
+      || !entry.domain
+      || !Array.isArray(entry.catalog_vector_ids)
+      || !entry.task_id
+    ) {
       errors.push(`attack entry missing required fields: ${entry.id ?? '(no id)'}`);
       continue;
     }
     if (!taskIds.has(entry.task_id) && !entry.task_id.startsWith('DET-00') && !entry.task_id.startsWith('SOC-')) {
       warnings.push(`${entry.id}: task_id ${entry.task_id} not in RESOURCE_EXHAUSTION_TASKS`);
     }
-    if (entry.coverage_status === 'pending' && entry.check_ids?.length) {
-      errors.push(`${entry.id}: pending entry must not list check_ids`);
-    }
-    if (entry.coverage_status !== 'pending' && (!entry.check_ids || entry.check_ids.length === 0)) {
-      errors.push(`${entry.id}: ${entry.coverage_status} entry must list at least one check_id`);
-    }
+    const mappedChecks = [];
     for (const checkId of entry.check_ids ?? []) {
       if (!catalogIds.has(checkId)) {
         errors.push(`${entry.id}: unknown check_id ${checkId}`);
-      } else if (!getCheckById(checkId)) {
-        errors.push(`${entry.id}: getCheckById failed for ${checkId}`);
+      } else {
+        const check = getCheckById(checkId);
+        if (!check) errors.push(`${entry.id}: getCheckById failed for ${checkId}`);
+        else mappedChecks.push(check);
       }
     }
+
+    if (!(entry.coverage_status in COVERAGE_STATUS_SEMANTICS)) {
+      errors.push(`${entry.id}: unknown coverage_status ${entry.coverage_status}`);
+      continue;
+    }
+    const expectedTier = mappedChecks.reduce((best, check) => {
+      const tier = evidenceTierForCheck(check);
+      const priority = { E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 };
+      return priority[tier] > priority[best] ? tier : best;
+    }, 'E0');
+    if (entry.evidence_tier !== expectedTier) {
+      errors.push(`${entry.id}: evidence_tier does not match best mapped check tier`);
+    }
+    const expectedStatus = expectedTier === 'E3'
+      ? 'implemented'
+      : expectedTier === 'E1' || expectedTier === 'E2'
+        ? 'partial'
+        : expectedTier === 'E4'
+          ? 'soc_only'
+          : 'pending';
+    if (entry.coverage_status !== expectedStatus) {
+      errors.push(`${entry.id}: coverage_status does not match evidence_tier ${entry.evidence_tier}`);
+    }
   }
+
+  for (const entry of WAF_VULNERABILITY_REGISTRY) {
+    if (
+      entry.domain !== 'A7'
+      || !familyIds.has(entry.exhausted_resource)
+      || !Array.isArray(entry.catalog_vector_ids)
+      || !entry.evidence_tier
+      || !entry.coverage_status
+    ) {
+      errors.push(`${entry.id}: incomplete derived WAF taxonomy metadata`);
+    }
+  }
+
+  const domainIds = new Set(ATTACK_SURFACE_DOMAINS.map((domain) => domain.id));
+  for (const entry of ATTACK_VECTOR_REGISTRY) {
+    if (!domainIds.has(entry.domain)) errors.push(`${entry.id}: unknown attack-surface domain ${entry.domain}`);
+  }
+  errors.push(...validateDeclaredProbeKinds(CHECK_CATALOG));
 
   const summary = summarizeCoverage();
   const pendingEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'pending');
   const implementedEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'implemented');
-  if (pendingEntries.length > 0) {
-    errors.push(`pending attack vectors remain: ${pendingEntries.map((entry) => entry.id).join(', ')}`);
+  const externalCatalogIds = readExternalCatalogIds();
+  if (externalCatalogIds.length !== 721) {
+    errors.push(`external catalog row count must be 721, found ${externalCatalogIds.length}`);
+  }
+  const registryEntries = [
+    ...ATTACK_VECTOR_REGISTRY,
+    ...WAF_VULNERABILITY_REGISTRY,
+    ...NON_DDOS_AVAILABILITY_THREATS,
+  ];
+  const claimsByCatalogId = new Map();
+  for (const entry of registryEntries) {
+    for (const catalogId of entry.catalog_vector_ids ?? []) {
+      if (!/^(NET|AMP|APP|WAF|EVA)-\d{3}$/.test(catalogId)) {
+        errors.push(`${entry.id}: invalid catalog_vector_id ${catalogId}`);
+      }
+      const claims = claimsByCatalogId.get(catalogId) ?? [];
+      claims.push(entry.id);
+      claimsByCatalogId.set(catalogId, claims);
+    }
+  }
+  for (const [catalogId, claims] of claimsByCatalogId) {
+    if (claims.length > 1) errors.push(`${catalogId}: duplicate registry claims ${claims.join(', ')}`);
+  }
+  const outOfScopeIds = new Set(OUT_OF_SCOPE_VECTORS.flatMap((entry) => entry.catalog_vector_ids));
+  const allowedOutOfScopeReasons = new Set([
+    'requires_l2_adjacency',
+    'requires_rf_proximity',
+    'requires_mobile_core_interface',
+    'requires_routing_peer_session',
+  ]);
+  for (const entry of OUT_OF_SCOPE_VECTORS) {
+    if (!allowedOutOfScopeReasons.has(entry.reason) || !['A1b', 'A1c', 'A1d'].includes(entry.domain)) {
+      errors.push(`invalid out-of-scope vector declaration: ${JSON.stringify(entry)}`);
+    }
+  }
+  const catalogUnclaimedIds = externalCatalogIds.filter((catalogId) => (
+    !claimsByCatalogId.has(catalogId) && !outOfScopeIds.has(catalogId)
+  ));
+  if (catalogUnclaimedIds.length > 0) {
+    warnings.push(`unclaimed catalog vectors (${catalogUnclaimedIds.length}): ${catalogUnclaimedIds.join(', ')}`);
   }
 
-  const ddosCatalogChecks = CHECK_CATALOG.filter((check) => check.exhausted_resource != null);
+  const scoredFamilyIds = new Set(
+    EXHAUSTED_RESOURCE_FAMILIES
+      .filter((family) => family.scored_for_ddos_readiness)
+      .map((family) => family.id),
+  );
+  const checkHasDdosFamily = (check) => check.exhausted_resources.some((familyId) => scoredFamilyIds.has(familyId));
+  const ddosCatalogChecks = CHECK_CATALOG.filter(checkHasDdosFamily);
   const nonDdosOnlyChecks = CHECK_CATALOG.filter((check) => (
-    check.exhausted_resource == null
+    !checkHasDdosFamily(check)
     && check.non_ddos_threat_ids.length > 0
     && check.waf_vulnerability_ids.length === 0
   ));
   const wafOnlyChecks = CHECK_CATALOG.filter((check) => (
-    check.exhausted_resource == null
+    !checkHasDdosFamily(check)
     && check.waf_vulnerability_ids.length > 0
     && check.non_ddos_threat_ids.length === 0
   ));
   const mixedUnscoredChecks = CHECK_CATALOG.filter((check) => (
-    check.exhausted_resource == null
+    !checkHasDdosFamily(check)
     && check.waf_vulnerability_ids.length > 0
     && check.non_ddos_threat_ids.length > 0
   ));
@@ -229,14 +379,18 @@ export function validateResourceExhaustionTaxonomy() {
     })),
     non_ddos_threats: NON_DDOS_AVAILABILITY_THREATS.length,
     waf_vulnerability_entries: WAF_VULNERABILITY_REGISTRY.length,
+    catalog_unclaimed_count: catalogUnclaimedIds.length,
+    catalog_unclaimed_ids: catalogUnclaimedIds,
     catalog_metadata: {
       checks_with_ddos_family: ddosCatalogChecks.length,
       checks_non_ddos_only: nonDdosOnlyChecks.length,
       checks_waf_only: wafOnlyChecks.length,
       checks_mixed_unscored: mixedUnscoredChecks.length,
       classified_total: classifiedCatalogCount,
-      by_exhausted_resource: CHECK_CATALOG.reduce((acc, c) => {
-        if (c.exhausted_resource != null) acc[c.exhausted_resource] = (acc[c.exhausted_resource] ?? 0) + 1;
+      by_exhausted_resource: CHECK_CATALOG.reduce((acc, check) => {
+        for (const familyId of check.exhausted_resources) {
+          acc[familyId] = (acc[familyId] ?? 0) + 1;
+        }
         return acc;
       }, {}),
     },

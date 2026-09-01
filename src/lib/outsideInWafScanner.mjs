@@ -20,6 +20,11 @@ import {
 const MAX_BODY_READ_BYTES = 8192;
 const BLOCK_STATUSES = new Set([401, 403, 406, 429, 503]);
 const CHALLENGE_HEADERS = ['cf-mitigated', 'x-waf-block', 'x-bot-challenge', 'x-sucuri-block'];
+const CLASS_MARKER_FAMILIES = Object.freeze({
+  sqli: 'sqli_marker',
+  xss: 'xss_marker',
+  path_traversal: 'path_traversal_marker',
+});
 
 export const BENIGN_CLASS_MARKERS = Object.freeze({
   xss: '<astranull-xss-probe/>',
@@ -52,7 +57,23 @@ export const OUTSIDE_IN_SCAN_PHASES = Object.freeze([
   'origin_bypass',
 ]);
 
-export const OUTSIDE_IN_SCAN_DEFAULT_BUDGET = 10;
+export const OUTSIDE_IN_SCAN_DEFAULT_BUDGET = 13;
+
+const OUTSIDE_IN_PHASE_RETENTION_PRIORITY = Object.freeze([
+  'baseline',
+  'path_traversal_marker',
+  'sqli_marker',
+  'xss_marker',
+  'combined_marker',
+  'origin_bypass',
+  'content_type_confusion',
+  'multipart_confusion',
+  'sqli_case_marker',
+  'sqli_comment_marker',
+  'sqli_encoded_marker',
+  'xss_encoded_marker',
+  'no_user_agent',
+]);
 
 const DEFAULT_BROWSER_HEADERS = Object.freeze({
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -307,10 +328,16 @@ export function buildOutsideInPostureReport({
   evasionBypassSuspected = false,
   domXssValidation = 'agent_required',
   edgeSignature = null,
+  coverageComplete,
 } = {}) {
   const anyMarkerAllowed = markerResults.some((m) => m.allowed === true);
-  const anyMarkerBlocked = markerResults.some((m) => m.blocked === true);
-  const probeValidationPassed = markerResults.length > 0 && anyMarkerBlocked && !anyMarkerAllowed;
+  const classMarkerResults = Object.values(CLASS_MARKER_FAMILIES).map(
+    (family) => markerResults.find((row) => row.family === family && row.variant === 'plain'),
+  );
+  const classCoverageComplete = classMarkerResults.every(Boolean);
+  const probeValidationPassed = classCoverageComplete
+    && classMarkerResults.every((marker) => marker.blocked === true)
+    && !anyMarkerAllowed;
   const validationFailed = markerResults.length > 0 && (anyMarkerAllowed || evasionBypassSuspected);
 
   let validationPassed = probeValidationPassed && !evasionBypassSuspected;
@@ -364,6 +391,15 @@ export function buildOutsideInPostureReport({
   const corpusDetected = corpusWafPresent || edgeSignature?.cdn_detected === true;
   const wafConfidence = best?.confidence
     ?? (edgeBest ? Math.max(edgeBest.confidence, genericWafDetected ? 0.45 : 0) : (genericWafDetected ? 0.45 : 0));
+  const class_posture = Object.fromEntries(Object.entries(CLASS_MARKER_FAMILIES).map(([className, family]) => {
+    const observation = markerResults.find((row) => row.family === family && row.variant === 'plain');
+    const status = observation?.blocked === true
+      ? 'protected'
+      : observation?.allowed === true
+        ? 'underprotected'
+        : 'unknown';
+    return [className, status];
+  }));
   return {
     posture_status,
     posture_label,
@@ -385,6 +421,8 @@ export function buildOutsideInPostureReport({
     evasion_bypass_suspected: evasionBypassSuspected,
     dom_xss_validation: domXssValidation,
     origin_bypass_confirmed: originBypassConfirmed,
+    ...(typeof coverageComplete === 'boolean' ? { coverage_complete: coverageComplete } : {}),
+    class_posture,
     marker_summary: {
       probes_sent: markerResults.length,
       blocked_count: markerResults.filter((m) => m.blocked).length,
@@ -661,30 +699,21 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
  * @param {{ hasDirectIp?: boolean }} options
  */
 export function buildOutsideInScanPlan(budget, { hasDirectIp = false } = {}) {
-  const ordered = [
-    { phase: 'baseline', method: 'GET' },
-    { phase: 'combined_marker', method: 'GET' },
-    { phase: 'path_traversal_marker', method: 'GET' },
-    { phase: 'sqli_marker', method: 'GET' },
-    { phase: 'sqli_encoded_marker', method: 'GET' },
-    { phase: 'sqli_case_marker', method: 'GET' },
-    { phase: 'sqli_comment_marker', method: 'GET' },
-    { phase: 'content_type_confusion', method: 'POST' },
-    { phase: 'multipart_confusion', method: 'POST' },
-    { phase: 'xss_marker', method: 'GET' },
-    { phase: 'xss_encoded_marker', method: 'GET' },
-    { phase: 'no_user_agent', method: 'GET' },
-  ];
-  if (hasDirectIp) ordered.push({ phase: 'origin_bypass', method: 'HEAD' });
-
-  if (hasDirectIp && budget >= 10) {
-    const reserve = ordered.filter((entry) => entry.phase !== 'no_user_agent' && entry.phase !== 'origin_bypass');
-    const picked = reserve.slice(0, budget - 1);
-    picked.push(ordered.find((entry) => entry.phase === 'origin_bypass'));
-    return picked.filter(Boolean);
-  }
-
-  return ordered.slice(0, budget);
+  const methods = new Map([
+    ['content_type_confusion', 'POST'],
+    ['multipart_confusion', 'POST'],
+    ['origin_bypass', 'HEAD'],
+  ]);
+  const availablePhases = OUTSIDE_IN_SCAN_PHASES.filter((phase) => hasDirectIp || phase !== 'origin_bypass');
+  const boundedBudget = Number.isInteger(budget) && budget > 0 ? budget : 0;
+  const retained = new Set(
+    OUTSIDE_IN_PHASE_RETENTION_PRIORITY
+      .filter((phase) => availablePhases.includes(phase))
+      .slice(0, boundedBudget),
+  );
+  return availablePhases
+    .filter((phase) => retained.has(phase))
+    .map((phase) => ({ phase, method: methods.get(phase) ?? 'GET' }));
 }
 
 /**
@@ -737,6 +766,10 @@ export async function runOutsideInWafScan(options = {}) {
   })();
   const plan = buildOutsideInScanPlan(budget, { hasDirectIp: Boolean(directIp && hostname) });
   const plannedPhases = new Set(plan.map((entry) => entry.phase));
+  const phasesPlanned = OUTSIDE_IN_SCAN_PHASES.filter(
+    (phase) => Boolean(directIp && hostname) || phase !== 'origin_bypass',
+  );
+  const phasesDropped = phasesPlanned.filter((phase) => !plannedPhases.has(phase));
 
   const [initialDnsHints, tlsHints] = await Promise.all([
     hostname ? resolveOutsideInDnsHints(hostname, deps) : Promise.resolve({ dns_chain: null }),
@@ -801,8 +834,12 @@ export async function runOutsideInWafScan(options = {}) {
     combined = await runGetPhase('combined_marker', buildUrl(url, { params: combinedParams }), { ...DEFAULT_BROWSER_HEADERS });
     if (combined) {
       const evalResult = isBlockedOrChallenged(combined, baseline);
-      recordMarkerResult(markerResults, { family: 'sqli_marker', variant: 'plain', ...evalResult, status_code: combined.status_code });
-      recordMarkerResult(markerResults, { family: 'xss_marker', variant: 'plain', ...evalResult, status_code: combined.status_code });
+      recordMarkerResult(markerResults, {
+        family: 'combined_marker',
+        variant: 'mixed_classes',
+        ...evalResult,
+        status_code: combined.status_code,
+      });
     }
   }
 
@@ -1036,6 +1073,9 @@ export async function runOutsideInWafScan(options = {}) {
 
   const wafDetected = Boolean(vendorClassification.best) || generic.detected || edgeSignature.waf_present;
   const evasionBypassSuspected = detectEvasionBypass(markerResults);
+  const phasesExecuted = phaseLog.map((entry) => entry.phase);
+  const coverageComplete = phasesDropped.length === 0
+    && plan.every((entry) => phasesExecuted.includes(entry.phase));
   const posture = buildOutsideInPostureReport({
     wafDetected,
     genericWafDetected: generic.detected,
@@ -1048,6 +1088,7 @@ export async function runOutsideInWafScan(options = {}) {
     evasionBypassSuspected,
     domXssValidation: options.domXssValidation ?? 'agent_required',
     edgeSignature,
+    coverageComplete,
   });
 
   const durationMs = Date.now() - started;
@@ -1064,6 +1105,10 @@ export async function runOutsideInWafScan(options = {}) {
     requests_sent: requestsSent,
     phases: phaseLog,
     scan_plan: plan.map((entry) => entry.phase),
+    phases_planned: phasesPlanned,
+    phases_executed: phasesExecuted,
+    phases_dropped: phasesDropped,
+    coverage_complete: coverageComplete,
     baseline_status_code: baseline?.status_code ?? 0,
     header_names: signalSource?.header_names ?? baseline?.header_names ?? [],
     cookie_names: signalSource?.cookie_names ?? baseline?.cookie_names ?? [],

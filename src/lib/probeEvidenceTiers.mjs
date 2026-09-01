@@ -1,0 +1,270 @@
+export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
+  'metadata_marker',
+  'not_run',
+  'http_head',
+  'tcp_connect',
+  'dns_resolve',
+  'dns_wire_query',
+  'udp_probe',
+  'quic_reachability',
+  'alert_webhook_ping',
+  'ownership_challenge',
+  'tls_session',
+  'http2_settings',
+  'websocket_upgrade_posture',
+]);
+
+const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
+
+export const EVIDENCE_TIERS = Object.freeze(['E0', 'E1', 'E2', 'E3', 'E4', 'E5']);
+
+export const EVIDENCE_TIER_LABELS = Object.freeze({
+  E0: 'Unmapped',
+  E1: 'Declared only',
+  E2: 'Transport only',
+  E3: 'Semantic safe',
+  E4: 'SOC governed',
+  E5: 'Monitor only',
+});
+
+export function evidenceTierForProbeKind(kind) {
+  if (kind === 'metadata_marker') return 'E1';
+  if (OBSERVATION_ONLY_PROBE_KIND_SET.has(kind)) return 'E2';
+  return 'E3';
+}
+
+export function evidenceTierForCheck(check) {
+  if (!check?.probe_profile) return 'E4';
+  return evidenceTierForProbeKind(check.probe_profile.kind);
+}
+
+const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
+  soc_gated: Object.freeze([
+    'high_scale.application.request_only',
+    'high_scale.degradation_recovery.request_only',
+    'high_scale.dns_high_query.request_only',
+    'high_scale.multi_vector.request_only',
+    'high_scale.volumetric.request_only',
+    'l3.connection_table_exhaustion.request_only',
+    'ops.kill_switch_drill.request_only',
+    'ops.provider_telemetry.request_only',
+    'ops.runbook_contact_validation.request_only',
+    'waf.offensive_combined.soc',
+    'waf.offensive_command_injection.soc',
+    'waf.offensive_ldap_injection.soc',
+    'waf.offensive_path_traversal.soc',
+    'waf.offensive_rce.soc',
+    'waf.offensive_sqli.soc',
+    'waf.offensive_ssti.soc',
+    'waf.offensive_xss.soc',
+  ]),
+  api_surface_scan: Object.freeze(['l7.api_surface_scan.safe']),
+  bot_challenge_probe: Object.freeze(['l7.bot_challenge_marker.safe']),
+  cache_abuse_probe: Object.freeze(['l7.cache_busting.safe']),
+  cors_posture_probe: Object.freeze(['l7.cors_posture.safe']),
+  dns_axfr_leak: Object.freeze(['dns.zone_transfer_exposure.safe']),
+  dns_failover_posture: Object.freeze(['dns.secondary_failover.safe']),
+  dns_open_recursion: Object.freeze(['dns.open_recursion_behavior.safe']),
+  dns_wire_query: Object.freeze([
+    'amp.authoritative_resolver_exposure.safe',
+    'amp.dns_any_txt_exposure.safe',
+    'dns.amplification_exposure.safe',
+    'dns.authoritative_response.safe',
+    'dns.garbage_flood.readiness',
+    'dns.nxns_attack.readiness',
+    'dns.random_prefix_nxdomain.safe',
+    'dns.tcp_fallback.readiness',
+  ]),
+  dnssec_posture: Object.freeze(['dns.dnssec_expensive_query.safe']),
+  graphql_posture_probe: Object.freeze([
+    'l7.graphql_batch_abuse.validation',
+    'l7.graphql_complexity.safe',
+  ]),
+  grpc_reflection_probe: Object.freeze(['protocol.grpc_reflection_stream.safe']),
+  header_size_probe: Object.freeze(['l7.header_size_boundary.safe']),
+  host_sni_bypass: Object.freeze([
+    'origin.direct_bypass.safe',
+    'origin.direct_reachability.safe',
+    'origin.host_sni_bypass.safe',
+    'waf.origin_bypass.safe',
+  ]),
+  http2_frame_probe: Object.freeze([
+    'l7.http2_continuation.readiness',
+    'l7.http2_made_you_reset.readiness',
+    'l7.http2_rapid_reset.validation',
+  ]),
+  http2_settings: Object.freeze([
+    'protocol.http2_rapid_reset_readiness.safe',
+    'protocol.http2_readiness.safe',
+    'protocol.http2_stream_concurrency.safe',
+  ]),
+  http3_control_probe: Object.freeze(['protocol.http3_control_stream.readiness']),
+  http_head: Object.freeze([
+    'l7.expensive_endpoint.safe',
+    'l7.password_reset.safe',
+    'l7.wordpress_xmlrpc.readiness',
+    'path.protected_canary.safe',
+  ]),
+  http_method_matrix: Object.freeze(['l7.http_method_restriction.safe']),
+  metadata_marker: Object.freeze([
+    'amp.smurf_broadcast_exposure.safe',
+    'dns.dnsbomb.readiness',
+    'dns.doh_dot_exposure.readiness',
+    'dns.domain_lockup.readiness',
+    'dns.laundering.readiness',
+    'dns.phantom_domain.readiness',
+    'dns.qname_minimization.readiness',
+    'dns.zone_walking.readiness',
+    'exploit.ip_options.posture',
+    'exploit.land_attack.posture',
+    'exploit.malformed_quic.posture',
+    'exploit.ping_of_death.posture',
+    'exploit.quic_migration.posture',
+    'exploit.teardrop.posture',
+    'l3.ack_flood.readiness',
+    'l3.fragmentation_flood.readiness',
+    'l3.gre_esp_flood.readiness',
+    'l3.icmp_flood.readiness',
+    'l3.ike_ipsec_negotiation.readiness',
+    'l3.ipv6_volumetric.readiness',
+    'l3.multicast_broadcast_storm.readiness',
+    'l3.nat_state_table.readiness',
+    'l3.out_of_state_tcp.readiness',
+    'l3.rst_flood.readiness',
+    'l3.sctp_exposure.readiness',
+    'l3.syn_ack_flood.readiness',
+    'l3.syn_flood.readiness',
+    'l7.batch_api_abuse.validation',
+    'l7.captcha_challenge_abuse.readiness',
+    'l7.checkout_abuse.validation',
+    'l7.conditional_revalidation.readiness',
+    'l7.connection_hoarding.readiness',
+    'l7.elasticsearch_abuse.readiness',
+    'l7.file_upload_abuse.readiness',
+    'l7.health_check_flood.readiness',
+    'l7.hpack_bomb.readiness',
+    'l7.http2_priority_abuse.readiness',
+    'l7.http2_push_promise.readiness',
+    'l7.http_pipelining.readiness',
+    'l7.http_post_flood.validation',
+    'l7.http_range_abuse.readiness',
+    'l7.json_xml_bomb.readiness',
+    'l7.large_body_post.readiness',
+    'l7.low_and_slow.readiness',
+    'l7.mqtt_broker_exposure.readiness',
+    'l7.otp_sms_cost.readiness',
+    'l7.qpack_bomb.readiness',
+    'l7.redos.readiness',
+    'l7.slow_post.readiness',
+    'l7.slow_read.readiness',
+    'l7.slowloris.readiness',
+    'l7.webhook_flood.readiness',
+    'ops.attack_alert_coverage.readiness',
+    'origin.cdn_bypass.readiness',
+    'origin.dns_hostname_bypass.readiness',
+    'pattern.adaptive_evasion.readiness',
+    'pattern.carpet_bombing.readiness',
+    'pattern.pulse_wave.readiness',
+    'pattern.ransom_ddos.readiness',
+    'pattern.rate_limit_evasion.readiness',
+    'pattern.residential_proxy.readiness',
+    'pattern.spoofed_source.readiness',
+    'protocol.sse_stream.readiness',
+    'protocol.websocket_message_rate.readiness',
+    'tls.handshake_rate.readiness',
+    'tls.zero_rtt.readiness',
+  ]),
+  ops_readiness: Object.freeze([
+    'ops.kill_switch_drill.safe',
+    'ops.runbook_contact_validation.safe',
+  ]),
+  origin_leak_scan: Object.freeze(['origin.leak_scan.safe']),
+  outside_in_waf_scan: Object.freeze(['waf.fingerprint.safe']),
+  port_scan_bounded: Object.freeze(['l3.firewall_exposure_scan.safe']),
+  quic_reachability: Object.freeze([
+    'protocol.http3_quic_exposure.safe',
+    'reflect.quic_reflection_exposure.safe',
+  ]),
+  rate_limit_sequence: Object.freeze([
+    'l7.api_quota_exhaustion.safe',
+    'l7.export_abuse.validation',
+    'l7.http_get_flood.validation',
+    'l7.login_abuse_flow.safe',
+    'l7.low_rate_rate_limit.safe',
+    'l7.oauth_token_abuse.validation',
+    'l7.search_abuse.validation',
+    'l7.signup_registration_abuse.validation',
+    'waf.low_rate_limit.safe',
+  ]),
+  reflection_service_probe: Object.freeze([
+    'amp.cldap_exposure.safe',
+    'amp.memcached_exposure.safe',
+    'amp.ntp_exposure.safe',
+    'reflect.chargen_qotd_exposure.safe',
+    'reflect.coap_iot_exposure.safe',
+    'reflect.dtls_sip_rdp_tftp_exposure.safe',
+    'reflect.ipmi_bmc_exposure.safe',
+    'reflect.jenkins_discovery_exposure.safe',
+    'reflect.legacy_device_discovery_exposure.safe',
+    'reflect.mdns_netbios_wsdiscovery_exposure.safe',
+    'reflect.mssql_resolver_exposure.safe',
+    'reflect.openvpn_wireguard_exposure.safe',
+    'reflect.portmap_service_exposure.safe',
+    'reflect.snmp_exposure.safe',
+    'reflect.ssdp_exposure.safe',
+    'reflect.stun_turn_exposure.safe',
+  ]),
+  slow_header_probe: Object.freeze(['tls.slow_header_body_timeout.safe']),
+  tcp_connect: Object.freeze([
+    'l3.basic_deny_rule.safe',
+    'l3.forbidden_tcp_port.safe',
+    'l3.ftp_connection_flood.readiness',
+    'l3.ipv6_reachability.safe',
+    'l3.smtp_connection_flood.readiness',
+    'l3.ssh_connection_flood.readiness',
+    'l3.tcp_connection_flood.readiness',
+    'l3.tcp_flag_anomaly.readiness',
+    'reflect.redis_direct_exposure.safe',
+    'reflect.tcp_middlebox_exposure.safe',
+  ]),
+  tls_audit: Object.freeze([
+    'tls.full_audit.safe',
+    'tls.ocsp_stapling.readiness',
+    'tls.profile_exposure.safe',
+  ]),
+  tls_session: Object.freeze([
+    'tls.idle_connection_timeout.safe',
+    'tls.renegotiation.readiness',
+  ]),
+  udp_probe: Object.freeze([
+    'l3.forbidden_udp_port.safe',
+    'l3.sip_voip_flood.readiness',
+  ]),
+  waf_enforcement_probe: Object.freeze([
+    'l7.waf_marker_rule.safe',
+    'waf.enforcement.safe',
+    'waf.marker_rule.safe',
+  ]),
+  websocket_upgrade_posture: Object.freeze(['protocol.websocket_connection_controls.safe']),
+});
+
+const TAXONOMY_PROBE_KIND_BY_CHECK_ID = new Map(
+  Object.entries(TAXONOMY_CHECK_IDS_BY_PROBE_KIND)
+    .flatMap(([kind, checkIds]) => checkIds.map((checkId) => [checkId, kind])),
+);
+
+const EVIDENCE_TIER_PRIORITY = Object.freeze({ E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 });
+
+export function evidenceTierForTaxonomyCheckId(checkId) {
+  const kind = TAXONOMY_PROBE_KIND_BY_CHECK_ID.get(checkId);
+  if (kind === 'soc_gated') return 'E4';
+  if (!kind) return 'E0';
+  return evidenceTierForProbeKind(kind);
+}
+
+export function evidenceTierForTaxonomyCheckIds(checkIds = []) {
+  return checkIds.reduce((best, checkId) => {
+    const candidate = evidenceTierForTaxonomyCheckId(checkId);
+    return EVIDENCE_TIER_PRIORITY[candidate] > EVIDENCE_TIER_PRIORITY[best] ? candidate : best;
+  }, 'E0');
+}

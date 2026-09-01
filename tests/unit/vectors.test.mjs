@@ -4,12 +4,15 @@ import {
   ALLOWED_PROBE_PROFILE_KINDS,
   CHECK_CATALOG,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
+  buildProbeProfile,
+  checkRequiresAdditionalInput,
   maxProbeRequestsForKind,
   WAF_SAFE_CHECK_IDS,
   getCheckById,
   isCustomerRunnable,
 } from '../../src/contracts/checks.mjs';
 import { EXHAUSTED_RESOURCE_FAMILIES } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
+import { evidenceTierForCheck } from '../../src/lib/readinessVerdicts.mjs';
 
 /** Maps docs/progress-detailed.md VEC-* rows to versioned catalog check_ids. */
 export const DETAILED_VECTOR_TRACKER = Object.freeze({
@@ -334,6 +337,106 @@ describe('vector catalog', () => {
     }
   });
 
+  it('validates and allowlists extended probe-profile fields', () => {
+    const reflection = buildProbeProfile({
+      kind: 'reflection_service_probe',
+      service_port: 1900,
+      payload_profile: 'ssdp_msearch',
+      expected_response_shape: 'amplifying_response',
+      unknown_field: 'drop-me',
+    });
+    assert.equal(reflection.service_port, 1900);
+    assert.equal(reflection.payload_profile, 'ssdp_msearch');
+    assert.equal(reflection.expected_response_shape, 'amplifying_response');
+    assert.equal(reflection.unknown_field, undefined);
+
+    const invalidReflection = buildProbeProfile({
+      kind: 'reflection_service_probe',
+      service_port: 65536,
+      payload_profile: 'not-a-profile',
+      expected_response_shape: 'large',
+    });
+    assert.equal(invalidReflection.service_port, undefined);
+    assert.equal(invalidReflection.payload_profile, undefined);
+    assert.equal(invalidReflection.expected_response_shape, undefined);
+
+    const http = buildProbeProfile({
+      kind: 'header_size_probe',
+      http_method: 'POST',
+      nonce_hash_only: true,
+      probe_path: '/declared',
+      oversize_header_bytes: 8192,
+      body: 'must-be-dropped',
+    });
+    assert.equal(http.http_method, 'POST');
+    assert.equal(http.nonce_hash_only, true);
+    assert.equal(http.probe_path, '/declared');
+    assert.equal(http.oversize_header_bytes, 8192);
+    assert.equal(http.body, undefined);
+
+    const invalidHttp = buildProbeProfile({
+      kind: 'header_size_probe',
+      http_method: 'CONNECT',
+      probe_path: '//invalid',
+      oversize_header_bytes: 16385,
+    });
+    assert.equal(invalidHttp.http_method, undefined);
+    assert.equal(invalidHttp.probe_path, undefined);
+    assert.equal(invalidHttp.oversize_header_bytes, undefined);
+
+    const methodPosture = buildProbeProfile({ kind: 'http_method_matrix', http_method: 'TRACE' });
+    assert.equal(methodPosture.http_method, undefined);
+
+    const dns = buildProbeProfile({ kind: 'dns_wire_query', dns_qtype: 'DNSKEY', dns_transport: 'auto' });
+    assert.equal(dns.dns_qtype, 'DNSKEY');
+    assert.equal(dns.dns_transport, 'auto');
+    const invalidDns = buildProbeProfile({ kind: 'dns_wire_query', dns_qtype: 'AXFR', dns_transport: 'https' });
+    assert.equal(invalidDns.dns_qtype, undefined);
+    assert.equal(invalidDns.dns_transport, undefined);
+  });
+
+  it('rejects POST probe profiles without an inert marker-only body', () => {
+    assert.throws(
+      () => buildProbeProfile({ kind: 'rate_limit_sequence', http_method: 'POST' }),
+      /nonce_hash_only/,
+    );
+  });
+
+  it('publishes the new per-kind request bounds above the unchanged global default', () => {
+    assert.deepEqual(
+      Object.fromEntries([
+        'reflection_service_probe', 'dns_wire_query', 'http_method_matrix',
+        'header_size_probe', 'slow_header_probe', 'http2_frame_probe',
+        'http3_control_probe', 'waf_inspection_limit_probe', 'outside_in_waf_scan',
+      ].map((kind) => [kind, maxProbeRequestsForKind(kind)])),
+      {
+        reflection_service_probe: 2,
+        dns_wire_query: 3,
+        http_method_matrix: 2,
+        header_size_probe: 2,
+        slow_header_probe: 1,
+        http2_frame_probe: 4,
+        http3_control_probe: 2,
+        waf_inspection_limit_probe: 6,
+        outside_in_waf_scan: 13,
+      },
+    );
+  });
+
+  it('marks customer-declared rate-limit paths as additional input', () => {
+    for (const checkId of [
+      'l7.search_abuse.validation',
+      'l7.export_abuse.validation',
+      'l7.oauth_token_abuse.validation',
+      'l7.signup_registration_abuse.validation',
+      'l7.login_abuse_flow.safe',
+      'l7.api_quota_exhaustion.safe',
+    ]) {
+      assert.equal(checkRequiresAdditionalInput(getCheckById(checkId)), true, checkId);
+    }
+    assert.equal(checkRequiresAdditionalInput(getCheckById('l7.http_get_flood.validation')), false);
+  });
+
   it('maps detailed tracker VEC-* rows to catalog check_ids (progress-detailed.md)', () => {
     for (const [vecId, checkIds] of Object.entries(DETAILED_VECTOR_TRACKER)) {
       for (const checkId of checkIds) {
@@ -390,10 +493,17 @@ describe('vector catalog', () => {
     const familyIds = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id));
     for (const check of CHECK_CATALOG) {
       assert.ok('exhausted_resource' in check, check.check_id);
+      assert.ok(Array.isArray(check.exhausted_resources), check.check_id);
+      assert.equal(check.exhausted_resource, check.exhausted_resources[0] ?? null, check.check_id);
       assert.ok(Array.isArray(check.attack_vector_ids), check.check_id);
       assert.ok(Array.isArray(check.delivery_patterns), check.check_id);
-      if (check.exhausted_resource !== null) {
-        assert.ok(familyIds.has(check.exhausted_resource), check.check_id);
+      const ddosFamilies = check.exhausted_resources.filter((familyId) => (
+        EXHAUSTED_RESOURCE_FAMILIES.find((family) => family.id === familyId)?.scored_for_ddos_readiness
+      ));
+      if (ddosFamilies.length > 0) {
+        for (const familyId of check.exhausted_resources) {
+          assert.ok(familyIds.has(familyId), `${check.check_id}:${familyId}`);
+        }
         assert.ok(check.attack_vector_ids.length > 0, check.check_id);
       } else {
         // null is only allowed for WAF-offensive or monitor-only operational checks
@@ -406,10 +516,28 @@ describe('vector catalog', () => {
     // Every DDoS family is represented in the catalog.
     for (const family of ['volumetric', 'packet_processing', 'state_exhaustion', 'application_l7', 'computational', 'memory_exhaustion', 'backend_exhaustion', 'dns_exhaustion', 'reflection', 'amplification', 'exploit_dos', 'delivery_pattern']) {
       assert.ok(
-        CHECK_CATALOG.some((c) => c.exhausted_resource === family),
+        CHECK_CATALOG.some((c) => c.exhausted_resources.includes(family)),
         `no catalog check maps to family ${family}`,
       );
     }
+    const graphql = getCheckById('l7.graphql_complexity.safe');
+    assert.deepEqual(graphql.exhausted_resources, ['computational', 'backend_exhaustion']);
+    assert.equal(graphql.exhausted_resource, 'computational');
+
+    for (const checkId of [
+      'dns.zone_transfer_exposure.safe',
+      'reflect.quic_reflection_exposure.safe',
+    ]) {
+      const check = getCheckById(checkId);
+      assert.equal(check.probe_profile.max_requests, 2, checkId);
+      assert.equal(maxProbeRequestsForKind(check.probe_profile.kind), 2, checkId);
+    }
+    assert.equal(getCheckById('protocol.http3_control_stream.readiness').probe_profile.max_requests, 2);
+
+    for (const check of CHECK_CATALOG) {
+      assert.equal(check.evidence_tier, evidenceTierForCheck(check), check.check_id);
+    }
+
     // Delivery-pattern checks expose their governed delivery_patterns labels.
     const carpet = getCheckById('pattern.carpet_bombing.readiness');
     assert.deepEqual(carpet.delivery_patterns, ['carpet_bombing']);

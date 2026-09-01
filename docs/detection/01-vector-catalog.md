@@ -2,29 +2,57 @@
 
 This catalog lists vectors AstraNull should understand for readiness validation. It is defensive: it defines validation intent, expected controls, safe evidence, and SOC-gated handling. It must not become a public unmanaged attack toolkit.
 
-## Vector families
+## Four-axis classification
 
-| Family | Examples | AstraNull validation style |
+The 721-row external catalog is classified on four independent axes. No single family label is used as a substitute for evidence quality or execution authority.
+
+### Axis A — attack-surface domain
+
+| ID | Domain | Outside-in reachability |
 |---|---|---|
-| Origin bypass | Direct IP, Host/SNI bypass, stale DNS, CDN bypass | Safe canary/direct-origin probes with agent proof. |
-| L3/L4 volumetric | UDP flood, TCP SYN/ACK/RST, ICMP, GRE, fragments | Safe low-rate reachability; high-scale only through SOC. |
-| Amplification/reflection exposure | DNS, NTP, SSDP, CLDAP, Memcached, Chargen exposure | Defensive exposure checks; do not generate reflection traffic. |
-| DNS DDoS | Query flood, random-prefix/water-torture, NXDOMAIN, resolver abuse | Safe DNS queries and logs; high-scale SOC only. |
-| L7 HTTP/S | GET/POST flood, cache busting, expensive endpoints, bot-like bursts | Low-rate marker/rate checks; high-scale SOC only. |
-| API resource exhaustion | Login/OTP/search/export/upload/GraphQL/batch abuse | Customer-declared endpoint checks and limit validation. |
-| TLS/connection exhaustion | Handshake cost, slow headers/body, connection hoarding | Safe timeout/config checks; high-scale SOC only. |
-| HTTP/2/HTTP/3 protocols | HTTP/2 Rapid Reset class, stream abuse, QUIC/UDP request flood | Protocol readiness and safe configured behavior checks. |
-| WebSocket/SSE | Connection hoarding, message-rate abuse | Low-count connection/timeout/limit checks. |
-| Control-plane exhaustion | Autoscaling cost, health-check failure, alert blind spots | Health/evidence checks and SOC runbooks. |
-| Operational readiness | Alerts, contacts, runbooks, kill switch, provider approvals | Workflow validation and reports. |
+| A1a | IP / Transport Packet Processing | Partial; some vectors need governed packet generation. |
+| A1b | LAN / Routing Control Plane | No; requires L2 adjacency or a peer session. |
+| A1c | Wireless / RF | No; requires RF proximity. |
+| A1d | Mobile / Telecom Signalling | No; requires a mobile-core interface. |
+| A2 | Reflection & Amplification Exposure | Yes, with bounded protocol-correct requests to declared services. |
+| A3 | DNS Service Exhaustion | Yes, with bounded DNS wire queries. |
+| A4a | HTTP / API Application Exhaustion | Yes. |
+| A4b | Non-HTTP Application Services | Yes, with service-specific clients. |
+| A5 | Protocol Machinery | Yes, with H2/H3/QUIC/WebSocket/gRPC/TLS-aware clients. |
+| A7 | Web Application Attack Classes | Yes for safe markers; offensive validation is SOC-governed. |
+| A8 | Evasion & Delivery Patterns | Cross-cutting modifiers over reachable surfaces. |
 
-## Check risk classification
+A6 remains reserved for a possible future Edge / Origin Topology & Placement domain.
 
-| Risk class | Description | Execution owner |
+### Axis B — exhausted resource
+
+The DDoS resource families are `volumetric`, `packet_processing`, `state_exhaustion`, `application_l7`, `computational`, `memory_exhaustion`, `backend_exhaustion`, `dns_exhaustion`, `reflection`, `amplification`, `exploit_dos`, and `delivery_pattern`. Web-application rows use the additional non-DDoS families `integrity_attack`, `access_control`, `data_exposure`, `automation_abuse`, and `ai_agentic`.
+
+### Axis C — evidence tier
+
+| Tier | Meaning |
+|---|---|
+| E0 | Unmapped: no implementation is mapped yet. |
+| E1 | Declared only: metadata or a customer declaration, not an observed protocol fact. |
+| E2 | Transport only: reachability, handshake, or similarly incomplete semantic evidence. |
+| E3 | Semantic safe: a bounded safe probe establishes the relevant protocol/application fact. |
+| E4 | SOC governed: evidence is available only through an approved SOC workflow. |
+| E5 | Monitor only: evidence comes from monitoring rather than an outside-in probe. |
+
+Tiers are derived at build time from the probe profile and are never hand-authored on registry entries. `pending` / E0 is a legitimate recorded state: it makes missing implementation visible without pretending a declaration or liveness check proves protection.
+
+### Axis D — execution class
+
+| Class | Meaning | Execution owner |
 |---|---|---|
-| Safe | Customer-runnable validation checks. | Customer can run. |
-| Controlled | Bounded repeated probes; explicit warning and caps. | Customer admin/engineer with permissions. |
-| SOC-gated | High-scale or disruptive potential. | AstraNull SOC only. |
+| `safe` | Bounded customer-runnable validation. | Authorized customer user. |
+| `soc_gated` | Potentially disruptive, high-scale, or offensive validation. | AstraNull SOC after approval and scheduling. |
+
+The current check catalog contains 158 `safe` and 17 `soc_gated` checks.
+
+### Catalog-ID cross-reference
+
+CSV identifiers (`NET-*`, `AMP-*`, `APP-*`, `WAF-*`, and `EVA-*`) are the canonical external keys. Every machine-readable registry entry lists its claimed rows in `catalog_vector_ids`; physically unreachable rows appear in `OUT_OF_SCOPE_VECTORS` with a reason code. This makes both catalog → AstraNull and AstraNull → catalog navigation deterministic, exposes the breadth of umbrella entries, and lets the validator reject unclaimed or duplicate IDs.
 
 ## Vector-to-evidence map
 
@@ -46,6 +74,15 @@ This catalog is defensive metadata: it must not be interpreted as a library of a
 ## Resource-exhaustion taxonomy
 
 DDoS attacks are also classified by **what resource they exhaust** (bandwidth, packet-processing, TCP state, DNS QPS, application RPS, etc.). See [Resource-Exhaustion Taxonomy](19-resource-exhaustion-taxonomy.md) and the machine-readable registry in `src/contracts/resourceExhaustionTaxonomy.mjs`. Validate coverage with `npm run vector:taxonomy:validate`.
+
+## How to read coverage numbers
+
+Catalog coverage and evidence coverage answer different questions:
+
+- **Catalog accounting: 721/721 rows (100%)** — 680 rows are claimed by a registry entry and 41 are explicitly out of outside-in scope; 0 are unclaimed and 0 are duplicated.
+- **Evidence coverage: 356/680 claimed rows (52.4%) have non-E0 evidence** — E1: 83, E2: 72, E3: 145, E4: 48, E5: 8. The other 324 claimed rows are honestly recorded as E0 / `pending`.
+
+Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the 2026-09-01 validator snapshot; see the [full vector coverage audit](22-vector-coverage-audit-2026-09-01.md) for methodology and gap analysis.
 
 ## Completion criteria
 

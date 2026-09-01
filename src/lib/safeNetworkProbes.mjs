@@ -8,6 +8,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import tls from 'node:tls';
 import { pinnedFetch, pinnedWebSocketUpgrade, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
+import { reflectorPayloadForProfile } from './reflectorPayloads.mjs';
 
 const SAFE_UDP_PAYLOAD_PREFIX = 'ASTRANULL:udp:';
 const SAFE_ALERT_PAYLOAD_TYPE = 'astranull_alert_workflow_ping';
@@ -72,7 +73,34 @@ function safeUdpPayload(job) {
   return Buffer.from(`${SAFE_UDP_PAYLOAD_PREFIX}${noncePart}`, 'utf8');
 }
 
+function udpResponseSizeClass(byteCount) {
+  if (byteCount === 0) return 'none';
+  if (byteCount <= 64) return 'tiny';
+  if (byteCount <= 512) return 'small';
+  if (byteCount <= 1200) return 'medium';
+  return 'large';
+}
+
+function canonicalIpAddress(value) {
+  const candidate = String(value ?? '').trim();
+  if (net.isIP(candidate) !== 6) return candidate;
+  try {
+    return new URL(`http://[${candidate}]/`).hostname.slice(1, -1).toLowerCase();
+  } catch {
+    return candidate.toLowerCase();
+  }
+}
+
+export function isExpectedUdpPeer(rinfo, host, port) {
+  return rinfo != null
+    && canonicalIpAddress(rinfo.address) === canonicalIpAddress(host)
+    && Number(rinfo.port) === port;
+}
+
 /**
+ * Send exactly one datagram and wait for at most one response from the pinned peer.
+ * The response payload is never returned or retained.
+ *
  * @param {import('node:dgram').Socket} socket
  * @param {Buffer} payload
  * @param {number} port
@@ -82,22 +110,232 @@ function safeUdpPayload(job) {
 function sendUdpDatagram(socket, payload, port, host, timeoutMs) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => {
+    let timer;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.removeListener?.('message', onMessage);
+      socket.removeListener?.('error', onError);
+      try {
+        socket.close();
+      } catch {
+        // A synchronous send failure can leave the socket unopened; it is still settled.
+      }
+    };
+    const settle = (value, error) => {
       if (settled) return;
       settled = true;
-      socket.close();
-      reject(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' }));
-    }, timeoutMs);
+      cleanup();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const onMessage = (message, rinfo) => {
+      if (!isExpectedUdpPeer(rinfo, host, port)) return;
+      const responseBytes = Buffer.isBuffer(message)
+        ? message.length
+        : Buffer.byteLength(message ?? '');
+      settle({
+        response_received: true,
+        response_bytes: responseBytes,
+        response_size_class: udpResponseSizeClass(responseBytes),
+      });
+    };
+    const onError = (error) => settle(null, error);
 
-    socket.send(payload, port, host, (err) => {
+    socket.on('message', onMessage);
+    socket.once('error', onError);
+    timer = setTimeout(() => settle({
+      response_received: false,
+      response_bytes: 0,
+      response_size_class: 'none',
+    }), Math.max(1, Number(timeoutMs) || 5000));
+
+    try {
+      socket.send(payload, port, host, (error) => {
+        if (error) settle(null, error);
+      });
+    } catch (error) {
+      settle(null, error);
+    }
+  });
+}
+
+function validNetworkPort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+function reflectionEndpoint(job, payloadProfile) {
+  const host = resolveHostForJob(job);
+  if (!host) return null;
+  const customerPort = validNetworkPort(job.target?.port)
+    ?? validNetworkPort(parseNetworkEndpoint(job)?.port);
+  const port = customerPort
+    ?? validNetworkPort(job.probe_profile?.service_port)
+    ?? validNetworkPort(payloadProfile.default_port);
+  return port == null ? null : { host, port };
+}
+
+function sendTcpPayload(connectFn, payload, endpoint, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer;
+    const settle = (value, error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      socket.close();
-      if (err) reject(err);
-      else resolve();
+      try {
+        socket.destroy();
+      } catch {
+        // The injected socket can fail synchronously before it is fully initialized.
+      }
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const socket = connectFn({ host: endpoint.host, port: endpoint.port }, () => {
+      try {
+        socket.write(payload, (error) => {
+          if (error) settle(null, error);
+        });
+      } catch (error) {
+        settle(null, error);
+      }
     });
+    socket.once('data', (chunk) => settle({
+      response_received: true,
+      response_bytes: Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk ?? ''),
+    }));
+    socket.once('end', () => settle({ response_received: false, response_bytes: 0 }));
+    socket.once('close', () => settle({ response_received: false, response_bytes: 0 }));
+    socket.once('error', (error) => settle(null, error));
+    socket.setTimeout?.(Math.max(1, timeoutMs), () => settle({
+      response_received: false,
+      response_bytes: 0,
+    }));
+    timer = setTimeout(() => settle({
+      response_received: false,
+      response_bytes: 0,
+    }), Math.max(1, timeoutMs));
   });
+}
+
+function reflectionFailure(job, metadata, externalResult, requestsSent, started) {
+  const durationMs = Date.now() - started;
+  return {
+    external_result: externalResult,
+    metadata: {
+      probe_kind: 'reflection_service_probe',
+      ...metadata,
+      duration_ms: durationMs,
+    },
+    requests_sent: requestsSent,
+    duration_ms: durationMs,
+  };
+}
+
+export async function probeReflectionService(job, deps = {}) {
+  const profileName = job.probe_profile?.payload_profile ?? 'generic_probe';
+  const payloadProfile = reflectorPayloadForProfile(profileName);
+  const endpoint = reflectionEndpoint(job, payloadProfile);
+  const started = Date.now();
+  if (!endpoint) {
+    return reflectionFailure(job, {
+      target_port: null,
+      payload_profile: payloadProfile.id,
+      request_bytes: 0,
+      response_received: false,
+      response_bytes: 0,
+      response_size_class: 'none',
+      amplification_ratio: null,
+      reflector_confirmed: false,
+      error_class: 'unsupported_target',
+    }, 'error', 0, started);
+  }
+
+  const timeoutMs = Math.max(1, Number(job.constraints?.timeout_ms) || 5000);
+  const maxRequests = Math.min(2, Math.max(1, Number(job.constraints?.max_requests) || 1));
+  const payload = payloadProfile.build({
+    nonceHash: job.nonce_hash ?? job.nonce,
+    queryName: job.target?.metadata?.query_name,
+  });
+  let requestsSent = 0;
+  const baseMetadata = {
+    target_port: endpoint.port,
+    payload_profile: payloadProfile.id,
+    request_bytes: payload.length,
+  };
+
+  try {
+    const pinned = await resolvePinnedDestination(endpoint.host, deps);
+    let response = { response_received: false, response_bytes: 0 };
+    if (payloadProfile.transport === 'tcp') {
+      deps.recordProbeLogicalAttempt?.('reflection_tcp');
+      requestsSent = 1;
+      response = await sendTcpPayload(
+        deps.connectFn ?? net.connect,
+        payload,
+        { host: pinned.address, port: endpoint.port },
+        timeoutMs,
+      );
+    } else {
+      const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
+      for (let attempt = 0; attempt < maxRequests; attempt += 1) {
+        const remainingMs = timeoutMs - (Date.now() - started);
+        if (remainingMs <= 0) break;
+        const attemptsRemaining = maxRequests - attempt;
+        const attemptTimeoutMs = Math.max(1, Math.floor(remainingMs / attemptsRemaining));
+        const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
+        requestsSent += 1;
+        response = await sendUdpDatagram(
+          socket,
+          payload,
+          endpoint.port,
+          pinned.address,
+          attemptTimeoutMs,
+        );
+        if (response.response_received) break;
+      }
+    }
+
+    const classification = payloadProfile.classify(
+      payload,
+      response.response_bytes,
+      response.response_received,
+    );
+    if (!response.response_received) {
+      return reflectionFailure(job, {
+        ...baseMetadata,
+        response_received: false,
+        response_bytes: 0,
+        ...classification,
+        error_class: 'no_reflection_response',
+      }, 'timeout', requestsSent, started);
+    }
+    return reflectionFailure(job, {
+      ...baseMetadata,
+      response_received: true,
+      response_bytes: response.response_bytes,
+      ...classification,
+    }, 'connected', requestsSent, started);
+  } catch (error) {
+    const code = error?.code ?? '';
+    const externalResult = requestsSent === 0
+      ? 'error'
+      : (code === 'ETIMEOUT'
+        ? 'timeout'
+        : (['EACCES', 'EPERM', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EDESTINATION'].includes(code)
+          ? 'blocked'
+          : 'error'));
+    return reflectionFailure(job, {
+      ...baseMetadata,
+      response_received: false,
+      response_bytes: 0,
+      response_size_class: 'none',
+      amplification_ratio: null,
+      reflector_confirmed: false,
+      error_class: code || 'reflection_probe_failed',
+    }, externalResult, requestsSent, started);
+  }
 }
 
 /**
@@ -127,15 +365,25 @@ export async function probeUdpDatagram(job, deps = {}) {
     const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
     const payload = safeUdpPayload(job);
     requestsSent = 1;
-    await sendUdpDatagram(socket, payload, endpoint.port, pinned.address, timeoutMs);
+    const response = await sendUdpDatagram(
+      socket,
+      payload,
+      endpoint.port,
+      pinned.address,
+      timeoutMs,
+    );
     const durationMs = Date.now() - started;
     return {
-      external_result: 'connected',
+      external_result: response.response_received ? 'connected' : 'timeout',
       metadata: withProfileKind(job, {
         probe_kind: 'udp_probe',
+        ...(!response.response_received ? { error_class: 'no_udp_response' } : {}),
         duration_ms: durationMs,
         target_port: endpoint.port,
         datagram_bytes: payload.length,
+        response_received: response.response_received,
+        response_bytes: response.response_bytes,
+        response_size_class: response.response_size_class,
       }),
       requests_sent: requestsSent,
       duration_ms: durationMs,
@@ -145,7 +393,7 @@ export async function probeUdpDatagram(job, deps = {}) {
     const code = err?.code ?? '';
     if (code === 'ETIMEOUT') {
       return {
-        external_result: 'timeout',
+        external_result: requestsSent > 0 ? 'timeout' : 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'udp_probe',
           error_class: 'timeout',
@@ -165,7 +413,7 @@ export async function probeUdpDatagram(job, deps = {}) {
       || code === 'EDESTINATION'
     ) {
       return {
-        external_result: 'blocked',
+        external_result: requestsSent > 0 ? 'blocked' : 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'udp_probe',
           error_class: code,
@@ -215,7 +463,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
   const code = err?.code ?? '';
   if (code === 'ETIMEOUT') {
     return {
-      external_result: 'timeout',
+      external_result: requestsSent > 0 ? 'timeout' : 'error',
       metadata: withProfileKind(job, {
         probe_kind: probeKind,
         error_class: 'timeout',
@@ -227,7 +475,7 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
   }
   if (TLS_BLOCKED_CODES.has(code) || code === 'EDESTINATION') {
     return {
-      external_result: 'blocked',
+      external_result: requestsSent > 0 ? 'blocked' : 'error',
       metadata: withProfileKind(job, {
         probe_kind: probeKind,
         error_class: code,
@@ -505,6 +753,7 @@ export async function probeQuicReachability(job, deps = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      deps.recordProbeLogicalAttempt?.('http');
       requestsSent += 1;
       const res = await fetchFn(httpUrl, {
         method: 'HEAD',
@@ -517,20 +766,53 @@ export async function probeQuicReachability(job, deps = {}) {
     }
 
     const quicPort = altSvc.quic_port ?? 443;
+    const remainingMs = timeoutMs - (Date.now() - started);
+    if (remainingMs <= 0) {
+      const durationMs = Date.now() - started;
+      return {
+        external_result: 'timeout',
+        metadata: withProfileKind(job, {
+          probe_kind: 'quic_reachability',
+          error_class: 'deadline_elapsed_before_udp',
+          duration_ms: durationMs,
+          alt_svc_present: altSvc.alt_svc_present,
+          quic_port: quicPort,
+          udp_response_received: false,
+          udp_response_bytes: 0,
+          udp_response_size_class: 'none',
+        }),
+        requests_sent: requestsSent,
+        duration_ms: durationMs,
+      };
+    }
+
     const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
-    const payload = safeUdpPayload(job);
+    const payload = reflectorPayloadForProfile('quic_initial').build({
+      nonceHash: job.nonce_hash ?? job.nonce,
+    });
+    deps.recordProbeLogicalAttempt?.('udp_datagram');
     requestsSent += 1;
-    await sendUdpDatagram(socket, payload, quicPort, pinned.address, timeoutMs);
+    const response = await sendUdpDatagram(
+      socket,
+      payload,
+      quicPort,
+      pinned.address,
+      remainingMs,
+    );
 
     const durationMs = Date.now() - started;
     return {
-      external_result: 'connected',
+      external_result: response.response_received ? 'connected' : 'timeout',
       metadata: withProfileKind(job, {
         probe_kind: 'quic_reachability',
+        ...(!response.response_received ? { error_class: 'no_udp_response' } : {}),
         duration_ms: durationMs,
         alt_svc_present: altSvc.alt_svc_present,
         quic_port: quicPort,
         udp_datagram_bytes: payload.length,
+        udp_response_received: response.response_received,
+        udp_response_bytes: response.response_bytes,
+        udp_response_size_class: response.response_size_class,
       }),
       requests_sent: requestsSent,
       duration_ms: durationMs,
@@ -540,7 +822,7 @@ export async function probeQuicReachability(job, deps = {}) {
     const code = err?.name === 'AbortError' ? 'ETIMEOUT' : (err?.code ?? '');
     if (code === 'ETIMEOUT') {
       return {
-        external_result: 'timeout',
+        external_result: requestsSent > 0 ? 'timeout' : 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'quic_reachability',
           error_class: 'timeout',
@@ -554,7 +836,7 @@ export async function probeQuicReachability(job, deps = {}) {
     }
     if (['ENOTFOUND', 'EDESTINATION', 'ECONNREFUSED', 'EHOSTUNREACH'].includes(code)) {
       return {
-        external_result: 'blocked',
+        external_result: requestsSent > 0 ? 'blocked' : 'error',
         metadata: withProfileKind(job, {
           probe_kind: 'quic_reachability',
           error_class: code,
@@ -650,7 +932,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
     pinned = await resolvePinnedDestination(webhookHostname, deps);
   } catch (error) {
     return {
-      external_result: 'blocked',
+      external_result: 'error',
       metadata: withProfileKind(job, {
         probe_kind: 'alert_webhook_ping',
         error_class: 'webhook_host_not_routable',

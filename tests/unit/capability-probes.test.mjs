@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import { isLiveCapabilityProbeAuthorized } from '../../src/lib/capabilityProbeAuth.mjs';
@@ -12,6 +13,7 @@ import {
 } from '../../src/lib/dnsTcpWire.mjs';
 import {
   BOUNDED_SUBDOMAIN_PREFIXES,
+  CAPABILITY_PROBE_DISPATCH,
   probeApiSurfaceScan,
   probeAxfrLeak,
   probeBotChallenge,
@@ -21,16 +23,22 @@ import {
   probeDnssecPosture,
   probeGraphqlPosture,
   probeHostSniBypass,
+  probeHeaderSizeBoundary,
+  probeHttp2FrameBehavior,
+  probeHttp3ControlStream,
+  probeHttpMethodMatrix,
   probeOpenRecursion,
   probeOriginLeakScan,
   probePortScanBounded,
   probeRateLimitSequence,
+  probeSlowHeaderTimeout,
   probeTlsAudit,
   probeWafEnforcement,
   probeOutsideInWafScan,
   executeCapabilityProbe,
 } from '../../src/lib/capabilityProbes.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
+import { BENIGN_CLASS_MARKERS } from '../../src/lib/outsideInWafScanner.mjs';
 
 function job(overrides = {}) {
   return {
@@ -38,6 +46,23 @@ function job(overrides = {}) {
     probe_profile: { kind: 'origin_leak_scan' },
     target: { kind: 'fqdn', value: 'shop.example.test' },
     ...overrides,
+  };
+}
+
+function httpResponse(status, headers = {}, body = '') {
+  const normalized = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  const bytes = new TextEncoder().encode(body);
+  return {
+    status,
+    headers: { get: (name) => normalized[String(name).toLowerCase()] ?? null },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
   };
 }
 
@@ -53,6 +78,27 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.requests_sent, 4);
     assert.equal(outcome.metadata.subdomains_scanned.length, 1);
     assert.ok(outcome.metadata.subdomains_scanned.length < BOUNDED_SUBDOMAIN_PREFIXES.length);
+  });
+
+  it('origin leak max_requests=1 fails before apex A, apex AAAA, or edge HEAD', async () => {
+    const operations = [];
+    const outcome = await probeOriginLeakScan(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      probe_profile: { kind: 'origin_leak_scan', max_requests: 1 },
+    }), {
+      resolve4Fn: async () => { operations.push('A'); return []; },
+      resolve6Fn: async () => { operations.push('AAAA'); return []; },
+      fetchFn: async () => {
+        operations.push('HEAD');
+        return { status: 404, headers: { get: () => null } };
+      },
+    });
+
+    assert.deepEqual(operations, []);
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'signed_request_budget_below_mandatory_floor');
+    assert.equal(outcome.metadata.required_requests, 3);
+    assert.equal(outcome.requests_sent, 0);
   });
 
   it('origin leak scan reports leak signals from subdomain divergence', async () => {
@@ -222,7 +268,7 @@ describe('capability probes P0/P1', () => {
     const probedPorts = [];
     const outcome = await probePortScanBounded(
       job({
-        constraints: { timeout_ms: 1000 },
+        constraints: { timeout_ms: 5000 },
         target: { value: '10.0.0.5' },
         probe_profile: {
           kind: 'port_scan_bounded',
@@ -354,6 +400,341 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'blocked');
   });
 
+  it('D-04 rate-limit checks emit distinguishable declared endpoint evidence', async () => {
+    const urls = [];
+    const fetchFn = async (url) => {
+      urls.push(url);
+      return httpResponse(200);
+    };
+    const search = await probeRateLimitSequence(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/original' },
+      probe_profile: {
+        kind: 'rate_limit_sequence',
+        max_requests: 1,
+        probe_path: '/catalog/search',
+        http_method: 'GET',
+      },
+    }), { fetchFn });
+    const signup = await probeRateLimitSequence(job({
+      nonce_hash: 'sha256:signup-marker',
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/original' },
+      probe_profile: {
+        kind: 'rate_limit_sequence',
+        max_requests: 1,
+        probe_path: '/account/signup-probe',
+        http_method: 'POST',
+        nonce_hash_only: true,
+      },
+    }), { fetchFn });
+
+    assert.equal(search.metadata.probe_path, '/catalog/search');
+    assert.equal(search.metadata.http_method, 'GET');
+    assert.equal(signup.metadata.probe_path, '/account/signup-probe');
+    assert.equal(signup.metadata.http_method, 'POST');
+    assert.notEqual(search.metadata.probe_path, signup.metadata.probe_path);
+    assert.deepEqual(urls, [
+      'https://app.example.test/catalog/search',
+      'https://app.example.test/account/signup-probe',
+    ]);
+  });
+
+  it('rate-limit POST without nonce-hash-only marker fails closed before fetch', async () => {
+    let attempts = 0;
+    const outcome = await probeRateLimitSequence(job({
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: {
+        kind: 'rate_limit_sequence',
+        max_requests: 5,
+        probe_path: '/oauth/token-probe',
+        http_method: 'POST',
+      },
+    }), {
+      fetchFn: async () => { attempts += 1; return httpResponse(200); },
+    });
+
+    assert.equal(attempts, 0);
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(outcome.metadata.error_class, 'unsafe_post_profile');
+  });
+
+  it('HTTP method posture sends only HEAD/OPTIONS and reports advertised unsafe methods', async () => {
+    const calls = [];
+    const outcome = await probeHttpMethodMatrix(job({
+      nonce_hash: 'sha256:method-marker',
+      constraints: { max_requests: 2, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: { kind: 'http_method_matrix', max_requests: 2, probe_path: '/method-policy' },
+    }), {
+      fetchFn: async (_url, init) => {
+        calls.push(init.method);
+        return init.method === 'OPTIONS'
+          ? httpResponse(204, { allow: 'GET, HEAD, OPTIONS, TRACE' })
+          : httpResponse(200);
+      },
+    });
+
+    assert.deepEqual(calls, ['HEAD', 'OPTIONS']);
+    assert.equal(outcome.requests_sent, 2);
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.metadata.trace_advertised, true);
+    assert.equal(outcome.metadata.trace_enabled, null);
+    assert.deepEqual(outcome.metadata.unsafe_methods_advertised, ['TRACE']);
+    assert.equal(outcome.metadata.unsafe_methods_executed, false);
+  });
+
+  it('HTTP method posture stays inconclusive without an Allow policy and respects its cap', async () => {
+    let attempts = 0;
+    const complete = await probeHttpMethodMatrix(job({
+      constraints: { max_requests: 2, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: { kind: 'http_method_matrix', max_requests: 2 },
+    }), {
+      fetchFn: async () => { attempts += 1; return httpResponse(405); },
+    });
+    assert.deepEqual(complete.metadata.methods_blocked, ['HEAD', 'OPTIONS']);
+    assert.deepEqual(complete.metadata.methods_allowed, []);
+    assert.equal(complete.external_result, 'error');
+    assert.equal(attempts, 2);
+
+    attempts = 0;
+    const bounded = await probeHttpMethodMatrix(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: { kind: 'http_method_matrix', max_requests: 2 },
+    }), {
+      fetchFn: async () => { attempts += 1; return httpResponse(405); },
+    });
+    assert.equal(attempts, 1);
+    assert.equal(bounded.requests_sent, 1);
+  });
+
+  it('header-size boundary sends the configured header and recognizes 431 enforcement', async () => {
+    const headerLengths = [];
+    const outcome = await probeHeaderSizeBoundary(job({
+      constraints: { max_requests: 2, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: { kind: 'header_size_probe', max_requests: 2, oversize_header_bytes: 8_192 },
+    }), {
+      fetchFn: async (_url, init) => {
+        headerLengths.push(init.headers['x-astranull-boundary']?.length ?? 0);
+        return httpResponse(headerLengths.length === 1 ? 200 : 431);
+      },
+    });
+
+    assert.deepEqual(headerLengths, [0, 8_192]);
+    assert.equal(outcome.metadata.oversize_status, 431);
+    assert.equal(outcome.metadata.oversize_bytes, 8_192);
+    assert.equal(outcome.metadata.boundary_enforced, true);
+  });
+
+  it('slow-header probe opens one connection and always closes it after server close', async () => {
+    let connections = 0;
+    let destroyCount = 0;
+    const outcome = await probeSlowHeaderTimeout(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://203.0.113.20/slow' },
+      probe_profile: { kind: 'slow_header_probe', max_requests: 1, probe_path: '/slow' },
+    }), {
+      connectFn: () => {
+        connections += 1;
+        const socket = new EventEmitter();
+        socket.write = () => queueMicrotask(() => socket.emit('close'));
+        socket.destroy = () => { destroyCount += 1; };
+        queueMicrotask(() => socket.emit('secureConnect'));
+        return socket;
+      },
+    });
+
+    assert.equal(connections, 1);
+    assert.equal(destroyCount, 1);
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.metadata.connection_closed_by_server, true);
+    assert.equal(outcome.metadata.timeout_enforced, true);
+  });
+
+  it('slow-header probe closes its single connection when partial write throws', async () => {
+    let connections = 0;
+    let destroyCount = 0;
+    const outcome = await probeSlowHeaderTimeout(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://203.0.113.20/slow' },
+      probe_profile: { kind: 'slow_header_probe', max_requests: 1, probe_path: '/slow' },
+    }), {
+      connectFn: () => {
+        connections += 1;
+        const socket = new EventEmitter();
+        socket.write = () => { throw Object.assign(new Error('write failed'), { code: 'EWRITE' }); };
+        socket.destroy = () => { destroyCount += 1; };
+        queueMicrotask(() => socket.emit('secureConnect'));
+        return socket;
+      },
+    });
+
+    assert.equal(connections, 1);
+    assert.equal(destroyCount, 1);
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.metadata.error_class, 'EWRITE');
+  });
+
+  it('HTTP/2 frame behavior sends exactly one RST_STREAM', async () => {
+    let resetCount = 0;
+    const session = new EventEmitter();
+    session.alpnProtocol = 'h2';
+    session.ping = (_payload, callback) => queueMicrotask(() => callback(null, 2));
+    session.request = () => {
+      const stream = new EventEmitter();
+      stream.close = () => { resetCount += 1; };
+      return stream;
+    };
+    session.close = () => {};
+    session.destroy = () => {};
+    const outcomePromise = probeHttp2FrameBehavior(job({
+      constraints: { max_requests: 4, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://203.0.113.21/h2' },
+      probe_profile: { kind: 'http2_frame_probe', max_requests: 4, probe_path: '/h2' },
+    }), {
+      signedJobVerified: true,
+      http2ConnectFn: () => {
+        queueMicrotask(() => {
+          session.emit('connect');
+          session.emit('remoteSettings', {
+            maxConcurrentStreams: 100,
+            maxHeaderListSize: 16_384,
+            enablePush: false,
+          });
+        });
+        return session;
+      },
+    });
+    const outcome = await outcomePromise;
+
+    assert.equal(resetCount, 1);
+    assert.equal(outcome.requests_sent, 4);
+    assert.equal(outcome.metadata.reset_accepted, true);
+    assert.equal(outcome.metadata.continuation_bound_advertised, true);
+  });
+
+  it('HTTP/2 frame behavior reports a non-h2 target cleanly', async () => {
+    const session = new EventEmitter();
+    session.alpnProtocol = 'http/1.1';
+    session.close = () => {};
+    session.destroy = () => {};
+    const outcomePromise = probeHttp2FrameBehavior(job({
+      constraints: { max_requests: 4, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://203.0.113.22/' },
+      probe_profile: { kind: 'http2_frame_probe', max_requests: 4 },
+    }), {
+      signedJobVerified: true,
+      http2ConnectFn: () => {
+        queueMicrotask(() => session.emit('connect'));
+        return session;
+      },
+    });
+    const outcome = await outcomePromise;
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'http2_not_negotiated');
+    assert.equal(outcome.requests_sent, 1);
+  });
+
+  it('HTTP/3 control probe truthfully reuses exactly one HEAD and one bounded QUIC datagram', async () => {
+    const operations = [];
+    const methods = [];
+    const socketTypes = [];
+    const outcome = await probeHttp3ControlStream(job({
+      constraints: { max_requests: 2, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://203.0.113.25/h3' },
+      probe_profile: { kind: 'http3_control_probe', max_requests: 2 },
+    }), {
+      recordProbeLogicalAttempt: (operation) => operations.push(operation),
+      fetchFn: async (_url, init) => {
+        methods.push(init.method);
+        return httpResponse(200, { 'alt-svc': 'h3=":443"' });
+      },
+      createSocket: (type) => {
+        socketTypes.push(type);
+        const socket = new EventEmitter();
+        socket.send = (_payload, port, host, callback) => {
+          callback?.();
+          setImmediate(() => socket.emit('message', Buffer.from('quic'), {
+            address: host,
+            port,
+          }));
+        };
+        socket.close = () => {};
+        return socket;
+      },
+    });
+
+    assert.deepEqual(methods, ['HEAD']);
+    assert.deepEqual(socketTypes, ['udp4']);
+    assert.deepEqual(operations, ['http', 'udp_datagram']);
+    assert.equal(outcome.requests_sent, 2);
+    assert.equal(outcome.metadata.probe_kind, 'http3_control_probe');
+    assert.equal(outcome.metadata.capability_scope, 'quic_reachability_only');
+    assert.equal(outcome.metadata.control_stream_observed, false);
+    assert.equal(outcome.metadata.settings_observed, false);
+  });
+
+  it('WAF inspection-limit variants reuse only the benign SQLi marker and detect fail-open', async () => {
+    const calls = [];
+    const executor = CAPABILITY_PROBE_DISPATCH.waf_inspection_limit_probe;
+    const outcome = await executor(job({
+      constraints: { max_requests: 6, timeout_ms: 1000 },
+      target: { kind: 'url', value: 'https://waf.example.test/' },
+      probe_profile: { kind: 'waf_inspection_limit_probe', max_requests: 6, probe_path: '/inspect' },
+    }), {
+      fetchFn: async (url, init) => {
+        calls.push({ url, init });
+        return httpResponse(calls.length === 1 || calls.length > 2 ? 403 : 200);
+      },
+    });
+
+    assert.equal(calls.length, 5);
+    assert.ok(calls.length <= 6);
+    assert.equal(outcome.requests_sent, calls.length);
+    for (const { url, init } of calls) {
+      const wire = `${url} ${Object.values(init.headers ?? {}).join(' ')} ${init.body ?? ''}`;
+      assert.ok(wire.includes(BENIGN_CLASS_MARKERS.sqli) || decodeURIComponent(wire).includes(BENIGN_CLASS_MARKERS.sqli));
+      assert.equal(wire.includes(BENIGN_CLASS_MARKERS.xss), false);
+      assert.equal(wire.includes(BENIGN_CLASS_MARKERS.path_traversal), false);
+    }
+    assert.equal(outcome.metadata.variants.length, 4);
+    assert.equal(outcome.metadata.inspection_limit_bypass_suspected, true);
+    assert.equal(outcome.metadata.fail_open_signal, true);
+  });
+
+  it('sequential requests consume only the remaining whole-job timeout', async () => {
+    let attempts = 0;
+    const started = process.hrtime.bigint();
+    const outcome = await probeRateLimitSequence(
+      job({
+        constraints: { max_requests: 3, timeout_ms: 40 },
+        target: { value: 'https://login.example.test/signin' },
+        probe_profile: { kind: 'rate_limit_sequence', max_requests: 3, timeout_ms: 40 },
+      }),
+      {
+        // Deliberately ignores AbortSignal: boundedFetch must race the shared deadline itself.
+        fetchFn: async () => {
+          attempts += 1;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return { status: 200, headers: { get: () => null } };
+        },
+      },
+    );
+    const wallMs = Number((process.hrtime.bigint() - started + 999_999n) / 1_000_000n);
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(attempts, 2);
+    assert.equal(outcome.requests_sent, 2);
+    assert.ok(outcome.duration_ms >= 35, `duration ${outcome.duration_ms}ms`);
+    assert.ok(Math.abs(outcome.duration_ms - wallMs) <= 5, `${outcome.duration_ms} vs ${wallMs}`);
+    assert.ok(wallMs < 70, `fresh per-request timeouts overran to ${wallMs}ms`);
+  });
+
   it('waf enforcement flags monitor-only leak', async () => {
     const outcome = await probeWafEnforcement(
       job({
@@ -378,6 +759,83 @@ describe('capability probes P0/P1', () => {
     });
     assert.equal(outcome.metadata.dnssec_missing, true);
     assert.equal(outcome.external_result, 'connected');
+  });
+
+  it('DNS posture probes return error for transient resolver failures', async () => {
+    const transient = (code) => Object.assign(new Error(code), { code });
+
+    const dnssec = await probeDnssecPosture(job({
+      probe_profile: { kind: 'dnssec_posture', max_requests: 2 },
+    }), {
+      resolveFn: async () => { throw transient('ESERVFAIL'); },
+    });
+    assert.equal(dnssec.external_result, 'error');
+    assert.equal(dnssec.metadata.error_class, 'ESERVFAIL');
+    assert.equal(dnssec.requests_sent, 1);
+
+    const recursion = await probeOpenRecursion(job({
+      target: { kind: 'ip', value: '8.8.8.8' },
+      probe_profile: { kind: 'dns_open_recursion', max_requests: 1 },
+    }), {
+      resolve4ExternalFn: async () => { throw transient('EAI_AGAIN'); },
+    });
+    assert.equal(recursion.external_result, 'error');
+    assert.equal(recursion.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(recursion.requests_sent, 1);
+
+    const failover = await probeDnsFailoverPosture(job({
+      probe_profile: { kind: 'dns_failover_posture', max_requests: 3 },
+    }), {
+      resolveNsFn: async () => { throw transient('ETIMEOUT'); },
+    });
+    assert.equal(failover.external_result, 'error');
+    assert.equal(failover.metadata.error_class, 'ETIMEOUT');
+    assert.equal(failover.requests_sent, 1);
+  });
+
+  it('DNS failover preserves authoritative negatives but not transient secondary failures', async () => {
+    const authoritative = await probeDnsFailoverPosture(job({
+      target: { kind: 'fqdn', value: 'shop.example.test' },
+      probe_profile: {
+        kind: 'dns_failover_posture',
+        max_requests: 3,
+        secondary_nameservers: ['shop.example.test'],
+      },
+    }), {
+      resolveNsFn: async () => ['ns1.example.test', 'ns2.example.test'],
+      resolve4Fn: async () => { throw Object.assign(new Error('no data'), { code: 'ENODATA' }); },
+    });
+    assert.equal(authoritative.external_result, 'connected');
+    assert.equal(authoritative.metadata.secondary_results[0].reachable, false);
+
+    const transient = await probeDnsFailoverPosture(job({
+      target: { kind: 'fqdn', value: 'shop.example.test' },
+      probe_profile: {
+        kind: 'dns_failover_posture',
+        max_requests: 3,
+        secondary_nameservers: ['shop.example.test'],
+      },
+    }), {
+      resolveNsFn: async () => ['ns1.example.test', 'ns2.example.test'],
+      resolve4Fn: async () => { throw Object.assign(new Error('temporary'), { code: 'EAI_AGAIN' }); },
+    });
+    assert.equal(transient.external_result, 'error');
+    assert.equal(transient.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(transient.requests_sent, 2);
+  });
+
+  it('DNS operation-budget errors propagate instead of becoming posture', async () => {
+    await assert.rejects(
+      () => probeDnsFailoverPosture(job({
+        probe_profile: { kind: 'dns_failover_posture', max_requests: 3 },
+      }), {
+        recordProbeLogicalAttempt: () => {
+          throw Object.assign(new Error('budget'), { code: 'signed_operation_budget_exceeded' });
+        },
+        resolveNsFn: async () => ['ns1.example.test'],
+      }),
+      (error) => error?.code === 'signed_operation_budget_exceeded',
+    );
   });
 
   it('probeAxfrLeak accumulates split TCP response chunks before parsing', async () => {
@@ -480,6 +938,25 @@ describe('capability probes P0/P1', () => {
     assert.equal(JSON.stringify(touched).includes(victim), false);
   });
 
+  it('AXFR max_requests=1 fails before its NS lookup or TCP query', async () => {
+    let resolverCalls = 0;
+    let connectCalls = 0;
+    const outcome = await probeAxfrLeak(job({
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      probe_profile: { kind: 'dns_axfr_leak', max_requests: 1 },
+      target: { kind: 'fqdn', value: 'example.test' },
+    }), {
+      resolveNsFn: async () => { resolverCalls += 1; return ['ns1.example.test']; },
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+
+    assert.equal(outcome.metadata.error_class, 'signed_request_budget_below_mandatory_floor');
+    assert.equal(outcome.metadata.required_requests, 2);
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(resolverCalls, 0);
+    assert.equal(connectCalls, 0);
+  });
+
   it('axfr leak probe counts resolve-only when no nameservers', async () => {
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'missing.test' },
@@ -570,7 +1047,7 @@ describe('capability probes P0/P1', () => {
     }), {
       resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
     assert.equal(outcome.metadata.blocked_address, '10.0.0.53');
     assert.equal(outcome.requests_sent, 0);
@@ -585,7 +1062,7 @@ describe('capability probes P0/P1', () => {
     }), {
       resolve4ExternalFn: async () => { resolverCalls += 1; return []; },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
     assert.equal(outcome.metadata.reason, 'not_an_ip_literal');
     assert.equal(resolverCalls, 0);
@@ -601,7 +1078,7 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => [],
       connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
     assert.equal(outcome.metadata.blocked_address, '192.168.1.10');
     assert.equal(outcome.requests_sent, 0);
@@ -718,6 +1195,24 @@ describe('capability probes P0/P1', () => {
     });
     assert.equal(outcome.metadata.cache_key_weakness, true);
     assert.equal(outcome.metadata.observations[1].x_cache, 'HIT');
+  });
+
+  it('cache abuse probe counts attempted requests even when every fetch fails', async () => {
+    let attempts = 0;
+    const outcome = await probeCacheAbuse(job({
+      constraints: { max_requests: 3, timeout_ms: 1000 },
+      target: { value: 'https://cdn.example.test/asset' },
+      probe_profile: { kind: 'cache_abuse_probe', max_requests: 3 },
+    }), {
+      fetchFn: async () => {
+        attempts += 1;
+        throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
+      },
+    });
+
+    assert.equal(attempts, 3);
+    assert.equal(outcome.requests_sent, 3);
+    assert.deepEqual(outcome.metadata.observations, []);
   });
 
   it('open recursion uses only exact target for resolver and query despite corrupt profile fields', async () => {
@@ -859,7 +1354,7 @@ describe('capability probes P0/P1', () => {
     }));
     assert.equal(outcome.metadata.probe_kind, 'host_sni_bypass');
     assert.equal(outcome.metadata.error_class, 'live_probe_requires_signed_worker');
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.requests_sent, 0);
   });
 

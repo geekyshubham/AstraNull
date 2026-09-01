@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import {
   parseNetworkEndpoint,
@@ -25,6 +26,24 @@ function baseJob(overrides = {}) {
   };
 }
 
+function udpSocket({ respond = true, responseBytes = 12, responsePayload, onSend } = {}) {
+  const socket = new EventEmitter();
+  socket.closeCount = 0;
+  socket.send = (payload, port, host, callback) => {
+    onSend?.({ payload, port, host });
+    callback(null);
+    if (respond) {
+      queueMicrotask(() => socket.emit(
+        'message',
+        responsePayload ?? Buffer.alloc(responseBytes, 0x61),
+        { address: host, port },
+      ));
+    }
+  };
+  socket.close = () => { socket.closeCount += 1; };
+  return socket;
+}
+
 describe('safe network probes', () => {
   it('parses host:port and host+port target descriptors', () => {
     assert.deepEqual(parseNetworkEndpoint(baseJob()), { host: 'origin.test', port: 9999 });
@@ -46,22 +65,27 @@ describe('safe network probes', () => {
     assert.equal(resolveAlertWebhookUrl(job), 'https://hooks.example.test/alerts');
   });
 
-  it('probeUdpDatagram reports blocked without sending when A/AAAA are empty', async () => {
+  it('probeUdpDatagram reports error without sending when A/AAAA are empty', async () => {
     let sockets = 0;
     const outcome = await probeUdpDatagram(baseJob(), {
       resolve4Fn: async () => [],
       resolve6Fn: async () => [],
       createSocket: () => { sockets += 1; throw new Error('must not create socket'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.probe_kind, 'udp_probe');
     assert.equal(outcome.requests_sent, 0);
     assert.equal(sockets, 0);
   });
 
-  it('probeUdpDatagram sends only to the injected preflight literal', async () => {
+  it('probeUdpDatagram sends only to the injected preflight literal and retains response metadata only', async () => {
     let resolverCalls = 0;
     let sentHost = null;
+    const responsePayload = Buffer.from('SENSITIVE_UDP_RESPONSE_BODY', 'utf8');
+    const socket = udpSocket({
+      responsePayload,
+      onSend: ({ host }) => { sentHost = host; },
+    });
     const outcome = await probeUdpDatagram(baseJob(), {
       vettedHost: 'origin.test',
       vettedAddresses: ['203.0.113.20'],
@@ -69,22 +93,45 @@ describe('safe network probes', () => {
       resolve6Fn: async () => { resolverCalls += 1; return []; },
       createSocket: (type) => {
         assert.equal(type, 'udp4');
-        return {
-          send(_payload, _port, host, cb) {
-            sentHost = host;
-            cb(null);
-          },
-          close() {},
-        };
+        return socket;
       },
     });
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.datagram_bytes > 0, true);
+    assert.equal(outcome.metadata.response_received, true);
+    assert.equal(outcome.metadata.response_bytes, responsePayload.length);
+    assert.equal(outcome.metadata.response_size_class, 'tiny');
+    assert.equal(JSON.stringify(outcome.metadata).includes(responsePayload.toString('utf8')), false);
     assert.equal(sentHost, '203.0.113.20');
     assert.equal(resolverCalls, 0);
+    assert.equal(socket.closeCount, 1);
+    assert.equal(socket.listenerCount('message'), 0);
+    assert.equal(socket.listenerCount('error'), 0);
   });
 
-  it('probeQuicReachability collects Alt-Svc and UDP send metadata', async () => {
+  it('probeUdpDatagram classifies send success without a response as timeout and cleans up', async () => {
+    const socket = udpSocket({ respond: false });
+    const outcome = await probeUdpDatagram(baseJob({
+      constraints: { timeout_ms: 10, max_requests: 1 },
+      probe_profile: { kind: 'udp_probe', max_requests: 1, timeout_ms: 10 },
+    }), {
+      vettedHost: 'origin.test',
+      vettedAddresses: ['203.0.113.20'],
+      createSocket: () => socket,
+    });
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'no_udp_response');
+    assert.equal(outcome.metadata.response_received, false);
+    assert.equal(outcome.metadata.response_bytes, 0);
+    assert.equal(outcome.metadata.response_size_class, 'none');
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(socket.closeCount, 1);
+    assert.equal(socket.listenerCount('message'), 0);
+    assert.equal(socket.listenerCount('error'), 0);
+  });
+
+  it('probeQuicReachability collects Alt-Svc and pinned UDP response metadata', async () => {
     const outcome = await probeQuicReachability(
       baseJob({
         probe_profile: { kind: 'quic_reachability', max_requests: 2, timeout_ms: 1000 },
@@ -104,18 +151,17 @@ describe('safe network probes', () => {
         vettedAddresses: ['203.0.113.21'],
         resolve4Fn: async () => { throw new Error('resolver must not run'); },
         resolve6Fn: async () => { throw new Error('resolver must not run'); },
-        createSocket: () => ({
-          send(_payload, _port, host, cb) {
-            assert.equal(host, '203.0.113.21');
-            cb(null);
-          },
-          close() {},
+        createSocket: () => udpSocket({
+          responseBytes: 48,
+          onSend: ({ host }) => assert.equal(host, '203.0.113.21'),
         }),
       },
     );
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.alt_svc_present, true);
     assert.equal(outcome.metadata.quic_port, 443);
+    assert.equal(outcome.metadata.udp_response_received, true);
+    assert.equal(outcome.metadata.udp_response_bytes, 48);
     assert.equal(outcome.requests_sent, 2);
   });
 
@@ -173,27 +219,27 @@ describe('safe network probes', () => {
     assert.equal(fetchCalls, 0);
   });
 
-  it('probeAlertWebhookPing blocks a webhook host resolving to cloud metadata', async () => {
+  it('probeAlertWebhookPing errors before send for a webhook host resolving to cloud metadata', async () => {
     let fetchCalls = 0;
     const outcome = await probeAlertWebhookPing(webhookJob('https://evil.example.test/ping'), {
       resolve4Fn: async () => ['169.254.169.254'],
       resolve6Fn: async () => [],
       fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
     assert.equal(outcome.metadata.blocked_address, '169.254.169.254');
     assert.equal(fetchCalls, 0);
   });
 
-  it('probeAlertWebhookPing blocks a webhook host resolving to RFC1918 space', async () => {
+  it('probeAlertWebhookPing errors before send for a webhook host resolving to RFC1918 space', async () => {
     let fetchCalls = 0;
     const outcome = await probeAlertWebhookPing(webhookJob('https://internal.example.test/ping'), {
       resolve4Fn: async () => ['10.0.0.5'],
       resolve6Fn: async () => [],
       fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
     assert.equal(fetchCalls, 0);
   });
@@ -234,14 +280,14 @@ describe('safe network probes', () => {
     assert.equal(outcome.metadata.pinned_address, '203.0.113.20');
   });
 
-  it('probeAlertWebhookPing blocks a webhook host that resolves to nothing', async () => {
+  it('probeAlertWebhookPing errors before send when a webhook host resolves to nothing', async () => {
     let fetchCalls = 0;
     const outcome = await probeAlertWebhookPing(webhookJob('https://missing.example.test/ping'), {
       resolve4Fn: async () => [],
       resolve6Fn: async () => [],
       fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'webhook_host_not_routable');
     assert.equal(fetchCalls, 0);
   });

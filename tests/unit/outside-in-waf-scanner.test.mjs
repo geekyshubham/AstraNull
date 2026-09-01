@@ -80,10 +80,10 @@ function mockResponse(status, headers = {}) {
   });
 
 describe('outside-in WAF scanner', () => {
-  it('waf.fingerprint.safe maps to outside_in_waf_scan with 10-request budget', () => {
+  it('waf.fingerprint.safe maps to outside_in_waf_scan with 13-request budget', () => {
     const check = getCheckById('waf.fingerprint.safe');
     assert.equal(check.probe_profile.kind, 'outside_in_waf_scan');
-    assert.equal(check.probe_profile.max_requests, 10);
+    assert.equal(check.probe_profile.max_requests, 13);
     assert.equal(check.probe_profile.require_agent_for_protected, true);
     assert.equal(check.probe_profile.follow_redirects, false);
   });
@@ -173,18 +173,31 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.requests_sent, 6);
   });
 
-  it('buildOutsideInScanPlan prioritizes evasion phases within budget', () => {
+  it('buildOutsideInScanPlan preserves class markers before evasion phases within budget', () => {
     const plan = buildOutsideInScanPlan(6, { hasDirectIp: false });
     assert.deepEqual(plan.map((entry) => entry.phase), [
       'baseline',
       'combined_marker',
       'path_traversal_marker',
       'sqli_marker',
-      'sqli_encoded_marker',
-      'sqli_case_marker',
+      'xss_marker',
+      'content_type_confusion',
     ]);
-    const fullPlan = buildOutsideInScanPlan(10, { hasDirectIp: false });
-    assert.ok(fullPlan.some((entry) => entry.phase === 'multipart_confusion'));
+    assert.deepEqual(
+      ['sqli_marker', 'xss_marker', 'path_traversal_marker'].filter(
+        (phase) => !plan.some((entry) => entry.phase === phase),
+      ),
+      [],
+    );
+    assert.equal(plan.some((entry) => entry.phase === 'no_user_agent'), false);
+    assert.equal(plan.some((entry) => entry.phase === 'sqli_encoded_marker'), false);
+    assert.equal(plan.some((entry) => entry.phase === 'sqli_case_marker'), false);
+
+    const fullPlan = buildOutsideInScanPlan(13, { hasDirectIp: true });
+    assert.equal(fullPlan.length, 13);
+    for (const phase of ['xss_marker', 'xss_encoded_marker', 'no_user_agent', 'origin_bypass']) {
+      assert.ok(fullPlan.some((entry) => entry.phase === phase), phase);
+    }
   });
 
   it('detects generic WAF via status drift between baseline and marker probe', () => {
@@ -199,7 +212,7 @@ describe('outside-in WAF scanner', () => {
     const baseUrl = 'https://shop.example.test/';
     const outcome = await runOutsideInWafScan({
       url: baseUrl,
-      budget: 10,
+      budget: 13,
       timeoutMs: 1000,
       fetchFn: async (url, init) => {
         const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
@@ -225,6 +238,7 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.posture_status, 'edge_protected');
     assert.equal(outcome.probe_validation_passed, true);
     assert.equal(outcome.validation_passed, false);
+    assert.equal(outcome.coverage_complete, true);
     assert.ok(outcome.marker_probes.some((probe) => probe.family === 'sqli_encoded_marker'));
   });
 
@@ -232,7 +246,7 @@ describe('outside-in WAF scanner', () => {
     const baseUrl = 'https://shop.example.test/';
     const outcome = await runOutsideInWafScan({
       url: baseUrl,
-      budget: 8,
+      budget: 13,
       timeoutMs: 1000,
       agentCorroborated: true,
       fetchFn: async (url, init) => {
@@ -246,6 +260,52 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.posture_label, 'Protected');
     assert.equal(outcome.validation_passed, true);
     assert.equal(outcome.agent_corroborated, true);
+    assert.equal(outcome.coverage_complete, true);
+  });
+
+  it('reports protected class evidence while optional phase coverage is incomplete', async () => {
+    const baseUrl = 'https://shop.example.test/';
+    const outcome = await runOutsideInWafScan({
+      url: baseUrl,
+      budget: 6,
+      timeoutMs: 1000,
+      fetchFn: async (url, init) => {
+        const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
+        return isBaseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+      },
+    });
+
+    assert.equal(outcome.coverage_complete, false);
+    assert.ok(outcome.phases_dropped.includes('no_user_agent'));
+    assert.equal(outcome.posture_label, 'Edge protected · not internally validated');
+    assert.deepEqual(outcome.class_posture, {
+      sqli: 'protected',
+      xss: 'protected',
+      path_traversal: 'protected',
+    });
+  });
+
+  it('leaves an unrun class unknown and never reports the scan protected', async () => {
+    const baseUrl = 'https://shop.example.test/';
+    const outcome = await runOutsideInWafScan({
+      url: baseUrl,
+      budget: 3,
+      timeoutMs: 1000,
+      agentCorroborated: true,
+      fetchFn: async (url, init) => {
+        const isBaseline = url === baseUrl && init?.headers?.['User-Agent'] && init?.method !== 'POST';
+        return isBaseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+      },
+    });
+
+    assert.equal(outcome.coverage_complete, false);
+    assert.equal(outcome.class_posture.xss, 'unknown');
+    assert.equal(outcome.probe_validation_passed, false);
+    assert.equal(outcome.posture_label, 'Unknown');
   });
 
   it('flags evasion bypass when plain markers blocked but encoded allowed', async () => {
@@ -346,8 +406,8 @@ describe('outside-in WAF scanner', () => {
     const outcome = await probeOutsideInWafScan({
       check_id: 'waf.fingerprint.safe',
       nonce_hash: 'sha256:agent-proof',
-      constraints: { max_requests: 10, timeout_ms: 1000 },
-      probe_profile: { kind: 'outside_in_waf_scan' },
+      constraints: { max_requests: 13, timeout_ms: 1000 },
+      probe_profile: { kind: 'outside_in_waf_scan', max_requests: 13 },
       target: { kind: 'url', value: 'https://edge.example.test/' },
     }, {
       resolve4Fn: async () => ['203.0.113.10'],
@@ -368,6 +428,35 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.metadata.agent_corroborated, true);
     assert.equal(outcome.metadata.posture_label, 'Protected');
+  });
+
+  it('probeOutsideInWafScan preserves incomplete optional coverage after agent corroboration', async () => {
+    const outcome = await probeOutsideInWafScan({
+      check_id: 'waf.fingerprint.safe',
+      nonce_hash: 'sha256:agent-proof',
+      constraints: { max_requests: 6, timeout_ms: 1000 },
+      probe_profile: { kind: 'outside_in_waf_scan', max_requests: 6 },
+      target: { kind: 'url', value: 'https://edge.example.test/' },
+    }, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      tlsConnect: rejectedTlsSocket,
+      agentObservations: [{
+        nonce_hash: 'sha256:agent-proof',
+        metadata: { waf_marker: true, observed_action: 'block', waf_blocked: true },
+      }],
+      fetchFn: async (url, init) => {
+        const isBaseline = url === 'https://edge.example.test/' && init?.headers?.['User-Agent'] && init?.method !== 'POST';
+        return isBaseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+      },
+    });
+
+    assert.equal(outcome.metadata.agent_corroborated, true);
+    assert.equal(outcome.metadata.posture_label, 'Protected');
+    assert.equal(outcome.metadata.coverage_complete, false);
+    assert.ok(outcome.metadata.phases_dropped.includes('no_user_agent'));
   });
 
   it('probeOutsideInWafScan integrates with capability probe dispatch', async () => {

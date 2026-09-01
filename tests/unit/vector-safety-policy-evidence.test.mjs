@@ -104,6 +104,59 @@ describe('vector safety policy evidence', () => {
     assert.ok(result.missing_fields.includes('failure_handling'));
   });
 
+  it('enforces explicit safety rules for every new probe kind', () => {
+    const profiles = [
+      { kind: 'reflection_service_probe', max_requests: 2, timeout_ms: 5000, service_port: 1900, payload_profile: 'ssdp_msearch', expected_response_shape: 'amplifying_response' },
+      { kind: 'dns_wire_query', max_requests: 3, timeout_ms: 5000, dns_qtype: 'A', dns_transport: 'udp' },
+      { kind: 'http_method_matrix', max_requests: 2, timeout_ms: 5000 },
+      { kind: 'header_size_probe', max_requests: 2, timeout_ms: 5000, oversize_header_bytes: 8192 },
+      { kind: 'slow_header_probe', max_requests: 1, timeout_ms: 5000 },
+      { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 5000 },
+      { kind: 'http3_control_probe', max_requests: 2, timeout_ms: 5000 },
+      { kind: 'waf_inspection_limit_probe', max_requests: 6, timeout_ms: 5000 },
+    ];
+    for (const profile of profiles) {
+      const result = validateCheckVectorSafetyPolicy(minimalSafeCheck({ probe_profile: profile }));
+      assert.equal(result.ok, true, `${profile.kind}: ${JSON.stringify(result.invalid_fields)}`);
+    }
+  });
+
+  it('rejects raw bodies, non-inert POSTs, and unsafe reflection profiles', () => {
+    const rawBody = validateCheckVectorSafetyPolicy(minimalSafeCheck({
+      probe_profile: {
+        kind: 'header_size_probe',
+        max_requests: 2,
+        timeout_ms: 5000,
+        oversize_header_bytes: 8192,
+        body: 'raw',
+      },
+    }));
+    assert.ok(rawBody.invalid_fields.some((field) => field.reason === 'raw_payload_body_forbidden'));
+
+    const post = validateCheckVectorSafetyPolicy(minimalSafeCheck({
+      probe_profile: {
+        kind: 'header_size_probe',
+        max_requests: 2,
+        timeout_ms: 5000,
+        oversize_header_bytes: 8192,
+        http_method: 'POST',
+      },
+    }));
+    assert.ok(post.invalid_fields.some((field) => field.reason === 'POST_requires_inert_marker_body'));
+
+    const reflection = validateCheckVectorSafetyPolicy(minimalSafeCheck({
+      probe_profile: {
+        kind: 'reflection_service_probe',
+        max_requests: 2,
+        timeout_ms: 5000,
+        service_port: 1900,
+        payload_profile: 'ssdp_msearch',
+        expected_response_shape: 'service_banner',
+      },
+    }));
+    assert.ok(reflection.invalid_fields.some((field) => field.reason === 'reflection_probe_must_only_capture_response_ratio'));
+  });
+
   it('enforces SOC-gated entries as non-customer-runnable request markers', () => {
     for (const check of CHECK_CATALOG.filter((c) => c.risk_class === 'soc_gated')) {
       const result = validateCheckVectorSafetyPolicy(check);
