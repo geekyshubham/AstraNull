@@ -12,6 +12,7 @@ import {
   COVERAGE_STATUS_SEMANTICS,
   EXHAUSTED_RESOURCE_FAMILIES,
   FAMILY_BUILD_SPECS,
+  MONITOR_ONLY_VECTORS,
   NON_DDOS_AVAILABILITY_THREATS,
   OUT_OF_SCOPE_VECTORS,
   RESOURCE_EXHAUSTION_TASKS,
@@ -312,6 +313,55 @@ export function validateResourceExhaustionTaxonomy() {
       errors.push(`invalid out-of-scope vector declaration: ${JSON.stringify(entry)}`);
     }
   }
+  // Monitor-only annotation layer: passive detection over the OUT_OF_SCOPE_VECTORS.
+  // Must reference exactly the out-of-scope ids, once each, with a family-correct
+  // detection_mode/dependency. It is NOT a registry claimant (no duplicate claims).
+  const monitorExpectedByReason = {
+    requires_l2_adjacency: { detection_mode: 'agent_local_telemetry', dependency: 'on_network_agent_required' },
+    requires_routing_peer_session: { detection_mode: 'integration_telemetry', dependency: 'routing_session_feed_required' },
+    requires_rf_proximity: { detection_mode: 'integration_telemetry', dependency: 'wireless_sensor_required' },
+    requires_mobile_core_interface: { detection_mode: 'integration_telemetry', dependency: 'mobile_core_tap_required' },
+  };
+  const monitorSeen = new Map();
+  const monitorByDetectionMode = {};
+  const monitorByDependency = {};
+  for (const entry of MONITOR_ONLY_VECTORS) {
+    if (entry.monitor_only !== true) errors.push(`${entry.id}: monitor-only vector must set monitor_only:true`);
+    if (entry.evidence_tier !== 'E5') errors.push(`${entry.id}: monitor-only vector evidence_tier must be E5`);
+    if (!['agent_local_telemetry', 'integration_telemetry'].includes(entry.detection_mode)) {
+      errors.push(`${entry.id}: invalid monitor-only detection_mode ${entry.detection_mode}`);
+    }
+    if (!entry.signal_source || !entry.dependency || !entry.notes) {
+      errors.push(`${entry.id}: monitor-only vector missing signal_source/dependency/notes`);
+    }
+    const expected = monitorExpectedByReason[entry.reason];
+    if (!expected) {
+      errors.push(`${entry.id}: unknown monitor-only reason ${entry.reason}`);
+    } else {
+      if (entry.detection_mode !== expected.detection_mode) {
+        errors.push(`${entry.id}: detection_mode ${entry.detection_mode} does not match reason ${entry.reason}`);
+      }
+      if (entry.dependency !== expected.dependency) {
+        errors.push(`${entry.id}: dependency ${entry.dependency} does not match reason ${entry.reason}`);
+      }
+    }
+    monitorByDetectionMode[entry.detection_mode] = (monitorByDetectionMode[entry.detection_mode] ?? 0) + entry.catalog_vector_ids.length;
+    monitorByDependency[entry.dependency] = (monitorByDependency[entry.dependency] ?? 0) + entry.catalog_vector_ids.length;
+    for (const catalogId of entry.catalog_vector_ids) {
+      if (!outOfScopeIds.has(catalogId)) {
+        errors.push(`${entry.id}: monitor-only catalog id ${catalogId} is not an OUT_OF_SCOPE vector`);
+      }
+      if (monitorSeen.has(catalogId)) {
+        errors.push(`${catalogId}: monitor-only vector claimed twice (${monitorSeen.get(catalogId)}, ${entry.id})`);
+      }
+      monitorSeen.set(catalogId, entry.id);
+    }
+  }
+  const monitorUncovered = [...outOfScopeIds].filter((catalogId) => !monitorSeen.has(catalogId)).sort();
+  if (monitorUncovered.length > 0) {
+    errors.push(`out-of-scope vectors missing monitor-only coverage: ${monitorUncovered.join(', ')}`);
+  }
+
   const catalogUnclaimedIds = externalCatalogIds.filter((catalogId) => (
     !claimsByCatalogId.has(catalogId) && !outOfScopeIds.has(catalogId)
   ));
@@ -380,6 +430,14 @@ export function validateResourceExhaustionTaxonomy() {
     })),
     non_ddos_threats: NON_DDOS_AVAILABILITY_THREATS.length,
     waf_vulnerability_entries: WAF_VULNERABILITY_REGISTRY.length,
+    monitor_only: {
+      entries: MONITOR_ONLY_VECTORS.length,
+      catalog_ids_covered: monitorSeen.size,
+      out_of_scope_ids: outOfScopeIds.size,
+      by_detection_mode: monitorByDetectionMode,
+      by_dependency: monitorByDependency,
+      uncovered_ids: monitorUncovered,
+    },
     catalog_unclaimed_count: catalogUnclaimedIds.length,
     catalog_unclaimed_ids: catalogUnclaimedIds,
     catalog_metadata: {

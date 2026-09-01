@@ -447,6 +447,201 @@ export const OUT_OF_SCOPE_VECTORS = Object.freeze([
   },
 ]);
 
+/**
+ * Honest monitor-only detection layer for the OUT_OF_SCOPE_VECTORS.
+ *
+ * These 41 vectors can never be safely ORIGINATED by an outside-in SaaS probe
+ * (that is why they stay in OUT_OF_SCOPE_VECTORS and keep their probe_reachable:false
+ * domains). They can, however, be passively DETECTED where the customer already
+ * runs the right observer. This layer annotates the same catalog ids with that
+ * passive detection story — it never claims an active probe. It mirrors the
+ * existing NON_DDOS_AVAILABILITY_THREATS monitor_only pattern (E5, scope-bounded).
+ *
+ * detection_mode:
+ *   - agent_local_telemetry: AstraNull's on-host agent (agents/linux/astranull-agent.mjs,
+ *     a passive outbound-only metadata observer) sees the flood in local interface
+ *     counters, netlink neighbor/route churn, and kernel/syslog — genuinely useful
+ *     passive detection when a host sits in the affected L2/broadcast domain.
+ *   - integration_telemetry: detection depends on a customer-supplied feed/sensor
+ *     (routing-session state, WIDS/wireless sensor, or a mobile-core signalling tap).
+ *     RF and mobile-core sensors are specialised and most customers do not have them,
+ *     so those families are honestly "detection-only-if-integrated".
+ *
+ * Bookkeeping: this is an ANNOTATION layer, not a catalog claimant. The 41 ids remain
+ * counted exactly once via OUT_OF_SCOPE_VECTORS; MONITOR_ONLY_VECTORS is NOT added to
+ * the registry claim set, so it introduces no duplicate claim.
+ *
+ * @typedef {Object} MonitorOnlyVectorEntry
+ * @property {string} id
+ * @property {string} name
+ * @property {string[]} catalog_vector_ids
+ * @property {'agent_local_telemetry'|'integration_telemetry'} detection_mode
+ * @property {string} signal_source
+ * @property {string} dependency
+ * @property {true} monitor_only
+ * @property {string} notes
+ */
+const MONITOR_ONLY_VECTORS_SOURCE = [
+  {
+    id: 'MON-001',
+    name: 'IPv6 neighbor / router-discovery flood (local observation)',
+    catalog_vector_ids: ['NET-030', 'NET-031', 'NET-032', 'NET-033', 'NET-034'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent interface counters + netlink neighbor-table churn + kernel/syslog ND/RA/MLD messages',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable: NS/NA/RS/RA/MLD floods show as neighbor-table churn and interface-counter spikes on a host in the affected link; nothing safe can originate them.',
+  },
+  {
+    id: 'MON-002',
+    name: 'Ethernet / ARP L2 frame flood (local observation)',
+    catalog_vector_ids: ['NET-091', 'NET-092', 'NET-093', 'NET-094'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent interface counters (broadcast/multicast rate) + ARP-table churn + syslog',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable: ARP/broadcast/multicast/malformed-MAC floods surface as local broadcast-storm counters and ARP-cache thrash; detection only, no origination.',
+  },
+  {
+    id: 'MON-003',
+    name: 'IGMP multicast-control flood (local observation)',
+    catalog_vector_ids: ['NET-095', 'NET-096', 'NET-097'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent multicast-group state + interface counters + kernel/syslog IGMP messages',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable: IGMP / fragmented / malformed IGMP floods appear in local multicast group-membership churn and packet counters.',
+  },
+  {
+    id: 'MON-004',
+    name: 'Switching / STP / CAM-table flood (local observation)',
+    catalog_vector_ids: ['NET-147', 'NET-148'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent interface counters + STP topology-change events in syslog (switch-integration feed optional)',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable indirectly: CAM exhaustion and STP/BPDU topology-change floods manifest as unicast-flooding and link-flap symptoms on attached hosts; switch SNMP/syslog integration sharpens it.',
+  },
+  {
+    id: 'MON-005',
+    name: 'DHCP starvation flood (local observation)',
+    catalog_vector_ids: ['NET-149', 'NET-150'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent DHCP client-state + lease-acquisition failures + kernel/syslog',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable: DHCPv4/DHCPv6 discover/solicit starvation surfaces as lease-acquisition failure and DISCOVER retries on hosts in the same segment.',
+  },
+  {
+    id: 'MON-006',
+    name: 'L2 access / admission-control flood (local observation)',
+    catalog_vector_ids: ['NET-151', 'NET-152', 'NET-153', 'NET-154', 'NET-155'],
+    reason: 'requires_l2_adjacency',
+    domain: 'A1b',
+    detection_mode: 'agent_local_telemetry',
+    signal_source: 'on-host agent interface counters + 802.1X supplicant/link-control events in kernel/syslog',
+    dependency: 'on_network_agent_required',
+    monitor_only: true,
+    notes: 'Agent-observable: PPPoE / 802.1X-EAPOL / LLDP-CDP / LACP / FHRP control floods appear as link-control event storms and interface-counter spikes on attached hosts.',
+  },
+  {
+    id: 'MON-007',
+    name: 'BGP control-plane flood (routing-session observation)',
+    catalog_vector_ids: ['NET-042', 'NET-043'],
+    reason: 'requires_routing_peer_session',
+    domain: 'A1b',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'BGP session-state / route-churn feed (router telemetry, BMP, or looking-glass export)',
+    dependency: 'routing_session_feed_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated: BGP session-establishment and update/route-churn floods are visible in a BGP/BMP session-state feed; AstraNull cannot form the peering to originate them.',
+  },
+  {
+    id: 'MON-008',
+    name: 'IGP / BFD / multicast-routing / MPLS control flood (routing-session observation)',
+    catalog_vector_ids: ['NET-044', 'NET-125', 'NET-156', 'NET-157'],
+    reason: 'requires_routing_peer_session',
+    domain: 'A1b',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'routing/control-plane session-state feed (OSPF/BFD/PIM/MPLS adjacency + control-packet counters)',
+    dependency: 'routing_session_feed_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated: OSPF adjacency churn, BFD, PIM, and MPLS RSVP-TE/LDP control floods are visible only through a routing-control-plane telemetry feed.',
+  },
+  {
+    id: 'MON-009',
+    name: '802.11 management / control-frame flood (wireless-sensor observation)',
+    catalog_vector_ids: ['NET-169', 'NET-170', 'NET-171', 'NET-172', 'NET-173', 'NET-174', 'NET-175', 'NET-176'],
+    reason: 'requires_rf_proximity',
+    domain: 'A1c',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'WIDS / wireless sensor management- and control-frame telemetry',
+    dependency: 'wireless_sensor_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated: 802.11 assoc/auth/deauth/probe/beacon/RTS-CTS/PS-Poll/BlockACK floods are detectable only where a WIDS or wireless sensor is deployed; most customers lack one, and no SaaS probe can hear the RF.',
+  },
+  {
+    id: 'MON-010',
+    name: 'RF jamming / interference denial (spectrum-sensor observation)',
+    catalog_vector_ids: ['NET-177'],
+    reason: 'requires_rf_proximity',
+    domain: 'A1c',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'spectrum-analysis / RF-interference sensor feed',
+    dependency: 'wireless_sensor_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated: raw RF jamming is a physical-layer effect observable only by a spectrum sensor; without one it is honestly not covered.',
+  },
+  {
+    id: 'MON-011',
+    name: 'Mobile user / control-plane flood (mobile-core tap observation)',
+    catalog_vector_ids: ['NET-158', 'NET-159', 'NET-179'],
+    reason: 'requires_mobile_core_interface',
+    domain: 'A1d',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'mobile-core signalling tap (SGW/PGW/UPF for GTP-U/GTP-C, SMF for PFCP)',
+    dependency: 'mobile_core_tap_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated (telco deployments only): GTP-U/GTP-C/PFCP session and control-plane floods require a mobile-core interface tap that only carrier operators possess.',
+  },
+  {
+    id: 'MON-012',
+    name: 'Telecom signalling flood (mobile-core tap observation)',
+    catalog_vector_ids: ['NET-178', 'NET-180'],
+    reason: 'requires_mobile_core_interface',
+    domain: 'A1d',
+    detection_mode: 'integration_telemetry',
+    signal_source: 'mobile-core signalling tap (Diameter edge/DRA, AMF/MME attach signalling)',
+    dependency: 'mobile_core_tap_required',
+    monitor_only: true,
+    notes: 'Detection-only-if-integrated (telco deployments only): Diameter and mobile-attach signalling floods are visible only on an operator signalling interface.',
+  },
+];
+
+/**
+ * Monitor-only annotation layer over OUT_OF_SCOPE_VECTORS. Tagged E5 (not probeable;
+ * derives the same monitor-only tier as NON_DDOS_AVAILABILITY_THREATS). Passive
+ * detection only — never an active outside-in probe.
+ * @type {readonly MonitorOnlyVectorEntry[]}
+ */
+export const MONITOR_ONLY_VECTORS = Object.freeze(
+  MONITOR_ONLY_VECTORS_SOURCE.map((entry) => Object.freeze({
+    ...entry,
+    catalog_vector_ids: Object.freeze([...entry.catalog_vector_ids]),
+    evidence_tier: 'E5',
+  })),
+);
+
 const NON_DDOS_AVAILABILITY_THREATS_SOURCE = [
   { id: 'ND-001', name: 'BGP hijacking', classification: 'routing_attack', task_id: 'DET-026', monitor_only: true, scope_boundary: 'Monitor-only integration; out of probe scope. Never conflated with DDoS readiness score.', notes: 'Not resource-exhaustion DDoS; monitor-only integration future.' },
   { id: 'ND-002', name: 'BGP route leak', classification: 'routing_incident', task_id: 'DET-026', monitor_only: true, scope_boundary: 'Monitor-only integration; out of probe scope.' },

@@ -6,6 +6,7 @@ import {
   COVERAGE_STATUS_SEMANTICS,
   EXHAUSTED_RESOURCE_FAMILIES,
   FAMILY_BUILD_SPECS,
+  MONITOR_ONLY_VECTORS,
   NON_DDOS_AVAILABILITY_THREATS,
   OUT_OF_SCOPE_VECTORS,
   RESOURCE_EXHAUSTION_TASKS,
@@ -215,6 +216,71 @@ describe('resource-exhaustion taxonomy', () => {
     );
     assert.equal(OUT_OF_SCOPE_VECTORS.flatMap((entry) => entry.catalog_vector_ids).length, 41);
     assert.deepEqual(actualByReason, expectedByReason);
+  });
+
+  it('gives every out-of-scope vector honest monitor-only detection coverage', () => {
+    const outOfScopeIds = OUT_OF_SCOPE_VECTORS.flatMap((entry) => entry.catalog_vector_ids).sort();
+    const monitorIds = MONITOR_ONLY_VECTORS.flatMap((entry) => entry.catalog_vector_ids).sort();
+    assert.equal(monitorIds.length, 41);
+    assert.deepEqual(monitorIds, outOfScopeIds);
+    assert.equal(new Set(monitorIds).size, 41, 'no monitor-only id is claimed twice');
+
+    for (const entry of MONITOR_ONLY_VECTORS) {
+      assert.equal(entry.monitor_only, true, entry.id);
+      assert.equal(entry.evidence_tier, 'E5', entry.id);
+      assert.ok(['agent_local_telemetry', 'integration_telemetry'].includes(entry.detection_mode), entry.id);
+      assert.ok(entry.signal_source && entry.dependency && entry.notes, entry.id);
+    }
+  });
+
+  it('breaks monitor-only coverage down as 21 agent-local L2 + 6/9/5 integration families', () => {
+    const byDetectionMode = {};
+    const byDependency = {};
+    for (const entry of MONITOR_ONLY_VECTORS) {
+      const n = entry.catalog_vector_ids.length;
+      byDetectionMode[entry.detection_mode] = (byDetectionMode[entry.detection_mode] ?? 0) + n;
+      byDependency[entry.dependency] = (byDependency[entry.dependency] ?? 0) + n;
+    }
+    assert.deepEqual(byDetectionMode, {
+      agent_local_telemetry: 21,
+      integration_telemetry: 20,
+    });
+    assert.deepEqual(byDependency, {
+      on_network_agent_required: 21,
+      routing_session_feed_required: 6,
+      wireless_sensor_required: 9,
+      mobile_core_tap_required: 5,
+    });
+
+    const dependencyByReason = {
+      requires_l2_adjacency: 'on_network_agent_required',
+      requires_routing_peer_session: 'routing_session_feed_required',
+      requires_rf_proximity: 'wireless_sensor_required',
+      requires_mobile_core_interface: 'mobile_core_tap_required',
+    };
+    for (const entry of MONITOR_ONLY_VECTORS) {
+      assert.equal(entry.dependency, dependencyByReason[entry.reason], entry.id);
+      assert.equal(
+        entry.detection_mode,
+        entry.reason === 'requires_l2_adjacency' ? 'agent_local_telemetry' : 'integration_telemetry',
+        entry.id,
+      );
+    }
+  });
+
+  it('keeps the monitor-only layer out of the registry claim set (annotation, not claimant)', () => {
+    const result = validateResourceExhaustionTaxonomy();
+    assert.equal(result.ok, true, result.errors.join('; '));
+    assert.equal(result.catalog_unclaimed_count, 0, result.catalog_unclaimed_ids.join(', '));
+    assert.equal(result.monitor_only.catalog_ids_covered, 41);
+    assert.equal(result.monitor_only.out_of_scope_ids, 41);
+    assert.deepEqual(result.monitor_only.uncovered_ids, []);
+    assert.deepEqual(result.monitor_only.by_detection_mode, {
+      agent_local_telemetry: 21,
+      integration_telemetry: 20,
+    });
+    const duplicateClaimErrors = result.errors.filter((error) => error.includes('duplicate registry claims'));
+    assert.equal(duplicateClaimErrors.length, 0, duplicateClaimErrors.join('; '));
   });
 
   it('keeps the standalone taxonomy evidence index aligned with live check probe profiles', () => {

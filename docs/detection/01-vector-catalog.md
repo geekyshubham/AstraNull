@@ -54,6 +54,8 @@ The current check catalog contains 158 `safe` and 17 `soc_gated` checks.
 
 CSV identifiers (`NET-*`, `AMP-*`, `APP-*`, `WAF-*`, and `EVA-*`) are the canonical external keys. Every machine-readable registry entry lists its claimed rows in `catalog_vector_ids`; physically unreachable rows appear in `OUT_OF_SCOPE_VECTORS` with a reason code. This makes both catalog → AstraNull and AstraNull → catalog navigation deterministic, exposes the breadth of umbrella entries, and lets the validator reject unclaimed or duplicate IDs.
 
+The 41 outside-in exclusions still get an honest **monitor-only detection** annotation in `MONITOR_ONLY_VECTORS` — passive detection only, never a fabricated active probe. The L2-adjacency floods (21) are genuinely agent-observable via local telemetry; the routing-peer (6), wireless-RF (9), and mobile-core (5) families are detection-only-if the customer integrates a routing-session feed, a WIDS/wireless sensor, or a mobile-core signalling tap respectively. See [Resource-Exhaustion Taxonomy → Monitor-only detection tier](19-resource-exhaustion-taxonomy.md#monitor-only-detection-tier-the-41-outside-in-exclusions). This is an annotation layer, so the 41 stay counted once via `OUT_OF_SCOPE_VECTORS`.
+
 ## Vector-to-evidence map
 
 | Vector | External evidence | Internal evidence | Verdict focus |

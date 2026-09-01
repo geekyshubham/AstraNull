@@ -70,6 +70,24 @@ Catalog coverage and evidence coverage are separate measurements:
 
 The first number proves every catalog row has an accountable disposition. The second describes what evidence AstraNull can actually produce today; it must not be inferred from the first. Figures are from the 2026-09-01 validation snapshot. See the [vector coverage audit](22-vector-coverage-audit-2026-09-01.md) for the source catalog, methodology, and detailed gap register.
 
+## Monitor-only detection tier (the 41 outside-in exclusions)
+
+The 41 rows in `OUT_OF_SCOPE_VECTORS` cannot be safely **originated** by an outside-in SaaS probe — they need L2 adjacency, an accepted routing peer session, RF proximity, or a mobile-core interface. AstraNull never fabricates an active probe for them. They still receive **honest monitor-only detection coverage** in `MONITOR_ONLY_VECTORS`: passive detection where the customer already runs the right observer. This is an **annotation layer**, not an active test — the 41 rows remain counted exactly once via `OUT_OF_SCOPE_VECTORS`, so `MONITOR_ONLY_VECTORS` adds no catalog claim and no duplicate. Every entry is tagged evidence tier **E5** (monitor-only, outside the probe-derived DDoS readiness result), mirroring the existing `NON_DDOS_AVAILABILITY_THREATS` pattern.
+
+`detection_mode` is one of two values:
+
+- `agent_local_telemetry` — AstraNull's passive, outbound-only on-host agent (`agents/linux/astranull-agent.mjs`) observes the flood in local interface counters, netlink neighbor/route churn, and kernel/syslog. Genuinely useful passive detection.
+- `integration_telemetry` — detection depends on a customer-supplied feed or sensor. Where that sensor is uncommon, coverage is honestly **detection-only-if-integrated**.
+
+| Family (reason) | Rows | detection_mode | dependency | Honest coverage statement |
+|---|---|---|---|---|
+| L2-adjacency (`requires_l2_adjacency`) | 21 | `agent_local_telemetry` | `on_network_agent_required` | Genuinely useful passive detection. ARP/CAM/DHCP/STP/802.1X/ND/IGMP floods show up in local interface counters, netlink tables, and syslog on any host the agent runs on inside the affected L2/broadcast domain. |
+| Routing-peer (`requires_routing_peer_session`) | 6 | `integration_telemetry` | `routing_session_feed_required` | Detection-only-if-integrated. BGP/OSPF/BFD/PIM/MPLS control floods are visible only through a routing-session-state feed (router telemetry, BMP export). |
+| Wireless-RF (`requires_rf_proximity`) | 9 | `integration_telemetry` | `wireless_sensor_required` | Detection-only-if-integrated. 802.11 management/control-frame floods and RF jamming are detectable **only** where a WIDS / wireless / spectrum sensor is deployed. Most customers lack one; without it these are honestly not covered, because no SaaS probe can hear the RF. |
+| Mobile-core (`requires_mobile_core_interface`) | 5 | `integration_telemetry` | `mobile_core_tap_required` | Detection-only-if-integrated, telco deployments only. GTP-U/GTP-C/PFCP/Diameter/attach signalling floods require a mobile-core signalling tap that only carrier operators possess. |
+
+Passive detection is not active testing: it reports what a locally-placed observer sees, never a readiness score derived from an AstraNull-originated attack. The validator (`scripts/validate-resource-exhaustion-taxonomy.mjs`) cross-checks that `MONITOR_ONLY_VECTORS` covers exactly the 41 out-of-scope ids, once each, with the family-correct `detection_mode`/`dependency`, and surfaces the breakdown under `monitor_only` in the validation JSON.
+
 ## Task backlog
 
 See [Resource-Exhaustion Backlog](20-resource-exhaustion-backlog.md) and `PROGRESS.md` §4.1 (DET-016–DET-026, SOC-011).
