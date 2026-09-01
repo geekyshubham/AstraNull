@@ -384,8 +384,13 @@ describe('vector catalog', () => {
     assert.equal(invalidHttp.probe_path, undefined);
     assert.equal(invalidHttp.oversize_header_bytes, undefined);
 
-    const methodPosture = buildProbeProfile({ kind: 'http_method_matrix', http_method: 'TRACE' });
-    assert.equal(methodPosture.http_method, undefined);
+    for (const unsafeMethod of ['TRACE', 'PUT', 'DELETE', 'PATCH']) {
+      const methodPosture = buildProbeProfile({
+        kind: 'http_method_matrix',
+        http_method: unsafeMethod,
+      });
+      assert.equal(methodPosture.http_method, undefined, unsafeMethod);
+    }
 
     const dns = buildProbeProfile({ kind: 'dns_wire_query', dns_qtype: 'DNSKEY', dns_transport: 'auto' });
     assert.equal(dns.dns_qtype, 'DNSKEY');
@@ -416,7 +421,7 @@ describe('vector catalog', () => {
         header_size_probe: 2,
         slow_header_probe: 1,
         http2_frame_probe: 4,
-        http3_control_probe: 2,
+        http3_control_probe: 1,
         waf_inspection_limit_probe: 6,
         outside_in_waf_scan: 13,
       },
@@ -524,15 +529,18 @@ describe('vector catalog', () => {
     assert.deepEqual(graphql.exhausted_resources, ['computational', 'backend_exhaustion']);
     assert.equal(graphql.exhausted_resource, 'computational');
 
+    const axfr = getCheckById('dns.zone_transfer_exposure.safe');
+    assert.equal(axfr.probe_profile.max_requests, 2);
+    assert.equal(maxProbeRequestsForKind(axfr.probe_profile.kind), 2);
+
     for (const checkId of [
-      'dns.zone_transfer_exposure.safe',
       'reflect.quic_reflection_exposure.safe',
+      'protocol.http3_control_stream.readiness',
     ]) {
       const check = getCheckById(checkId);
-      assert.equal(check.probe_profile.max_requests, 2, checkId);
-      assert.equal(maxProbeRequestsForKind(check.probe_profile.kind), 2, checkId);
+      assert.equal(check.probe_profile.max_requests, 1, checkId);
+      assert.equal(maxProbeRequestsForKind(check.probe_profile.kind), 1, checkId);
     }
-    assert.equal(getCheckById('protocol.http3_control_stream.readiness').probe_profile.max_requests, 2);
 
     for (const check of CHECK_CATALOG) {
       assert.equal(check.evidence_tier, evidenceTierForCheck(check), check.check_id);

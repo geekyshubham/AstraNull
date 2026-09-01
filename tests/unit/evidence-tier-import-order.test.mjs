@@ -19,10 +19,9 @@ it('derives evidence tiers when the taxonomy is imported first and alone in a fr
   );
 
   assert.deepEqual(JSON.parse(stdout), {
-    E0: 105,
-    E1: 51,
-    E2: 31,
-    E3: 58,
-    E4: 9,
+    E1: 59,
+    E2: 36,
+    E3: 79,
+    E4: 80,
   });
 });

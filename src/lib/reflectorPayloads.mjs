@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { buildDnsQueryMessage } from './dnsTcpWire.mjs';
+import { extraReflectorPayloadForProfile } from './vectorProbes/extraReflectorPayloads.mjs';
 
 export const MAX_PAYLOAD_BYTES = 512;
 
@@ -154,17 +155,6 @@ function buildCldapRootDse() {
   return Buffer.concat([Buffer.from([0x30, message.length]), message]);
 }
 
-function buildQuicInitial(ctx) {
-  const destinationConnectionId = stableIdentifier(ctx.nonceHash, 8);
-  const protectedPayload = stableIdentifier(`${ctx.nonceHash ?? ''}:quic`, 24);
-  return Buffer.concat([
-    Buffer.from([0xc0, 0x00, 0x00, 0x00, 0x01, 0x08]),
-    destinationConnectionId,
-    Buffer.from([0x00, 0x00, 0x19, 0x00]),
-    protectedPayload,
-  ]);
-}
-
 function entry(id, transport, defaultPort, build) {
   return Object.freeze({
     id,
@@ -243,7 +233,6 @@ export const REFLECTOR_PAYLOADS = Object.freeze({
     payload.writeUInt32BE(16, 20);
     return payload;
   }),
-  quic_initial: entry('quic_initial', 'udp', 443, buildQuicInitial),
   generic_probe: entry('generic_probe', 'udp', null, (ctx) => Buffer.from(
     `ASTRANULL:udp:${String(ctx.nonceHash ?? 'probe').slice(0, 16)}`,
     'utf8',
@@ -251,5 +240,5 @@ export const REFLECTOR_PAYLOADS = Object.freeze({
 });
 
 export function reflectorPayloadForProfile(profile = 'generic_probe') {
-  return REFLECTOR_PAYLOADS[profile] ?? REFLECTOR_PAYLOADS.generic_probe;
+  return REFLECTOR_PAYLOADS[profile] ?? extraReflectorPayloadForProfile(profile) ?? REFLECTOR_PAYLOADS.generic_probe;
 }

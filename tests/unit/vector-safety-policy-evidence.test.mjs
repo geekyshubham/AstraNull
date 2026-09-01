@@ -112,7 +112,7 @@ describe('vector safety policy evidence', () => {
       { kind: 'header_size_probe', max_requests: 2, timeout_ms: 5000, oversize_header_bytes: 8192 },
       { kind: 'slow_header_probe', max_requests: 1, timeout_ms: 5000 },
       { kind: 'http2_frame_probe', max_requests: 4, timeout_ms: 5000 },
-      { kind: 'http3_control_probe', max_requests: 2, timeout_ms: 5000 },
+      { kind: 'http3_control_probe', max_requests: 1, timeout_ms: 5000 },
       { kind: 'waf_inspection_limit_probe', max_requests: 6, timeout_ms: 5000 },
     ];
     for (const profile of profiles) {

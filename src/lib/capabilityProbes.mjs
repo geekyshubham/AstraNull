@@ -3,7 +3,10 @@
  */
 
 import dns, { Resolver } from 'node:dns/promises';
-import { normalizeProbeHttpPath } from '../contracts/checks.mjs';
+import {
+  ALLOWED_PROBE_HTTP_METHODS,
+  normalizeProbeHttpPath,
+} from '../contracts/checks.mjs';
 import https from 'node:https';
 import http2 from 'node:http2';
 import net from 'node:net';
@@ -30,6 +33,9 @@ import {
   runOutsideInWafScan,
 } from './outsideInWafScanner.mjs';
 import { enrichProbeMetadataWithWafCatalog } from './wafProductCatalog.mjs';
+import { runWafClassMarkerProbe } from './vectorProbes/wafClassProbes.mjs';
+import { runWafEvasionMarkerProbe } from './vectorProbes/evasionProbes.mjs';
+import { probeL7ResourcePosture } from './vectorProbes/l7ResourceProbes.mjs';
 
 export const BOUNDED_SUBDOMAIN_PREFIXES = Object.freeze([
   'www', 'api', 'admin', 'dev', 'staging', 'test', 'old', 'legacy', 'direct', 'origin', 'cdn', 'internal',
@@ -51,8 +57,6 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 export const MINIMUM_REQUESTS_BY_PROBE_KIND = Object.freeze({
   origin_leak_scan: 3, // apex A + apex AAAA + edge HEAD
   dns_axfr_leak: 2, // NS lookup + one TCP AXFR query
-  quic_reachability: 2, // Alt-Svc HEAD + one UDP datagram
-  http3_control_probe: 2, // truthful scope: Alt-Svc HEAD + one bounded QUIC datagram
 });
 
 export function minimumProbeRequestsForKind(kind) {
@@ -123,6 +127,7 @@ function isProbeDeadlineError(error, deps = {}) {
 }
 
 const AUTHORITATIVE_DNS_NEGATIVE_CODES = new Set(['ENODATA', 'ENOTFOUND']);
+const EXECUTABLE_SAFE_HTTP_METHODS = new Set(ALLOWED_PROBE_HTTP_METHODS);
 
 function dnsResolverErrorClass(error) {
   const explicit = String(error?.code ?? '').trim().toUpperCase();
@@ -468,11 +473,15 @@ async function vetProbeDestinationHost(host, deps = {}, options = {}) {
     if (isProbeDeadlineError(error, deps) || error?.code === 'signed_operation_budget_exceeded') {
       throw error;
     }
+    const errorClass = dnsResolverErrorClass(error);
     return {
       ok: false,
       host: candidate,
       addresses: [],
-      reason: error?.code === 'ENOTFOUND' ? 'no_resolved_addresses' : error?.message,
+      error_class: errorClass,
+      reason: errorClass === 'ENOTFOUND'
+        ? 'no_resolved_addresses'
+        : 'destination_resolution_failed',
       blocked_address: error?.blockedAddress ?? null,
     };
   }
@@ -858,6 +867,19 @@ export async function probeRateLimitSequence(job, deps = {}) {
   const method = typeof job.probe_profile?.http_method === 'string'
     ? job.probe_profile.http_method
     : 'HEAD';
+  if (!EXECUTABLE_SAFE_HTTP_METHODS.has(method)) {
+    return {
+      external_result: 'error',
+      metadata: withKind(job, kind, {
+        error_class: 'unsafe_http_method',
+        probe_path: endpoint.probePath,
+        http_method: method,
+        request_counting_basis: 'logical_operations',
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
   if (method === 'POST' && job.probe_profile?.nonce_hash_only !== true) {
     return {
       external_result: 'error',
@@ -1356,9 +1378,7 @@ export async function probeHttp3ControlStream(job, deps = {}) {
       ...outcome.metadata,
       profile_kind: kind,
       probe_kind: kind,
-      capability_scope: 'quic_reachability_only',
-      control_stream_observed: false,
-      settings_observed: false,
+      capability_scope: 'http3_alt_svc_observation_only',
       request_counting_basis: 'logical_operations',
     }),
   };
@@ -1782,9 +1802,18 @@ export async function probeAxfrLeak(job, deps = {}) {
   if (remainingProbeTimeoutMs(job, deps) <= 0) {
     return deadlineOutcome(job, kind, deps, requestsSent, { zone, resolver_attempts: 0 });
   }
-  const nameservers = await resolveNs(zone, deps);
   requestsSent += 1;
   resolverAttempts += 1;
+  let nameservers;
+  try {
+    nameservers = await resolveNs(zone, deps);
+  } catch (error) {
+    return dnsResolverFailureOutcome(job, kind, deps, requestsSent, error, {
+      zone,
+      resolver_attempts: resolverAttempts,
+      transport_attempts: transportAttempts,
+    });
+  }
   if (remainingProbeTimeoutMs(job, deps) <= 0) {
     return deadlineOutcome(job, kind, deps, requestsSent, { zone, resolver_attempts: resolverAttempts });
   }
@@ -1820,9 +1849,9 @@ export async function probeAxfrLeak(job, deps = {}) {
   if (!nsVerdict.ok || nsVerdict.addresses.length === 0) {
     const durationMs = observedProbeDurationMs(deps);
     return {
-      external_result: 'blocked',
+      external_result: 'error',
       metadata: withKind(job, kind, {
-        error_class: 'resolver_not_routable',
+        error_class: nsVerdict.error_class ?? 'resolver_not_routable',
         zone,
         nameserver: nsHost,
         blocked_address: nsVerdict.blocked_address ?? null,
@@ -2412,6 +2441,14 @@ export const CAPABILITY_PROBE_DISPATCH = Object.freeze({
   bot_challenge_probe: probeBotChallenge,
   graphql_posture_probe: probeGraphqlPosture,
   grpc_reflection_probe: probeGrpcReflection,
+  waf_evasion_marker_probe: runWafEvasionMarkerProbe,
+  l7_resource_posture_probe: probeL7ResourcePosture,
+  waf_class_marker_probe: (job, deps = {}) => runWafClassMarkerProbe({
+    url: job?.target?.value ?? job?.target?.url,
+    marker_class: job?.probe_profile?.marker_class,
+    timeout_ms: job?.probe_profile?.timeout_ms,
+    fetchFn: deps.fetchFn ?? deps.fetch,
+  }),
 });
 
 const GRPC_HEALTH_PATH = '/grpc.health.v1.Health/Check';

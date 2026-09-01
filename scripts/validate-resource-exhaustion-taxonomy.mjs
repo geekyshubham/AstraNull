@@ -39,6 +39,7 @@ export const WORKER_EXECUTED_KIND_BY_DECLARED_KIND = Object.freeze(
     'outside_in_waf_scan', 'grpc_reflection_probe', 'reflection_service_probe',
     'dns_wire_query', 'http_method_matrix', 'header_size_probe', 'slow_header_probe',
     'http2_frame_probe', 'http3_control_probe', 'waf_inspection_limit_probe',
+    'waf_class_marker_probe', 'waf_evasion_marker_probe', 'l7_resource_posture_probe',
   ].map((kind) => [kind, kind])),
 );
 

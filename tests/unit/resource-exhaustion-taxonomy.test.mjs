@@ -150,10 +150,17 @@ describe('resource-exhaustion taxonomy', () => {
       );
     }
     for (const entry of WAF_VULNERABILITY_REGISTRY) {
-      const hasMappedSocCheck = (entry.check_ids ?? [])
-        .some((checkId) => checkId.endsWith('.soc') && getCheckById(checkId));
-      assert.equal(entry.evidence_tier, hasMappedSocCheck ? 'E4' : 'E0', entry.id);
-      assert.equal(entry.coverage_status, hasMappedSocCheck ? 'soc_only' : 'pending', entry.id);
+      const checks = (entry.check_ids ?? []).map(getCheckById).filter(Boolean);
+      const priority = { E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 };
+      const tier = checks.reduce((best, check) => (
+        priority[evidenceTierForCheck(check)] > priority[best] ? evidenceTierForCheck(check) : best
+      ), 'E0');
+      assert.equal(entry.evidence_tier, tier, entry.id);
+      assert.equal(
+        entry.coverage_status,
+        tier === 'E3' ? 'implemented' : tier === 'E1' || tier === 'E2' ? 'partial' : tier === 'E4' ? 'soc_only' : 'pending',
+        entry.id,
+      );
     }
     for (const entry of NON_DDOS_AVAILABILITY_THREATS) assert.equal(entry.evidence_tier, 'E5', entry.id);
   });
