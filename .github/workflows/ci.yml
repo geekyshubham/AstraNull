@@ -49,11 +49,13 @@ jobs:
 
       - name: Deployment artifacts
         run: |
-          ruby -e "require 'yaml'; YAML.parse_file('.github/workflows/deploy-aws.yml'); YAML.parse_file('.github/workflows/publish-kubernetes-worker.yml')"
+          ruby -e "require 'yaml'; YAML.parse_file('.github/workflows/deploy-aws.yml'); YAML.parse_file('.github/workflows/publish-kubernetes-worker.yml'); YAML.parse_file('.github/workflows/reset-accessibility-password.yml')"
           bash -n ops/aws/deploy.sh
           bash -n ops/aws/restore.sh
+          bash -n ops/aws/reset-accessibility-runner-password.sh
           node --check scripts/validate-aws-compose-secrets.mjs
           node --check scripts/worker-heartbeat-health.mjs
+          node --check scripts/reset-accessibility-runner-password.mjs
           docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/env.example --profile ops config --no-interpolate --no-path-resolution >/dev/null
           docker build -f ops/aws/Dockerfile -t astranull-ci-check:${GITHUB_SHA:-local} .
           docker build -f ops/kubernetes/Dockerfile.worker -t astranull-worker-ci-check:${GITHUB_SHA:-local} .

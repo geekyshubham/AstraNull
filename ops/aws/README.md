@@ -23,7 +23,15 @@ A successful same-repository `push` CI run for the current `main` SHA triggers d
 | `ASTRANULL_AWS_USER` | `ubuntu` |
 | `ASTRANULL_AWS_SSH_KEY` | Private key whose public half is in `ubuntu`'s `authorized_keys` |
 | `ASTRANULL_AWS_KNOWN_HOSTS` | Pinned `known_hosts` line for the VM; obtain and verify its fingerprint out of band |
+| `ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD` | Current password for `accessibility-runner@astranull.invalid`; supplied only to the fixed-account reset workflow and live accessibility automation |
 
+## Accessibility runner password reset
+
+Reset the fixed production validation account `accessibility-runner@astranull.invalid` only through the manual **Reset accessibility runner password** GitHub Actions workflow (`.github/workflows/reset-accessibility-password.yml`). Supply the exact 40-character SHA already deployed from `main`; the workflow refuses a stale SHA, serializes with deployments through the shared `deploy-aws` concurrency group and `/opt/astranull-backups/deploy.lock`, and executes the operator from the canonical immutable control-plane image using the enforced `astranull_app` database role.
+
+The new value comes only from the repository secret `ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD`; it is not a workflow input and is streamed over pinned-host-key SSH and container stdin without being placed in command arguments or temporary files. The operation replaces the salted verifier, clears failed-attempt and lockout state, clears `must_change`, consumes outstanding invite/reset tokens, increments `session_generation` to invalidate existing password sessions, and writes the normal `auth.password.invite_issued` and `auth.password.set` audit events. The workflow then verifies the credential against `https://astranull.site/v1/auth/login` in memory and emits metadata only; it never prints or retains the bearer token.
+
+Keep `ASTRANULL_ACCESSIBILITY_RUNNER_PASSWORD` synchronized after the reset because the live accessibility automation uses the same repository secret. A code rollback does not restore the prior credential; reversal requires another authorized reset.
 ## First boot
 
 1. Clone to `/opt/astranull` and ensure the deploy user owns the clean checkout.
