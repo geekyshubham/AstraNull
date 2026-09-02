@@ -211,6 +211,84 @@ aws ec2 authorize-security-group-ingress --profile astranull-staging --region us
 Currently allowed for port 22: `108.191.200.121/32`, `123.252.204.182/32`. Prune stale
 entries when convenient.
 
+## Live validation evidence (2026-09-02, against https://astranull.site)
+
+Both lanes were exercised over live HTTPS on the deployed host. Probe mode is
+`signed-worker`, so probes were real network I/O — scoped only to `astranull.site`, a target
+the tenant provably owns (it is this host's own domain).
+
+### Ownership gate
+
+Target `tgt_6a31fa8a3ebc162f` (`astranull.site`) reached `dns_verified` via DNS TXT
+challenge `dns_4c05f7a75f52ffbd`, `eligibility=eligible`. Probe dispatch requires ownership
+proven to at least `dns_verified`, so this is what allowed the bounded runs to proceed.
+
+### Agentless / external-only lane
+
+| Item | Value |
+|---|---|
+| Run | `run_598bc13bf1c526c4` → `verdicted` |
+| Verdict | `edge_protected`, confidence `external_only` |
+| Evidence event | `evt_409547c3f506414b` |
+| Run event provenance | `probe_result` / producer `signed_probe` / source `probe_worker` |
+| Placement | refused — `missing_agent` / `unbound`, "No agent is bound to this target group; internal path proof is unavailable." |
+
+The placement refusal is the important result: with no agent bound, the run reports an
+external-only verdict and makes no internal-path claim.
+
+### Optional-agent lane
+
+| Item | Value |
+|---|---|
+| Bootstrap token | `btok_08592008bfb64093` (secret returned once) |
+| Agent | `agt_e563ad3b5baa04fd`, `online`, bound to `tg_demo_origin`, caps heartbeat/canary/packet |
+| Heartbeat | 200, `last_token_validation_status=valid` |
+| Signed job | `job_64f74ea886454300`, type `observe_window`, acked |
+| Observation | `evt_69904bb30d1df772` accepted 201, producer `authenticated_agent`, source `agent` |
+| Run | `run_294f2ceca2dd09cd` → `verdicted` |
+| Verdict | `penetrated`, confidence `high` |
+| Explanation | "External response indicated block/timeout but the agent observed traffic — possible penetration with silent drop downstream." |
+| Placement | `Medium` / `observed_this_run`, agent bound, `evidence_event_id=evt_69904bb30d1df772` |
+| Run events | both `probe_result`(`signed_probe`/`probe_worker`) and `agent_observation`(`authenticated_agent`/`agent`) |
+
+Correlation behaved exactly as designed: the edge reported blocked while the authenticated
+agent observed traffic, producing a high-confidence `penetrated` verdict — the product's
+core claim, demonstrated end to end on the deployed release.
+
+### Reporting
+
+Report `rpt_56055bb296c46799` (`ready`); JSON export returned a custody digest
+`content_sha256=348352eff4c854c3069a084e239f7d76…` with canonicalization
+`json-key-sorted-v1`. Finding `fnd_3fd8e774b1bab3b2` (high, open) was published, and
+`/v1/state` reflects 1 target group, 1 agent online, 1 open finding.
+
+### Two findings worth recording
+
+**Agent observation requires `nonce_hash`, not `nonce`.** The observation endpoint compares
+`job.nonce_hash !== body.nonce_hash`. Posting the raw `nonce_for_agent` returns
+`agent_job_mismatch` (403). The agent must send `sha256:` + SHA-256 hex of the nonce it
+received; verified byte-identical against the job's stored hash.
+
+**External-only groups finalize immediately and cannot accept observations.** With
+`validation_mode=external_only`, `finalizeVerdictIfReady` runs as soon as probe evidence
+lands, so an agent observation arriving milliseconds later is correctly rejected
+`run_not_collecting` (409). This is intended behaviour, not a defect — the collection window
+is only held open for groups whose mode is not external-only. The seeded `tg_demo_origin`
+shipped as `external_only`; it was changed to `agent_assisted` to exercise the agent lane,
+and remains `agent_assisted`. Change it back if external-only semantics are wanted for demos.
+
+### Configuration left in place
+
+`tg_demo_origin.validation_mode=agent_assisted`, and verification agent
+`agt_e563ad3b5baa04fd` remains registered and online. Revoke it with
+`POST /v1/agents/agt_e563ad3b5baa04fd/revoke` if a clean fleet is preferred.
+
+### Not configured
+
+`staging.avyanbabytalks.store` was never set up. It was superseded: the old AWS account and
+its origin were deleted, so this host became the live origin for `astranull.site` itself
+rather than a separate staging hostname.
+
 ## Teardown
 
 > **This host now serves production `astranull.site`.** Running the teardown below takes the
