@@ -103,3 +103,10 @@ docs/readinessbas-pitch-comparison.html
 docs/astranull-pitch-comparison.html
 scripts/export-open-design-chat.mjs
 .foreman/
+
+# Local research/analysis working files — not product code, kept out of the release tree.
+# These are ad-hoc operator scripts and a source research export, not build or test inputs.
+analysis/
+one_sheet_global_ddos_waf_attack_vector_catalog_*.csv
+__pycache__/
+*.pyc
