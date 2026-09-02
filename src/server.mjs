@@ -1239,6 +1239,18 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, observabilityJson());
   }
 
+  // In Postgres mode `buildServiceDeps` deliberately withholds the dev-JSON defaults so a
+  // route can never silently read the developer store. That makes an unwired service a
+  // `TypeError` on first property access, which surfaced as an unhandled 500 instead of the
+  // documented `postgres_route_not_wired`. Gate the tenant/environment family explicitly.
+  if (
+    runtimeConfig.persistenceMode === 'postgres'
+    && !serviceDeps.tenants
+    && (path === '/v1/tenants/current' || path === '/v1/environments' || path.startsWith('/v1/environments/'))
+  ) {
+    return respondPostgresRouteNotWired(res);
+  }
+
   if (method === 'GET' && path === '/v1/tenants/current') {
     const gate = requirePermission(ctx, 'tenant:read');
     if (!gate.ok) return json(res, gate.status, gate.body);

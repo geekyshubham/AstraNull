@@ -73,6 +73,13 @@ async function startOidcAppServer(jwksUrl) {
   process.env.ASTRANULL_OIDC_AUDIENCE = AUDIENCE;
   process.env.ASTRANULL_OIDC_JWKS_URL = jwksUrl;
   process.env.ASTRANULL_OIDC_REQUIRE_MFA = '1';
+  // This harness runs its own in-process server against the dev store via freshStore().
+  // It passes no injected services, so an ambient ASTRANULL_PERSISTENCE_MODE=postgres would
+  // build a deliberately service-less Postgres dependency set and every route would report
+  // postgres_route_not_wired. Pin the mode this harness actually supports.
+  process.env.ASTRANULL_PERSISTENCE_MODE = 'memory';
+  process.env.ASTRANULL_NO_PERSIST = '1';
+  delete process.env.ASTRANULL_DATABASE_URL;
   delete process.env.NODE_ENV;
   freshStore();
   const appServer = createServer();

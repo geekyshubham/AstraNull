@@ -71,6 +71,14 @@ function artifactFromRow(row) {
     valid_window: meta.valid_window ?? null,
     approved_targets: meta.approved_targets ?? [],
     approved_scenario_families: meta.approved_scenario_families ?? [],
+    // Dropping these two on the round trip made the authorization pack permanently
+    // `partial` in Postgres mode, so SOC approval could never complete: the pack validator
+    // requires `approved_delivery_patterns` and `authorization_binding` on test_plan and
+    // scope_and_rate_plan artifacts.
+    approved_delivery_patterns: meta.approved_delivery_patterns ?? [],
+    authorization_binding: meta.authorization_binding
+      ?? asObject(meta.retained_artifact_metadata).authorization_binding
+      ?? null,
     contact_path: meta.contact_path ?? null,
     approval_reference: meta.approval_reference ?? null,
     approver: meta.approver ?? null,
@@ -105,6 +113,8 @@ function artifactToMetadata(artifact) {
     valid_window: artifact.valid_window,
     approved_targets: artifact.approved_targets,
     approved_scenario_families: artifact.approved_scenario_families,
+    approved_delivery_patterns: artifact.approved_delivery_patterns,
+    authorization_binding: artifact.authorization_binding,
     contact_path: artifact.contact_path,
     approval_reference: artifact.approval_reference,
     approver: artifact.approver,

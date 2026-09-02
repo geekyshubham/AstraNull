@@ -90,7 +90,7 @@ describe('local staging smoke', () => {
         path: '/v1/test-runs',
         status: 201,
         assertBody(body) {
-          assert.equal(body.check_id, 'origin.direct_bypass.safe');
+          assert.equal(body.check_id, 'origin.leak_scan.safe');
           assert.equal(body.target_group_id, 'tg_demo_origin');
           assert.equal(body.target_id, 'tgt_demo_1');
         },

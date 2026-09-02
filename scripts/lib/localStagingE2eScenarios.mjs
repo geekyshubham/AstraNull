@@ -23,7 +23,9 @@ function sha256Hex(value) {
 }
 
 function artifactProofBody(type, request, scopeHash) {
-  const windowStart = new Date().toISOString();
+  // Must contain the requested window (which opens slightly in the past so a governed
+  // dry-run can actually start inside its scheduled window) and the scheduled window.
+  const windowStart = new Date(Date.now() - 3600000).toISOString();
   const windowEnd = new Date(Date.now() + 86400000 * 30).toISOString();
   return {
     type,
@@ -70,7 +72,10 @@ function providerApprovalBody(item, request, scopeHash) {
 }
 
 function highScaleRequestPayload() {
-  const windowStart = new Date(Date.now() + 3600000).toISOString();
+  // Open the window now (minus a small margin) so the governed schedule can contain the
+  // execution moment; a wholly-future window made the dry-run start fail
+  // outside_schedule_window.
+  const windowStart = new Date(Date.now() - 300000).toISOString();
   const windowEnd = new Date(Date.now() + 7200000).toISOString();
   return {
     target_group_id: LOCAL_STAGING_DEMO_IDS.targetGroupId,
@@ -129,7 +134,9 @@ async function runHostedBundledOidcProof(baseUrl) {
     ),
   });
   if (bypass.status !== 401) {
-    throw new Error(`header bypass negative expected 401 (got ${bypass.status})`);
+    throw new Error(
+      `header bypass negative expected 401 (got ${bypass.status}): ${JSON.stringify(bypass.json ?? null)}`,
+    );
   }
   checks.push('header_bypass_denied');
 
@@ -141,7 +148,9 @@ async function runHostedBundledOidcProof(baseUrl) {
   });
   const socState = await stagingFetch(baseUrl, '/v1/state', { headers: socHeaders });
   if (socState.status !== 200) {
-    throw new Error(`OIDC soc role mapping expected 200 (got ${socState.status})`);
+    throw new Error(
+      `OIDC soc role mapping expected 200 (got ${socState.status}): ${JSON.stringify(socState.json ?? null)}`,
+    );
   }
   checks.push('oidc_role_mapping');
   checks.push('mfa_claim_enforced');
@@ -220,7 +229,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
       body: artifactProofBody(type, requestPayload, scopeHash),
     });
     if (uploaded.status !== 201 || !uploaded.json?.id) {
-      throw new Error(`artifact upload ${type} expected 201 (got ${uploaded.status})`);
+      throw new Error(
+      `artifact upload ${type} expected 201 (got ${uploaded.status}): ${JSON.stringify(uploaded.json ?? null)}`,
+    );
     }
     const reviewed = await stagingFetch(
       baseUrl,
@@ -228,7 +239,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
       { method: 'POST', headers: socPrimary, body: { status: 'accepted' } },
     );
     if (reviewed.status !== 200) {
-      throw new Error(`artifact review ${type} expected 200 (got ${reviewed.status})`);
+      throw new Error(
+      `artifact review ${type} expected 200 (got ${reviewed.status}): ${JSON.stringify(reviewed.json ?? null)}`,
+    );
     }
   }
   checks.push('authorization_pack_reviewed');
@@ -241,7 +254,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
       body: providerApprovalBody(item, requestPayload, scopeHash),
     });
     if (uploaded.status !== 201) {
-      throw new Error(`provider approval upload expected 201 (got ${uploaded.status})`);
+      throw new Error(
+      `provider approval upload expected 201 (got ${uploaded.status}): ${JSON.stringify(uploaded.json ?? null)}`,
+    );
     }
     const reviewed = await stagingFetch(
       baseUrl,
@@ -249,7 +264,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
       { method: 'POST', headers: socPrimary, body: { status: 'accepted' } },
     );
     if (reviewed.status !== 200) {
-      throw new Error(`provider approval review expected 200 (got ${reviewed.status})`);
+      throw new Error(
+      `provider approval review expected 200 (got ${reviewed.status}): ${JSON.stringify(reviewed.json ?? null)}`,
+    );
     }
   }
   checks.push('provider_checklist_reviewed');
@@ -259,7 +276,10 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
     headers: socPrimary,
   });
   if (firstApprove.status !== 200) {
-    throw new Error(`first SOC approve expected 200 (got ${firstApprove.status})`);
+    // Include the server's reason: a bare status made governance conflicts undiagnosable.
+    throw new Error(
+      `first SOC approve expected 200 (got ${firstApprove.status}): ${JSON.stringify(firstApprove.json ?? null)}`,
+    );
   }
   const secondApprove = await stagingFetch(baseUrl, `/internal/soc/high-scale/${hsId}/approve`, {
     method: 'POST',
@@ -270,15 +290,22 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
   }
   checks.push('dual_soc_approval');
 
-  const scheduleStart = new Date(Date.now() - 60000).toISOString();
-  const scheduleEnd = new Date(Date.now() + 3600000).toISOString();
+  // The governed schedule must sit inside the requested window and inside every authorization
+  // artifact's valid_window; scheduling relative to "now" started before the requested window
+  // and was correctly rejected as governed_authorization_mismatch.
+  const requestedStart = Date.parse(requestPayload.requested_window.window_start);
+  const requestedEnd = Date.parse(requestPayload.requested_window.window_end);
+  const scheduleStart = new Date(requestedStart + 60000).toISOString();
+  const scheduleEnd = new Date(requestedEnd - 60000).toISOString();
   const scheduled = await stagingFetch(baseUrl, `/internal/soc/high-scale/${hsId}/schedule`, {
     method: 'POST',
     headers: socPrimary,
     body: { window_start: scheduleStart, window_end: scheduleEnd },
   });
   if (scheduled.status !== 200) {
-    throw new Error(`SOC schedule expected 200 (got ${scheduled.status})`);
+    throw new Error(
+      `SOC schedule expected 200 (got ${scheduled.status}): ${JSON.stringify(scheduled.json ?? null)}`,
+    );
   }
   checks.push('scheduled');
 
@@ -296,7 +323,7 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
     checks.push('adapter_disabled_start_gate');
   } else {
     if (started.status !== 200 || started.json?.state !== 'running') {
-      throw new Error(`SOC dry-run start expected 200 running (got ${started.status})`);
+      throw new Error(`SOC dry-run start expected 200 running (got ${started.status}): ${JSON.stringify(started.json ?? null)}`);
     }
     checks.push('governed_adapter_dry_run_start');
 
@@ -328,7 +355,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
       headers: socPrimary,
     });
     if (closed.status !== 200) {
-      throw new Error(`SOC close expected 200 (got ${closed.status})`);
+      throw new Error(
+      `SOC close expected 200 (got ${closed.status}): ${JSON.stringify(closed.json ?? null)}`,
+    );
     }
     checks.push('closed_with_report_gate');
   }
@@ -338,7 +367,9 @@ export async function runSocHighScaleGovernanceScenario(baseUrl, authMode = 'dev
     headers: engineer,
   });
   if (customerStart.status !== 403) {
-    throw new Error(`customer start path expected 403 (got ${customerStart.status})`);
+    throw new Error(
+      `customer start path expected 403 (got ${customerStart.status}): ${JSON.stringify(customerStart.json ?? null)}`,
+    );
   }
   checks.push('customer_start_denied');
 

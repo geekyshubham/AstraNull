@@ -17,6 +17,12 @@ import { parseWorkerConfig, pollAndProcessOnce } from '../workers/probe-worker.m
  * @param {string} pathname
  * @param {{ method?: string, headers?: Record<string, string>, body?: unknown }} [options]
  */
+/**
+ * Check used for the bounded smoke run: customer-selectable (no extra run-time input) and
+ * backed by the signed-worker origin leak scan path.
+ */
+const SMOKE_CHECK_ID = 'origin.leak_scan.safe';
+
 export async function stagingFetch(baseUrl, pathname, options = {}) {
   const url = new URL(pathname, baseUrl);
   const headers = {
@@ -164,7 +170,7 @@ export async function runLocalStagingValidationLoopSmoke(baseUrl, headers = buil
     method: 'POST',
     headers,
     body: {
-      check_id: 'origin.direct_bypass.safe',
+      check_id: SMOKE_CHECK_ID,
       target_group_id: LOCAL_STAGING_DEMO_IDS.targetGroupId,
       target_id: LOCAL_STAGING_DEMO_IDS.targetId,
     },
@@ -350,8 +356,15 @@ export async function runLocalStagingSmoke(
   const checksApi = await stagingFetch(baseUrl, '/v1/checks', { headers });
   expectStatus(checksApi, 200, 'GET /v1/checks');
   const catalogItems = expectArrayResponse(checksApi, 'GET /v1/checks', ['checks', 'items']);
-  if (!catalogItems.some((entry) => entry.check_id === 'origin.direct_bypass.safe')) {
-    throw new Error('GET /v1/checks expected origin.direct_bypass.safe in catalog');
+  // The customer-selectable catalog intentionally withholds checks that need extra run-time
+  // input (host_sni_bypass profiles, declared probe paths, agent_mode prerequisites) so the
+  // portal never offers a check that would immediately error. Assert both halves of that
+  // contract: a selectable check is present, and a gated one is absent.
+  if (!catalogItems.some((entry) => entry.check_id === SMOKE_CHECK_ID)) {
+    throw new Error(`GET /v1/checks expected ${SMOKE_CHECK_ID} in catalog`);
+  }
+  if (catalogItems.some((entry) => entry.check_id === 'origin.direct_bypass.safe')) {
+    throw new Error('GET /v1/checks must not offer origin.direct_bypass.safe: it requires additional run-time input');
   }
   checks.push('checks_catalog');
 
