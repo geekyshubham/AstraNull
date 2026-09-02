@@ -367,7 +367,7 @@ Not a production deployment. Use for engineering, CI, and sales engineering **on
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 20.19+
 - Repository root: `/Users/checkred_admin/Projects/astranull` (or your clone path)
 - No PostgreSQL required for default `make verify` (production gate: Postgres in staging/prod)
 

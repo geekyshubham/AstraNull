@@ -6,6 +6,8 @@ import {
   isCustomerRunnable,
   resolveExpectedBehaviorForCheck,
 } from '../contracts/checks.mjs';
+import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
+import { targetDedupeKey } from '../contracts/targetManagement.mjs';
 import { incMetric } from '../lib/metrics.mjs';
 import { redactObject } from '../lib/redact.mjs';
 import { recordEvidence } from './evidence.mjs';
@@ -293,7 +295,7 @@ function validatePolicyBinding(ctx, body, group, check, options = {}) {
   return { policy };
 }
 
-function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThisHost, options = {}) {
+function revalidateBeforeDispatch(ctx, body, check, initialTarget, probeWillLeaveThisHost, options = {}) {
   const group = getStore().targetGroups.find(
     (candidate) => candidate.id === body.target_group_id
       && candidate.tenant_id === ctx.tenantId
@@ -301,12 +303,17 @@ function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThis
   );
   if (!group) return { error: 'target_group_not_found', status: 404 };
   const target = getStore().targets.find(
-    (candidate) => candidate.id === targetId
+    (candidate) => candidate.id === initialTarget.id
       && candidate.tenant_id === ctx.tenantId
       && candidate.target_group_id === group.id
       && !isArchivedTarget(candidate),
   );
   if (!target) return { error: 'target_not_found', status: 404 };
+  if (targetDedupeKey(target) !== targetDedupeKey(initialTarget)) {
+    return { error: 'target_binding_changed', status: 409 };
+  }
+  const compatibilityError = targetKindCompatibilityError(check, target);
+  if (compatibilityError) return compatibilityError;
   const binding = validatePolicyBinding(ctx, body, group, check, options);
   if (binding.error) return binding;
   if (probeWillLeaveThisHost) {
@@ -341,11 +348,6 @@ function denyEventCap(ctx, run, metadata = {}) {
     'event_cap_exceeded',
     429,
   );
-}
-
-function effectiveTargetKind(target) {
-  if (/^https?:\/\//i.test(String(target?.value ?? ''))) return 'url';
-  return target?.kind;
 }
 
 export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
@@ -475,18 +477,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     if (existingRun) return { run: getTestRun(ctx, existingRun.id), idempotent_replay: true };
   }
 
-  const kind = effectiveTargetKind(target);
-  if (Array.isArray(check.supported_targets) && check.supported_targets.length > 0) {
-    if (!check.supported_targets.includes(kind)) {
-      return {
-        error: 'target_kind_not_supported',
-        status: 400,
-        check_id: check.check_id,
-        target_kind: kind ?? null,
-        supported_targets: check.supported_targets,
-      };
-    }
-  }
+  const compatibilityError = targetKindCompatibilityError(check, target);
+  if (compatibilityError) return compatibilityError;
 
   if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
     const targetBindingError = validateHostSniTargetBinding(check, target);
@@ -608,7 +600,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     ctx,
     { ...body, target_group_id: targetGroupId },
     check,
-    target.id,
+    target,
     probeWillLeaveThisHost,
     options,
   );

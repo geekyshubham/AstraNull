@@ -56,6 +56,7 @@ import * as targetDetail from './services/targetDetail.mjs';
 import * as remediation from './services/remediation.mjs';
 import * as testPolicies from './services/testPolicies.mjs';
 import * as testRuns from './services/testRuns.mjs';
+import * as vectorLibrary from './services/vectorLibrary.mjs';
 import * as tokens from './services/tokens.mjs';
 import * as serviceAccounts from './services/serviceAccounts.mjs';
 import * as secretVault from './services/secretVault.mjs';
@@ -122,6 +123,7 @@ function defaultServiceDeps() {
     agents,
     agentAuth: { requireAgentAuth },
     testRuns,
+    vectors: vectorLibrary,
     evidence,
     findings: {
       listFindings: findings.listFindings,
@@ -155,6 +157,7 @@ function buildServiceDeps(runtimeConfig, injectedServices) {
   if (runtimeConfig.persistenceMode === 'postgres') {
     return {
       agentAuth: { requireAgentAuth },
+      vectors: vectorLibrary,
       custodyVerification,
       evidenceSnapshotSigning,
       ...(injectedServices ?? {}),
@@ -2834,6 +2837,26 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     return json(res, 200, result);
   }
 
+  if (path === '/v1/vectors' && method === 'GET') {
+    const gate = requirePermission(ctx, 'check:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    return json(res, 200, await serviceDeps.vectors.listVectors({
+      q: url.searchParams.get('q') ?? url.searchParams.get('search') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+      offset: url.searchParams.get('offset') ?? undefined,
+      vector_id: url.searchParams.get('vector_id') ?? undefined,
+      section: url.searchParams.get('section') ?? undefined,
+      domain: url.searchParams.get('domain') ?? undefined,
+      scope: url.searchParams.get('scope') ?? undefined,
+      family: url.searchParams.get('family') ?? undefined,
+      validation_tier: url.searchParams.get('validation_tier') ?? undefined,
+      evidence_tier: url.searchParams.get('evidence_tier') ?? undefined,
+      evidence_capability: url.searchParams.get('evidence_capability') ?? undefined,
+      execution_disposition: url.searchParams.get('execution_disposition') ?? undefined,
+      registry_source: url.searchParams.get('registry_source') ?? undefined,
+      check_id: url.searchParams.get('check_id') ?? undefined,
+    }));
+  }
   if (path === '/v1/checks' && method === 'GET') {
     const gate = requirePermission(ctx, 'check:read');
     if (!gate.ok) return json(res, gate.status, gate.body);

@@ -22,6 +22,7 @@ COPY apps/web ./apps/web
 COPY docs/api.md ./docs/api.md
 COPY db/schema.sql ./db/schema.sql
 COPY db/migrations ./db/migrations
+COPY db/seeds/waf-product-catalog.json ./db/seeds/waf-product-catalog.json
 COPY THIRD_PARTY_NOTICES ./THIRD_PARTY_NOTICES
 COPY workers ./workers
 

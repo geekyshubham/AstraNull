@@ -1,4 +1,5 @@
 import { getCheckById, isCustomerRunnable } from '../../contracts/checks.mjs';
+import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import {
   nextPolicyRunAt,
   normalizePolicyInput,
@@ -67,19 +68,6 @@ function assertRepositoryMethods(repo, label, methods) {
 
 function policyMaxConcurrency(check) {
   return Math.max(1, Math.min(1, Number(check?.safety_constraints?.max_concurrent_runs_per_target_group) || 1));
-}
-
-function targetKindCompatibilityError(check, target) {
-  const kind = /^https?:\/\//i.test(String(target?.value ?? '')) ? 'url' : target?.kind;
-  if (!Array.isArray(check.supported_targets) || check.supported_targets.length === 0
-      || check.supported_targets.includes(kind)) return null;
-  return {
-    error: 'target_kind_not_supported',
-    status: 400,
-    check_id: check.check_id,
-    target_kind: kind ?? null,
-    supported_targets: check.supported_targets,
-  };
 }
 
 function unsupportedEventDrivenPolicy(body, current = null) {

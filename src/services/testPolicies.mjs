@@ -1,5 +1,6 @@
 import { audit } from '../audit.mjs';
 import { getCheckById, isCustomerRunnable } from '../contracts/checks.mjs';
+import { targetKindCompatibilityError } from '../contracts/checkTargetCompatibility.mjs';
 import {
   nextPolicyRunAt,
   normalizePolicyInput,
@@ -30,19 +31,6 @@ function targetsForGroup(ctx, targetGroupId) {
 
 function targetForGroup(ctx, targetGroupId, targetId) {
   return targetsForGroup(ctx, targetGroupId).find((target) => target.id === targetId) ?? null;
-}
-
-function targetKindCompatibilityError(check, target) {
-  const kind = /^https?:\/\//i.test(String(target?.value ?? '')) ? 'url' : target?.kind;
-  if (!Array.isArray(check.supported_targets) || check.supported_targets.length === 0
-      || check.supported_targets.includes(kind)) return null;
-  return {
-    error: 'target_kind_not_supported',
-    status: 400,
-    check_id: check.check_id,
-    target_kind: kind ?? null,
-    supported_targets: check.supported_targets,
-  };
 }
 
 function publicCheck(check) {

@@ -3,7 +3,7 @@
  * Validates resource-exhaustion taxonomy registry against CHECK_CATALOG.
  * Emits metadata-only coverage summary; does not run attack traffic.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { CHECK_CATALOG, getCheckById } from '../src/contracts/checks.mjs';
 import {
@@ -23,9 +23,10 @@ import {
   summarizeCoverage,
 } from '../src/contracts/resourceExhaustionTaxonomy.mjs';
 import { evidenceTierForCheck } from '../src/lib/readinessVerdicts.mjs';
+import { evidenceTierForTaxonomyCheckIds } from '../src/lib/probeEvidenceTiers.mjs';
+import { VECTOR_CATALOG } from '../src/lib/data/vectorCatalog.generated.mjs';
 
 const DEFAULT_OUT = 'output/resource-exhaustion-taxonomy-validation.json';
-const CATALOG_PATH = 'one_sheet_global_ddos_waf_attack_vector_catalog_2026-09-01.csv';
 
 // Keep this profile-kind routing contract in sync with workers/probe-worker.mjs until the worker exports it.
 export const WORKER_EXECUTED_KIND_BY_DECLARED_KIND = Object.freeze(
@@ -60,9 +61,8 @@ export function validateDeclaredProbeKinds(
   return errors;
 }
 
-export function readExternalCatalogIds() {
-  const csv = readFileSync(CATALOG_PATH, 'utf8');
-  return [...csv.matchAll(/^(NET|AMP|APP|WAF|EVA)-\d{3}(?=,)/gm)].map((match) => match[0]);
+export function readCommittedCatalogIds() {
+  return VECTOR_CATALOG.map((row) => row.vector_id);
 }
 
 function parseArgs(argv) {
@@ -77,7 +77,7 @@ function parseArgs(argv) {
 }
 
 export function validateResourceExhaustionTaxonomy({
-  externalCatalogIds = readExternalCatalogIds(),
+  externalCatalogIds = readCommittedCatalogIds(),
   registryEntries = [
     ...ATTACK_VECTOR_REGISTRY,
     ...WAF_VULNERABILITY_REGISTRY,
@@ -245,11 +245,9 @@ export function validateResourceExhaustionTaxonomy({
       errors.push(`${entry.id}: unknown coverage_status ${entry.coverage_status}`);
       continue;
     }
-    const expectedTier = mappedChecks.reduce((best, check) => {
-      const tier = evidenceTierForCheck(check);
-      const priority = { E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 };
-      return priority[tier] > priority[best] ? tier : best;
-    }, 'E0');
+    const expectedTier = evidenceTierForTaxonomyCheckIds(
+      mappedChecks.map((check) => check.check_id),
+    );
     if (entry.evidence_tier !== expectedTier) {
       errors.push(`${entry.id}: evidence_tier does not match best mapped check tier`);
     }

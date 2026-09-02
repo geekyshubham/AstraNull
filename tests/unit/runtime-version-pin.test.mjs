@@ -132,6 +132,13 @@ const NODE_WORKFLOW_PATHS = WORKFLOW_PATHS.filter(
 );
 
 describe('node runtime version pin', () => {
+  it('declares the Vite Node 20 floor consistently in package metadata', () => {
+    const manifest = JSON.parse(read('package.json'));
+    const lockfile = JSON.parse(read('package-lock.json'));
+    assert.equal(manifest.engines?.node, '>=20.19.0');
+    assert.equal(lockfile.packages?.['']?.engines?.node, '>=20.19.0');
+  });
+
   /**
    * A guard that scans nothing passes everything.
    *

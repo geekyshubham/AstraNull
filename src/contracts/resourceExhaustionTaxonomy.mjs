@@ -1332,25 +1332,14 @@ export function buildResourceExhaustionCheckMetadata() {
   return metadata;
 }
 
-const EVIDENCE_TIER_PRIORITY = Object.freeze({ E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 });
-
 function applyRegistryEvidenceTiers(catalog) {
   registerReadinessCheckCatalog(catalog);
-  const checksById = new Map(catalog.map((check) => [check.check_id, check]));
   for (const check of catalog) {
     check.evidence_tier = evidenceTierForCheck(check);
   }
   for (const registry of [ATTACK_VECTOR_REGISTRY, WAF_VULNERABILITY_REGISTRY]) {
     for (const entry of registry) {
-      let evidenceTier = 'E0';
-      for (const checkId of entry.check_ids ?? []) {
-        const check = checksById.get(checkId);
-        if (!check) continue;
-        const candidate = evidenceTierForCheck(check);
-        if (EVIDENCE_TIER_PRIORITY[candidate] > EVIDENCE_TIER_PRIORITY[evidenceTier]) {
-          evidenceTier = candidate;
-        }
-      }
+      const evidenceTier = evidenceTierForTaxonomyCheckIds(entry.check_ids ?? []);
       entry.evidence_tier = evidenceTier;
       entry.coverage_status = coverageStatusForEvidenceTier(evidenceTier);
     }

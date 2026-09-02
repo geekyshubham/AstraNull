@@ -19332,8 +19332,8 @@ var cu = Object.freeze({
 }), lu = new Map(Object.entries(cu).flatMap(([e, t]) => t.map((t) => [t, e]))), uu = Object.freeze({
   E0: 0,
   E1: 1,
-  E4: 2,
-  E2: 3,
+  E2: 2,
+  E4: 3,
   E3: 4
 });
 function du(e) {
@@ -24219,13 +24219,7 @@ Object.freeze(Su.flatMap((e) => e.check_ids)), Object.freeze([
     title: "Governed volumetric execution scenarios (UDP/SYN/HTTP/DNS floods)",
     depends_on: ["SOC-007"]
   }
-]), Object.freeze({
-  E0: 0,
-  E1: 1,
-  E4: 2,
-  E2: 3,
-  E3: 4
-});
+]);
 var Cu = 720 * 60 * 60 * 1e3, wu = Object.freeze(pu.map((e) => {
   let t = e.scored_for_ddos_readiness === !0, n = t ? "readiness_posture" : "validation_coverage";
   return Object.freeze({

@@ -41,6 +41,12 @@ const WAVE1_FORBIDDEN_FIELD_LEAKS = [
   /\b(acquire_resource|auto_claim|dns_modify|modify_dns|create_account|register_domain)\s*:/i,
 ];
 
+// Keep scanning this generated data for every other forbidden pattern. "botnet" is
+// allowed only here as non-actionable taxonomy prose copied from the source catalog.
+const DESCRIPTIVE_METADATA_EXEMPTIONS = new Map([
+  [path.join('src', 'lib', 'data', 'vectorCatalog.generated.mjs'), new Set(['botnet'])],
+]);
+
 function walk(dir, files = []) {
   for (const name of readdirSync(dir)) {
     const p = path.join(dir, name);
@@ -54,8 +60,9 @@ function walk(dir, files = []) {
 function scanFile(file, patterns, label) {
   let hits = 0;
   const text = readFileSync(file, 'utf8');
+  const exemptions = DESCRIPTIVE_METADATA_EXEMPTIONS.get(path.relative(ROOT, file));
   for (const pattern of patterns) {
-    if (pattern.test(text)) {
+    if (pattern.test(text) && !exemptions?.has(pattern.source)) {
       console.error(`safety: ${label} ${pattern} in ${file}`);
       hits += 1;
     }

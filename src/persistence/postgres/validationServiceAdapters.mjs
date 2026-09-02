@@ -6,6 +6,8 @@ import {
   isCustomerRunnable,
   resolveExpectedBehaviorForCheck,
 } from '../../contracts/checks.mjs';
+import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
+import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
 import {
   VERDICT_INSERTED,
@@ -540,11 +542,16 @@ export function createPostgresValidationServices(repositories, options = {}) {
     };
   }
 
-  async function revalidateBeforeDispatch(ctx, body, check, targetId, probeWillLeaveThisHost, dispatchOptions = {}) {
+  async function revalidateBeforeDispatch(ctx, body, check, initialTarget, probeWillLeaveThisHost, dispatchOptions = {}) {
     const group = await coreCatalog.getTargetGroup(ctx, body.target_group_id, LEAN_GROUP_LOOKUP);
     if (!group) return { error: 'target_group_not_found', status: 404 };
-    const target = (group.targets ?? []).find((candidate) => candidate.id === targetId);
+    const target = (group.targets ?? []).find((candidate) => candidate.id === initialTarget.id);
     if (!target) return { error: 'target_not_found', status: 404 };
+    if (targetDedupeKey(target) !== targetDedupeKey(initialTarget)) {
+      return { error: 'target_binding_changed', status: 409 };
+    }
+    const compatibilityError = targetKindCompatibilityError(check, target);
+    if (compatibilityError) return compatibilityError;
     const binding = await validatePolicyBinding(ctx, body, group, check, dispatchOptions);
     if (binding.error) return binding;
     if (probeWillLeaveThisHost) {
@@ -1226,9 +1233,12 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
 
       const targets = group.targets ?? [];
-      const targetId = body.target_id ?? targets[0]?.id;
-      const target = targets.find((t) => t.id === targetId);
+      const targetId = typeof body.target_id === 'string' ? body.target_id.trim() : '';
+      if (!targetId) return { error: 'missing_target_id', status: 400 };
+      let target = targets.find((candidate) => candidate.id === targetId);
       if (!target) return { error: 'target_not_found', status: 404 };
+      const compatibilityError = targetKindCompatibilityError(check, target);
+      if (compatibilityError) return compatibilityError;
 
       if ((runtimeConfig.probeMode ?? 'simulation') === 'signed-worker') {
         const targetBindingError = validateHostSniTargetBinding(check, target);
@@ -1267,7 +1277,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
           ctx,
           { ...body, target_group_id: targetGroupId },
           check,
-          target.id,
+          target,
           probeWillLeaveThisHost,
           dispatchOptions,
         );
@@ -1451,6 +1461,41 @@ export function createPostgresValidationServices(repositories, options = {}) {
         }
       }
 
+      const finalValidation = await revalidateBeforeDispatch(
+        ctx,
+        { ...body, target_group_id: targetGroupId },
+        check,
+        target,
+        probeWillLeaveThisHost,
+        dispatchOptions,
+      );
+      if (finalValidation.error) {
+        if (['target_group_not_found', 'target_not_found', 'target_binding_changed', 'target_kind_not_supported'].includes(
+          finalValidation.error,
+        )) {
+          return finalValidation;
+        }
+        return denySafeStart(
+          ctx,
+          finalValidation.error === 'ownership_not_verified'
+            ? 'test_run.ownership_denied'
+            : 'test_run.policy_dispatch_denied',
+          targetGroupId,
+          {
+            check_id: check.check_id,
+            policy_id: policyBinding.policy?.id ?? null,
+            target_group_id: targetGroupId,
+            target_id: target.id,
+            ownership_state: finalValidation.ownership_state,
+            reason: finalValidation.reason,
+            phase: 'pre_dispatch_revalidation',
+          },
+          finalValidation.error,
+          finalValidation.status,
+        );
+      }
+      target = finalValidation.target;
+
       const safetyConstraints = effectiveSafetyConstraints(check, group);
       const runId = newId('run');
       const runRecord = {
@@ -1458,7 +1503,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
         tenant_id: ctx.tenantId,
         target_group_id: targetGroupId,
         target_id: target.id,
-        policy_id: policyBinding.policy?.id ?? null,
+        policy_id: finalValidation.policy?.id ?? null,
         policy_dispatch_id: dispatchOptions.policyDispatch?.dispatch_id ?? null,
         check_id: check.check_id,
         vector_family: check.vector_family,
@@ -1481,40 +1526,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
       let probe;
       let probeEvent = null;
       let probeJob = null;
-
-      const finalValidation = await revalidateBeforeDispatch(
-        ctx,
-        { ...body, target_group_id: targetGroupId },
-        check,
-        target.id,
-        probeWillLeaveThisHost,
-        dispatchOptions,
-      );
-      if (finalValidation.error) {
-        await validationEvidence.updateTestRun(ctx, runId, {
-          status: 'cancelled',
-          completed_at: nowFn().toISOString(),
-          summary: { dispatch_blocked: true, reason: finalValidation.error },
-        });
-        return denySafeStart(
-          ctx,
-          finalValidation.error === 'ownership_not_verified'
-            ? 'test_run.ownership_denied'
-            : 'test_run.policy_dispatch_denied',
-          runId,
-          {
-            check_id: check.check_id,
-            policy_id: runRecord.policy_id,
-            target_group_id: targetGroupId,
-            target_id: target.id,
-            ownership_state: finalValidation.ownership_state,
-            reason: finalValidation.reason,
-            phase: 'pre_dispatch_revalidation',
-          },
-          finalValidation.error,
-          finalValidation.status,
-        );
-      }
 
       if (!inlineProbe) {
         if (wouldExceedEventCap(run, 0, 1)) {

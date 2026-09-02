@@ -3164,7 +3164,7 @@ describe('postgres validation service adapters', () => {
     ));
   });
 
-  it('cancels a persisted policy-bound run when the lease changes at the final dispatch boundary', async () => {
+  it('denies a policy-bound run before persistence when the lease changes at revalidation', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
     const policy = {
       id: 'pol_1', tenant_id: 'ten_demo', target_group_id: 'tg_1',
@@ -3174,19 +3174,9 @@ describe('postgres validation service adapters', () => {
       lease_token: 'lease_1', lease_expires_at: '2026-06-01T12:05:00.000Z',
     };
     let policyReads = 0;
-    let createdRun;
-    const updates = [];
     const { repositories, validationCalls, auditEvents } = createRecordingValidationRepositories({
       getTargetGroup: async () => baseStartTargetGroup(),
       listAgents: async () => [baseOnlineAgent()],
-      createTestRun: async (c, record) => {
-        createdRun = record;
-        return { ...record };
-      },
-      updateTestRun: async (c, id, patch) => {
-        updates.push(patch);
-        return { ...createdRun, id, ...patch };
-      },
       createProbeJob: async (c, job) => ({ ...job, status: 'pending' }),
     });
     repositories.testPolicies = {
@@ -3217,13 +3207,8 @@ describe('postgres validation service adapters', () => {
     );
 
     assert.deepEqual(result, { error: 'policy_lease_invalid', status: 409 });
-    assert.equal(createdRun.policy_id, policy.id);
     assert.equal(policyReads, 2);
-    assert.ok(updates.some(
-      (patch) => patch.status === 'cancelled'
-        && patch.summary?.reason === 'policy_lease_invalid',
-    ));
-    assert.equal(validationCalls.some((call) => call.method === 'createProbeJob'), false);
+    assertNoRunProbeOrAgentSideEffects(validationCalls);
     assert.ok(auditEvents.some(
       (event) => event.entry.action === 'test_run.policy_dispatch_denied'
         && event.entry.metadata.phase === 'pre_dispatch_revalidation',
@@ -3311,7 +3296,9 @@ describe('postgres validation service adapters', () => {
     assertNoRunProbeOrAgentSideEffects(minInterval.validationCalls);
 
     const prereq = createRecordingValidationRepositories({
-      getTargetGroup: async () => baseStartTargetGroup(),
+      getTargetGroup: async () => baseStartTargetGroup({
+        targets: [{ id: 'tgt_1', kind: 'url', value: 'https://app.example.test/' }],
+      }),
       listAgents: async () => [baseOnlineAgent({ capabilities: ['heartbeat'] })],
     });
     const prereqDenied = await createPostgresValidationServices(prereq.repositories, {
@@ -3345,6 +3332,78 @@ describe('postgres validation service adapters', () => {
     );
     assert.deepEqual(targetDenied, { error: 'target_not_found', status: 404 });
     assertNoRunProbeOrAgentSideEffects(missingTarget.validationCalls);
+
+    const missingExactTarget = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup(),
+      listAgents: async () => [baseOnlineAgent()],
+    });
+    const missingExactDenied = await createPostgresValidationServices(
+      missingExactTarget.repositories,
+    ).testRuns.startTestRun(ctx, {
+      check_id: startBody.check_id,
+      target_group_id: startBody.target_group_id,
+    });
+    assert.deepEqual(missingExactDenied, { error: 'missing_target_id', status: 400 });
+    assertNoRunProbeOrAgentSideEffects(missingExactTarget.validationCalls);
+
+    const incompatibleTarget = createRecordingValidationRepositories({
+      getTargetGroup: async () => baseStartTargetGroup(),
+      listAgents: async () => [baseOnlineAgent()],
+    });
+    const incompatibleDenied = await createPostgresValidationServices(
+      incompatibleTarget.repositories,
+    ).testRuns.startTestRun(ctx, {
+      check_id: 'path.protected_canary.safe',
+      target_group_id: startBody.target_group_id,
+      target_id: startBody.target_id,
+    });
+    assert.deepEqual(incompatibleDenied, {
+      error: 'target_kind_not_supported',
+      status: 400,
+      check_id: 'path.protected_canary.safe',
+      target_kind: 'ip',
+      supported_targets: ['url'],
+    });
+    assertNoRunProbeOrAgentSideEffects(incompatibleTarget.validationCalls);
+  });
+
+  it('revalidates exact target disappearance and substitution with no side effects', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'engineer' };
+    const initial = baseStartTargetGroup();
+    const scenarios = [
+      {
+        name: 'disappearance',
+        revalidated: baseStartTargetGroup({ targets: [] }),
+        expected: { error: 'target_not_found', status: 404 },
+      },
+      {
+        name: 'same-id substitution',
+        revalidated: baseStartTargetGroup({
+          targets: [{ id: 'tgt_1', kind: 'ip', value: '203.0.113.2' }],
+        }),
+        expected: { error: 'target_binding_changed', status: 409 },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      let groupReads = 0;
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => (++groupReads === 1 ? initial : scenario.revalidated),
+        listAgents: async () => [baseOnlineAgent()],
+      });
+      const result = await createPostgresValidationServices(recorded.repositories, {
+        now: () => FIXED_NOW,
+      }).testRuns.startTestRun(ctx, {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      });
+
+      assert.deepEqual(result, scenario.expected, scenario.name);
+      assert.equal(groupReads, 2, scenario.name);
+      assertNoRunProbeOrAgentSideEffects(recorded.validationCalls);
+      assert.equal(recorded.auditEvents.length, 0, scenario.name);
+    }
   });
 
   it('startTestRun denies kill switch and SOC-gated checks with audit', async () => {
@@ -10053,7 +10112,9 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
   };
 
   function opsRepositories(releaseLedger, overrides = {}) {
-    const group = baseStartTargetGroup();
+    const group = baseStartTargetGroup({
+      targets: [{ id: 'tgt_1', kind: 'fqdn', value: 'app.example.test' }],
+    });
     let createdRun;
     const verdictWrites = [];
     const { repositories, validationCalls } = createRecordingValidationRepositories({

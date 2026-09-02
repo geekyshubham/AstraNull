@@ -2111,6 +2111,7 @@ fi
 
       const criticalRuntimeInputs = [
         'scripts/worker-heartbeat-health.mjs',
+        'db/seeds/waf-product-catalog.json',
         'THIRD_PARTY_NOTICES/cdncheck-MIT.txt',
         'THIRD_PARTY_NOTICES/wafw00f-BSD-3-Clause.txt',
       ];

@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   ATTACK_VECTOR_REGISTRY,
   ATTACK_SURFACE_DOMAINS,
@@ -15,10 +20,13 @@ import {
 } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import { evidenceTierForCheck } from '../../src/lib/readinessVerdicts.mjs';
-import { evidenceTierForTaxonomyCheckId } from '../../src/lib/probeEvidenceTiers.mjs';
+import {
+  evidenceTierForTaxonomyCheckId,
+  evidenceTierForTaxonomyCheckIds,
+} from '../../src/lib/probeEvidenceTiers.mjs';
 import {
   WORKER_EXECUTED_KIND_BY_DECLARED_KIND,
-  readExternalCatalogIds,
+  readCommittedCatalogIds,
   validateDeclaredProbeKinds,
   validateResourceExhaustionTaxonomy,
 } from '../../scripts/validate-resource-exhaustion-taxonomy.mjs';
@@ -96,6 +104,23 @@ describe('resource-exhaustion taxonomy', () => {
     t.diagnostic(`legitimate pending attack-vector entries: ${result.taxonomy.coverage.pending}`);
   });
 
+  it('validates from a source-free clean-checkout-style working directory', () => {
+    const cleanWorkingDirectory = mkdtempSync(path.join(tmpdir(), 'astranull-taxonomy-clean-'));
+    const out = path.join(cleanWorkingDirectory, 'taxonomy.json');
+    const script = fileURLToPath(new URL('../../scripts/validate-resource-exhaustion-taxonomy.mjs', import.meta.url));
+    try {
+      execFileSync(process.execPath, [script, '--out', out], {
+        cwd: cleanWorkingDirectory,
+        encoding: 'utf8',
+      });
+      const result = JSON.parse(readFileSync(out, 'utf8'));
+      assert.equal(result.ok, true, result.errors.join('; '));
+      assert.equal(result.catalog_partition.external_unique_ids, 721);
+    } finally {
+      rmSync(cleanWorkingDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('maps every catalog check to ATT, ND, or WAF registry', () => {
     const result = validateResourceExhaustionTaxonomy();
     const orphanErrors = result.errors.filter((e) => e.includes('orphan catalog'));
@@ -119,18 +144,26 @@ describe('resource-exhaustion taxonomy', () => {
         pending: summary.pending,
         total: summary.total,
       },
-      { implemented: 79, partial: 92, soc_only: 78, pending: 0, total: 249 },
+      { implemented: 79, partial: 84, soc_only: 86, pending: 0, total: 249 },
     );
     const validation = validateResourceExhaustionTaxonomy();
-    assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 68.7);
+    assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 65.5);
     t.diagnostic(`coverage distribution: ${JSON.stringify(summary)}`);
   });
 
-  it('derives all four check evidence-tier branches', () => {
+  it('derives all four check evidence-tier branches and preserves authoritative SOC scope', () => {
     assert.equal(evidenceTierForCheck({}), 'E4');
     assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'metadata_marker' } }), 'E1');
     assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'http_head' } }), 'E2');
     assert.equal(evidenceTierForCheck({ probe_profile: { kind: 'rate_limit_sequence' } }), 'E3');
+    assert.equal(evidenceTierForTaxonomyCheckIds([
+      'l3.forbidden_udp_port.safe',
+      'high_scale.volumetric.request_only',
+    ]), 'E4');
+    assert.equal(evidenceTierForTaxonomyCheckIds([
+      'l7.http_get_flood.validation',
+      'high_scale.application.request_only',
+    ]), 'E3');
   });
 
   it('derives status from the best mapped evidence tier', () => {
@@ -160,10 +193,7 @@ describe('resource-exhaustion taxonomy', () => {
 
     for (const entry of ATTACK_VECTOR_REGISTRY) {
       const checks = (entry.check_ids ?? []).map(getCheckById).filter(Boolean);
-      const priority = { E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 };
-      const tier = checks.reduce((best, check) => (
-        priority[evidenceTierForCheck(check)] > priority[best] ? evidenceTierForCheck(check) : best
-      ), 'E0');
+      const tier = evidenceTierForTaxonomyCheckIds(checks.map((check) => check.check_id));
       assert.equal(entry.evidence_tier, tier, entry.id);
       assert.equal(
         entry.coverage_status,
@@ -173,10 +203,7 @@ describe('resource-exhaustion taxonomy', () => {
     }
     for (const entry of WAF_VULNERABILITY_REGISTRY) {
       const checks = (entry.check_ids ?? []).map(getCheckById).filter(Boolean);
-      const priority = { E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 };
-      const tier = checks.reduce((best, check) => (
-        priority[evidenceTierForCheck(check)] > priority[best] ? evidenceTierForCheck(check) : best
-      ), 'E0');
+      const tier = evidenceTierForTaxonomyCheckIds(checks.map((check) => check.check_id));
       assert.equal(entry.evidence_tier, tier, entry.id);
       assert.equal(
         entry.coverage_status,
@@ -215,7 +242,7 @@ describe('resource-exhaustion taxonomy', () => {
   });
 
   it('fails closed unless claims and exclusions exactly partition canonical catalog IDs', () => {
-    const externalCatalogIds = readExternalCatalogIds();
+    const externalCatalogIds = readCommittedCatalogIds();
     const registryEntries = [
       ...ATTACK_VECTOR_REGISTRY,
       ...WAF_VULNERABILITY_REGISTRY,

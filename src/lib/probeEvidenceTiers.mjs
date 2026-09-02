@@ -338,7 +338,9 @@ const TAXONOMY_PROBE_KIND_BY_CHECK_ID = new Map(
     .flatMap(([kind, checkIds]) => checkIds.map((checkId) => [checkId, kind])),
 );
 
-const EVIDENCE_TIER_PRIORITY = Object.freeze({ E0: 0, E1: 1, E4: 2, E2: 3, E3: 4 });
+// A bounded semantic check can establish a safe result. Otherwise an authoritative
+// SOC-governed requirement must not be downgraded by supplemental declaration/transport checks.
+const EVIDENCE_TIER_PRIORITY = Object.freeze({ E0: 0, E1: 1, E2: 2, E4: 3, E3: 4 });
 
 export function evidenceTierForTaxonomyCheckId(checkId) {
   const kind = TAXONOMY_PROBE_KIND_BY_CHECK_ID.get(checkId);

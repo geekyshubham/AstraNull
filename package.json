@@ -5,7 +5,7 @@
   "type": "module",
   "description": "AstraNull — no-access-first DDoS readiness validation platform",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
@@ -121,6 +121,9 @@
     "waf:catalog:validate": "node scripts/validate-waf-product-catalog.mjs",
     "waf:catalog:seed": "node scripts/seed-waf-product-catalog.mjs",
     "probe:fleet:matrix:evidence": "node scripts/probe-fleet-matrix-evidence.mjs",
+    "vector:catalog:generate": "node scripts/generate-vector-catalog.mjs",
+    "vector:catalog:check": "node scripts/generate-vector-catalog.mjs --check",
+    "vector:matrix": "node scripts/emit-vector-target-matrix.mjs",
     "vector:safety:evidence": "node scripts/vector-safety-policy-evidence.mjs",
     "vector:taxonomy:validate": "node scripts/validate-resource-exhaustion-taxonomy.mjs",
     "secret:rotation:evidence": "node scripts/secret-rotation-drill-evidence.mjs",

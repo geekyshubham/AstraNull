@@ -43,7 +43,7 @@ These DET rows initially delivered the **65-check defensive catalog**; that hist
 |---|---|---|
 | DET-001–011 | Origin, L3/L4, DNS, L7, TLS, protocol readiness checks | Single-probe proxies; no volumetric floods |
 | DET-012 | High-scale telemetry model | Telemetry schema; not live flood execution |
-| DET-015 | Enterprise catalog expansion | Current DDoS-scored distribution: 79 implemented, 92 partial, 78 SOC-only, 0 pending; higher-tier staging evidence remains separate |
+| DET-015 | Enterprise catalog expansion | Current DDoS-scored distribution: 79 implemented, 84 partial, 86 SOC-only, 0 pending; higher-tier staging evidence remains separate |
 
 ## Definition of done (full taxonomy)
 

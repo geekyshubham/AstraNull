@@ -73,6 +73,8 @@ The production-safe catalog in `src/contracts/checks.mjs` maps matrix rows to ve
 
 This catalog is defensive metadata: it must not be interpreted as a library of amplification, reflection, spoofing, or unmanaged traffic-generation recipes.
 
+The committed 721-row projection names the source column neutrally as `targeted_resource_or_assumption`. The vector-library contract never turns that catalog target into a result: it publishes no `detects` field. Instead it separates `intended_detection_goal` (marked as intent, not observation), `evidence_capability`, `execution_disposition`, `failure_means`, and `expected_controls`. APP-003 and NET-016 are explicit invariants: both remain E4 / SOC-governed and `soc_gated_only`, while their E1 declaration checks are retained only through `metadata_available` and `metadata_check_ids`. APP-001 is the semantic-safe E3 rate-limit example.
+
 ## Resource-exhaustion taxonomy
 
 DDoS attacks are also classified by **what resource they exhaust** (bandwidth, packet-processing, TCP state, DNS QPS, application RPS, etc.). See [Resource-Exhaustion Taxonomy](19-resource-exhaustion-taxonomy.md) and the machine-readable registry in `src/contracts/resourceExhaustionTaxonomy.mjs`. Validate coverage with `npm run vector:taxonomy:validate`.
@@ -82,7 +84,7 @@ DDoS attacks are also classified by **what resource they exhaust** (bandwidth, p
 Catalog coverage and evidence coverage answer different questions:
 
 - **Catalog accounting: 721/721 rows (100%)** — 680 rows are claimed by a registry entry and 41 are explicitly out of outside-in scope; 0 are unclaimed and 0 are duplicated.
-- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104, E2: 79, E3: 271, E4: 218, and E5: 8. There are 0 claimed E0 / `pending` rows; the separately accounted 41 outside-in exclusions are monitor-only E5 annotations.
+- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104, E2: 39, E3: 271, E4: 258, and E5: 8. With the 41 explicit outside-in exclusions, the complete library has E5: 49. Authoritative E4 outranks supplemental E1/E2 evidence, while genuine E3 semantic-safe evidence outranks E4. Execution dispositions are 414 safe-validation available, 258 SOC-gated only, and 49 monitor-only; there are 0 E0 / `pending` rows.
 
 Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the current 2026-09-01 post-remediation validator snapshot. The [coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; use the validator, not its historical totals, for release accounting.
 
