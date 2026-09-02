@@ -330,6 +330,7 @@ const VALID_PROBE_BODY = Object.freeze({
  * which the pre-fix code left the start gate open.
  */
 function createKillSwitchInterleavingHarness(options = {}) {
+  const auditClient = {};
   const state = {
     testRuns: [],
     probeJobs: [],
@@ -418,11 +419,15 @@ function createKillSwitchInterleavingHarness(options = {}) {
         cancelled_jobs: cancelledJobs.map((job) => ({ ...job })),
       };
     },
-    async withRunMutationLock(ctx, runId, callback) {
-      return { acquired: true, result: await callback() };
+    async withRunMutationLock(ctx, runId, callback, options = {}) {
+      return {
+        acquired: true,
+        result: await callback(options.client ?? auditClient),
+      };
     },
-    async withRunFinalizationLock(ctx, runId, callback) {
-      return { acquired: true, result: await callback() };
+    async withRunFinalizationLock(ctx, runId, callback, options = {}) {
+      assert.equal(options.client, auditClient);
+      return { acquired: true, result: await callback(options.client) };
     },
     async listRunEvents(ctx, runId, opts = {}) {
       return state.events.filter(
@@ -568,6 +573,9 @@ function createKillSwitchInterleavingHarness(options = {}) {
   highScale.updateHighScaleRequest = async (ctx, id, patch) => ({ id, ...patch });
 
   const audit = {
+    async withTenantAuditLock(_tenantId, callback) {
+      return callback({ client: auditClient, prior: null });
+    },
     async appendAuditEvent(entry) {
       state.audit.push(entry);
       return entry;

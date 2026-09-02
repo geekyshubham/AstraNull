@@ -35,12 +35,16 @@ export function simulateProbeResult(check, target, overrideProfile) {
       datagram_bytes: 24,
       note: 'Simulated single UDP datagram probe.',
     });
-  } else if (probeProfileKind === 'quic_reachability') {
+  } else if (['quic_reachability', 'http3_control_probe'].includes(probeProfileKind)) {
     Object.assign(baseMetadata, {
-      probe_kind: 'quic_reachability',
+      probe_kind: probeProfileKind,
+      capability_scope: 'http3_alt_svc_observation_only',
+      http_method: 'HEAD',
       alt_svc_present: true,
-      quic_port: 443,
-      note: 'Simulated Alt-Svc discovery and UDP-443 datagram.',
+      http3_advertised: true,
+      advertised_h3_port: 443,
+      alt_svc_h3_valid: true,
+      note: 'Simulated one-HEAD HTTP/3 Alt-Svc observation only.',
     });
   } else if (probeProfileKind === 'alert_webhook_ping') {
     Object.assign(baseMetadata, {

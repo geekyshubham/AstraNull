@@ -1,5 +1,6 @@
 import { getStore } from '../store.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from './highScale.mjs';
+import { runVerdictSupportsReadiness } from '../lib/readinessVerdicts.mjs';
 import {
   computePlacementDiagnostics,
   placementScoreFromDiagnostics,
@@ -73,11 +74,13 @@ function vaultForRun(store, runId) {
     && (!e.related_event_id || trustedEventIds.has(e.related_event_id)));
 }
 
+function readinessVerdictForRun(store, run) {
+  const verdict = verdictForRun(store, run.id);
+  return runVerdictSupportsReadiness(run, verdict) ? verdict : null;
+}
+
 function runHasEvidenceBacking(store, run) {
-  if (verdictForRun(store, run.id)) return true;
-  if (eventsForRun(store, run.id).length > 0) return true;
-  if (vaultForRun(store, run.id).length > 0) return true;
-  return false;
+  return Boolean(readinessVerdictForRun(store, run));
 }
 
 function collectEvidenceTimestamps(store, run) {
@@ -246,18 +249,17 @@ function scoreSocGovernance(store, tenantId) {
 
 export function computeReadiness(tenantId) {
   const store = getStore();
-  const rollup = store.stateRollups?.[tenantId];
-  if (rollup?.readiness && typeof rollup.readiness === 'object') {
-    return rollup.readiness;
-  }
+  // Persisted readiness rollups are unversioned and can predate scoring/evidence rules.
+  // Recompute from authoritative tenant state; store.readiness remains an output cache only.
   const nowMs = Date.now();
   const groups = activeTargetGroupsForTenant(tenantId);
   const agents = store.agents.filter((a) => a.tenant_id === tenantId && a.status !== 'revoked');
   const onlineAgents = agents.filter((a) => a.status === 'online');
   const runs = store.testRuns.filter((r) => r.tenant_id === tenantId);
   const findings = store.findings.filter((f) => f.tenant_id === tenantId && f.status === 'open');
-  const verdicts = store.verdicts.filter((v) => v.tenant_id === tenantId
-    && verdictForRun(store, v.test_run_id)?.id === v.id);
+  const verdicts = runs
+    .map((run) => readinessVerdictForRun(store, run))
+    .filter(Boolean);
 
   const factors = [];
 

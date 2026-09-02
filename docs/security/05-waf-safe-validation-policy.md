@@ -12,7 +12,7 @@ WAF posture validation must prove control behavior, not exploit applications.
 
 | Check type | Allowed method | Limits |
 |---|---|---|
-| WAF fingerprinting | Single/few normal HTTP requests; DNS/TLS/headers. | No auth bypass, no high rate. |
+| WAF fingerprinting | Bounded pre-reserved, destination-pinned HTTP response metadata; no redirects or standalone DNS/TLS hint collectors. | No auth bypass, no high rate. |
 | Customer marker rule | Harmless header/path/query marker that customer configured WAF to block/challenge. | Max 1-5 requests per run. |
 | Protected path canary | Customer-provided canary endpoint/nonce. | No real user data. |
 | Origin bypass | Direct path probe with nonce and agent/canary observation. | Only approved direct target/origin. |

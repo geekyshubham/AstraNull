@@ -13,6 +13,7 @@ import {
 } from '../../src/contracts/checks.mjs';
 import { EXHAUSTED_RESOURCE_FAMILIES } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
 import { evidenceTierForCheck } from '../../src/lib/readinessVerdicts.mjs';
+import { simulateProbeResult } from '../../src/services/probeStub.mjs';
 
 /** Maps docs/progress-detailed.md VEC-* rows to versioned catalog check_ids. */
 export const DETAILED_VECTOR_TRACKER = Object.freeze({
@@ -426,6 +427,23 @@ describe('vector catalog', () => {
         outside_in_waf_scan: 13,
       },
     );
+  });
+
+  it('simulates HTTP3 compatibility kinds as HEAD-only Alt-Svc observations', () => {
+    for (const checkId of [
+      'protocol.http3_quic_exposure.safe',
+      'protocol.http3_control_stream.readiness',
+    ]) {
+      const result = simulateProbeResult(
+        getCheckById(checkId),
+        { id: 'tgt_h3', value: 'edge.example.test' },
+      );
+      assert.equal(result.metadata.capability_scope, 'http3_alt_svc_observation_only');
+      assert.equal(result.metadata.http_method, 'HEAD');
+      assert.equal(result.metadata.advertised_h3_port, 443);
+      assert.equal('quic_port' in result.metadata, false);
+      assert.equal('udp_response_received' in result.metadata, false);
+    }
   });
 
   it('marks customer-declared rate-limit paths as additional input', () => {

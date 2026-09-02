@@ -2,6 +2,10 @@ export interface ResourceFamily {
   id: string;
   label: string;
   metric: string;
+  layer: string;
+  scoredForDdosReadiness: boolean;
+  visualization: 'readiness_posture' | 'validation_coverage';
+  description: string;
 }
 
 export type ResourceMatrixStatus =

@@ -1,5 +1,7 @@
 # AstraNull Attack-Vector Coverage Audit — Gaps, Defects, and a Navigable Taxonomy
 
+> **Superseded pre-remediation baseline — not current release accounting.** This audit records the defect-discovery snapshot from before the 2026-09-01 remediation pass. Its 175-check, 356/721, and old status/tier totals are intentionally preserved as historical evidence and must not be quoted as current. Current executable truth comes from `npm run vector:taxonomy:validate`: 249 checks (232 safe, 17 SOC-gated), 680 registry-claimed catalog rows plus 41 explicit outside-in exclusions, 0 unclaimed, and a DDoS-scored distribution of 79 implemented / 92 partial / 78 SOC-only / 0 pending.
+
 **Scope:** every row of `one_sheet_global_ddos_waf_attack_vector_catalog_2026-09-01.csv` (721 vectors) reconciled against AstraNull's shipped registries and, critically, against what the probe code *actually executes*.
 **Date:** 2026-09-01 · **Status:** analysis only — no code changed. This document is the input for the implementation and remediation passes that follow.
 **Reproduce:** `python3 analysis/coverage-report.py` then `python3 analysis/gen-appendices.py` (both read `analysis/vector-map.py`, the curated 721-row mapping; outputs land in the gitignored `output/`).

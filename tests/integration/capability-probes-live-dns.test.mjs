@@ -1,31 +1,52 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { describe, it } from 'node:test';
+import { getCheckById } from '../../src/contracts/checks.mjs';
 import { executeCapabilityProbe } from '../../src/lib/capabilityProbes.mjs';
-import { signProbeJob } from '../../src/lib/probeJobs.mjs';
+import { buildSignedProbeJobRecord } from '../../src/lib/probeJobs.mjs';
 
-const VERIFY_SECRET = 'c'.repeat(32);
+const VERIFY_SECRET = randomBytes(32).toString('hex');
+const AXFR_CHECK = getCheckById('dns.zone_transfer_exposure.safe');
+assert.ok(AXFR_CHECK, 'AXFR catalog check must exist');
 
 function signedAxfrJob(zone) {
-  const job = {
-    id: 'pjob_live_axfr',
-    tenant_id: 'ten_live',
-    test_run_id: 'run_live',
-    check_id: 'dns.zone_transfer_exposure.safe',
-    nonce_hash: 'live_axfr_nonce_hash',
-    constraints: { timeout_ms: 15000, max_requests: 1 },
-    probe_profile: { kind: 'dns_axfr_leak', zone },
-    target: { kind: 'fqdn', value: zone },
-  };
-  job.job_signature = signProbeJob(job, VERIFY_SECRET);
-  return job;
+  return buildSignedProbeJobRecord({
+    run: {
+      id: 'run_live',
+      tenant_id: 'ten_live',
+      safety_constraints: { max_requests: 2 },
+    },
+    check: AXFR_CHECK,
+    target: { id: 'tgt_live_axfr', kind: 'fqdn', value: zone },
+    probeWorkerSecret: VERIFY_SECRET,
+    now: new Date('2026-09-01T00:00:00.000Z'),
+    newId: () => 'pjob_live_axfr',
+  });
 }
 
-const skipPublic = process.env.ASTRANULL_SKIP_PUBLIC_DNS === '1';
+const runPublicDns = process.env.ASTRANULL_RUN_PUBLIC_DNS === '1';
 
-describe('capability probes live public DNS (unaided I/O)', { skip: skipPublic }, () => {
-  it('dns_axfr_leak uses real resolveNs + net.connect against example.com NS', async () => {
+// example.com is third-party infrastructure. Local loopback AXFR coverage is canonical;
+// this supplemental public check requires an explicit operator opt-in.
+describe('capability probes live public DNS (unaided I/O)', () => {
+  it('signs coherent authoritative AXFR operation caps', () => {
+    const job = signedAxfrJob('example.com');
+    assert.equal(job.probe_profile.max_requests, 2);
+    assert.equal(job.constraints.max_probe_requests, 2);
+    assert.equal(job.constraints.min_destination_resolver_attempts, 2);
+    assert.equal(job.constraints.max_destination_resolver_attempts, 4);
+    assert.equal(job.constraints.max_total_operations, 6);
+    assert.equal(job.constraints.max_requests, 6);
+  });
+
+  it('dns_axfr_leak uses real resolveNs + net.connect against example.com NS', {
+    skip: runPublicDns
+      ? false
+      : 'set ASTRANULL_RUN_PUBLIC_DNS=1 to opt in to third-party DNS I/O',
+  }, async () => {
+    const job = signedAxfrJob('example.com');
     const outcome = await executeCapabilityProbe(
-      signedAxfrJob('example.com'),
+      job,
       { probeWorkerSecret: VERIFY_SECRET },
     );
 
@@ -40,6 +61,10 @@ describe('capability probes live public DNS (unaided I/O)', { skip: skipPublic }
     } else {
       assert.ok(outcome.metadata.rcode >= 1 && outcome.metadata.rcode <= 15, `unexpected DNS rcode ${outcome.metadata.rcode}`);
     }
+    assert.equal(outcome.metadata.resolver_attempts, 1);
+    assert.equal(outcome.metadata.destination_vetting_resolver_attempts, 2);
+    assert.equal(outcome.metadata.transport_attempts, 1);
+    assert.equal(outcome.metadata.request_counting_basis, 'logical_operations');
     assert.equal(outcome.requests_sent, 2);
   });
 });

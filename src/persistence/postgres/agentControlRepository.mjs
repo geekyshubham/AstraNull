@@ -1,4 +1,4 @@
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 const AGENT_COLUMNS = `id, tenant_id, environment_id, target_group_id, bootstrap_token_id, name, hostname,
   status, version, placement_type, capabilities, fingerprint, credential_hash, credential_salt,
@@ -297,8 +297,23 @@ export function createAgentControlRepository(pool) {
       });
     },
 
-    async ackAgentJob({ tenantId, agentId, jobId }, ackedAt) {
-      return withTenantContext(pool, tenantId, async (client) => {
+    async ackAgentJob({ tenantId, agentId, jobId }, ackedAt, options = {}) {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
+        const selected = await client.query(
+          `SELECT ${AGENT_JOB_COLUMNS}
+           FROM agent_jobs
+           WHERE tenant_id = $1 AND agent_id = $2 AND id = $3
+           FOR UPDATE`,
+          [tenantId, agentId, jobId],
+        );
+        const current = mapAgentJobRow(selected.rows[0] ?? null);
+        if (!current || !['pending', 'acked', 'observed'].includes(current.status)) {
+          return null;
+        }
+        if (current.status !== 'pending') {
+          return { job: current, transitioned: false };
+        }
+
         const { rows } = await client.query(
           `UPDATE agent_jobs
            SET status = 'acked', acked_at = $1::timestamptz
@@ -306,12 +321,16 @@ export function createAgentControlRepository(pool) {
            RETURNING ${AGENT_JOB_COLUMNS}`,
           [ackedAt, tenantId, agentId, jobId],
         );
-        return mapAgentJobRow(rows[0] ?? null);
+        const job = mapAgentJobRow(rows[0] ?? null);
+        if (!job) {
+          throw new Error('agent job ACK transition failed after row lock.');
+        }
+        return { job, transitioned: true };
       });
     },
 
-    async markAgentJobObserved({ tenantId, agentId, jobId }, observedAt) {
-      return withTenantContext(pool, tenantId, async (client) => {
+    async markAgentJobObserved({ tenantId, agentId, jobId }, observedAt, options = {}) {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `UPDATE agent_jobs
            SET status = 'observed', observed_at = $1::timestamptz
@@ -323,8 +342,8 @@ export function createAgentControlRepository(pool) {
       });
     },
 
-    async getAgentJobById({ tenantId, agentId, jobId }) {
-      return withTenantContext(pool, tenantId, async (client) => {
+    async getAgentJobById({ tenantId, agentId, jobId }, options = {}) {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${AGENT_JOB_COLUMNS}
            FROM agent_jobs

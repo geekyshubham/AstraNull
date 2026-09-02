@@ -4,7 +4,7 @@ export type PrototypeSurface = {
   id: string;
   label: string;
   route: string;
-  routeId?: string;
+  routeId?: RouteId;
   audience: 'Public' | 'Customer' | 'Staff' | 'SOC' | 'Operator';
   group: SurfaceKind | 'public' | 'operator';
   source: string;
@@ -57,10 +57,9 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     id: 'public-landing',
     label: 'Public Landing',
     route: '/',
-    routeId: 'dashboard',
     audience: 'Public',
     group: 'public',
-    source: 'landing.html',
+    source: 'pages/public-pages.tsx',
     status: 'React implemented',
     summary: 'Positioning, no-access-first promise, public entry actions, and safety framing.'
   },
@@ -70,7 +69,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     route: '/signup',
     audience: 'Public',
     group: 'public',
-    source: 'signup.html',
+    source: 'pages/public-pages.tsx',
     status: 'React implemented',
     summary: 'Reviewed access request form with high-scale interest captured as a governed signal.'
   },
@@ -80,7 +79,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     route: '/signup-status',
     audience: 'Public',
     group: 'public',
-    source: 'signup-status.html',
+    source: 'pages/public-pages.tsx',
     status: 'React implemented',
     summary: 'Request status lookup surface for public account intake.'
   },
@@ -90,9 +89,39 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     route: '/login',
     audience: 'Public',
     group: 'public',
-    source: 'login.html',
+    source: 'pages/public-pages.tsx',
     status: 'React implemented',
-    summary: 'Customer portal entry that supports local dev headers and bundled staging sessions.'
+    summary: 'Customer sign-in with configured enterprise, password, or developer-validation authentication.'
+  },
+  {
+    id: 'password-reset-request',
+    label: 'Request Password Reset',
+    route: '/login?flow=request-password-reset',
+    audience: 'Public',
+    group: 'public',
+    source: 'pages/public-pages.tsx',
+    status: 'React implemented',
+    summary: 'Enumeration-safe password recovery initiation for configured password-login deployments.'
+  },
+  {
+    id: 'password-reset',
+    label: 'Reset Password',
+    route: '/login?flow=password-reset',
+    audience: 'Public',
+    group: 'public',
+    source: 'pages/public-pages.tsx',
+    status: 'React implemented',
+    summary: 'One-time recovery-token consumption with password policy and MFA handling.'
+  },
+  {
+    id: 'set-password',
+    label: 'Set Password',
+    route: '/set-password',
+    audience: 'Public',
+    group: 'public',
+    source: 'pages/public-pages.tsx',
+    status: 'React implemented',
+    summary: 'One-time invitation activation for password-login accounts.'
   },
   {
     id: 'staff-login',
@@ -100,7 +129,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     route: '/internal/admin/login',
     audience: 'Staff',
     group: 'staff',
-    source: 'staff-login.html',
+    source: 'pages/public-pages.tsx',
     status: 'React implemented',
     summary: 'Staff entry into internal management and SOC-only surfaces.'
   },
@@ -111,372 +140,350 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     routeId: 'dashboard',
     audience: 'Customer',
     group: 'overview',
-    source: 'index.html',
+    source: 'App.tsx',
     status: 'React implemented',
-    summary: 'Single React host for the authenticated portal and product route aliases.'
+    summary: 'Single React host for authenticated customer routes.'
   },
   {
     id: 'dashboard',
     label: 'Dashboard',
-    route: '/dashboard',
+    route: '/app#dashboard',
     routeId: 'dashboard',
     audience: 'Customer',
     group: 'overview',
-    source: 'dashboard.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
     summary: 'Readiness score, vectors, target coverage, recent evidence, and governance summary.'
   },
   {
-    id: 'onboarding',
-    label: 'Onboarding',
-    route: '/onboarding',
-    routeId: 'onboarding',
-    audience: 'Customer',
-    group: 'overview',
-    source: 'onboarding.html',
-    status: 'React implemented',
-    summary: 'Guided first environment, target group, outbound agent, heartbeat, test run, and evidence review.'
-  },
-  {
     id: 'environments',
     label: 'Environments',
-    route: '/environments',
+    route: '/app#environments',
     routeId: 'environments',
     audience: 'Customer',
     group: 'scope',
-    source: 'environments.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Environment IDs from active target groups with validation evidence, findings, and coverage.'
+    summary: 'Declared environment IDs with validation evidence, findings, and coverage.'
+  },
+  {
+    id: 'environment-detail',
+    label: 'Environment Detail',
+    route: '/app#environment-detail?id=:id',
+    routeId: 'environment-detail',
+    audience: 'Customer',
+    group: 'scope',
+    source: 'pages/detail-pages.tsx',
+    status: 'React implemented',
+    summary: 'Target groups, agents, validation history, and findings for one declared environment.'
   },
   {
     id: 'target-groups',
     label: 'Target Groups',
-    route: '/target-groups',
+    route: '/app#target-groups',
     routeId: 'target-groups',
     audience: 'Customer',
     group: 'scope',
-    source: 'target-groups.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Customer-declared business services, target rows, expected behavior, checks, runs, findings, and settings.'
+    summary: 'Customer-declared business services, expected behavior, owners, and run context.'
+  },
+  {
+    id: 'targets',
+    label: 'Targets',
+    route: '/app#targets',
+    routeId: 'targets',
+    audience: 'Customer',
+    group: 'scope',
+    source: 'pages/targets-page.tsx',
+    status: 'React implemented',
+    summary: 'Declared targets with ownership, eligibility, provenance, and group context.'
   },
   {
     id: 'target-group-detail',
     label: 'Target Group Detail',
-    route: '/target-group-detail',
+    route: '/app#target-group-detail?id=:id',
     routeId: 'target-group-detail',
     audience: 'Customer',
     group: 'scope',
-    source: 'target-group-detail.html',
+    source: 'pages/target-group-detail-view.tsx',
     status: 'React implemented',
-    summary: 'Per-service deep view for targets, behavior, agents, checks, runs, findings, and audit-safe settings.'
+    summary: 'Per-service scope, ownership, agents, checks, runs, findings, and settings.'
+  },
+  {
+    id: 'target-detail',
+    label: 'Target Detail',
+    route: '/app#target-detail?id=:id',
+    routeId: 'target-detail',
+    audience: 'Customer',
+    group: 'scope',
+    source: 'pages/target-detail-view.tsx',
+    status: 'React implemented',
+    summary: 'Per-target ownership, validation, findings, and optional WAF posture evidence.'
   },
   {
     id: 'agents',
     label: 'Agents',
-    route: '/agents',
+    route: '/app#agents',
     routeId: 'agents',
     audience: 'Customer',
     group: 'scope',
-    source: 'agents.html',
+    source: 'pages/functional-surfaces.tsx',
     status: 'React implemented',
-    summary: 'Install commands, outbound-only fleet status, placement, capabilities, logs, and upgrade posture.'
+    summary: 'Outbound-only fleet, bootstrap-token handling, signed release artifacts, and operations.'
   },
   {
     id: 'agent-detail',
     label: 'Agent Detail',
-    route: '/agent-detail',
+    route: '/app#agent-detail?id=:id',
     routeId: 'agent-detail',
     audience: 'Customer',
     group: 'scope',
-    source: 'agent-detail.html',
+    source: 'pages/detail-pages.tsx',
     status: 'React implemented',
-    summary: 'One agent identity, heartbeat, placement confidence, capabilities, logs, and update history.'
+    summary: 'One agent identity, heartbeat, placement, explicitly attributed runs, and audit events.'
   },
   {
     id: 'checks',
     label: 'Checks Library',
-    route: '/checks',
+    route: '/app#checks',
     routeId: 'checks',
     audience: 'Customer',
     group: 'validation',
-    source: 'checks.html',
+    source: 'pages/functional-surfaces.tsx',
     status: 'React implemented',
-    summary: 'Recommended checks, origin bypass, L3/L4, DNS, L7/API, protocol, high-scale, and custom coverage.'
+    summary: 'Safe checks and SOC request-only scenarios with real execution bounds.'
+  },
+  {
+    id: 'check-detail',
+    label: 'Check Detail',
+    route: '/app#check-detail?id=:id',
+    routeId: 'check-detail',
+    audience: 'Customer',
+    group: 'validation',
+    source: 'pages/detail-pages.tsx',
+    status: 'React implemented',
+    summary: 'Execution kind, cap, taxonomy mappings, evidence requirements, and latest verdict for one check.'
   },
   {
     id: 'test-policies',
     label: 'Test Policies',
-    route: '/test-policies',
+    route: '/app#test-policies',
     routeId: 'test-policies',
     audience: 'Customer',
     group: 'validation',
-    source: 'test-policies.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Cadence, declared target bindings, expected verdicts, windows, and policy cards.'
+    summary: 'Cadence, declared target bindings, expected verdict keys, windows, and guardrails.'
+  },
+  {
+    id: 'policy-detail',
+    label: 'Policy Detail',
+    route: '/app#policy-detail?id=:id',
+    routeId: 'policy-detail',
+    audience: 'Customer',
+    group: 'validation',
+    source: 'pages/detail-pages.tsx',
+    status: 'React implemented',
+    summary: 'Cadence, target binding, expected verdict, safe window, and SOC gating for one policy.'
   },
   {
     id: 'runs',
     label: 'Test Runs',
-    route: '/runs',
+    route: '/app#runs',
     routeId: 'runs',
     audience: 'Customer',
     group: 'validation',
-    source: 'runs.html',
+    source: 'pages/functional-surfaces.tsx',
     status: 'React implemented',
-    summary: 'Run list, summary, timeline, probe results, agent observations, correlation, evidence, and event review.'
+    summary: 'Run list, proof panels, evidence, findings, and customer SOC request intake.'
   },
   {
     id: 'run-detail',
     label: 'Run Detail',
-    route: '/run-detail',
+    route: '/app#run-detail?id=:id',
     routeId: 'run-detail',
     audience: 'Customer',
     group: 'validation',
-    source: 'run-detail.html',
+    source: 'pages/detail-pages.tsx',
     status: 'React implemented',
-    summary: 'Verdict explanation, timeline, truth table, evidence chain, and safe-run context.'
+    summary: 'Verdict explanation, timeline, truth table, evidence chain, and bounded-run context.'
   },
   {
     id: 'findings',
     label: 'Findings',
-    route: '/findings',
+    route: '/app#findings',
     routeId: 'findings',
     audience: 'Customer',
     group: 'validation',
-    source: 'findings.html',
+    source: 'pages/functional-surfaces.tsx',
     status: 'React implemented',
-    summary: 'Open, grouped, accepted-risk, closed, SLA, why-this-finding, export, and retest workflow.'
+    summary: 'Evidence-backed gaps, owners, SLAs, filters, remediation, and closure workflow.'
   },
   {
-    id: 'evidence',
-    label: 'Evidence Vault',
-    route: '/evidence',
-    routeId: 'evidence',
+    id: 'finding-detail',
+    label: 'Finding Detail',
+    route: '/app#finding-detail?id=:id',
+    routeId: 'finding-detail',
     audience: 'Customer',
     group: 'validation',
-    source: 'evidence.html',
+    source: 'pages/finding-detail-view.tsx',
     status: 'React implemented',
-    summary: 'Evidence ledger, custody-safe exports, source material, and reporting links.'
+    summary: 'Verdict explanation, remediation, evidence bundle, and custody export for one finding.'
   },
   {
-    id: 'waf-posture',
-    label: 'WAF Posture',
-    route: '/waf-posture',
-    routeId: 'waf-posture',
+    id: 'evidence-detail',
+    label: 'Evidence Detail',
+    route: '/app#evidence-detail?id=:id',
+    routeId: 'evidence-detail',
     audience: 'Customer',
     group: 'validation',
-    source: 'waf-posture.html',
+    source: 'pages/detail-pages.tsx',
     status: 'React implemented',
-    summary: 'WAF assets, roadmap, scenario cadence, drift, connectors, validation plans, reports, and evidence.'
-  },
-  {
-    id: 'waf-asset-detail',
-    label: 'WAF Asset Detail',
-    route: '/waf-asset-detail',
-    routeId: 'waf-asset-detail',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'waf-asset-detail.html',
-    status: 'React implemented',
-    summary: 'Per-asset effectiveness, rules, geography, drift, exceptions, validation runs, and actions.'
-  },
-  {
-    id: 'cve-pipeline',
-    label: 'CVE Pipeline',
-    route: '/cve-pipeline',
-    routeId: 'cve-pipeline',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'cve-pipeline.html',
-    status: 'React implemented',
-    summary: 'Live exposure intake, triage, matches, recommendations, staged mitigations, retests, and playbooks.'
-  },
-  {
-    id: 'supply-chain',
-    label: 'Supply Chain',
-    route: '/supply-chain',
-    routeId: 'supply-chain',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'supply-chain.html',
-    status: 'React implemented',
-    summary: 'CNAME, dependency, vendor, redirect, and subdomain risk categories with custody-safe remediation.'
-  },
-  {
-    id: 'remediation',
-    label: 'Remediation',
-    route: '/remediation',
-    routeId: 'remediation',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'remediation.html',
-    status: 'React implemented',
-    summary: 'Action items, ticket previews, SIEM/SOAR-safe delivery, retests, and closure evidence.'
-  },
-  {
-    id: 'discovery',
-    label: 'Discovery',
-    route: '/discovery',
-    routeId: 'discovery',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'discovery.html',
-    status: 'React implemented',
-    summary: 'Approval-gated candidates, modes, sources, decisions, and imports into declared target groups.'
-  },
-  {
-    id: 'discovery-entity',
-    label: 'Discovery Entity',
-    route: '/discovery-entity',
-    routeId: 'discovery-entity',
-    audience: 'Customer',
-    group: 'validation',
-    source: 'discovery-entity.html',
-    status: 'React implemented',
-    summary: 'Entity source evidence, confidence, decision trail, promote, and dismiss workflow.'
-  },
-  {
-    id: 'high-scale',
-    label: 'High-Scale Requests',
-    route: '/high-scale',
-    routeId: 'high-scale',
-    audience: 'Customer',
-    group: 'governance',
-    source: 'high-scale.html',
-    status: 'React implemented',
-    summary: 'Customer request form, authorization pack, window, contacts, provider approval, and post-test custody.'
-  },
-  {
-    id: 'soc',
-    label: 'SOC Console',
-    route: '/soc',
-    routeId: 'soc',
-    audience: 'SOC',
-    group: 'governance',
-    source: 'soc.html',
-    status: 'React implemented',
-    summary: 'SOC queue, go/no-go checklist, kill switch, lifecycle actions, provider contacts, and notes.'
+    summary: 'One evidence artifact, recorded digest, payload metadata, and local digest recomputation.'
   },
   {
     id: 'reports',
     label: 'Reports',
-    route: '/reports',
+    route: '/app#reports',
     routeId: 'reports',
     audience: 'Customer',
     group: 'governance',
-    source: 'reports.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Executive, technical, SOC, audit, WAF, release, and custody-oriented report builders.'
+    summary: 'Executive, technical, SOC, audit, release, and WAF report builders.'
+  },
+  {
+    id: 'report-detail',
+    label: 'Report Detail',
+    route: '/app#report-detail?id=:id',
+    routeId: 'report-detail',
+    audience: 'Customer',
+    group: 'governance',
+    source: 'pages/detail-pages.tsx',
+    status: 'React implemented',
+    summary: 'Generated report preview, formats, custody metadata, and server verification result.'
   },
   {
     id: 'integrations',
     label: 'Integrations',
-    route: '/integrations',
+    route: '/app#integrations',
     routeId: 'integrations',
     audience: 'Customer',
     group: 'governance',
-    source: 'integrations.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Notification, ticketing, SIEM/SOAR, and optional read-only provider connectors.'
+    summary: 'Notification, ticketing, SIEM/SOAR, and optional read-only connectors.'
   },
   {
     id: 'notifications',
     label: 'Notifications',
-    route: '/notifications',
+    route: '/app#notifications',
     routeId: 'notifications',
     audience: 'Customer',
     group: 'governance',
-    source: 'notifications.html',
+    source: 'pages/governance-pages.tsx',
     status: 'React implemented',
-    summary: 'Rules, events, provider state, retry, and DLQ recovery controls with metadata-only outputs.'
+    summary: 'Rules, events, provider state, retry, and DLQ controls.'
   },
   {
     id: 'audit',
     label: 'Audit Log',
-    route: '/audit',
+    route: '/app#audit',
     routeId: 'audit',
     audience: 'Customer',
     group: 'governance',
-    source: 'audit.html',
+    source: 'pages/governance-pages.tsx',
     status: 'React implemented',
-    summary: 'Tenant audit table, filters, custody activity, and security-relevant changes.'
+    summary: 'Tenant audit records, filters, custody activity, and security-relevant changes.'
   },
   {
     id: 'release-evidence',
     label: 'Release Evidence',
-    route: '/release-evidence',
+    route: '/app#release-evidence',
     routeId: 'release-evidence',
     audience: 'Customer',
     group: 'governance',
-    source: 'release-evidence.html',
+    source: 'pages/governance-pages.tsx',
     status: 'React implemented',
-    summary: 'Staging attestation, required evidence kinds, gap ledger, bundles, and launch-gate status.'
+    summary: 'Production release evidence inventory and staging attestation for authorized auditors.'
   },
   {
     id: 'settings',
     label: 'Settings',
-    route: '/settings',
+    route: '/app#settings',
     routeId: 'settings',
     audience: 'Customer',
     group: 'governance',
-    source: 'settings.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Organization, users, roles, API keys, SSO/SAML, notifications, integrations, retention, and audit links.'
+    summary: 'Tenant profile, users, tokens, retention, SSO, and safe defaults.'
   },
   {
     id: 'support',
     label: 'Support',
-    route: '/support',
+    route: '/app#support',
     routeId: 'support',
     audience: 'Customer',
     group: 'governance',
-    source: 'support.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Support readiness, runbook references, escalation, and custody-safe support notes.'
+    summary: 'Support readiness, escalation paths, and runbook references.'
   },
   {
     id: 'subscription',
     label: 'Subscription',
-    route: '/subscription',
+    route: '/app#subscription',
     routeId: 'subscription',
     audience: 'Customer',
     group: 'governance',
-    source: 'subscription.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Plan, entitlements, limits, billing state, contract references, and effective dates.'
+    summary: 'Plan, entitlements, limits, billing state, and effective dates.'
   },
   {
     id: 'admin',
     label: 'Admin Console',
-    route: '/admin',
+    route: '/internal/admin#admin',
     routeId: 'admin',
     audience: 'Staff',
     group: 'staff',
-    source: 'admin.html',
+    source: 'pages/page-components.tsx',
     status: 'React implemented',
-    summary: 'Staff overview, sign-up queue, tenant lifecycle, approvals, support operations, and internal audit.'
+    summary: 'Staff overview, sign-up queue, tenant lifecycle, approvals, support, and internal audit.'
   },
   {
     id: 'tenant-detail',
     label: 'Tenant Detail',
-    route: '/tenant-detail',
+    route: '/internal/admin#tenant-detail?id=:id',
     routeId: 'tenant-detail',
     audience: 'Staff',
     group: 'staff',
-    source: 'tenant-detail.html',
+    source: 'pages/detail-pages.tsx',
     status: 'React implemented',
-    summary: 'Tenant state, users, entitlements, support notes, subscriptions, and audit activity.'
+    summary: 'Tenant lifecycle, users, entitlements, support notes, subscription, and audit activity.'
   },
   {
     id: 'internal-soc',
     label: 'Internal SOC',
-    route: '/internal/soc',
+    route: '/internal/soc#internal-soc',
     routeId: 'internal-soc',
     audience: 'SOC',
     group: 'staff',
-    source: 'internal-soc.html',
+    source: 'pages/governance-pages.tsx',
     status: 'React implemented',
-    summary: 'Dedicated staff SOC plane for governed high-scale reviews, scheduling, kill switch, and closure.'
+    summary: 'Staff SOC plane for governed high-scale review, scheduling, kill switch, and closure.'
+  },
+  {
+    id: 'queue-detail',
+    label: 'SOC Queue Detail',
+    route: '/internal/soc#queue-detail?id=:id&tenant=:tenant_id',
+    routeId: 'queue-detail',
+    audience: 'SOC',
+    group: 'staff',
+    source: 'pages/detail-pages.tsx',
+    status: 'React implemented',
+    summary: 'One governed request workspace with artifacts, adapter telemetry, lifecycle actions, and notes.'
   },
   {
     id: 'probe-worker',
@@ -486,7 +493,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'operator',
     source: 'workers/probe-worker.mjs',
     status: 'Operator workflow',
-    summary: 'Leased metadata-only probe worker hidden from customer UI by design.'
+    summary: 'Leased probe worker hidden from customer UI by design.'
   },
   {
     id: 'linux-agent',
@@ -496,7 +503,7 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     group: 'operator',
     source: 'agents/linux',
     status: 'Operator workflow',
-    summary: 'Outbound-only agent install, systemd, Docker, Helm, update, and verification workflows.'
+    summary: 'Outbound-only agent package, service, container, Helm, update, and verification workflows.'
   }
 ];
 

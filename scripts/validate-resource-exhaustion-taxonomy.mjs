@@ -60,7 +60,7 @@ export function validateDeclaredProbeKinds(
   return errors;
 }
 
-function readExternalCatalogIds() {
+export function readExternalCatalogIds() {
   const csv = readFileSync(CATALOG_PATH, 'utf8');
   return [...csv.matchAll(/^(NET|AMP|APP|WAF|EVA)-\d{3}(?=,)/gm)].map((match) => match[0]);
 }
@@ -76,7 +76,15 @@ function parseArgs(argv) {
   return { out };
 }
 
-export function validateResourceExhaustionTaxonomy() {
+export function validateResourceExhaustionTaxonomy({
+  externalCatalogIds = readExternalCatalogIds(),
+  registryEntries = [
+    ...ATTACK_VECTOR_REGISTRY,
+    ...WAF_VULNERABILITY_REGISTRY,
+    ...NON_DDOS_AVAILABILITY_THREATS,
+  ],
+  outOfScopeVectors = OUT_OF_SCOPE_VECTORS,
+} = {}) {
   const errors = [];
   const warnings = [];
   const catalogIds = new Set(CHECK_CATALOG.map((c) => c.check_id));
@@ -278,18 +286,30 @@ export function validateResourceExhaustionTaxonomy() {
   const summary = summarizeCoverage();
   const pendingEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'pending');
   const implementedEntries = ATTACK_VECTOR_REGISTRY.filter((e) => e.coverage_status === 'implemented');
-  const externalCatalogIds = readExternalCatalogIds();
+  const externalCatalogIdCounts = new Map();
+  for (const catalogId of externalCatalogIds) {
+    externalCatalogIdCounts.set(catalogId, (externalCatalogIdCounts.get(catalogId) ?? 0) + 1);
+  }
+  const externalCatalogIdSet = new Set(externalCatalogIds);
+  const duplicateExternalCatalogIds = [...externalCatalogIdCounts]
+    .filter(([, count]) => count > 1)
+    .map(([catalogId]) => catalogId)
+    .sort();
   if (externalCatalogIds.length !== 721) {
     errors.push(`external catalog row count must be 721, found ${externalCatalogIds.length}`);
   }
-  const registryEntries = [
-    ...ATTACK_VECTOR_REGISTRY,
-    ...WAF_VULNERABILITY_REGISTRY,
-    ...NON_DDOS_AVAILABILITY_THREATS,
-  ];
+  if (externalCatalogIdSet.size !== 721) {
+    errors.push(`external catalog unique id count must be 721, found ${externalCatalogIdSet.size}`);
+  }
+  if (duplicateExternalCatalogIds.length > 0) {
+    errors.push(`external catalog duplicate ids (${duplicateExternalCatalogIds.length}): ${duplicateExternalCatalogIds.join(', ')}`);
+  }
+
   const claimsByCatalogId = new Map();
+  let catalogClaimOccurrences = 0;
   for (const entry of registryEntries) {
     for (const catalogId of entry.catalog_vector_ids ?? []) {
+      catalogClaimOccurrences += 1;
       if (!/^(NET|AMP|APP|WAF|EVA)-\d{3}$/.test(catalogId)) {
         errors.push(`${entry.id}: invalid catalog_vector_id ${catalogId}`);
       }
@@ -298,17 +318,53 @@ export function validateResourceExhaustionTaxonomy() {
       claimsByCatalogId.set(catalogId, claims);
     }
   }
+  const duplicateClaimIds = [];
   for (const [catalogId, claims] of claimsByCatalogId) {
-    if (claims.length > 1) errors.push(`${catalogId}: duplicate registry claims ${claims.join(', ')}`);
+    if (claims.length > 1) {
+      duplicateClaimIds.push(catalogId);
+      errors.push(`${catalogId}: duplicate registry claims ${claims.join(', ')}`);
+    }
   }
-  const outOfScopeIds = new Set(OUT_OF_SCOPE_VECTORS.flatMap((entry) => entry.catalog_vector_ids));
+  duplicateClaimIds.sort();
+  const unknownClaimIds = [...claimsByCatalogId.keys()]
+    .filter((catalogId) => !externalCatalogIdSet.has(catalogId))
+    .sort();
+  if (unknownClaimIds.length > 0) {
+    errors.push(`registry claims unknown catalog ids (${unknownClaimIds.length}): ${unknownClaimIds.join(', ')}`);
+  }
+
+  const outOfScopeCatalogIds = outOfScopeVectors.flatMap((entry) => entry.catalog_vector_ids ?? []);
+  const outOfScopeIdCounts = new Map();
+  for (const catalogId of outOfScopeCatalogIds) {
+    outOfScopeIdCounts.set(catalogId, (outOfScopeIdCounts.get(catalogId) ?? 0) + 1);
+  }
+  const outOfScopeIds = new Set(outOfScopeCatalogIds);
+  const duplicateOutOfScopeIds = [...outOfScopeIdCounts]
+    .filter(([, count]) => count > 1)
+    .map(([catalogId]) => catalogId)
+    .sort();
+  if (duplicateOutOfScopeIds.length > 0) {
+    errors.push(`out-of-scope duplicate catalog ids (${duplicateOutOfScopeIds.length}): ${duplicateOutOfScopeIds.join(', ')}`);
+  }
+  const unknownOutOfScopeIds = [...outOfScopeIds]
+    .filter((catalogId) => !externalCatalogIdSet.has(catalogId))
+    .sort();
+  if (unknownOutOfScopeIds.length > 0) {
+    errors.push(`out-of-scope unknown catalog ids (${unknownOutOfScopeIds.length}): ${unknownOutOfScopeIds.join(', ')}`);
+  }
+  const claimOutOfScopeOverlapIds = [...outOfScopeIds]
+    .filter((catalogId) => claimsByCatalogId.has(catalogId))
+    .sort();
+  if (claimOutOfScopeOverlapIds.length > 0) {
+    errors.push(`catalog ids both claimed and out-of-scope (${claimOutOfScopeOverlapIds.length}): ${claimOutOfScopeOverlapIds.join(', ')}`);
+  }
   const allowedOutOfScopeReasons = new Set([
     'requires_l2_adjacency',
     'requires_rf_proximity',
     'requires_mobile_core_interface',
     'requires_routing_peer_session',
   ]);
-  for (const entry of OUT_OF_SCOPE_VECTORS) {
+  for (const entry of outOfScopeVectors) {
     if (!allowedOutOfScopeReasons.has(entry.reason) || !['A1b', 'A1c', 'A1d'].includes(entry.domain)) {
       errors.push(`invalid out-of-scope vector declaration: ${JSON.stringify(entry)}`);
     }
@@ -362,11 +418,18 @@ export function validateResourceExhaustionTaxonomy() {
     errors.push(`out-of-scope vectors missing monitor-only coverage: ${monitorUncovered.join(', ')}`);
   }
 
-  const catalogUnclaimedIds = externalCatalogIds.filter((catalogId) => (
+  const catalogUnclaimedIds = [...externalCatalogIdSet].filter((catalogId) => (
     !claimsByCatalogId.has(catalogId) && !outOfScopeIds.has(catalogId)
-  ));
+  )).sort();
   if (catalogUnclaimedIds.length > 0) {
-    warnings.push(`unclaimed catalog vectors (${catalogUnclaimedIds.length}): ${catalogUnclaimedIds.join(', ')}`);
+    errors.push(`unclaimed catalog vectors (${catalogUnclaimedIds.length}): ${catalogUnclaimedIds.join(', ')}`);
+  }
+  const canonicalDispositionIds = new Set(
+    [...claimsByCatalogId.keys(), ...outOfScopeIds]
+      .filter((catalogId) => externalCatalogIdSet.has(catalogId)),
+  );
+  if (canonicalDispositionIds.size !== externalCatalogIdSet.size) {
+    errors.push(`catalog disposition partition must cover ${externalCatalogIdSet.size} unique ids, found ${canonicalDispositionIds.size}`);
   }
 
   const scoredFamilyIds = new Set(
@@ -411,7 +474,7 @@ export function validateResourceExhaustionTaxonomy() {
         partial: summary.partial,
         soc_only: summary.soc_only,
         pending: summary.pending,
-        implemented_or_partial_pct: Math.round(((summary.implemented + summary.partial + summary.soc_only) / summary.total) * 1000) / 10,
+        implemented_or_partial_pct: Math.round(((summary.implemented + summary.partial) / summary.total) * 1000) / 10,
       },
       by_exhausted_resource: summary.by_resource,
     },
@@ -430,6 +493,22 @@ export function validateResourceExhaustionTaxonomy() {
     })),
     non_ddos_threats: NON_DDOS_AVAILABILITY_THREATS.length,
     waf_vulnerability_entries: WAF_VULNERABILITY_REGISTRY.length,
+    catalog_partition: {
+      external_rows: externalCatalogIds.length,
+      external_unique_ids: externalCatalogIdSet.size,
+      claim_occurrences: catalogClaimOccurrences,
+      claimed_ids: claimsByCatalogId.size,
+      out_of_scope_occurrences: outOfScopeCatalogIds.length,
+      out_of_scope_ids: outOfScopeIds.size,
+      disposition_ids: canonicalDispositionIds.size,
+      duplicate_external_ids: duplicateExternalCatalogIds,
+      duplicate_claim_ids: duplicateClaimIds,
+      duplicate_out_of_scope_ids: duplicateOutOfScopeIds,
+      unknown_claim_ids: unknownClaimIds,
+      unknown_out_of_scope_ids: unknownOutOfScopeIds,
+      claim_out_of_scope_overlap_ids: claimOutOfScopeOverlapIds,
+      unclaimed_ids: catalogUnclaimedIds,
+    },
     monitor_only: {
       entries: MONITOR_ONLY_VECTORS.length,
       catalog_ids_covered: monitorSeen.size,

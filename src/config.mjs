@@ -11,6 +11,7 @@ import {
   loadConnectorSecretEncryptionKey,
   loadSecretEncryptionKey,
 } from './lib/secrets.mjs';
+import { validateHmacSecretEntropy } from './lib/evidenceSigning.mjs';
 
 export const AUTH_MODES = ['dev-headers', 'signed-session', 'oidc-jwt'];
 
@@ -520,6 +521,13 @@ export function loadRuntimeConfig(env = process.env) {
         `ASTRANULL_PROBE_WORKER_SECRET must be at least ${MIN_PROBE_WORKER_SECRET_LENGTH} characters when probe mode is signed-worker.`,
       );
     }
+    const validatedSecret = validateHmacSecretEntropy(probeWorkerSecret);
+    if (!validatedSecret.ok) {
+      throw new Error(
+        `ASTRANULL_PROBE_WORKER_SECRET failed entropy validation (${validatedSecret.error}).`,
+      );
+    }
+    probeWorkerSecret = validatedSecret.secret;
   }
 
   const highScaleAdapterMode = resolveHighScaleAdapterMode(env);

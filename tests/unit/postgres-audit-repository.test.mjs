@@ -289,6 +289,106 @@ describe('postgres audit repository', () => {
     assertTenantContext(pool);
   });
 
+  it('appendAuditEvent idempotency returns a historical matching resource audit', async () => {
+    const pool = createFakePool({
+      onQuery({ text, params }) {
+        if (text.includes('action = ANY($2::text[])')) {
+          assert.deepEqual(params, [
+            'ten_demo',
+            ['probe_job.result_ingested', 'probe_job.result_reconciled'],
+            'probe_job',
+            'pjob_1',
+            '{}',
+          ]);
+          assert.match(text, /metadata_json @> \$5::jsonb/);
+          return {
+            rows: [{
+              id: 'event_existing',
+              tenant_id: 'ten_demo',
+              timestamp: new Date('2026-07-01T12:00:00.000Z'),
+              sequence: '4',
+              prev_hash: 'h3',
+              entry_hash: 'h4',
+              actor_user_id: 'worker_1',
+              actor_role: 'probe_worker',
+              action: 'probe_job.result_ingested',
+              resource_type: 'probe_job',
+              resource_id: 'pjob_1',
+              metadata_json: { test_run_id: 'run_1' },
+            }],
+          };
+        }
+        return { rows: [] };
+      },
+    });
+    const repo = createAuditRepository(pool);
+
+    const result = await repo.appendAuditEvent(
+      {
+        tenant_id: 'ten_demo',
+        action: 'probe_job.result_reconciled',
+        resource_type: 'probe_job',
+        resource_id: 'pjob_1',
+      },
+      {
+        idempotency: {
+          actions: ['probe_job.result_ingested', 'probe_job.result_reconciled'],
+          resourceType: 'probe_job',
+          resourceId: 'pjob_1',
+        },
+      },
+    );
+
+    assert.equal(result.id, 'event_existing');
+    assert.equal(result.action, 'probe_job.result_ingested');
+    assert.equal(
+      pool.client.queries.some(({ text }) => text.includes('INSERT INTO audit_logs')),
+      false,
+    );
+    assertTenantContext(pool);
+  });
+
+  it('appendAuditEvent idempotency matches exact required metadata', async () => {
+    const pool = createFakePool({
+      onQuery({ text, params }) {
+        if (text.includes('action = ANY($2::text[])')) {
+          assert.deepEqual(params, [
+            'ten_demo',
+            ['observation.ingested', 'observation.recovered'],
+            'test_run',
+            'run_1',
+            JSON.stringify({ agent_job_id: 'job_1' }),
+          ]);
+          return { rows: [] };
+        }
+        if (text.includes('ORDER BY sequence DESC')) return { rows: [] };
+        return { rows: [] };
+      },
+    });
+    const repo = createAuditRepository(pool);
+
+    await repo.appendAuditEvent({
+      tenant_id: 'ten_demo',
+      action: 'observation.ingested',
+      resource_type: 'test_run',
+      resource_id: 'run_1',
+      metadata: { agent_id: 'agent_1', agent_job_id: 'job_1' },
+    }, {
+      idempotency: {
+        actions: ['observation.ingested', 'observation.recovered'],
+        resourceType: 'test_run',
+        resourceId: 'run_1',
+        metadata: { agent_job_id: 'job_1' },
+      },
+    });
+
+    assert.equal(
+      pool.client.queries.filter(({ text }) => text.includes('INSERT INTO audit_logs')).length,
+      1,
+    );
+    assertTenantContext(pool);
+  });
+
   it('appendAuditEvent rolls back when insert fails after lock and read', async () => {
     const pool = createFakePool({
       onQuery({ text }) {

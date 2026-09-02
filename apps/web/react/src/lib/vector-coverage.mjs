@@ -18,7 +18,7 @@ export const VECTOR_FAMILIES = [
   { label: 'Origin', keys: ['origin'] },
   { label: 'L3/L4', keys: ['l3_l4', 'l3/l4', 'layer_3_4'] },
   { label: 'DNS', keys: ['dns'] },
-  { label: 'L7/API', keys: ['l7_api', 'l7/api', 'application', 'api'] },
+  { label: 'L7/API', keys: ['l7', 'l7_api', 'l7/api', 'application', 'api'] },
   { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] },
 ];
 
@@ -95,7 +95,10 @@ export function checkMatchesFamily(check, family) {
     stringValue(check, 'name'),
     stringValue(check, 'check_id'),
   ].join(' ');
-  return family.keys.some((key) => haystack.includes(key));
+  return family.keys.some((key) => {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`).test(haystack);
+  });
 }
 
 /**

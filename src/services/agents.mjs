@@ -170,6 +170,8 @@ export function ackJob(agent, jobId) {
     (j) => j.id === jobId && j.agent_id === agent.id && j.tenant_id === agent.tenant_id,
   );
   if (!job) return null;
+  if (job.status === 'acked' || job.status === 'observed') return job;
+  if (job.status !== 'pending') return null;
   job.status = 'acked';
   job.acked_at = new Date().toISOString();
   audit({

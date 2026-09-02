@@ -6,10 +6,16 @@ import {
 } from '../../scripts/postgres-grant-app-role.mjs';
 import { createWafPostureRepository } from '../../src/persistence/postgres/wafPostureRepository.mjs';
 import {
+  fetchAppliedMigrationVersions,
+  listMigrationFiles,
+} from '../../src/persistence/postgres/migrations.mjs';
+import {
+  MIGRATIONS_DIR,
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
 } from '../helpers/pg-harness.mjs';
 
+const MIGRATION_0050 = '0050_connector_poll_governance';
 const TENANT_A = 'ten_0050_a';
 const TENANT_B = 'ten_0050_b';
 const CTX_A = { tenantId: TENANT_A, userId: 'scheduler', role: 'system' };
@@ -65,7 +71,14 @@ describe('postgres migration 0050 connector poll governance', () => {
     }
 
     await withEphemeralPostgres(async (pool, { latestVersion }) => {
-      assert.equal(latestVersion, '0050_connector_poll_governance');
+      const files = listMigrationFiles(MIGRATIONS_DIR);
+      assert.equal(latestVersion, files.at(-1)?.version);
+      assert.ok(files.some(({ version }) => version === MIGRATION_0050));
+      const applied = await fetchAppliedMigrationVersions(pool);
+      assert.deepEqual(
+        files.filter(({ version }) => !applied.has(version)).map(({ version }) => version),
+        [],
+      );
       await seed(pool);
       const repo = createWafPostureRepository(pool);
 
@@ -169,6 +182,6 @@ describe('postgres migration 0050 connector poll governance', () => {
           client.query('SELECT * FROM connector_provider_rate_limits')),
         /permission denied/,
       );
-    });
+    }, availability.env ?? process.env);
   });
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createOwnershipVerificationRepository } from '../../src/persistence/postgres/ownershipVerificationRepository.mjs';
 import { createPostgresOwnershipVerificationServices } from '../../src/persistence/postgres/ownershipVerificationServiceAdapters.mjs';
+import { runWithTenantClient } from '../../src/persistence/postgres/tenantContext.mjs';
 
 const CTX = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
 
@@ -124,9 +125,19 @@ function providerVerificationRow({
 
 function buildServices(pool, audit = { appendAuditEvent: async () => ({ id: 'audit_1' }) }) {
   const ownershipVerifications = createOwnershipVerificationRepository(pool);
+  const transactionalAudit = {
+    ...audit,
+    withTenantAuditLock: audit.withTenantAuditLock
+      ?? ((tenantId, callback) => runWithTenantClient(
+        pool,
+        tenantId,
+        undefined,
+        (client) => callback({ client, prior: null }),
+      )),
+  };
   return createPostgresOwnershipVerificationServices({
     repositories: { ownershipVerifications },
-    audit,
+    audit: transactionalAudit,
   });
 }
 
@@ -293,6 +304,120 @@ describe('postgres ownership verification service adapters', () => {
     assert.ok(auditCalls.every(({ options }) => options.client === pool.client));
     assert.equal(pool.client.queries[0].text, 'BEGIN');
     assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
+  });
+
+  it('recordOwnershipSignal selects the exact verification ID even when nonce is nonunique', async () => {
+    const exact = dbRow({
+      id: 'own_exact',
+      probe_observed: false,
+      probe_job_id: 'pjob_exact',
+    });
+    const competing = dbRow({ id: 'own_competing', probe_observed: false });
+    const pool = createRecordingPool((text, params) => {
+      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        assert.match(text, /WHERE tenant_id = \$1 AND id = \$2/);
+        assert.doesNotMatch(text, /challenge_nonce_hash = \$2/);
+        assert.deepEqual(params, [CTX.tenantId, exact.id]);
+        return { rows: [exact] };
+      }
+      if (/UPDATE ownership_verifications/i.test(text) && /probe_observed = \$3/.test(text)) {
+        return { rows: [{ ...exact, probe_observed: true }] };
+      }
+      return { rows: [] };
+    });
+    const services = buildServices(pool);
+
+    const result = await services.recordOwnershipSignal(CTX, exact.id, {
+      source: 'probe',
+      nonce_hash: competing.challenge_nonce_hash,
+      probe_job_id: exact.probe_job_id,
+    });
+
+    assert.equal(result.verification.id, exact.id);
+    assert.equal(result.verification.probe_observed, true);
+  });
+
+  for (const [label, probeJobId] of [
+    ['missing', undefined],
+    ['different', 'pjob_other'],
+  ]) {
+    it(`rejects a probe signal with a ${label} reciprocal probe job binding before writes`, async () => {
+      const record = dbRow({ probe_observed: false, probe_job_id: 'pjob_exact' });
+      let updateCalls = 0;
+      const pool = createRecordingPool((text) => {
+        if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+          return { rows: [record] };
+        }
+        if (/UPDATE ownership_verifications/i.test(text)) updateCalls += 1;
+        return { rows: [] };
+      });
+      const services = buildServices(pool);
+
+      const result = await services.recordOwnershipSignal(CTX, record.id, {
+        source: 'probe',
+        nonce_hash: record.challenge_nonce_hash,
+        ...(probeJobId === undefined ? {} : { probe_job_id: probeJobId }),
+      });
+
+      assert.deepEqual(result, {
+        error: 'ownership_probe_job_binding_mismatch',
+        status: 409,
+      });
+      assert.equal(updateCalls, 0);
+      assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
+    });
+  }
+
+  it('rejects a malformed reciprocal probe binding before completed-status handling', async () => {
+    const record = dbRow({
+      status: 'verified',
+      verified_at: new Date('2026-06-01T12:00:00.000Z'),
+      probe_observed: true,
+      probe_job_id: 'pjob_exact',
+    });
+    let updateCalls = 0;
+    const pool = createRecordingPool((text) => {
+      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [record] };
+      }
+      if (/UPDATE ownership_verifications/i.test(text)) updateCalls += 1;
+      return { rows: [] };
+    });
+    const services = buildServices(pool);
+
+    const result = await services.recordOwnershipSignal(CTX, record.id, {
+      source: 'probe',
+      nonce_hash: record.challenge_nonce_hash,
+      probe_job_id: 'pjob_other',
+    });
+
+    assert.deepEqual(result, {
+      error: 'ownership_probe_job_binding_mismatch',
+      status: 409,
+    });
+    assert.equal(updateCalls, 0);
+    assert.equal(pool.client.queries.at(-1).text, 'COMMIT');
+  });
+
+  it('keeps agent-origin ownership signals unchanged without a probe job ID', async () => {
+    const record = dbRow({ probe_observed: false, agent_observed: false, probe_job_id: 'pjob_exact' });
+    const pool = createRecordingPool((text) => {
+      if (/FROM ownership_verifications/i.test(text) && /FOR UPDATE/i.test(text)) {
+        return { rows: [record] };
+      }
+      if (/UPDATE ownership_verifications/i.test(text) && /agent_observed = \$4/.test(text)) {
+        return { rows: [{ ...record, agent_observed: true }] };
+      }
+      return { rows: [] };
+    });
+    const services = buildServices(pool);
+
+    const result = await services.recordOwnershipSignal(CTX, record.id, {
+      source: 'agent',
+      nonce_hash: record.challenge_nonce_hash,
+    });
+
+    assert.equal(result.verification.agent_observed, true);
   });
 
   it('rolls back challenge completion when target evidence cannot be inserted', async () => {

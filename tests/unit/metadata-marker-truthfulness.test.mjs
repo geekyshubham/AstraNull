@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { validateProbeResultBody } from '../../src/lib/probeResultValidation.mjs';
 import { correlateExternalOnlyVerdict, correlateVerdict } from '../../src/services/correlation.mjs';
+import { computeReadiness } from '../../src/services/readiness.mjs';
+import { getStore } from '../../src/store.mjs';
+import { freshStore } from '../helpers/reset.mjs';
 import { simulateProbeResult } from '../../src/services/probeStub.mjs';
 import { probeMetadataMarker } from '../../workers/probe-worker.mjs';
 
@@ -51,6 +54,7 @@ describe('metadata-only probe truthfulness', () => {
       expectedBehavior: 'must_block_before_origin',
       agentOnline: true,
       agentBound: true,
+      probeKind: 'metadata_marker',
     });
     assert.equal(correlated.verdict, 'inconclusive');
     assert.equal(correlated.createsFinding, false);
@@ -58,8 +62,51 @@ describe('metadata-only probe truthfulness', () => {
     const externalOnly = correlateExternalOnlyVerdict({
       externalResult: 'not_run',
       expectedBehavior: 'must_block_before_origin',
+      probeKind: 'metadata_marker',
     });
     assert.equal(externalOnly.verdict, 'inconclusive');
     assert.equal(externalOnly.createsFinding, false);
+  });
+
+  it('awards no readiness credit to persisted metadata-only/no-I/O evidence', () => {
+    freshStore();
+    const store = getStore();
+    const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_metadata_only',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'metadata.declaration.only',
+      status: 'verdicted',
+      created_at: now,
+      completed_at: now,
+    });
+    store.events.push({
+      id: 'evt_metadata_only',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_metadata_only',
+      signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
+      timestamp: now,
+      metadata: {
+        external_result: 'not_run',
+        probe_kind: 'metadata_marker',
+        profile_kind: 'metadata_marker',
+      },
+    });
+    store.verdicts.push({
+      id: 'verdict_metadata_only',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_metadata_only',
+      verdict: 'inconclusive',
+      evidence_ids: ['evt_metadata_only'],
+      created_at: now,
+    });
+
+    const readiness = computeReadiness('ten_demo');
+    for (const key of ['coverage', 'verdicts', 'evidence_freshness']) {
+      assert.equal(readiness.factors.find((factor) => factor.key === key).score, 0, key);
+    }
   });
 });

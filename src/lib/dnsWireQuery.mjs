@@ -9,6 +9,7 @@ import {
   parseDnsResponseHeader,
 } from './dnsTcpWire.mjs';
 import { resolvePinnedDestination } from './pinnedHttpRequest.mjs';
+import { startProbeIoAttempt } from './probeAttempt.mjs';
 import { isExpectedUdpPeer } from './safeNetworkProbes.mjs';
 
 function queryIdForJob(job) {
@@ -85,9 +86,14 @@ async function resolveDnsDestination(job, deps, queryName, started, timeoutMs) {
   );
 }
 
-function sendDnsUdp(createSocket, query, endpoint, timeoutMs) {
+function sendDnsUdp(createSocket, query, endpoint, timeoutMs, transactionId, deps, operation, onAttempt) {
   return new Promise((resolve, reject) => {
-    const socket = createSocket(net.isIP(endpoint.host) === 6 ? 'udp6' : 'udp4');
+    const socket = startProbeIoAttempt(
+      deps,
+      operation,
+      () => createSocket(net.isIP(endpoint.host) === 6 ? 'udp6' : 'udp4'),
+      onAttempt,
+    );
     let settled = false;
     let timer;
     const settle = (value, error) => {
@@ -108,8 +114,9 @@ function sendDnsUdp(createSocket, query, endpoint, timeoutMs) {
       if (!isExpectedUdpPeer(rinfo, endpoint.host, endpoint.port)) return;
       const response = Buffer.isBuffer(message) ? message : Buffer.from(message ?? []);
       const parsed = parseDnsResponseHeader(response, { transport: 'udp' });
+      if (parsed.incomplete || parsed.transaction_id !== transactionId) return;
       settle({
-        received: !parsed.incomplete,
+        received: true,
         response_bytes: response.length,
         parsed,
       });
@@ -131,7 +138,7 @@ function sendDnsUdp(createSocket, query, endpoint, timeoutMs) {
   });
 }
 
-function sendDnsTcp(connectFn, query, endpoint, timeoutMs) {
+function sendDnsTcp(connectFn, query, endpoint, timeoutMs, transactionId, deps, operation, onAttempt) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let responseBuffer = Buffer.alloc(0);
@@ -149,27 +156,41 @@ function sendDnsTcp(connectFn, query, endpoint, timeoutMs) {
       if (error) reject(error);
       else resolve(value);
     };
-    socket = connectFn({ host: endpoint.host, port: endpoint.port }, () => {
-      try {
-        socket.write(frameDnsTcpMessage(query), (error) => {
-          if (error) settle(null, error);
-        });
-      } catch (error) {
-        settle(null, error);
-      }
-    });
-    socket.on('data', (chunk) => {
+    socket = startProbeIoAttempt(
+      deps,
+      operation,
+      () => connectFn({ host: endpoint.host, port: endpoint.port }, () => {
+        try {
+          socket.write(frameDnsTcpMessage(query), (error) => {
+            if (error) settle(null, error);
+          });
+        } catch (error) {
+          settle(null, error);
+        }
+      }),
+      onAttempt,
+    );
+    const onData = (chunk) => {
       if (settled) return;
       const accumulated = accumulateDnsTcpResponse(responseBuffer, chunk, { transport: 'tcp' });
       responseBuffer = accumulated.buffer;
       if (!accumulated.complete) return;
+      if (accumulated.parsed.transaction_id !== transactionId) {
+        const frameBytes = responseBuffer.length >= 2
+          ? Math.min(responseBuffer.length, responseBuffer.readUInt16BE(0) + 2)
+          : responseBuffer.length;
+        responseBuffer = responseBuffer.subarray(frameBytes);
+        if (responseBuffer.length > 0) onData(Buffer.alloc(0));
+        return;
+      }
       const responseBytes = accumulated.parsed.dns_message?.length ?? Math.max(0, responseBuffer.length - 2);
       settle({
         received: accumulated.parsed.rcode != null,
         response_bytes: responseBytes,
         parsed: accumulated.parsed,
       });
-    });
+    };
+    socket.on('data', onData);
     socket.once('error', (error) => settle(null, error));
     socket.once('end', () => settle({ received: false, response_bytes: 0, parsed: null }));
     socket.setTimeout?.(Math.max(1, timeoutMs), () => settle({
@@ -244,21 +265,29 @@ export async function probeDnsWireQuery(job, deps = {}) {
   try {
     const pinned = await resolveDnsDestination(job, deps, queryName, started, timeoutMs);
     const endpoint = { host: pinned.address, port: 53 };
+    const transactionId = query.readUInt16BE(0);
     let transport = requestedTransport === 'tcp' ? 'tcp' : 'udp';
-    deps.recordProbeLogicalAttempt?.(`dns_${transport}`);
-    requestsSent += 1;
+    const recordAttempt = () => { requestsSent += 1; };
     let response = transport === 'tcp'
       ? await sendDnsTcp(
           deps.connectFn ?? net.connect,
           query,
           endpoint,
           remainingTimeoutMs(started, timeoutMs),
+          transactionId,
+          deps,
+          `dns_${transport}`,
+          recordAttempt,
         )
       : await sendDnsUdp(
           deps.createSocket ?? dgram.createSocket.bind(dgram),
           query,
           endpoint,
           remainingTimeoutMs(started, timeoutMs),
+          transactionId,
+          deps,
+          `dns_${transport}`,
+          recordAttempt,
         );
 
     const truncated = Boolean(response.parsed?.truncated);
@@ -266,13 +295,15 @@ export async function probeDnsWireQuery(job, deps = {}) {
     if (requestedTransport === 'auto' && truncated && maxRequests >= 2) {
       transport = 'tcp';
       tcpFallbackUsed = true;
-      deps.recordProbeLogicalAttempt?.('dns_tcp_fallback');
-      requestsSent += 1;
       response = await sendDnsTcp(
         deps.connectFn ?? net.connect,
         query,
         endpoint,
         remainingTimeoutMs(started, timeoutMs),
+        transactionId,
+        deps,
+        'dns_tcp_fallback',
+        recordAttempt,
       );
     }
 
@@ -304,7 +335,9 @@ export async function probeDnsWireQuery(job, deps = {}) {
     }, 'connected', requestsSent, started);
   } catch (error) {
     const code = error?.code ?? '';
-    if (code === 'signed_operation_budget_exceeded') throw error;
+    if (['signed_operation_budget_exceeded', 'probe_job_deadline_exceeded'].includes(code)) {
+      throw error;
+    }
     const externalResult = requestsSent === 0
       ? 'error'
       : (code === 'ETIMEOUT'

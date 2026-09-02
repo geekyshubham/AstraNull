@@ -71,6 +71,8 @@ describe('outside-in WAF agent evidence', () => {
       waf_confidence: 0.9,
       marker_probes: [
         { family: 'sqli_marker', variant: 'plain', blocked: true, allowed: false },
+        { family: 'xss_marker', variant: 'plain', blocked: true, allowed: false },
+        { family: 'path_traversal_marker', variant: 'plain', blocked: true, allowed: false },
       ],
     }, {
       nonceHash: 'sha256:upgrade',

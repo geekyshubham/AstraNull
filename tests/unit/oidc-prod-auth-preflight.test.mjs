@@ -39,7 +39,7 @@ function baseProductionOidcEnv(overrides = {}) {
       'https://idp.example/oauth2/default/v1/keys?client_secret=supersecret',
     ASTRANULL_SECRET_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
     ASTRANULL_DATABASE_URL: 'postgresql://user:secret@db.example:5432/astranull',
-    ASTRANULL_PROBE_WORKER_SECRET: 'test-probe-worker-secret-32-chars!!',
+    ASTRANULL_PROBE_WORKER_SECRET: randomBytes(32).toString('base64url'),
     ...overrides,
   };
 }
@@ -79,6 +79,9 @@ describe('oidc production auth preflight utility', () => {
     assert.equal(checkById(evaluation.checks, 'negative_dev_headers_refused').ok, true);
     assert.equal(checkById(evaluation.checks, 'negative_signed_session_refused').ok, true);
     assert.equal(checkById(evaluation.checks, 'negative_http_jwks_refused').ok, true);
+    assert.match(checkById(evaluation.checks, 'negative_dev_headers_refused').detail, /AUTH_MODE must be oidc-jwt/);
+    assert.match(checkById(evaluation.checks, 'negative_signed_session_refused').detail, /AUTH_MODE must be oidc-jwt/);
+    assert.match(checkById(evaluation.checks, 'negative_http_jwks_refused').detail, /JWKS_URL must use HTTPS/);
     assert.equal(evaluation.auth_posture.oidc.require_mfa, true);
   });
 

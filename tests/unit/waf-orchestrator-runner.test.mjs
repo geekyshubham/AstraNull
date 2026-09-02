@@ -1,6 +1,7 @@
 import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +24,7 @@ import {
 } from '../../src/persistence/postgres/wafOrchestratorServiceAdapters.mjs';
 
 const tempDirs = [];
+const TEST_PROBE_WORKER_SECRET = randomBytes(32).toString('hex');
 
 function tempDir() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'astranull-waf-orchestrator-runner-'));
@@ -33,11 +35,11 @@ function tempDir() {
 const SIGNED_WORKER_ENV = {
   ASTRANULL_DATABASE_URL: 'postgresql://user:secret@db.example.invalid/astranull',
   ASTRANULL_PROBE_MODE: 'signed-worker',
-  ASTRANULL_PROBE_WORKER_SECRET: 'a'.repeat(32),
+  ASTRANULL_PROBE_WORKER_SECRET: TEST_PROBE_WORKER_SECRET,
 };
 
 function signedWorkerRuntimeConfig() {
-  return { probeMode: 'signed-worker', probeWorkerSecret: 'a'.repeat(32) };
+  return { probeMode: 'signed-worker', probeWorkerSecret: TEST_PROBE_WORKER_SECRET };
 }
 
 afterEach(() => {
@@ -191,7 +193,7 @@ describe('waf orchestrator runner config validation', () => {
       parseWafOrchestratorRunnerArgs(['node', 'script.mjs', '--tenant-id', 'ten_a']),
     );
     assert.equal(config.ok, false);
-    assert.match(config.message ?? '', /at least 32 characters/);
+    assert.match(config.message ?? '', /hmac_secret_too_short/);
   });
 
   it('redacts loadRuntimeConfig failures that mention database URLs', () => {
@@ -418,7 +420,7 @@ describe('waf orchestrator runner metadata-only summary', () => {
     assert.equal(summary.artifact_type, 'waf_orchestrator_runtime_run');
     assert.ok(summary.caveats.some((c) => /external scheduling/i.test(c)));
     assert.ok(!blob.includes('postgresql://'));
-    assert.ok(!blob.includes('a'.repeat(32)));
+    assert.ok(!blob.includes(TEST_PROBE_WORKER_SECRET));
   });
 
   it('redacts database URLs from runner error messages', () => {

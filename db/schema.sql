@@ -432,14 +432,14 @@ CREATE OR REPLACE VIEW target_verification_current AS
   FROM target_verifications
   ORDER BY target_id, transitioned_at DESC;
 
--- Current WAF/CDN edge fingerprint per target, from the pinned edge signature corpus.
+-- Current WAF/CDN edge fingerprint per target, from the pinned wafw00f + cdncheck corpus.
 -- Evidence is label-only: no raw header/cookie values and no block-page bodies (ADR-0005).
 CREATE TABLE target_edge_detections (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   target_group_id TEXT NOT NULL,
   target_id TEXT NOT NULL,
-  test_run_id TEXT,
+  test_run_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'inconclusive'
     CHECK (status IN ('detected', 'not_detected', 'inconclusive', 'error', 'pending')),
   reason TEXT,
@@ -1677,6 +1677,8 @@ ALTER TABLE target_edge_detections ADD CONSTRAINT target_edge_detections_tenant_
 ALTER TABLE bootstrap_tokens ADD CONSTRAINT bootstrap_tokens_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE agents ADD CONSTRAINT agents_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_run_group_target_key
+  UNIQUE (tenant_id, id, target_group_id, target_id);
 ALTER TABLE test_policies ADD CONSTRAINT test_policies_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE verdicts ADD CONSTRAINT verdicts_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE events ADD CONSTRAINT events_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1818,6 +1820,39 @@ ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_targ
   FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
 ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_test_run_tenant
   FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
+
+LOCK TABLE target_edge_detections, test_runs, targets IN SHARE ROW EXCLUSIVE MODE;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM target_edge_detections edge
+    LEFT JOIN targets target
+      ON target.tenant_id = edge.tenant_id
+     AND target.target_group_id = edge.target_group_id
+     AND target.id = edge.target_id
+    LEFT JOIN test_runs run
+      ON run.tenant_id = edge.tenant_id
+     AND run.id = edge.test_run_id
+     AND run.target_group_id = edge.target_group_id
+     AND run.target_id = edge.target_id
+    WHERE edge.test_run_id IS NULL
+       OR target.id IS NULL
+       OR run.id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'preexisting target edge detection provenance is malformed'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'target_edge_detections_provenance_binding';
+  END IF;
+END;
+$$;
+
+ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_target_binding
+  FOREIGN KEY (tenant_id, target_group_id, target_id)
+  REFERENCES targets (tenant_id, target_group_id, id);
+ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_run_binding
+  FOREIGN KEY (tenant_id, test_run_id, target_group_id, target_id)
+  REFERENCES test_runs (tenant_id, id, target_group_id, target_id);
 ALTER TABLE waf_fingerprints ADD CONSTRAINT fk_waf_fingerprints_waf_asset_tenant
   FOREIGN KEY (tenant_id, waf_asset_id) REFERENCES waf_assets (tenant_id, id);
 ALTER TABLE waf_fingerprints ADD CONSTRAINT fk_waf_fingerprints_test_run_tenant
@@ -2065,34 +2100,7 @@ DECLARE
   run_target_id TEXT;
   run_status TEXT;
 BEGIN
-  IF NEW.ownership_verification_id IS NOT NULL THEN
-    PERFORM 1
-    FROM ownership_verifications ov
-    JOIN target_groups tg
-      ON tg.tenant_id = ov.tenant_id AND tg.id = ov.target_group_id
-    JOIN agents a
-      ON a.tenant_id = ov.tenant_id AND a.id = ov.agent_id
-    JOIN targets t
-      ON t.tenant_id = ov.tenant_id AND t.target_group_id = ov.target_group_id
-     AND t.deleted_at IS NULL AND t.kind = 'fqdn'
-     AND COALESCE(t.normalized_value, lower(btrim(t.value))) = lower(btrim(ov.declared_fqdn))
-    WHERE ov.tenant_id = NEW.tenant_id
-      AND ov.id = NEW.ownership_verification_id
-      AND ov.status = 'challenge_sent'
-      AND tg.deleted_at IS NULL AND tg.archived_at IS NULL
-      AND a.target_group_id = ov.target_group_id
-      AND a.status = 'online'
-      AND COALESCE(a.last_token_validation_status, 'valid') <> 'invalid'
-      AND NEW.test_run_id = ov.id
-      AND NEW.target_id = ov.agent_id
-      AND NEW.nonce_hash = ov.challenge_nonce_hash
-      AND NEW.target_descriptor_json->>'kind' = 'fqdn'
-      AND lower(btrim(NEW.target_descriptor_json->>'value')) = lower(btrim(ov.declared_fqdn))
-    FOR KEY SHARE OF ov, tg, a, t;
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'ownership probe job must match an open exact-target challenge'
-        USING ERRCODE = '23514', CONSTRAINT = 'probe_jobs_ownership_challenge_binding';
-    END IF;
+  IF NEW.check_id = 'ownership.challenge' OR NEW.ownership_verification_id IS NOT NULL THEN
     RETURN NEW;
   END IF;
 
@@ -2126,10 +2134,209 @@ END;
 $$;
 
 CREATE TRIGGER probe_jobs_exact_active_target
-BEFORE INSERT OR UPDATE OF tenant_id, test_run_id, target_id, ownership_verification_id,
-  nonce_hash, target_descriptor_json
+BEFORE INSERT OR UPDATE OF id, tenant_id, test_run_id, target_id, check_id,
+  ownership_verification_id, nonce_hash, target_descriptor_json
 ON probe_jobs
 FOR EACH ROW EXECUTE FUNCTION astranull_probe_jobs_exact_active_target_trigger();
+
+LOCK TABLE ownership_verifications, probe_jobs IN SHARE ROW EXCLUSIVE MODE;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM ownership_verifications ov
+    LEFT JOIN probe_jobs j
+      ON j.tenant_id = ov.tenant_id AND j.id = ov.probe_job_id
+    WHERE ov.probe_job_id IS NOT NULL
+      AND (
+        j.id IS NULL
+        OR j.ownership_verification_id IS DISTINCT FROM ov.id
+        OR j.test_run_id IS DISTINCT FROM ov.id
+        OR j.target_id IS DISTINCT FROM ov.agent_id
+        OR j.check_id IS DISTINCT FROM 'ownership.challenge'
+        OR j.nonce_hash IS DISTINCT FROM ov.challenge_nonce_hash
+        OR j.target_descriptor_json->>'kind' IS DISTINCT FROM 'fqdn'
+        OR lower(btrim(j.target_descriptor_json->>'value'))
+             IS DISTINCT FROM lower(btrim(ov.declared_fqdn))
+      )
+  ) OR EXISTS (
+    SELECT 1
+    FROM probe_jobs j
+    LEFT JOIN ownership_verifications ov
+      ON ov.tenant_id = j.tenant_id AND ov.id = j.ownership_verification_id
+    WHERE (j.check_id = 'ownership.challenge' OR j.ownership_verification_id IS NOT NULL)
+      AND (
+        ov.id IS NULL
+        OR ov.probe_job_id IS DISTINCT FROM j.id
+        OR j.test_run_id IS DISTINCT FROM ov.id
+        OR j.target_id IS DISTINCT FROM ov.agent_id
+        OR j.check_id IS DISTINCT FROM 'ownership.challenge'
+        OR j.nonce_hash IS DISTINCT FROM ov.challenge_nonce_hash
+        OR j.target_descriptor_json->>'kind' IS DISTINCT FROM 'fqdn'
+        OR lower(btrim(j.target_descriptor_json->>'value'))
+             IS DISTINCT FROM lower(btrim(ov.declared_fqdn))
+      )
+  ) THEN
+    RAISE EXCEPTION 'preexisting ownership verification/probe job binding is malformed'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'ownership_verifications_probe_job_binding';
+  END IF;
+END;
+$$;
+
+ALTER TABLE probe_jobs
+  ADD CONSTRAINT probe_jobs_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE ownership_verifications
+  ADD CONSTRAINT ownership_verifications_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE ownership_verifications
+  ADD CONSTRAINT fk_ownership_verifications_probe_job_tenant
+  FOREIGN KEY (tenant_id, probe_job_id)
+  REFERENCES probe_jobs (tenant_id, id)
+  DEFERRABLE INITIALLY DEFERRED
+  NOT VALID;
+ALTER TABLE probe_jobs
+  ADD CONSTRAINT fk_probe_jobs_ownership_verification_tenant
+  FOREIGN KEY (tenant_id, ownership_verification_id)
+  REFERENCES ownership_verifications (tenant_id, id)
+  DEFERRABLE INITIALLY DEFERRED
+  NOT VALID;
+ALTER TABLE ownership_verifications
+  VALIDATE CONSTRAINT fk_ownership_verifications_probe_job_tenant;
+ALTER TABLE probe_jobs
+  VALIDATE CONSTRAINT fk_probe_jobs_ownership_verification_tenant;
+
+CREATE OR REPLACE FUNCTION astranull_ownership_verifications_reciprocal_probe_job_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  current_probe_job_id TEXT;
+BEGIN
+  SELECT ov.probe_job_id
+    INTO current_probe_job_id
+  FROM ownership_verifications ov
+  WHERE ov.tenant_id = NEW.tenant_id AND ov.id = NEW.id
+  FOR KEY SHARE;
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM 1
+  FROM probe_jobs j
+  WHERE j.tenant_id = NEW.tenant_id
+    AND j.ownership_verification_id = NEW.id
+    AND j.id IS DISTINCT FROM current_probe_job_id
+  FOR KEY SHARE;
+  IF FOUND THEN
+    RAISE EXCEPTION 'ownership verification cannot leave a one-sided ownership challenge job'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'ownership_verifications_probe_job_binding';
+  END IF;
+
+  IF current_probe_job_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  PERFORM 1
+  FROM ownership_verifications ov
+  JOIN probe_jobs j
+    ON j.tenant_id = ov.tenant_id AND j.id = ov.probe_job_id
+  WHERE ov.tenant_id = NEW.tenant_id
+    AND ov.id = NEW.id
+    AND j.ownership_verification_id = ov.id
+    AND j.test_run_id = ov.id
+    AND j.target_id = ov.agent_id
+    AND j.check_id = 'ownership.challenge'
+    AND j.nonce_hash = ov.challenge_nonce_hash
+    AND j.target_descriptor_json->>'kind' = 'fqdn'
+    AND lower(btrim(j.target_descriptor_json->>'value')) = lower(btrim(ov.declared_fqdn))
+  FOR KEY SHARE OF ov, j;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ownership verification must reciprocally match its exact ownership challenge job'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'ownership_verifications_probe_job_binding';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION astranull_probe_jobs_reciprocal_ownership_verification_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  current_check_id TEXT;
+  current_ownership_verification_id TEXT;
+BEGIN
+  SELECT j.check_id, j.ownership_verification_id
+    INTO current_check_id, current_ownership_verification_id
+  FROM probe_jobs j
+  WHERE j.tenant_id = NEW.tenant_id AND j.id = NEW.id;
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_check_id <> 'ownership.challenge'
+     AND current_ownership_verification_id IS NULL THEN
+    PERFORM 1
+    FROM ownership_verifications ov
+    WHERE ov.tenant_id = NEW.tenant_id AND ov.probe_job_id = NEW.id;
+    IF FOUND THEN
+      RAISE EXCEPTION 'ordinary probe job cannot be referenced as an ownership challenge job'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'probe_jobs_ownership_challenge_binding';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  PERFORM 1
+  FROM ownership_verifications ov
+  WHERE ov.tenant_id = NEW.tenant_id
+    AND ov.probe_job_id = NEW.id
+    AND ov.id IS DISTINCT FROM current_ownership_verification_id
+  FOR KEY SHARE;
+  IF FOUND THEN
+    RAISE EXCEPTION 'ownership challenge job cannot leave a one-sided verification reference'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'probe_jobs_ownership_challenge_binding';
+  END IF;
+
+  PERFORM 1
+  FROM probe_jobs j
+  JOIN ownership_verifications ov
+    ON ov.tenant_id = j.tenant_id AND ov.id = j.ownership_verification_id
+  WHERE j.tenant_id = NEW.tenant_id
+    AND j.id = NEW.id
+    AND ov.probe_job_id = j.id
+    AND j.test_run_id = ov.id
+    AND j.target_id = ov.agent_id
+    AND j.check_id = 'ownership.challenge'
+    AND j.nonce_hash = ov.challenge_nonce_hash
+    AND j.target_descriptor_json->>'kind' = 'fqdn'
+    AND lower(btrim(j.target_descriptor_json->>'value')) = lower(btrim(ov.declared_fqdn))
+  FOR KEY SHARE OF j, ov;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ownership challenge job must reciprocally match its exact verification'
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'probe_jobs_ownership_challenge_binding';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER ownership_verifications_reciprocal_probe_job
+AFTER INSERT OR UPDATE
+ON ownership_verifications
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION astranull_ownership_verifications_reciprocal_probe_job_trigger();
+
+CREATE CONSTRAINT TRIGGER probe_jobs_reciprocal_ownership_verification
+AFTER INSERT OR UPDATE
+ON probe_jobs
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION astranull_probe_jobs_reciprocal_ownership_verification_trigger();
+
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 ALTER TABLE environments ENABLE ROW LEVEL SECURITY;

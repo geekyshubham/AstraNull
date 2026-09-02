@@ -4,59 +4,17 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { roleHasPermission } from '../../src/contracts/roles.mjs';
+import { STAFF_ROLES } from '../../src/contracts/staffRoles.mjs';
 import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.mjs';
+import { DETAIL_ROUTE_ITEMS, NAV_ITEMS } from '../../apps/web/react/src/lib/navigation.ts';
 
-/** 25 surviving portal RouteId values (docs/ux/14 §3). */
-const PORTAL_ROUTES = Object.freeze([
-  'dashboard',
-  'environments',
-  'target-groups',
-  'target-group-detail',
-  'target-detail',
-  'agents',
-  'agent-detail',
-  'checks',
-  'test-policies',
-  'runs',
-  'run-detail',
-  'findings',
-  'finding-detail',
-  'reports',
-  'report-detail',
-  'integrations',
-  'notifications',
-  'audit',
-  'release-evidence',
-  'settings',
-  'support',
-  'subscription',
-  'admin',
-  'tenant-detail',
-  'internal-soc',
-  'queue-detail',
-]);
+/** Every shipped authenticated route, derived from the same source as the router and shell. */
+const PORTAL_ROUTES = Object.freeze(
+  [...NAV_ITEMS, ...DETAIL_ROUTE_ITEMS].map((item) => item.id),
+);
 
-/** Customer + staff sidebar entries from navigation.ts NAV_ITEMS. */
-const SIDEBAR_ROUTE_IDS = Object.freeze([
-  'dashboard',
-  'environments',
-  'target-groups',
-  'agents',
-  'checks',
-  'test-policies',
-  'runs',
-  'findings',
-  'integrations',
-  'reports',
-  'settings',
-  'support',
-  'notifications',
-  'audit',
-  'release-evidence',
-  'subscription',
-  'admin',
-  'internal-soc',
-]);
+/** Every shipped sidebar entry, including customer and staff surfaces. */
+const SIDEBAR_ROUTE_IDS = Object.freeze(NAV_ITEMS.map((item) => item.id));
 
 const STAFF_ONLY_ROUTES = new Set(['admin', 'tenant-detail']);
 /** Staff-only SOC execution console. queue-detail is shared for customer pack completion. */
@@ -154,6 +112,32 @@ describe('portal RBAC matrix (FT-RBAC-01..03)', () => {
         canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole }),
         true,
         `staff SOC role ${staffRole} must access queue-detail`,
+      );
+    }
+  });
+});
+
+describe('portal staff/customer surface separation (FT-RBAC-04)', () => {
+  it('FT-RBAC-04 staff principals can reach only staff routes authorized for their staff role', () => {
+    for (const staffRole of STAFF_ROLES) {
+      const expectedRoutes = new Set(['admin', 'tenant-detail']);
+      if (STAFF_SOC_ROLES.includes(staffRole)) {
+        expectedRoutes.add('internal-soc');
+        expectedRoutes.add('queue-detail');
+      }
+
+      for (const routeId of PORTAL_ROUTES) {
+        assert.equal(
+          canAccessRoute('admin', routeId, { principal: 'staff', staffRole }),
+          expectedRoutes.has(routeId),
+          `staff_role=${staffRole} route=${routeId}`,
+        );
+      }
+
+      assert.deepEqual(
+        filterSidebar('admin', 'staff', staffRole),
+        STAFF_SOC_ROLES.includes(staffRole) ? ['admin', 'internal-soc'] : ['admin'],
+        `staff_role=${staffRole} sidebar`,
       );
     }
   });

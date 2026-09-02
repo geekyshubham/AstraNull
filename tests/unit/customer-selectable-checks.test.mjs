@@ -13,6 +13,12 @@ const INPUT_REQUIRING = [
   'origin.host_sni_bypass.safe',
   'path.protected_canary.safe',
   'waf.origin_bypass.safe',
+  'l7.login_abuse_flow.safe',
+  'l7.api_quota_exhaustion.safe',
+  'l7.search_abuse.validation',
+  'l7.export_abuse.validation',
+  'l7.oauth_token_abuse.validation',
+  'l7.signup_registration_abuse.validation',
 ];
 
 test('checkRequiresAdditionalInput flags host_sni_bypass and agent_mode prerequisites', () => {

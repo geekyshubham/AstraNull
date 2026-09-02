@@ -1,12 +1,12 @@
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient } from './tenantContext.mjs';
 
 /**
  * @param {import('pg').Pool} pool
  */
 export function createKillSwitchRepository(pool) {
   return {
-    async isKillSwitchActiveForTenant(ctx) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async isKillSwitchActiveForTenant(ctx, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT active
            FROM soc_kill_switch
@@ -18,8 +18,8 @@ export function createKillSwitchRepository(pool) {
       });
     },
 
-    async getKillSwitchRecord(ctx) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async getKillSwitchRecord(ctx, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT tenant_id, active, reason, updated_at, updated_by
            FROM soc_kill_switch
@@ -46,8 +46,8 @@ export function createKillSwitchRepository(pool) {
       });
     },
 
-    async upsertKillSwitch(ctx, { active, reason, updated_by, updated_at }) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async upsertKillSwitch(ctx, { active, reason, updated_by, updated_at }, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         await client.query(
           'SELECT pg_advisory_xact_lock(hashtext($1))',
           [`kill_switch_state:${ctx.tenantId}`],

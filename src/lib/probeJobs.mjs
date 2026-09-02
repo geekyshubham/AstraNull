@@ -6,13 +6,21 @@ import {
   normalizeProbeHttpPath,
   WAF_SAFE_PROBE_METADATA_KEYS,
 } from '../contracts/checks.mjs';
-import { API_DOC_PATHS, RISKY_ADMIN_PORTS } from './capabilityProbes.mjs';
+import {
+  API_DOC_PATHS,
+  RISKY_ADMIN_PORTS,
+  minimumProbeRequestsForKind,
+} from './capabilityProbes.mjs';
 import { assertProbeDestinationAllowed } from './probeEndpoint.mjs';
 import { generateNonce, hashNonce } from '../lib/crypto.mjs';
 import { stableStringify } from './agentUpdates.mjs';
 
 const DEFAULT_MAX_REQUESTS = 1;
 const DEFAULT_TIMEOUT_CAP_MS = 5000;
+const RESOLVER_ATTEMPTS_PER_HOSTNAME = 2;
+const EXTRA_DESTINATION_RESOLVER_ATTEMPTS_BY_KIND = new Map([
+  ['dns_axfr_leak', RESOLVER_ATTEMPTS_PER_HOSTNAME],
+]);
 
 const CAPABILITY_ARRAY_OVERRIDE_KEYS = new Set(['ports', 'paths', 'secondary_nameservers', 'collect']);
 
@@ -239,6 +247,28 @@ function targetLogicalHost(target) {
   return (hostPort ? hostPort[1] : value.split('/')[0]) || null;
 }
 
+/**
+ * Maximum A/AAAA calls used only to classify socket destinations. Probe DNS queries remain
+ * in the independent probe budget. AXFR can discover one nameserver mid-probe, requiring a
+ * second bounded A/AAAA classification pair.
+ */
+export function initialDestinationResolverAttemptsForJob(probeProfile, target) {
+  if (probeProfile?.kind === 'metadata_marker') return 0;
+  const host = targetLogicalHost(target);
+  if (!host || isIP(host) !== 0) return 0;
+  // dns_wire_query discovers the authoritative nameserver first, then classifies
+  // that hostname with one A and one AAAA lookup before opening UDP/TCP transport.
+  return probeProfile?.kind === 'dns_wire_query'
+    ? RESOLVER_ATTEMPTS_PER_HOSTNAME + 1
+    : RESOLVER_ATTEMPTS_PER_HOSTNAME;
+}
+
+export function maxDestinationResolverAttemptsForJob(probeProfile, target) {
+  const initialAttempts = initialDestinationResolverAttemptsForJob(probeProfile, target);
+  return initialAttempts
+    + (EXTRA_DESTINATION_RESOLVER_ATTEMPTS_BY_KIND.get(probeProfile?.kind) ?? 0);
+}
+
 export function targetLiteralIpAddress(target) {
   const value = String(target?.value ?? '').trim();
   if (/^https?:\/\//i.test(value)) {
@@ -308,7 +338,7 @@ function bindProbeProfileDestinationsToTarget(profile, target) {
   return buildProbeProfile(bound);
 }
 
-export function normalizeJobConstraints(safetyConstraints, probeProfile) {
+export function normalizeJobConstraints(safetyConstraints, probeProfile, target = null) {
   const src = safetyConstraints ?? {};
   const out = {};
   if (src.max_events != null) out.max_events = src.max_events;
@@ -318,10 +348,35 @@ export function normalizeJobConstraints(safetyConstraints, probeProfile) {
   }
   let maxRequests =
     probeProfile?.max_requests != null ? probeProfile.max_requests : DEFAULT_MAX_REQUESTS;
+  const mandatoryRequests = minimumProbeRequestsForKind(probeProfile?.kind);
+  if (maxRequests < mandatoryRequests) {
+    throw new RangeError(
+      `${probeProfile.kind} requires a signed max_requests budget of ${mandatoryRequests}`,
+    );
+  }
   if (src.max_requests != null) {
+    if (src.max_requests < mandatoryRequests) {
+      throw new RangeError(
+        `${probeProfile.kind} requires a signed max_requests budget of ${mandatoryRequests}`,
+      );
+    }
     maxRequests = Math.min(maxRequests, src.max_requests);
   }
-  out.max_requests = maxRequests;
+  const minDestinationResolverAttempts = initialDestinationResolverAttemptsForJob(
+    probeProfile,
+    target,
+  );
+  const maxDestinationResolverAttempts = maxDestinationResolverAttemptsForJob(
+    probeProfile,
+    target,
+  );
+  // max_requests is the signed total logical-operation cap. Keep a distinct probe cap so
+  // additive destination classification allowance can never authorize extra probe egress.
+  out.max_probe_requests = maxRequests;
+  out.min_destination_resolver_attempts = minDestinationResolverAttempts;
+  out.max_destination_resolver_attempts = maxDestinationResolverAttempts;
+  out.max_total_operations = maxRequests + maxDestinationResolverAttempts;
+  out.max_requests = out.max_total_operations;
   let timeoutMs;
   if (src.timeout_ms != null) {
     timeoutMs = src.timeout_ms;
@@ -457,7 +512,12 @@ export function buildSignedProbeJobRecord({
     ),
     target,
   );
-  const baseConstraints = normalizeJobConstraints(run.safety_constraints, resolvedProbeProfile);
+  const signedTarget = targetDescriptor(target);
+  const baseConstraints = normalizeJobConstraints(
+    run.safety_constraints,
+    resolvedProbeProfile,
+    signedTarget,
+  );
   const constraints = {
     ...baseConstraints,
     ...(ownershipBinding && typeof ownershipBinding === 'object'
@@ -477,7 +537,7 @@ export function buildSignedProbeJobRecord({
     nonce,
     probe_profile: resolvedProbeProfile,
     constraints,
-    target: targetDescriptor(target),
+    target: signedTarget,
     worker_metadata: {
       check_title: check.title ?? check.check_id,
       safety_class: check.safety_class ?? check.risk_class ?? null,

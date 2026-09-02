@@ -10,6 +10,7 @@ import {
   ListChecks,
   Network,
   ScanSearch,
+  Search,
   ShieldCheck,
   Siren,
   Target,
@@ -27,10 +28,11 @@ import { Tabs } from '../components/ui/tabs';
 import { AgentInstallMatrix } from '../components/agents/agent-install-matrix';
 import { FindingsListView } from '../components/findings/findings-list';
 import { RunsPageHeadActions, RunsSocGatePanel } from '../components/runs/runs-soc-gate';
-import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../lib/crud-ui';
+import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState, useConfirmModal } from '../lib/crud-ui';
 import { apiErrorMessage } from '../lib/error-messages';
 import { buildEvidenceCustodyManifest } from '../lib/custody';
 import { buildEvidenceChainExport, summarizeEvidenceExport } from '../lib/evidence-export';
+import { hasEvidenceBackedVerdict } from '../lib/environments';
 import {
   computeFindingKpis,
   filterFindingsByTab,
@@ -53,7 +55,6 @@ import {
   formatPlacementStatus,
   placementStatusHint,
 } from '../lib/agent-helpers';
-import { resolveAgentReleaseMetadata } from '../lib/agent-release-metadata';
 import { formatRequiredSetupList } from '../lib/capability-probe-labels';
 import {
   CHECK_SAFETY_SCOPE_TABS,
@@ -401,6 +402,16 @@ function ensureFunctionalSurfaceStyles() {
 @media (prefers-reduced-motion: reduce) {
   .run-live-dot { animation: none; opacity: 0.85; }
 }
+.catalog-filter-grid { display: grid; grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(160px, 1fr)); gap: var(--space-3); align-items: end; }
+.catalog-search-control { display: flex; min-height: 44px; align-items: center; gap: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
+.catalog-search-control input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }
+.catalog-check-primary, .catalog-cell-stack { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.catalog-check-primary strong { color: var(--fg); }
+.catalog-check-primary small, .catalog-cell-stack small { color: var(--fg-2); font-size: var(--text-xs); }
+.validation-catalog-table .data-table { min-width: 1040px; }
+.validation-runs-table .data-table { min-width: 1180px; }
+@media (max-width: 900px) { .catalog-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .catalog-search-field { grid-column: 1 / -1; } }
+@media (max-width: 620px) { .catalog-filter-grid { grid-template-columns: minmax(0, 1fr); } .catalog-search-field { grid-column: auto; } }
 `;
   document.head.appendChild(node);
 }
@@ -802,6 +813,7 @@ export function AgentsPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -855,13 +867,6 @@ export function AgentsPage({
       }];
     })
   ];
-  const installRelease = useMemo(
-    () => resolveAgentReleaseMetadata(data.releaseEvidence),
-    [data.releaseEvidence]
-  );
-  const installReleaseMetadataComplete = installRelease.version !== '—'
-    && installRelease.digest !== '—'
-    && !['—', 'metadata recorded'].includes(installRelease.cosignStatus.toLowerCase());
   const auxiliaryError = [releaseLoadError, trustKeyLoadError].filter(Boolean).join(' ');
 
   // Load agent update releases + update-signing trust keys for the rollout / trust-key
@@ -1108,7 +1113,11 @@ export function AgentsPage({
       setError('No bootstrap token id was returned, so it cannot be revoked from here.');
       return;
     }
-    if (!window.confirm('Revoke this bootstrap token? New agent registrations using it will fail.')) return;
+    if (!await confirm({
+      title: 'Revoke bootstrap token',
+      description: 'Revoke this bootstrap token? New agent registrations using it will fail.',
+      confirmLabel: 'Revoke token'
+    })) return;
     const result = await runAction(
       setBusy,
       setError,
@@ -1152,7 +1161,11 @@ export function AgentsPage({
 
   async function revokeAgent(id: string) {
     if (!id) return;
-    if (!window.confirm("Revoke this agent's credentials? It will stop reporting until re-registered.")) return;
+    if (!await confirm({
+      title: 'Revoke agent credentials',
+      description: "Revoke this agent's credentials? It will stop reporting until re-registered.",
+      confirmLabel: 'Revoke agent'
+    })) return;
     await runAction(
       setBusy,
       setError,
@@ -1166,7 +1179,11 @@ export function AgentsPage({
 
   async function requestReleaseRollback(releaseId: string) {
     if (!releaseId) return;
-    if (!window.confirm('Request rollback for this agent release? Eligible agents will move to the previous signed version.')) return;
+    if (!await confirm({
+      title: 'Request agent rollback',
+      description: 'Request rollback for this agent release? Eligible agents will move to the previous signed version.',
+      confirmLabel: 'Request rollback'
+    })) return;
     await runAction(
       setBusy,
       setError,
@@ -1183,7 +1200,11 @@ export function AgentsPage({
 
   async function revokeTrustKey(keyId: string) {
     if (!keyId) return;
-    if (!window.confirm('Revoke this agent update trust key? Agents will reject updates signed with it.')) return;
+    if (!await confirm({
+      title: 'Revoke update trust key',
+      description: 'Revoke this agent update trust key? Agents will reject updates signed with it.',
+      confirmLabel: 'Revoke key'
+    })) return;
     await runAction(
       setBusy,
       setError,
@@ -1598,18 +1619,14 @@ export function AgentsPage({
       `}</style>
       <PageHeader
         route="agents"
-        title="Agent fleet"
-        description="Operate outbound-only observation agents, one-time registration credentials, and signed update trust."
+        eyebrow="Observe-only footprint"
+        title="Agents"
+        description="Optional outbound-only observers confirm whether probe markers reached a protected zone. They never originate traffic, require inbound management access, or hold cloud credentials."
         actions={(
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={busy === 'refresh'}
-            disabled={busy !== ''}
-            onClick={() => void handleAgentsRefresh()}
-          >
-            Refresh
-          </Button>
+          <>
+            <Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleAgentsRefresh()}>Refresh</Button>
+            <Button size="sm" disabled={busy !== ''} onClick={() => setAgentsTab('install')}>Install agent</Button>
+          </>
         )}
       />
       <PageContextSummary>
@@ -1855,17 +1872,16 @@ export function AgentsPage({
             </CardContent>
           </Card>
 
-          {!installReleaseMetadataComplete ? (
-            <div className="form-banner neutral" role="note">
-              Signed agent release metadata is incomplete. Treat the install commands below as templates until a concrete version, digest, and signature status are published.
-            </div>
-          ) : null}
           <AgentInstallMatrix
-            data={data}
             tokenSecret={tokenRevoked ? '' : tokenSecret}
             onCreateToken={() => void createBootstrapToken()}
             createBusy={busy === 'create-bootstrap-token'}
             actionsDisabled={busy !== '' || Boolean(targetGroupsLoadError) || !selectedTargetGroup}
+            updateReleases={updateReleases}
+            trustKeys={trustKeys}
+            metadataLoading={auxLoading}
+            releaseLoadError={releaseLoadError}
+            trustKeyLoadError={trustKeyLoadError}
           />
         </div>
       ) : null}
@@ -1985,10 +2001,12 @@ export function ValidationSurfacePage({
   session: Session;
   onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [checkFilter, setCheckFilter] = useState<CheckFamilyTabId>('recommended');
+  const [checkQuery, setCheckQuery] = useState('');
   const [checkSafetyScope, setCheckSafetyScope] = useState<CheckSafetyScopeId>('all');
   const [checkStatusFilter, setCheckStatusFilter] = useState('all');
   const [findingTab, setFindingTab] = useState<FindingTabId>('open');
@@ -2027,9 +2045,19 @@ export function ValidationSurfacePage({
   const latestCheckVerdicts = useMemo(() => buildLatestCheckVerdictMap(data.runs), [data.runs]);
 
   const visibleChecks = useMemo(() => {
-    if (checkStatusFilter === 'all') return filteredChecks;
-    return filteredChecks.filter((check) => checkStatusFilterKey(check, latestCheckVerdicts) === checkStatusFilter);
-  }, [filteredChecks, checkStatusFilter, latestCheckVerdicts]);
+    const needle = checkQuery.trim().toLowerCase();
+    return filteredChecks.filter((check) => {
+      if (checkStatusFilter !== 'all' && checkStatusFilterKey(check, latestCheckVerdicts) !== checkStatusFilter) return false;
+      if (!needle) return true;
+      return [
+        getString(check, ['check_id'], ''),
+        getString(check, ['name', 'title'], ''),
+        getString(check, ['description', 'summary'], ''),
+        getString(check, ['vector_family'], ''),
+        getString(check, ['evidence_tier'], '')
+      ].join(' ').toLowerCase().includes(needle);
+    });
+  }, [filteredChecks, checkQuery, checkStatusFilter, latestCheckVerdicts]);
 
   const filteredRuns = useMemo(() => {
     const sorted = [...data.runs].sort((a, b) => {
@@ -2172,7 +2200,12 @@ export function ValidationSurfacePage({
       findings: data.findings
     });
     const summary = summarizeEvidenceExport(preview).map(([label, value]) => `${label}: ${value}`).join('\n');
-    if (!window.confirm(`Export evidence chain JSON?\n\nThis fetches up to 20 recent run details for verdict correlation.\n\n${summary}`)) return;
+    if (!await confirm({
+      title: 'Export evidence chain JSON',
+      description: `Export evidence chain JSON?\n\nThis fetches up to 20 recent run details for verdict correlation.\n\n${summary}`,
+      confirmLabel: 'Export JSON',
+      confirmTone: 'default'
+    })) return;
     setBusy('export-evidence-chain');
     setError('');
     setMessage('');
@@ -2239,98 +2272,136 @@ export function ValidationSurfacePage({
   }
 
   if (route === 'checks') {
+    ensureFunctionalSurfaceStyles();
     const columns: TableColumn<DataItem>[] = [
       {
-        key: 'name',
-        label: 'Name',
-        render: (item) => <strong>{getString(item, ['name', 'check_id'], '—')}</strong>
+        key: 'check',
+        label: 'Check',
+        render: (item) => {
+          const checkId = getString(item, ['check_id'], '');
+          const targets = Array.isArray(item.supported_targets)
+            ? (item.supported_targets as unknown[]).map(String)
+            : [];
+          return (
+            <span className="catalog-check-primary">
+              <strong>{getString(item, ['name', 'title', 'check_id'], '—')}</strong>
+              <code className="traffic-path-label" title={checkId}>{checkId || 'No check ID'}</code>
+              {targets.length ? <small>Targets: {targets.join(', ')}</small> : null}
+            </span>
+          );
+        }
       },
       {
         key: 'family',
         label: 'Family',
         render: (item) => (
-          <Badge tone="info" title="Vector family from check catalog">
+          <Badge tone="info" title="Vector family from the check catalog">
             {formatVectorFamilyLabel(getString(item, ['vector_family'], ''))}
           </Badge>
         )
       },
       {
-        key: 'description',
-        label: 'Description',
+        key: 'mode',
+        label: 'Mode & safety',
         render: (item) => {
-          const desc = getString(item, ['description', 'summary'], '');
-          return desc
-            ? <span className="cell-truncate cell-truncate--desc" title={desc} aria-label={desc}>{desc}</span>
-            : <span className="muted">—</span>;
+          const safetyClass = getString(item, ['safety_class'], 'unknown');
+          return (
+            <span className="catalog-cell-stack">
+              <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>
+              <small>{formatCheckBoundLabel(item)}</small>
+            </span>
+          );
         }
       },
       {
-        key: 'targets',
-        label: 'Targets',
+        key: 'evidence',
+        label: 'Evidence tier',
         render: (item) => {
-          const targets = Array.isArray(item.supported_targets)
-            ? (item.supported_targets as unknown[]).map((value) => String(value))
-            : [];
-          return targets.length
-            ? <code className="traffic-path-label">{targets.join(', ')}</code>
-            : <span className="muted">—</span>;
+          const tier = getString(item, ['evidence_tier'], '');
+          const required = Array.isArray(item.evidence_required) ? item.evidence_required.map(String) : [];
+          return (
+            <span className="catalog-cell-stack">
+              {tier ? <Badge tone="muted" title="Derived evidence tier from catalog contract">{tier}</Badge> : <span className="muted">Not recorded</span>}
+              {required.length ? <small title={required.join(', ')}>{required.length} required {pluralize(required.length, 'signal')}</small> : null}
+            </span>
+          );
         }
       },
+      {
+        key: 'expected',
+        label: 'Expected behavior',
+        render: (item) => {
+          const expected = getString(item, ['expected_behavior', 'expected_result'], '');
+          const description = getString(item, ['description', 'summary'], '');
+          return (
+            <span className="catalog-cell-stack">
+              <strong>{expected ? formatSnakeLabel(expected) : 'Declared per target'}</strong>
+              {description ? <small title={description}>{truncateText(description, 86)}</small> : null}
+            </span>
+          );
+        }
+      },
+      {
+        key: 'result',
+        label: 'Last result',
+        render: (item) => {
+          const checkId = getString(item, ['check_id'], '');
+          const latest = latestCheckVerdicts.get(checkId);
+          const safetyClass = getString(item, ['safety_class'], '');
+          const verdict = latest?.verdict || (safetyClass === 'soc_gated' ? 'request' : '');
+          const badge = <Badge tone={catalogVerdictBadgeTone(verdict)}>{verdict ? formatCatalogVerdictLabel(verdict) : 'Untested'}</Badge>;
+          return latest?.runId
+            ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', latest.runId)} aria-label={`Open latest run for ${checkId}`}>{badge}</AnchorButton>
+            : badge;
+        }
+      }
     ];
+    const checksLoadError = data.loadErrors.checks ?? '';
     return (
-      <div className="content">
-        <PageHeader route="checks" />
+      <div className="content validation-catalog-page">
+        <PageHeader
+          route="checks"
+          eyebrow="Validation catalog"
+          title="Checks"
+          description="Every bounded customer-runnable check and SOC request-only scenario, with execution class, evidence tier, expected behavior, and latest result."
+          actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>}
+        />
+        <PageContextSummary>
+          {checksLoadError ? 'Check catalog unavailable' : <><span className="tabular-nums">{data.checks.length}</span> checks · <span className="tabular-nums">{checkSafetyCounts.safe}</span> customer-runnable · <span className="tabular-nums">{checkSafetyCounts.soc}</span> SOC request-only</>}
+        </PageContextSummary>
+        <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
-            <CardTitle>Check catalog</CardTitle>
-            <CardDescription>
-              Filter by vector family, safety class, and last verdict. Showing{' '}
-              <span className="tabular-nums">{visibleChecks.length}</span> of{' '}
-              <span className="tabular-nums">{data.checks.length}</span> checks.
-            </CardDescription>
+            <div>
+              <CardTitle>Check catalog</CardTitle>
+              <CardDescription><span className="tabular-nums">{visibleChecks.length}</span> of <span className="tabular-nums">{data.checks.length}</span> checks. Open any row for bounds, taxonomy, setup, and recent evidence.</CardDescription>
+            </div>
+            <Badge tone="muted">Evidence backed</Badge>
           </CardHeader>
           <CardContent className="stack-tight">
-            <div
-              role="group"
-              aria-label="Check catalog filters"
-              style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-3)' }}
-            >
-              <Select
-                label="Vector family"
-                value={checkFilter}
-                options={CHECK_FAMILY_FILTER_OPTIONS}
-                onChange={(value) => setCheckFilter(value as CheckFamilyTabId)}
-              />
-              <Select
-                label="Safety class"
-                value={checkSafetyScope}
-                options={CHECK_SAFETY_SCOPE_TABS.map((tab) => ({
-                  value: tab.id,
-                  label: `${tab.label} (${checkSafetyCounts[tab.id]})`
-                }))}
-                onChange={(value) => setCheckSafetyScope(value as CheckSafetyScopeId)}
-              />
-              <Select
-                label="Last verdict"
-                value={checkStatusFilter}
-                options={CHECK_STATUS_FILTER_OPTIONS}
-                onChange={setCheckStatusFilter}
-              />
+            <div className="catalog-filter-grid" role="group" aria-label="Check catalog filters">
+              <label className="field catalog-search-field">
+                <span>Search</span>
+                <span className="catalog-search-control"><Search size={15} aria-hidden="true" /><input type="search" value={checkQuery} onChange={(event) => setCheckQuery(event.target.value)} placeholder="Search name, ID, family, or evidence tier" /></span>
+              </label>
+              <Select label="Vector family" value={checkFilter} options={CHECK_FAMILY_FILTER_OPTIONS} onChange={(value) => setCheckFilter(value as CheckFamilyTabId)} />
+              <Select label="Safety class" value={checkSafetyScope} options={CHECK_SAFETY_SCOPE_TABS.map((tab) => ({ value: tab.id, label: `${tab.label} (${checkSafetyCounts[tab.id]})` }))} onChange={(value) => setCheckSafetyScope(value as CheckSafetyScopeId)} />
+              <Select label="Last verdict" value={checkStatusFilter} options={CHECK_STATUS_FILTER_OPTIONS} onChange={setCheckStatusFilter} />
             </div>
             <DataTable
+              className="validation-catalog-table"
               columns={columns}
               items={visibleChecks}
+              getRowId={(item, index) => getString(item, ['check_id'], String(index))}
               getRowProps={(item) => {
                 const checkId = getString(item, ['check_id'], '');
                 return checkId ? buildDetailHashRowProps('check-detail', checkId, `Open ${checkId}`) : {};
               }}
-              empty={(
-                data.checks.length === 0 ? (
-                  <EmptyState icon={ListChecks} title="No checks in catalog." body="The check catalog appears after your tenant is provisioned and scope is declared." />
-                ) : (
-                  <EmptyState icon={ListChecks} title="No checks match these filters." body="Adjust the vector family, safety class, or last-verdict filter to see more checks." />
-                )
-              )}
+              loadError={checksLoadError}
+              onRetry={() => void handleSurfaceRefresh()}
+              empty={data.checks.length === 0
+                ? <EmptyState icon={ListChecks} title="No checks in catalog" body="The check catalog appears after tenant provisioning. No execution capability is inferred from an empty response." />
+                : <EmptyState icon={ListChecks} title="No checks match these filters" body="Adjust search, vector family, safety class, or last result." />}
             />
           </CardContent>
         </Card>
@@ -2361,6 +2432,22 @@ export function ValidationSurfacePage({
         }
       },
       {
+        key: 'mode',
+        label: 'Mode',
+        render: (item) => {
+          const checkId = getString(item, ['check_id'], '');
+          const check = data.checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
+          const safetyClass = getString(check ?? {}, ['safety_class'], '');
+          const tier = getString(check ?? {}, ['evidence_tier'], '');
+          return safetyClass ? (
+            <span className="catalog-cell-stack">
+              <Badge tone={checkModeBadgeTone(safetyClass)}>{formatCheckModeLabel(safetyClass)}</Badge>
+              {tier ? <small>{tier}</small> : null}
+            </span>
+          ) : <span className="muted">—</span>;
+        }
+      },
+      {
         key: 'status',
         label: 'Status',
         render: (item) => {
@@ -2384,19 +2471,18 @@ export function ValidationSurfacePage({
         key: 'verdict',
         label: 'Verdict',
         render: (item) => {
-          const verdict = getRunVerdictValue(item) || 'pending';
-          return <Badge tone={verdictBadgeTone(verdict)} title="Correlated run verdict">{formatVerdictLabel(verdict)}</Badge>;
+          const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? getRunVerdictValue(item) : '';
+          if (!verdict) return <span className="muted">No verdict evidence</span>;
+          const verdictRecord = getNestedItem(item, ['verdict']);
+          const rawConfidence = getNumber(verdictRecord ?? {}, ['confidence_pct', 'confidence'], -1);
+          const confidence = rawConfidence < 0 ? '' : rawConfidence <= 1 ? `${Math.round(rawConfidence * 100)}% confidence` : `${Math.round(rawConfidence)}% confidence`;
+          return <span className="catalog-cell-stack"><Badge tone={verdictBadgeTone(verdict)} title="Evidence-backed run verdict">{formatVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
         }
       },
       {
         key: 'duration',
         label: 'Duration',
         render: (item) => <code className="traffic-path-label">{formatRunDuration(item)}</code>
-      },
-      {
-        key: 'agent',
-        label: 'Agent',
-        render: (item) => <code className="traffic-path-label">{getString(item, ['agent_id', 'observed_agent_id'], '—')}</code>
       },
       {
         key: 'started',
@@ -2446,10 +2532,17 @@ export function ValidationSurfacePage({
         : !runStartTargetPreview
           ? 'Add at least one target to the first target group.'
           : '';
+    const runStatusOptions = [
+      { value: 'all', label: 'All statuses' },
+      ...[...new Set(data.runs.map((run) => getString(run, ['status'], '')).filter(Boolean))].sort().map((status) => ({ value: status, label: formatRunStatusLabel(status) }))
+    ];
     return (
-      <div className="content">
+      <div className="content validation-runs-page">
         <PageHeader
           route="runs"
+          eyebrow="Validation history"
+          title="Test runs"
+          description="Review bounded safe checks and SOC-governed requests with lifecycle state, correlated verdict, confidence when published, and sealed evidence."
           actions={(
             <RunsPageHeadActions
               onRefresh={() => void onRefresh()}
@@ -2461,6 +2554,9 @@ export function ValidationSurfacePage({
             />
           )}
         />
+        <PageContextSummary>
+          <span className="tabular-nums">{data.runs.length}</span>{` ${pluralize(data.runs.length, 'run')} · `}<span className="tabular-nums">{inFlightRuns.length}</span> in progress · agents optional for internal corroboration
+        </PageContextSummary>
         <RunsSocGatePanel
           data={data}
           config={config}
@@ -2485,9 +2581,16 @@ export function ValidationSurfacePage({
         ) : null}
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
-          <CardHeader><CardTitle>Recent runs</CardTitle><CardDescription>runs · click a row to open the correlated verdict</CardDescription></CardHeader>
-          <CardContent>
+          <CardHeader>
+            <div><CardTitle>Run history</CardTitle><CardDescription>Open a row for probe results, optional agent observations, correlation, and custody chain.</CardDescription></div>
+            <Badge tone="muted">Evidence backed</Badge>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div className="catalog-filter-grid" role="group" aria-label="Run history filters">
+              <Select label="Lifecycle status" value={runStatusFilter} options={runStatusOptions} onChange={setRunStatusFilter} />
+            </div>
             <DataTable
+              className="validation-runs-table"
               columns={runColumns}
               items={filteredRuns}
               getRowProps={(item) => {
@@ -2545,23 +2648,28 @@ export function ValidationSurfacePage({
   }
 
   if (route === 'findings') {
+    const findingKpis = computeFindingKpis(data.findings);
+    const findingsLoadError = data.loadErrors.findings ?? '';
     return (
-      <div className="content">
-        <PageHeader route="findings" />
+      <div className="content validation-findings-page">
+        <PageHeader
+          route="findings"
+          eyebrow="Triage & remediate"
+          title="Findings"
+          description="Every finding links an observed verdict to evidence, declared business context, ownership, SLA, and a concrete remediation path."
+          actions={<Button variant="secondary" size="sm" loading={busy === 'refresh'} disabled={busy !== ''} onClick={() => void handleSurfaceRefresh()}>Refresh</Button>}
+        />
+        <PageContextSummary>
+          {findingsLoadError ? 'Finding inventory unavailable' : <><span className="tabular-nums">{findingKpis.openCount}</span> open · <span className="tabular-nums">{findingKpis.acceptedRiskCount}</span> accepted risk · <span className="tabular-nums">{findingKpis.closed30dCount}</span> closed in 30d · <span className="tabular-nums">{findingKpis.slaBreachCount}</span> SLA breached</>}
+        </PageContextSummary>
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
-            <CardTitle>Findings</CardTitle>
-            <CardDescription>click a card to open the correlated verdict</CardDescription>
+            <div><CardTitle>Finding queue</CardTitle><CardDescription>Filter evidence-backed gaps, then open any row for explanation, remediation, safe retest, and custody export.</CardDescription></div>
+            <Badge tone={findingKpis.slaBreachCount > 0 ? 'danger' : 'muted'}>{findingKpis.slaBreachCount} SLA breached</Badge>
           </CardHeader>
           <CardContent className="findings-surface-wrap">
-            <FindingsListView
-              findings={data.findings}
-              checks={data.checks}
-              targetGroups={data.targetGroups}
-              loadError={data.loadErrors.findings}
-              onRetry={onRefresh ? () => void onRefresh() : undefined}
-            />
+            <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} loadError={findingsLoadError} onRetry={() => void handleSurfaceRefresh()} />
           </CardContent>
         </Card>
       </div>

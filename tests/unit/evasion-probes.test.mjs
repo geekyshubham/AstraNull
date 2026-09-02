@@ -70,10 +70,13 @@ test('probe kind: single bounded kind, <=8 requests', () => {
   assert.equal(PROPOSED_PROFILE_FIELDS.length, 2);
 });
 
-test('exported surface exposes no count/rate/concurrency/repeat parameter', () => {
-  const profile = buildEvasionMarkerProfile({ transform: 'double_url', marker_class: 'sqli', max_requests: 99, rate: 50 });
-  assert.equal(profile.max_requests, 4, 'request budget is fixed, not caller-tunable');
-  assert.ok(profile.max_requests <= MAX_WAF_EVASION_MARKER_REQUESTS);
+test('generated profiles preserve the catalog default while explicit budgets reduce or clamp', () => {
+  const generated = buildEvasionMarkerProfile({ transform: 'double_url', marker_class: 'sqli' });
+  const reduced = buildEvasionMarkerProfile({ transform: 'double_url', max_requests: 1 });
+  const clamped = buildEvasionMarkerProfile({ transform: 'double_url', max_requests: 99, rate: 50 });
+  assert.equal(generated.max_requests, 4);
+  assert.equal(reduced.max_requests, 1);
+  assert.equal(clamped.max_requests, MAX_WAF_EVASION_MARKER_REQUESTS);
 });
 
 test('every evasion transform wraps an inert marker and emits nothing exploitable', () => {
@@ -170,6 +173,40 @@ test('runner: request budget is hard-bounded and retains no response body', asyn
   for (const entry of res.metadata.variant_results) {
     assert.deepEqual(Object.keys(entry).sort(), ['blocked', 'label', 'sent_length', 'status_code']);
   }
+});
+
+test('runner: preserves the signed target path/query and honors a worker cap of one', async () => {
+  const { fetchFn, calls } = countingFetch([403, 403]);
+  const job = {
+    target: { value: 'https://example.test/signed/path?keep=1' },
+    constraints: { max_requests: 99, max_probe_requests: 1 },
+    probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }),
+  };
+  const res = await runWafEvasionMarkerProbe(job, { fetchFn });
+  assert.equal(res.requests_sent, 1);
+  assert.equal(res.external_result, 'inconclusive');
+  assert.equal(calls().length, 1);
+  const sent = new URL(calls()[0].url);
+  assert.equal(sent.pathname, '/signed/path');
+  assert.equal(sent.searchParams.get('keep'), '1');
+  assert.ok(sent.searchParams.has('probe'));
+});
+
+test('runner: stops after the first transport failure', async () => {
+  let calls = 0;
+  const job = {
+    target: { value: 'https://example.test/signed/path' },
+    probe_profile: buildEvasionMarkerProfile({ transform: 'double_url' }),
+  };
+  const res = await runWafEvasionMarkerProbe(job, {
+    fetchFn: async () => {
+      calls += 1;
+      throw Object.assign(new Error('temporary failure'), { code: 'ECONNRESET' });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(res.requests_sent, 1);
+  assert.equal(res.external_result, 'inconclusive');
 });
 
 test('runner: honours job deadline (stops before sending)', async () => {

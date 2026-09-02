@@ -8,6 +8,7 @@ import {
   listMigrationFiles,
   runMigrations,
 } from '../src/persistence/postgres/migrations.mjs';
+import { createAuditRepository } from '../src/persistence/postgres/auditRepository.mjs';
 import { createCoreCatalogRepository } from '../src/persistence/postgres/coreCatalogRepository.mjs';
 import { createSupplyChainRiskRepository } from '../src/persistence/postgres/supplyChainRiskRepository.mjs';
 import { createWafOrchestratorRepository } from '../src/persistence/postgres/wafOrchestratorRepository.mjs';
@@ -246,23 +247,30 @@ async function seedTenantFixture(client, ids) {
  * @param {ReturnType<typeof buildAcceptanceTempIds>} ids
  */
 async function cleanupTenantFixture(client, ids) {
-  try {
-    if (ids.validationPlanId) {
-      await client.query(`DELETE FROM waf_validation_plans WHERE id = $1`, [ids.validationPlanId]);
-    }
-    if (ids.supplyChainRiskId) {
-      await client.query(`DELETE FROM supply_chain_risks WHERE id = $1`, [ids.supplyChainRiskId]);
-    }
-    if (ids.secondaryTargetId) {
-      await client.query(`DELETE FROM targets WHERE id = $1`, [ids.secondaryTargetId]);
-    }
-    await client.query(`DELETE FROM targets WHERE id = $1`, [ids.targetId]);
-    await client.query(`DELETE FROM target_groups WHERE id = $1`, [ids.targetGroupId]);
-    await client.query(`DELETE FROM environments WHERE id = $1`, [ids.environmentId]);
-    await client.query(`DELETE FROM tenants WHERE id = $1`, [ids.tenantId]);
-  } catch {
-    // best-effort metadata cleanup
+  if (ids.validationPlanId) {
+    await client.query(`DELETE FROM waf_validation_plans WHERE id = $1`, [ids.validationPlanId]);
   }
+  if (ids.supplyChainRiskId) {
+    await client.query(`DELETE FROM supply_chain_risks WHERE id = $1`, [ids.supplyChainRiskId]);
+  }
+  if (ids.secondaryTargetId) {
+    await client.query(`DELETE FROM targets WHERE id = $1`, [ids.secondaryTargetId]);
+  }
+  await client.query(`DELETE FROM targets WHERE id = $1`, [ids.targetId]);
+  await client.query(`DELETE FROM target_groups WHERE id = $1`, [ids.targetGroupId]);
+  await client.query(`DELETE FROM environments WHERE id = $1`, [ids.environmentId]);
+  await client.query(`DELETE FROM audit_logs WHERE tenant_id = $1`, [ids.tenantId]);
+  await client.query(`DELETE FROM tenants WHERE id = $1`, [ids.tenantId]);
+}
+
+/**
+ * @param {import('pg').Pool} pool
+ * @param {ReturnType<typeof buildAcceptanceTempIds>} ids
+ */
+async function cleanupTenantFixtureInOwnTransaction(pool, ids) {
+  await withTenantContext(pool, ids.tenantId, async (client) => {
+    await cleanupTenantFixture(client, ids);
+  });
 }
 
 /**
@@ -278,10 +286,11 @@ export async function verifyTargetGroupCrudLifecycle(pool, options = {}) {
   const ids = options.ids ?? buildAcceptanceTempIds('crud');
   const ctx = buildAcceptanceCtx(ids.tenantId);
   const now = options.now ?? new Date().toISOString();
-  const repo = createRepo(pool);
+  const repo = createRepo(pool, { auditRepository: createAuditRepository(pool) });
   let seeded = false;
 
   try {
+    await cleanupTenantFixtureInOwnTransaction(pool, ids);
     await withTenantContext(pool, ids.tenantId, async (client) => {
       await seedTenantFixture(client, ids);
     });
@@ -308,10 +317,20 @@ export async function verifyTargetGroupCrudLifecycle(pool, options = {}) {
       ctx,
       ids.targetGroupId,
       ids.secondaryTargetId,
+      { metadata: { notes: 'patched by postgres acceptance' } },
+    );
+    if (patchedTarget?.metadata?.notes !== 'patched by postgres acceptance') {
+      throw new Error('Target group CRUD: patchTarget did not persist metadata change.');
+    }
+
+    const identityMutation = await repo.patchTarget(
+      ctx,
+      ids.targetGroupId,
+      ids.secondaryTargetId,
       { value: 'crud-patched.example' },
     );
-    if (!patchedTarget || patchedTarget.value !== 'crud-patched.example') {
-      throw new Error('Target group CRUD: patchTarget did not persist value change.');
+    if (identityMutation?.error !== 'target_identity_immutable' || identityMutation?.status !== 409) {
+      throw new Error('Target group CRUD: patchTarget did not preserve immutable target identity.');
     }
 
     const deleted = await repo.deleteTarget(ctx, ids.targetGroupId, ids.secondaryTargetId);
@@ -335,9 +354,7 @@ export async function verifyTargetGroupCrudLifecycle(pool, options = {}) {
     }
   } finally {
     if (seeded) {
-      await withTenantContext(pool, ids.tenantId, async (client) => {
-        await cleanupTenantFixture(client, ids);
-      });
+      await cleanupTenantFixtureInOwnTransaction(pool, ids);
     }
   }
 }
@@ -373,6 +390,7 @@ export async function verifySupplyChainPhaseAuthorization(pool, options = {}) {
   };
 
   try {
+    await cleanupTenantFixtureInOwnTransaction(pool, ids);
     await withTenantContext(pool, ids.tenantId, async (client) => {
       await client.query(`INSERT INTO tenants (id, name) VALUES ($1, $2)`, [
         ids.tenantId,
@@ -419,9 +437,7 @@ export async function verifySupplyChainPhaseAuthorization(pool, options = {}) {
     }
   } finally {
     if (seeded) {
-      await withTenantContext(pool, ids.tenantId, async (client) => {
-        await cleanupTenantFixture(client, ids);
-      });
+      await cleanupTenantFixtureInOwnTransaction(pool, ids);
     }
   }
 }
@@ -453,6 +469,7 @@ export async function verifyWafDelegationOutboxPersistence(pool, options = {}) {
   };
 
   try {
+    await cleanupTenantFixtureInOwnTransaction(pool, ids);
     await withTenantContext(pool, ids.tenantId, async (client) => {
       await seedTenantFixture(client, ids);
     });
@@ -504,9 +521,7 @@ export async function verifyWafDelegationOutboxPersistence(pool, options = {}) {
     }
   } finally {
     if (seeded) {
-      await withTenantContext(pool, ids.tenantId, async (client) => {
-        await cleanupTenantFixture(client, ids);
-      });
+      await cleanupTenantFixtureInOwnTransaction(pool, ids);
     }
   }
 }
@@ -520,11 +535,13 @@ async function verifyTenantIsolationAndCrossTenantReject(pool) {
   const seedState = createAcceptanceTenantSeedState();
 
   try {
+    await cleanupTenantFixtureInOwnTransaction(pool, tenantA);
     await withTenantContext(pool, tenantA.tenantId, async (client) => {
       await seedTenantFixture(client, tenantA);
     });
     seedState.tenantA = true;
 
+    await cleanupTenantFixtureInOwnTransaction(pool, tenantB);
     await withTenantContext(pool, tenantB.tenantId, async (client) => {
       await seedTenantFixture(client, tenantB);
     });
@@ -578,10 +595,7 @@ async function verifyTenantIsolationAndCrossTenantReject(pool) {
   } finally {
     for (const key of acceptanceTenantsNeedingCleanup(seedState)) {
       const ids = key === 'tenantA' ? tenantA : tenantB;
-      const tenantId = ids.tenantId;
-      await withTenantContext(pool, tenantId, async (client) => {
-        await cleanupTenantFixture(client, ids);
-      });
+      await cleanupTenantFixtureInOwnTransaction(pool, ids);
     }
   }
 }

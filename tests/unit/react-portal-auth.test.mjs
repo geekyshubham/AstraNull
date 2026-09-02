@@ -339,16 +339,29 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('viewer', 'settings'), true);
   });
 
+  it('keeps customer routes out of the non-impersonating staff surface', () => {
+    for (const route of ['dashboard', 'targets', 'finding-detail', 'settings', 'subscription']) {
+      assert.equal(
+        canAccessRoute('admin', route, { principal: 'staff', staffRole: 'internal_admin' }),
+        false,
+        `staff must not access customer route ${route}`,
+      );
+    }
+    assert.equal(canAccessRoute('admin', 'admin', { principal: 'staff', staffRole: 'internal_admin' }), true);
+    assert.equal(canAccessRoute('admin', 'tenant-detail', { principal: 'staff', staffRole: 'support_engineer' }), true);
+  });
+
   it('aligns staff SOC route gate with operational SOC roles only', () => {
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'admin' }), false);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'internal_admin' }), false);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'soc_lead' }), true);
   });
 
-  it('allows customers to open queue-detail for authorization pack completion', () => {
+  it('keeps queue-detail shared with customers but limits staff access to operational SOC roles', () => {
     assert.equal(canAccessRoute('engineer', 'queue-detail', { principal: 'customer' }), true);
     assert.equal(canAccessRoute('viewer', 'queue-detail', { principal: 'customer' }), true);
-    assert.equal(canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole: 'support_engineer' }), true);
+    assert.equal(canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole: 'support_engineer' }), false);
+    assert.equal(canAccessRoute('admin', 'queue-detail', { principal: 'staff', staffRole: 'soc_analyst' }), true);
   });
 
   it('narrows release-evidence to the auditor role (docs/ux/14 §3.1)', () => {
@@ -365,16 +378,18 @@ describe('react portal route access', () => {
     const bootStart = APP_SOURCE.indexOf('async function boot()');
     const bootEnd = APP_SOURCE.indexOf("boot().catch", bootStart);
     const boot = APP_SOURCE.slice(bootStart, bootEnd);
+    const fallback = boot.indexOf('fallbackRouteForPrincipal(nextSession.principal)');
     const authorize = boot.indexOf('canAccessRoute(nextSession.role, requestedBootRoute');
     const redirect = boot.indexOf('window.history.replaceState');
     const route = boot.indexOf('setRoute(bootRoute)');
     const hydrate = boot.indexOf('await refresh(nextConfig, nextSession, bootRoute)');
     const reveal = boot.indexOf('setLoading(false)');
 
-    assert.ok(authorize >= 0, 'boot must authorize the requested hash route');
+    assert.ok(fallback >= 0, 'boot must select an authorized principal-specific fallback');
+    assert.ok(fallback < authorize, 'the fallback must be available to the route authorization decision');
     assert.ok(authorize < redirect, 'authorization must decide whether the hash is replaced');
-    assert.ok(redirect < route, 'an unauthorized deep-link must point at dashboard before route state changes');
-    assert.ok(route < hydrate, 'dashboard route state must be selected before any route fetch');
+    assert.ok(redirect < route, 'an unauthorized deep-link must point at its authorized fallback before route state changes');
+    assert.ok(route < hydrate, 'fallback route state must be selected before any route fetch');
     assert.ok(hydrate < reveal, 'the authorized route must hydrate before route-specific rendering is revealed');
     assert.doesNotMatch(boot, /refresh\(nextConfig, nextSession, requestedBootRoute\)/);
   });

@@ -1,6 +1,6 @@
+import { ShieldHalf } from 'lucide-react';
 import type { DataItem } from '../../lib/types';
 import { EmptyState } from '../ui/empty-state';
-import { ShieldHalf } from 'lucide-react';
 
 function getNumber(item: DataItem | null | undefined, keys: string[], fallback: number | null = null) {
   if (!item) return fallback;
@@ -20,35 +20,45 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function getMetaString(item: DataItem, key: string) {
+  const meta = item.meta;
+  return meta && typeof meta === 'object' && !Array.isArray(meta)
+    ? getString(meta as DataItem, [key])
+    : '';
+}
+
 function WafKpi({
   label,
   value,
   note,
-  noteWarn = false,
   unit,
 }: {
   label: string;
   value: string | number;
   note: string;
-  noteWarn?: boolean;
   unit?: string;
 }) {
   return (
-    <div className="dw-kpi">
-      <div className="dw-label">{label}</div>
-      <div className="dw-value">
+    <div className="kpi-cell">
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-value">
         {value}
-        {unit ? <span className="dw-unit">{unit}</span> : null}
-      </div>
-      <div
-        className={`dw-note${noteWarn ? ' dw-note--warn' : ''}`}
-        style={noteWarn ? { color: 'var(--warn)' } : undefined}
-      >
-        {note}
-      </div>
+        {unit ? <span className="unit">{unit}</span> : null}
+      </span>
+      <span className="kpi-delta">{note}</span>
     </div>
   );
 }
+
+type VendorCoverage = {
+  vendor: string;
+  pct: number | null;
+  passPct: number | null;
+  warnPct: number | null;
+  failPct: number | null;
+  edgeProtected: number | null;
+  total: number | null;
+};
 
 function VendorCoverageRow({
   vendor,
@@ -58,50 +68,74 @@ function VendorCoverageRow({
   failPct,
   edgeProtected,
   total,
-}: {
-  vendor: string;
-  pct: number;
-  passPct: number;
-  warnPct: number;
-  failPct: number;
-  edgeProtected: number;
-  total: number;
-}) {
-  const description = `${vendor}: ${pct}% fully protected across ${total} assets; ${edgeProtected} edge protected but not internally validated`;
+}: VendorCoverage) {
+  const coverage = pct === null ? 'Fully protected coverage unavailable' : `${pct}% fully protected`;
+  const assetScope = total === null
+    ? 'declared asset total unavailable'
+    : `${total} declared asset${total === 1 ? '' : 's'}`;
+  const edgeScope = edgeProtected === null
+    ? 'edge-protected count unavailable'
+    : `${edgeProtected} edge protected but not internally validated`;
+  const description = `${vendor}: ${coverage}; ${assetScope}; ${edgeScope}. Observed validation and connector metadata.`;
+
   return (
     <div className="dw-vendor-row">
-      <div className="dw-vendor-label mono">{vendor}</div>
+      <div className="mono text-sm">{vendor}</div>
       <div
         className="dw-vendor-bar"
         role="img"
         aria-label={description}
         title={description}
       >
-        {passPct > 0 ? <span className="seg pass" style={{ width: `${passPct}%` }} /> : null}
-        {warnPct > 0 ? <span className="seg warn" style={{ width: `${warnPct}%` }} /> : null}
-        {failPct > 0 ? <span className="seg fail" style={{ width: `${failPct}%` }} /> : null}
+        {passPct !== null && passPct > 0 ? <span className="seg pass" style={{ width: `${passPct}%` }} /> : null}
+        {warnPct !== null && warnPct > 0 ? <span className="seg warn" style={{ width: `${warnPct}%` }} /> : null}
+        {failPct !== null && failPct > 0 ? <span className="seg fail" style={{ width: `${failPct}%` }} /> : null}
       </div>
-      <div className="dw-vendor-pct mono">{pct}%</div>
+      <div className="mono text-sm">{pct === null ? '—' : `${pct}%`}</div>
     </div>
   );
 }
 
-function vendorRows(summary: DataItem | null) {
+function vendorRows(summary: DataItem | null): VendorCoverage[] {
   const byVendor = summary?.by_vendor;
   if (!byVendor || typeof byVendor !== 'object' || Array.isArray(byVendor)) return [];
+
   return Object.entries(byVendor as Record<string, DataItem>).map(([vendor, stats]) => {
-    const assets = getNumber(stats, ['assets', 'assets_total'], 0) ?? 0;
-    const protectedCount = getNumber(stats, ['protected'], 0) ?? 0;
-    const edgeProtected = getNumber(stats, ['edge_protected'], 0) ?? 0;
-    const underprotected = getNumber(stats, ['underprotected'], 0) ?? 0;
-    const unknown = getNumber(stats, ['unknown'], 0) ?? 0;
-    const total = assets > 0 ? assets : protectedCount + edgeProtected + underprotected + unknown;
-    const pct = total > 0 ? Math.round((protectedCount / total) * 100) : 0;
-    const passPct = total > 0 ? Math.round((protectedCount / total) * 100) : 0;
-    const warnPct = total > 0 ? Math.round(((edgeProtected + underprotected) / total) * 100) : 0;
-    const failPct = Math.max(0, 100 - passPct - warnPct);
+    const assets = getNumber(stats, ['assets', 'assets_total']);
+    const protectedCount = getNumber(stats, ['protected']);
+    const edgeProtected = getNumber(stats, ['edge_protected']);
+    const underprotected = getNumber(stats, ['underprotected']);
+    const unknown = getNumber(stats, ['unknown']);
+    const classifications = [protectedCount, edgeProtected, underprotected, unknown];
+    const classificationsComplete = classifications.every((value) => value !== null);
+    const total = assets ?? (classificationsComplete
+      ? classifications.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+      : null);
+    const explicitPct = getNumber(stats, ['coverage_pct']);
+    const pct = explicitPct ?? (protectedCount !== null && total !== null && total > 0
+      ? Math.round((protectedCount / total) * 100)
+      : null);
+    const passPct = protectedCount !== null && total !== null && total > 0
+      ? Math.round((protectedCount / total) * 100)
+      : null;
+    const warnPct = edgeProtected !== null && total !== null && total > 0
+      ? Math.round((edgeProtected / total) * 100)
+      : null;
+    const failPct = underprotected !== null && total !== null && total > 0
+      ? Math.round((underprotected / total) * 100)
+      : null;
+
     return { vendor, pct, passPct, warnPct, failPct, edgeProtected, total };
   });
+}
+
+function connectorHealthNote(degraded: number | null, disabled: number | null) {
+  if (degraded === null && disabled === null) return 'Health metadata unavailable';
+  const parts = [
+    degraded === null ? null : `${degraded} degraded`,
+    disabled === null ? null : `${disabled} disabled`,
+  ].filter(Boolean);
+  return `${parts.join(' · ')} · connector metadata`;
 }
 
 export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
@@ -115,17 +149,23 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
     );
   }
 
-  const protectedCount = getNumber(summary, ['protected'], 0) ?? 0;
-  const edgeProtected = getNumber(summary, ['edge_protected'], 0) ?? 0;
-  const underprotected = getNumber(summary, ['underprotected'], 0) ?? 0;
-  const coveragePct = getNumber(summary, ['coverage_pct'], null);
-  const connectorsActive = getNumber(summary, ['connectors_active'], 0) ?? 0;
-  const connectorsDegraded = getNumber(summary, ['connectors_degraded'], 0) ?? 0;
-  const connectorsDisabled = getNumber(summary, ['connectors_disabled'], 0) ?? 0;
+  const protectedCount = getNumber(summary, ['protected']);
+  const edgeProtected = getNumber(summary, ['edge_protected']);
+  const underprotected = getNumber(summary, ['underprotected']);
+  const unknown = getNumber(summary, ['unknown']);
+  const coveragePct = getNumber(summary, ['coverage_pct']);
+  const connectorsActive = getNumber(summary, ['connectors_active']);
+  const connectorsDegraded = getNumber(summary, ['connectors_degraded']);
+  const connectorsDisabled = getNumber(summary, ['connectors_disabled']);
   const vendors = vendorRows(summary);
-  const emptyReason = getString(summary, ['meta', 'empty_reason'], '');
+  const emptyReason = getMetaString(summary, 'empty_reason');
+  const classificationCounts = [protectedCount, edgeProtected, underprotected, unknown];
 
-  if (emptyReason && protectedCount === 0 && edgeProtected === 0 && underprotected === 0 && vendors.length === 0) {
+  if (
+    emptyReason
+    && classificationCounts.every((value) => value === null || value === 0)
+    && vendors.length === 0
+  ) {
     return (
       <EmptyState
         icon={ShieldHalf}
@@ -137,46 +177,55 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
     );
   }
 
-  const connectorNote = connectorsDegraded > 0 || connectorsDisabled > 0
-    ? `${connectorsDegraded} degraded · ${connectorsDisabled} disabled`
-    : 'healthy';
-
   return (
-    <div className={`dash-waf-grid${vendors.length === 0 ? ' dash-waf-grid--solo' : ''}`}>
-      <div className="dash-waf-kpis">
-        <WafKpi label="Protected" value={protectedCount} note="agent-confirmed full protection" />
+    <div className="stack">
+      <div className="kpi-row" aria-label="Observed WAF posture summary">
+        <WafKpi
+          label="Protected"
+          value={protectedCount ?? '—'}
+          note="Observed validation · agent-confirmed"
+        />
         <WafKpi
           label="Edge protected"
-          value={edgeProtected}
-          note="not internally validated"
-          noteWarn={edgeProtected > 0}
+          value={edgeProtected ?? '—'}
+          note="Observed at edge · internal corroboration absent"
         />
         <WafKpi
           label="Underprotected"
-          value={underprotected}
-          note="drift and policy exceptions"
-          noteWarn={underprotected > 0}
+          value={underprotected ?? '—'}
+          note="Observed drift or policy exception"
         />
         <WafKpi
-          label="Coverage"
-          value={coveragePct ?? '—'}
-          unit={coveragePct !== null ? '%' : undefined}
-          note="weighted by critical target groups"
+          label="Unknown"
+          value={unknown ?? '—'}
+          note="Insufficient observed evidence"
         />
-        <WafKpi label="Connectors" value={connectorsActive} note={connectorNote} />
+        <WafKpi
+          label="Protection rate"
+          value={coveragePct ?? '—'}
+          unit={coveragePct === null ? undefined : '%'}
+          note="Observed validation · criticality weighted"
+        />
+        <WafKpi
+          label="Connectors"
+          value={connectorsActive ?? '—'}
+          note={connectorHealthNote(connectorsDegraded, connectorsDisabled)}
+        />
       </div>
-      {vendors.length > 0 ? (
-        <div className="dash-waf-vendors">
-          <div className="dw-vendor-head">Coverage by vendor</div>
-          {vendors.map((row) => (
-            <VendorCoverageRow key={row.vendor} {...row} />
-          ))}
+
+      <section className="stack-tight" aria-labelledby="waf-vendor-coverage-title">
+        <div className="stack-tight">
+          <h3 className="card-title" id="waf-vendor-coverage-title">Coverage by vendor</h3>
+          <p className="muted small">Per-vendor classifications come from connector metadata and observed validation; an unfilled bar segment is not evidence of protection.</p>
         </div>
-      ) : (
-        <p className="dash-waf-vendors--empty">
-          Vendor coverage breakdown appears when connectors publish per-vendor asset metadata.
-        </p>
-      )}
+        {vendors.length > 0 ? (
+          vendors.map((row) => <VendorCoverageRow key={row.vendor} {...row} />)
+        ) : (
+          <p className="dash-waf-vendors--empty">
+            Vendor coverage breakdown appears when connectors publish per-vendor asset metadata.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

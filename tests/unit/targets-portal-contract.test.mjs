@@ -45,7 +45,9 @@ describe('Targets portal contract', () => {
   it('keeps target-group scheduling and removal on bounded, real APIs', () => {
     const source = readPage('target-group-detail-view.tsx');
 
-    assert.match(source, /window\.confirm\(/);
+    assert.match(source, /const \{ confirm \} = useConfirmModal\(\)/);
+    assert.match(source, /if \(!await confirm\(\{/);
+    assert.doesNotMatch(source, /window\.confirm\(/);
     assert.match(source, /method: 'DELETE'/);
     assert.match(source, /requestJson\(config, session, '\/v1\/test-policies'/);
     assert.match(source, /safe_windows: \[\{ day, start, end, timezone \}\]/);

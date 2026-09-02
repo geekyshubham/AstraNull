@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
+import {
+  fetchAppliedMigrationVersions,
+  listMigrationFiles,
+} from '../../src/persistence/postgres/migrations.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import {
+  MIGRATIONS_DIR,
   resolvePostgresHarnessAvailability,
   withEphemeralPostgres,
 } from '../helpers/pg-harness.mjs';
 
+const MIGRATION_0049 = '0049_tenant_connector_feature_authority';
 const TENANT_A = 'ten_0049_a';
 const TENANT_B = 'ten_0049_b';
 const CTX_A = { tenantId: TENANT_A, userId: 'usr_0049', role: 'admin' };
@@ -168,7 +174,14 @@ describe('postgres migration 0049 feature authority', () => {
     }
 
     await withEphemeralPostgres(async (pool, { latestVersion }) => {
-      assert.equal(latestVersion, '0050_connector_poll_governance');
+      const files = listMigrationFiles(MIGRATIONS_DIR);
+      assert.equal(latestVersion, files.at(-1)?.version);
+      assert.ok(files.some(({ version }) => version === MIGRATION_0049));
+      const applied = await fetchAppliedMigrationVersions(pool);
+      assert.deepEqual(
+        files.filter(({ version }) => !applied.has(version)).map(({ version }) => version),
+        [],
+      );
       await seed(pool);
 
       const view = await pool.query(
@@ -307,6 +320,6 @@ describe('postgres migration 0049 feature authority', () => {
       );
       assert.equal(claimed?.id, validJob);
       assert.equal(claimed?.status, 'leased');
-    }, { databaseName: undefined });
+    }, availability.env ?? process.env);
   });
 });

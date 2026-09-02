@@ -98,7 +98,7 @@ export function pluralize(count: number, singular: string, plural?: string) {
 
 /** `${count} ${noun}` with the noun agreeing with the count. */
 export function countLabel(count: number, singular: string, plural?: string) {
-  return `${count} ${pluralize(count, singular, plural)}`;
+  return `${formatNumber(count)} ${pluralize(count, singular, plural)}`;
 }
 
 const SECONDS_PER_MINUTE = 60;

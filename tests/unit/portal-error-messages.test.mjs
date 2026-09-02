@@ -8,6 +8,8 @@ import { describe, it } from 'node:test';
 import {
   apiErrorMessage,
   humanizeErrorCode,
+  publicApiErrorCode,
+  publicApiErrorMessage,
 } from '../../apps/web/react/src/lib/error-messages.ts';
 
 /**
@@ -75,6 +77,19 @@ describe('portal error humanizer', () => {
     assert.equal(banner, 'Outbound connector poll failed; manual metadata snapshots remain supported.');
   });
 
+  it('ignores attached server messages for 5xx API failures', () => {
+    const err = Object.assign(new Error('Something went wrong on the server. Try again.'), {
+      status: 500,
+      payload: {
+        error: 'internal_error',
+        message: 'relation tenant_secrets does not exist on db-primary.internal',
+      },
+    });
+    const banner = apiErrorMessage(err, 'Action failed.');
+    assert.equal(banner, 'Something went wrong on the server. Try again.');
+    assert.doesNotMatch(banner, /tenant_secrets|db-primary/);
+  });
+
   it('ignores a blank message and falls through to the code', () => {
     const banner = apiErrorMessage(apiError({ error: 'not_found', message: '   ' }), 'Action failed.');
     assert.equal(banner, 'That record no longer exists. Refresh and try again.');
@@ -91,6 +106,59 @@ describe('portal error humanizer', () => {
   });
 });
 
+describe('public API error boundary', () => {
+  it('uses fixed copy for known codes without trusting a supplied message', () => {
+    assert.equal(
+      publicApiErrorMessage(404, {
+        error: 'not_found',
+        message: 'proxy diagnostic: upstream route table missing',
+      }, 'Lookup failed.'),
+      'The requested record was not found.',
+    );
+    assert.equal(
+      publicApiErrorMessage(400, {
+        error: 'unknown_public_code',
+        message: 'database relation public.users does not exist',
+      }, 'Request failed. Try again.'),
+      'Request failed. Try again.',
+    );
+  });
+
+  it('collapses all 5xx payloads to fixed availability copy', () => {
+    for (const status of [500, 502, 503, 504]) {
+      assert.equal(
+        publicApiErrorMessage(status, {
+          error: 'internal_error',
+          message: 'sensitive topology and schema diagnostic',
+        }, 'Flow-specific fallback.'),
+        'Service is temporarily unavailable. Try again.',
+      );
+    }
+  });
+
+
+  it('withholds known codes from caller-specific dispatch on every 5xx response', () => {
+    const codes = [
+      'invalid_credentials',
+      'rate_limited',
+      'duplicate_request',
+      'weak_password',
+      'mfa_required',
+      'password_login_disabled',
+    ];
+    for (const status of [500, 502, 503, 504]) {
+      for (const code of codes) {
+        assert.equal(publicApiErrorCode(status, { error: code }), '');
+      }
+    }
+    assert.equal(
+      publicApiErrorCode(400, { error: 'invalid_credentials' }),
+      'invalid_credentials',
+      'documented 4xx codes must remain available for fixed flow-specific copy',
+    );
+  });
+});
+
 describe('portal surfaces route errors through the humanizer', () => {
   it('no longer renders payload.error verbatim on the runs or settings surfaces', () => {
     for (const file of ['functional-surfaces.tsx', 'page-components.tsx']) {
@@ -102,5 +170,29 @@ describe('portal surfaces route errors through the humanizer', () => {
       );
       assert.match(source, /from '\.\.\/lib\/error-messages'/, `${file} must import the humanizer`);
     }
+  });
+
+  it('never renders server-authored message fields on public or auth surfaces', () => {
+    const source = readFileSync(
+      path.join(ROOT, 'apps/web/react/src/pages/public-pages.tsx'),
+      'utf8',
+    );
+    assert.doesNotMatch(source, /json\.message/, 'public pages must not trust API message fields');
+    assert.doesNotMatch(
+      source,
+      /String\(json\.error \?\? ['"][^'"]+/,
+      'public pages must not use a raw API error code as fallback copy',
+    );
+    assert.doesNotMatch(
+      source,
+      /String\(json\.error/,
+      'public pages must route code inspection through the status-aware boundary',
+    );
+    assert.equal(
+      source.match(/publicApiErrorCode\((?:response\.status|status), json\)/g)?.length,
+      6,
+      'all six public/auth code dispatchers must suppress payload codes for 5xx responses',
+    );
+    assert.match(source, /publicApiErrorMessage/, 'public pages must use the fixed public boundary');
   });
 });

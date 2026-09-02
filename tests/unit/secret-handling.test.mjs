@@ -20,6 +20,7 @@ import { freshStore } from '../helpers/reset.mjs';
 const TEST_ENC_KEY_B64 = randomBytes(32).toString('base64');
 const OTHER_ENC_KEY_B64 = randomBytes(32).toString('base64');
 const TEST_SESSION_SECRET = 'test-session-secret-at-least-32-chars!!';
+const TEST_PROBE_SECRET = randomBytes(32).toString('base64url');
 const envSnapshot = { ...process.env };
 
 function restoreEnv() {
@@ -61,6 +62,28 @@ describe('secret envelope crypto', () => {
     const hex = randomBytes(32).toString('hex');
     const key = loadSecretEncryptionKey({ ASTRANULL_SECRET_ENCRYPTION_KEY: hex });
     assert.equal(key.length, 32);
+  });
+
+  it('accepts a diverse 32-byte key when only byte 31 matches byte 0', () => {
+    const bytes = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+    bytes[31] = bytes[0];
+    const key = loadSecretEncryptionKey({
+      ASTRANULL_SECRET_ENCRYPTION_KEY: bytes.toString('base64'),
+      ASTRANULL_DEPLOYMENT_PROFILE: 'production',
+    });
+    assert.deepEqual(key, bytes);
+  });
+
+  it('still rejects a key with a meaningful half-length repeating period', () => {
+    const half = Buffer.from(Array.from({ length: 16 }, (_, index) => index));
+    const repeating = Buffer.concat([half, half]);
+    assert.throws(
+      () => loadSecretEncryptionKey({
+        ASTRANULL_SECRET_ENCRYPTION_KEY: repeating.toString('base64'),
+        ASTRANULL_DEPLOYMENT_PROFILE: 'production',
+      }),
+      /repeat every 16 byte/,
+    );
   });
 
   it('rejects invalid key size or encoding', () => {
@@ -258,7 +281,7 @@ describe('production secret encryption config', () => {
     process.env.ASTRANULL_OIDC_JWKS_URL = 'https://idp.example/jwks';
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
     process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
-    process.env.ASTRANULL_PROBE_WORKER_SECRET = 'p'.repeat(32);
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
     delete process.env.ASTRANULL_SECRET_ENCRYPTION_KEY;
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_SECRET_ENCRYPTION_KEY/);
 

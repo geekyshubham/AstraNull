@@ -1,83 +1,87 @@
 :root {
-  /* ═══════════════════════════════════════════════════════════════════
-     AstraNull "Observatory" design system — DARK (default).
-     Refined dark, modern minimal. Deep charcoal canvas (not pure black),
-     frost hairline borders, off-white type, ONE restrained signal-red
-     accent + an instrument-cyan reserved for the readiness/"live" moment.
-     Calm · rigorous · defensible. All color via tokens (oklch + frost
-     alphas); variable NAMES are preserved so the whole stylesheet re-skins.
-     ═══════════════════════════════════════════════════════════════════ */
-  --void-black: oklch(15.5% 0.005 255);          /* darkest base — page canvas (near-black charcoal, cool undertone) */
-  --frost-border: oklch(96% 0.003 250 / 0.10);   /* semi-transparent white frost — reads as structure on charcoal */
-  --orange-accent: oklch(65% 0.20 28);           /* signal red — the one chromatic moment (name kept for continuity) */
+  /* AstraNull Open Design foundation — dark is the default. */
+  --void-black: #000000;
+  --frost-border: rgba(214, 235, 253, 0.19);
+  --orange-accent: #ff801f;
+
   --bg: var(--void-black);
-  --surface: oklch(18.5% 0.005 255);             /* cards, raised panels — lift off the canvas */
-  --surface-raised: oklch(22% 0.006 255);        /* hover / nested raised */
-  --fg: oklch(96% 0.003 250);                    /* primary text — off-white, not pure white */
-  --fg-2: oklch(78% 0.012 250);                  /* secondary text */
-  --text-secondary: oklch(78% 0.012 250);
-  --muted: oklch(74% 0.012 250);                 /* captions, subtext — AA (≥4.5:1) on surface-2 */
-  --meta: oklch(64% 0.012 250);                  /* faint mono meta */
+  --surface: #000000;
+  --surface-raised: #000000;
+  --surface-sunk: #000000;
+  --surface-2: oklch(0% 0 0);
+  --surface-3: #000000;
+  --surface-elevated: var(--surface);
+
+  --fg: oklch(95.514% 0 0);
+  --fg-2: #a1a4a5;
+  --text-secondary: var(--fg-2);
+  --muted-text: color-mix(in oklab, var(--fg), transparent 50%);
+  --muted: var(--muted-text);
+  --meta: #74797c;
+
   --border: var(--frost-border);
-  --border-soft: oklch(96% 0.003 250 / 0.07);
-  --border-strong: oklch(96% 0.003 250 / 0.16);
+  --border-soft: rgba(217, 237, 254, 0.145);
+  --border-strong: rgba(214, 235, 253, 0.34);
+
   --accent: var(--orange-accent);
-  --accent-on: oklch(14% 0.02 28);               /* dark label on red fill */
-  --on-danger: oklch(99% 0.01 28);
-  /* Solid danger fill for destructive BUTTONS — decoupled from --danger so it
-     can be deep enough to clear WCAG AA (≥4.5:1) against the near-white
-     --on-danger label, while --danger itself stays bright for status text/dots
-     on dark surfaces. oklch(50% 0.19 25) ≈ 5.1:1 with white. */
-  --danger-fill:       oklch(45% 0.185 25);      /* ~5.2:1 with white --on-danger label (AA) */
-  --danger-fill-hover: oklch(49% 0.185 25);
-  --danger-fill-active: oklch(41% 0.185 25);
-  --accent-hover: oklch(70% 0.18 28);
-  --accent-active: oklch(60% 0.20 28);
-  --accent-soft: oklch(65% 0.20 28 / 0.16);      /* glow / chip background */
-  /* instrument cyan — reserved for the readiness / "live" moment (continuity w/ mockups) */
-  --signal: oklch(82% 0.13 198);
-  --signal-soft: oklch(82% 0.13 198 / 0.16);
-  --success: oklch(78% 0.16 152);
-  --warn: oklch(80% 0.15 75);
-  --danger: oklch(70% 0.20 25);
-  --info: var(--signal);
-  --proof-surface: color-mix(in oklab, var(--fg), transparent 96%);
-  --proof-pending-surface: color-mix(in oklab, var(--fg), transparent 95%);
-  --proof-active-row: color-mix(in oklab, var(--accent), transparent 92%);
-  --code-surface: color-mix(in oklab, var(--fg), transparent 96%);
-  --overlay-backdrop: color-mix(in oklab, var(--bg), transparent 35%);
-  --overlay-scrim: color-mix(in oklab, var(--fg), transparent 68%);
-  --topbar-bg: var(--glass-strong);
-  --selection-bg: color-mix(in oklab, var(--accent), transparent 72%);
+  --accent-on: #000000;
+  --accent-hover: color-mix(in oklab, var(--accent), var(--fg) 10%);
+  --accent-active: color-mix(in oklab, var(--accent), var(--bg) 12%);
+  --accent-soft: color-mix(in oklab, var(--accent), transparent 86%);
+
+  --success: oklch(87.97764% 0.212416 155.7741);
+  --warn: oklch(85.36968% 0.157207 84.13);
+  --danger: oklch(64.11194% 0.245414 20.5598);
+  --info: var(--accent);
+  --signal: var(--accent);
+  --signal-soft: var(--accent-soft);
+  --on-danger: var(--fg);
+  --danger-fill: var(--danger);
+  --danger-fill-hover: color-mix(in oklab, var(--danger), var(--fg) 8%);
+  --danger-fill-active: color-mix(in oklab, var(--danger), var(--bg) 12%);
+
+  --wash: color-mix(in oklab, var(--fg), transparent 94%);
+  --wash-strong: color-mix(in oklab, var(--fg), transparent 88%);
+  --proof-surface: var(--wash);
+  --proof-pending-surface: var(--wash);
+  --proof-active-row: color-mix(in oklab, var(--accent), transparent 90%);
+  --code-surface: var(--wash);
+  --overlay-backdrop: color-mix(in oklab, var(--bg), transparent 34%);
+  --overlay-scrim: color-mix(in oklab, var(--bg), transparent 18%);
+  --topbar-bg: var(--bg);
+  --selection-bg: color-mix(in oklab, var(--accent), transparent 70%);
   --selection-fg: var(--fg);
   --scrollbar-thumb: color-mix(in oklab, var(--fg), transparent 82%);
   --scrollbar-thumb-hover: color-mix(in oklab, var(--fg), transparent 70%);
   --scrollbar-track: transparent;
-  --status-fill-mix: 84%;
-  --status-border-mix: 70%;
-  --surface-elevated: var(--surface-raised);
-  --mask-opaque: oklch(15.5% 0.005 255);
-  --motion-fast: 150ms;
-  --motion-base: 220ms;
-  --motion-ui: 220ms;
+  --status-fill-mix: 86%;
+  --status-border-mix: 62%;
+  --mask-opaque: #000000;
+
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-ui: 200ms;
+  --motion-slow: 300ms;
   --motion-ease: cubic-bezier(0.2, 0, 0, 1);
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
-  --font-body: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --ease-standard: var(--motion-ease);
+
+  --font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+  --font-body: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --text-xs: 12px;
   --text-sm: 14px;
   --text-base: 16px;
   --text-lg: 20px;
   --text-xl: 24px;
-  --text-2xl: 32px;
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-pill: 9999px;
-  --tracking-display: -0.025em;
+  --text-2xl: 36px;
+  --tracking-display: -0.05em;
   --tracking-caps: 0.06em;
-  --elev-ring: 0 0 0 1px var(--border);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
+
   --space-1: 4px;
   --space-1-5: 6px;
   --space-2: 8px;
@@ -86,25 +90,30 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
   --space-12: 48px;
+
   --icon-sm: 14px;
   --icon-md: 18px;
-  /* Shared measure for every public/auth shell (top nav, landing wrap, auth grid).
-     Was three separate 1120/1200px literals, which left ~38% of a 1920px display
-     empty and made the three surfaces disagree by 80px. One token keeps the nav
-     rail aligned with the content below it on every public page. */
+  --sidebar-width: 248px;
+  --sidebar-collapsed-width: 64px;
   --page-max: 1560px;
-  --elev-raised: 0 1px 0 0 oklch(96% 0.003 250 / 0.04) inset, 0 0 0 1px var(--border);
-  --surface-2: oklch(22% 0.006 255);
-  --surface-3: oklch(25% 0.007 255);
-  --card-shadow: 0 1px 0 0 oklch(96% 0.003 250 / 0.04) inset, 0 0 0 1px var(--border), 0 10px 30px -18px oklch(0% 0 0 / 0.6);
-  --card-shadow-hover: 0 1px 0 0 oklch(96% 0.003 250 / 0.06) inset, 0 0 0 1px var(--border-strong), 0 18px 42px -18px oklch(0% 0 0 / 0.7);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
-  /* glassmorphism — frosted surfaces over the aurora (nav / selective panels) */
-  --glass: oklch(18% 0.005 255 / 0.72);
-  --glass-strong: oklch(18% 0.005 255 / 0.86);
-  --glass-border: oklch(96% 0.003 250 / 0.12);
-  --glass-blur: blur(18px) saturate(150%);
+
+  --elev-ring: 0 0 0 1px var(--border);
+  --elev-raised: 0 0 0 1px var(--border);
+  --elev-inset: inset 0 0 0 1px var(--border-soft);
+  --elev-inset-sm: inset 0 0 0 1px var(--border-soft);
+  --card-shadow: none;
+  --card-shadow-hover: none;
+  --focus-color: var(--accent);
+  --focus-ring: 0 0 0 2px var(--focus-color);
+
+  /* Compatibility aliases intentionally collapse former glass/cyan layers. */
+  --glass: var(--surface);
+  --glass-strong: var(--surface);
+  --glass-border: var(--border);
+  --glass-blur: none;
+
   color-scheme: dark;
   color: var(--fg);
   background: var(--bg);
@@ -112,66 +121,69 @@
 }
 
 :root[data-theme="light"] {
-  /* ═══════════════════════════════════════════════════════════════════
-     "Observatory Light" — cool daylight console. Paper-white surfaces,
-     cool-slate ink, hairline slate borders, the SAME signal-red accent +
-     instrument cyan, both deepened for AA contrast on white. Real soft
-     shadows replace the dark frost-lift (shadows are invisible on charcoal
-     but structure on white). No warm beige/cream. Calm · rigorous.
-     ═══════════════════════════════════════════════════════════════════ */
-  --void-black: oklch(97.5% 0.003 250);          /* faint cool paper — cards lift off it */
-  --bg: oklch(97.5% 0.003 250);
-  --surface: oklch(100% 0 0);                    /* pure white cards */
-  --surface-raised: oklch(96% 0.004 250);        /* hover / nested */
-  --fg: oklch(26% 0.015 260);                    /* cool slate ink — never pure black */
-  --fg-2: oklch(40% 0.016 260);
-  --text-secondary: oklch(40% 0.016 260);
-  --muted: oklch(48% 0.016 260);
-  --meta: oklch(52% 0.016 260);
-  --frost-border: oklch(26% 0.03 260 / 0.12);
-  --border: oklch(26% 0.03 260 / 0.12);          /* slate hairline (frost is dark-only) */
-  --border-soft: oklch(26% 0.03 260 / 0.08);
-  --border-strong: oklch(26% 0.03 260 / 0.22);
-  --accent: oklch(55% 0.21 28);                  /* deepened so a white label clears AA */
-  --accent-on: oklch(99% 0.01 28);
-  --accent-hover: oklch(49% 0.21 28);
-  --accent-active: oklch(44% 0.21 28);
-  --accent-soft: oklch(55% 0.21 28 / 0.12);
-  --on-danger: oklch(99% 0.01 28);
-  --signal: oklch(52% 0.12 220);                 /* deepened so the instrument reads on white */
-  --signal-soft: oklch(52% 0.12 220 / 0.12);
-  --success: oklch(52% 0.15 152);
-  --warn: oklch(54% 0.15 65);                 /* AA for raw warning text on white and raised surfaces */
-  --danger: oklch(53% 0.21 25);                  /* bright enough for danger text/dots on white */
-  --danger-fill:       oklch(45% 0.19 25);        /* solid destructive-button fill — AA (≥4.5:1) with white label */
-  --danger-fill-hover: oklch(41% 0.19 25);
-  --danger-fill-active: oklch(38% 0.19 25);
-  --info: var(--signal);
-  --proof-surface: color-mix(in oklab, var(--fg), transparent 96%);
-  --proof-pending-surface: color-mix(in oklab, var(--fg), transparent 94%);
-  --proof-active-row: color-mix(in oklab, var(--accent), transparent 90%);
-  --code-surface: color-mix(in oklab, var(--surface-raised), var(--fg) 4%);
-  --overlay-backdrop: color-mix(in oklab, var(--fg), transparent 52%);
-  --overlay-scrim: color-mix(in oklab, var(--fg), transparent 58%);
-  --topbar-bg: var(--glass-strong);
-  --selection-bg: color-mix(in oklab, var(--accent), transparent 82%);
+  --void-black: #f7f7f5;
+  --bg: #f7f7f5;
+  --surface: oklch(100% 0 0);
+  --surface-raised: oklch(100% 0 0);
+  --surface-sunk: #f0f0ed;
+  --surface-2: #ffffff;
+  --surface-3: #f0f0ed;
+  --surface-elevated: var(--surface);
+
+  --fg: oklch(20.86418% 0.008506 264.373);
+  --fg-2: #565b63;
+  --text-secondary: var(--fg-2);
+  --muted-text: color-mix(in oklab, var(--fg), transparent 38%);
+  --muted: var(--muted-text);
+  --meta: #626870;
+
+  --frost-border: rgba(19, 22, 28, 0.13);
+  --border: var(--frost-border);
+  --border-soft: rgba(19, 22, 28, 0.075);
+  --border-strong: rgba(19, 22, 28, 0.24);
+
+  --accent: var(--orange-accent);
+  --accent-on: #000000;
+  --accent-hover: color-mix(in oklab, var(--accent), var(--surface) 10%);
+  --accent-active: color-mix(in oklab, var(--accent), var(--fg) 12%);
+  --accent-soft: color-mix(in oklab, var(--accent), transparent 88%);
+
+  --success: oklch(51.6112% 0.125195 154.7611);
+  --warn: oklch(52.21944% 0.114248 64.2871);
+  --danger: oklch(51.96747% 0.199209 20.6554);
+  --info: var(--accent);
+  --signal: var(--accent);
+  --signal-soft: var(--accent-soft);
+  --on-danger: var(--surface);
+
+  --wash: color-mix(in oklab, var(--fg), transparent 96%);
+  --wash-strong: color-mix(in oklab, var(--fg), transparent 92%);
+  --proof-surface: var(--wash);
+  --proof-pending-surface: var(--wash-strong);
+  --proof-active-row: color-mix(in oklab, var(--accent), transparent 88%);
+  --code-surface: var(--surface-sunk);
+  --overlay-backdrop: color-mix(in oklab, var(--fg), transparent 60%);
+  --overlay-scrim: color-mix(in oklab, var(--fg), transparent 60%);
+  --topbar-bg: var(--bg);
+  --selection-bg: color-mix(in oklab, var(--accent), var(--surface) 74%);
   --selection-fg: var(--fg);
   --scrollbar-thumb: color-mix(in oklab, var(--fg), transparent 78%);
-  --scrollbar-thumb-hover: color-mix(in oklab, var(--fg), transparent 68%);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--fg), transparent 66%);
   --status-fill-mix: 88%;
   --status-border-mix: 58%;
-  --surface-elevated: var(--surface-raised);
+
   --elev-ring: 0 0 0 1px var(--border);
-  --elev-raised: 0 0 0 1px var(--border), 0 1px 2px oklch(26% 0.04 260 / 0.05), 0 5px 14px -8px oklch(26% 0.04 260 / 0.14);
-  --surface-2: oklch(96% 0.004 250);
-  --surface-3: oklch(93% 0.005 250);
-  --card-shadow: 0 0 0 1px var(--border), 0 1px 2px oklch(26% 0.04 260 / 0.05), 0 5px 14px -8px oklch(26% 0.04 260 / 0.14);
-  --card-shadow-hover: 0 0 0 1px var(--border-strong), 0 2px 6px oklch(26% 0.04 260 / 0.07), 0 18px 38px -18px oklch(26% 0.04 260 / 0.24);
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
-  /* frosted white over the pale daylight aurora */
-  --glass: oklch(100% 0 0 / 0.62);
-  --glass-strong: oklch(100% 0 0 / 0.78);
-  --glass-border: oklch(26% 0.03 260 / 0.10);
+  --elev-raised: 0 0 0 1px var(--border), 0 1px 2px rgba(19, 22, 28, 0.05), 0 6px 16px -6px rgba(19, 22, 28, 0.10);
+  --elev-inset: inset 0 0 0 1px var(--border), inset 0 1px 3px rgba(19, 22, 28, 0.07);
+  --elev-inset-sm: inset 0 0 0 1px var(--border);
+  --card-shadow: 0 1px 2px rgba(19, 22, 28, 0.05), 0 6px 16px -8px rgba(19, 22, 28, 0.08);
+  --card-shadow-hover: var(--card-shadow);
+  /* Orange is 2.34:1 as ink here; neutral ink supplies the compliant focus ring. */
+  --focus-color: var(--fg);
+  --focus-ring: 0 0 0 2px var(--focus-color);
+
+  --glass: var(--surface);
+  --glass-strong: var(--surface);
   color-scheme: light;
 }
 
@@ -202,38 +214,8 @@ body {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
-/* ─── Observatory aurora ─────────────────────────────────────────────
-   Page-wide fixed wash every frosted surface (topbar, glass cards)
-   refracts. Charcoal-dark = saturated instrument aurora; light theme
-   dials it down to a pale daylight version. z-index:-1 keeps it behind
-   the app shell without needing a stacking context on #root. */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(42% 52% at 80% 6%,  oklch(60% 0.19 27 / 0.18), transparent 70%),
-    radial-gradient(46% 56% at 10% 28%, oklch(56% 0.16 355 / 0.14), transparent 72%),
-    radial-gradient(42% 46% at 72% 78%, oklch(62% 0.15 45 / 0.11), transparent 70%),
-    radial-gradient(46% 50% at 18% 92%, oklch(58% 0.17 10 / 0.10), transparent 72%);
-  filter: blur(22px);
-}
-:root[data-theme="light"] body::before {
-  background:
-    radial-gradient(42% 52% at 80% 6%,  oklch(72% 0.14 27 / 0.10), transparent 70%),
-    radial-gradient(46% 56% at 10% 28%, oklch(75% 0.10 355 / 0.08), transparent 72%),
-    radial-gradient(42% 46% at 72% 78%, oklch(82% 0.09 210 / 0.09), transparent 70%),
-    radial-gradient(46% 50% at 18% 92%, oklch(80% 0.10 20 / 0.07), transparent 72%);
-}
-@media (prefers-reduced-motion: no-preference) {
-  body::before { animation: aurora-drift 34s var(--ease-standard) infinite alternate; }
-}
-@keyframes aurora-drift {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to   { transform: translate3d(0, -1.5%, 0) scale(1.06); }
-}
+/* The shared system uses an unembellished token canvas: no aurora layer. */
+body::before { content: none; }
 
 ::selection {
   background: var(--selection-bg);
@@ -610,6 +592,12 @@ th {
   min-height: 0;
 }
 
+/* Route arrival moves focus here programmatically; the region itself is not an
+   interactive control, so it must not paint a focus ring. Descendant controls keep theirs. */
+.main:focus {
+  outline: none;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -984,13 +972,16 @@ th {
      it the container's full width; a non-auto cross size opts out of stretch
      without changing how it sizes inside row containers. */
   width: fit-content;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   padding: 2px var(--space-2);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .badge-sans,
@@ -1090,12 +1081,15 @@ select.select:focus,
   margin-bottom: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--border-soft);
+  /* Cells paint their own hairlines into the 1px gap so an incomplete final row
+     renders as plain canvas instead of an orphan strip of border colour. */
+  background: var(--bg);
 }
 
 .kpi-cell {
   min-width: 0;
   background: var(--bg);
+  box-shadow: -1px 0 0 var(--border-soft), 0 -1px 0 var(--border-soft);
   padding: 15px 17px;
   display: flex;
   flex-direction: column;
@@ -1476,7 +1470,7 @@ select.select:focus,
   border: 2px solid color-mix(in oklab, var(--info), transparent 70%);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: onboarding-heartbeat-spin 0.9s linear infinite;
+  animation: onboarding-heartbeat-spin var(--motion-slow) linear infinite;
 }
 
 @keyframes onboarding-heartbeat-spin {
@@ -1690,9 +1684,7 @@ select.select:focus,
 .gauge-fill,
 .gauge-fill-animate {
   stroke-linecap: round;
-  transition: stroke-dashoffset 600ms var(--motion-ease);
-  /* Observatory instrument glow — the one precision-instrument flourish */
-  filter: drop-shadow(0 0 6px color-mix(in oklab, currentColor, transparent 45%));
+  transition: stroke-dashoffset var(--motion-slow) var(--motion-ease);
 }
 
 .gauge-fill-success {
@@ -1843,7 +1835,7 @@ select.select:focus,
   color: var(--danger);
 }
 
-/* Light status text is mixed toward the Observatory ink token, not replaced
+/* Light status text is mixed toward the shared ink token, not replaced
    with a new hue. The 15% mix clears 4.5:1 on both white and raised surfaces
    after each semantic tint is composited into the cell background. */
 :root[data-theme="light"] .heatmap-warn {
@@ -2682,17 +2674,8 @@ tr:last-child td {
   padding: clamp(40px, 6vw, 76px) 0 var(--space-12);
 }
 
-/* Single soft accent wash anchored behind the headline. Keeps the fold from
-   reading as a flat slab without adding a decorative image. */
 .public-hero::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  inset: 0 auto 0 0;
-  width: min(60%, 720px);
-  background: radial-gradient(circle at 22% 34%, var(--accent-soft), transparent 62%);
-  opacity: 0.7;
-  pointer-events: none;
+  content: none;
 }
 
 .public-hero > * {
@@ -4229,7 +4212,7 @@ td .row-actions {
   margin-top: var(--space-4);
 }
 
-.run-proof-panels h4 {
+.run-proof-panels h3 {
   margin: 0 0 var(--space-3);
   font-size: var(--text-sm);
 }
@@ -4241,7 +4224,7 @@ td .row-actions {
   background: var(--proof-surface);
 }
 
-.verdict-explanation > h4 {
+.verdict-explanation > h3 {
   margin: 0 0 var(--space-4);
   font-size: var(--text-base);
   font-weight: 600;
@@ -4443,7 +4426,7 @@ td .row-actions {
   border: 2.5px solid color-mix(in oklab, var(--fg), transparent 86%);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 720ms linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 @keyframes spin {
@@ -4473,7 +4456,7 @@ td .row-actions {
     color-mix(in oklab, var(--fg), transparent 94%) 100%
   );
   background-size: 200% 100%;
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  animation: none;
 }
 
 .skeleton-text {
@@ -4517,7 +4500,7 @@ td .row-actions {
     width: 280px;
     visibility: hidden;
     box-shadow: var(--elev-raised);
-    transition: left var(--motion-ui) var(--motion-ease), visibility 0s linear var(--motion-ui);
+    transition: left var(--motion-ui) var(--motion-ease), visibility var(--motion-ui) step-end;
   }
 
   .sidebar-collapse {
@@ -4566,7 +4549,6 @@ td .row-actions {
   .sidebar.open {
     left: 0;
     visibility: visible;
-    transition-delay: 0s;
   }
 
   .sidebar-close,
@@ -4914,10 +4896,9 @@ td .row-actions {
   *,
   *::before,
   *::after {
-    animation-duration: 1ms !important;
-    animation-iteration-count: 1 !important;
+    animation: none !important;
     scroll-behavior: auto !important;
-    transition-duration: 1ms !important;
+    transition: none !important;
   }
 
   .gauge-fill,
@@ -4966,7 +4947,7 @@ td .row-actions {
   -webkit-mask: radial-gradient(circle at center, transparent 0 63px, var(--mask-opaque) 63.5px 100%);
   mask: radial-gradient(circle at center, transparent 0 63px, var(--mask-opaque) 63.5px 100%);
   z-index: 0;
-  animation: gauge-in 900ms var(--ease-standard) both;
+  animation: none;
 }
 
 .gauge--segmented::after {
@@ -4995,7 +4976,7 @@ td .row-actions {
   text-align: center;
   color: var(--fg);
   z-index: 2;
-  background: radial-gradient(circle at center, color-mix(in oklab, var(--success), transparent 92%) 0%, transparent 62%);
+  background: var(--surface);
   border-radius: 50%;
 }
 
@@ -5008,7 +4989,12 @@ td .row-actions {
 .dash-gauge-block { display: flex; align-items: center; gap: var(--space-6); padding: 0; flex-wrap: wrap; }
 .gauge-legend { display: flex; flex-direction: column; gap: 12px; margin-top: 0; }
 .legend-row { display: grid; grid-template-columns: 9px auto minmax(56px, 1fr) auto auto; align-items: center; gap: 12px; font-size: var(--text-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
-.legend-row .ld { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.legend-row { --factor-tone: var(--muted-text); }
+.legend-row[data-tone="success"] { --factor-tone: var(--success); }
+.legend-row[data-tone="warn"] { --factor-tone: var(--warn); }
+.legend-row[data-tone="danger"] { --factor-tone: var(--danger); }
+.legend-row .ld { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--factor-tone); }
+.legend-row .lg-bar { background: var(--factor-tone); }
 .legend-row .lg-label { color: var(--fg); }
 .legend-row .lg-bar-wrap { position: relative; height: 6px; border-radius: var(--radius-pill); background: color-mix(in oklab, var(--fg), transparent 92%); overflow: hidden; }
 .legend-row .lg-bar { position: absolute; inset-block: 0; left: 0; border-radius: inherit; height: 100%; }
@@ -5028,7 +5014,7 @@ td .row-actions {
 .verify-chip.is-partial { color: var(--warn); }
 .verify-chip.is-pending { color: var(--fg-2); }
 .verify-chip.is-checking { color: var(--accent); }
-.verify-chip.is-checking .vc-dot { animation: vc-blink 1.1s ease-in-out infinite; }
+.verify-chip.is-checking .vc-dot { animation: vc-blink var(--motion-slow) ease-in-out infinite alternate; }
 .verify-chip.is-unverified { color: var(--meta); border-style: dashed; }
 .verify-chip--strong { font-weight: 600; }
 /* Light theme: darken verified/dns/checking chip text to clear WCAG AA at 12px
@@ -5072,7 +5058,7 @@ td .row-actions {
 /* Two-rail key/value row used in the target-detail ownership panel. */
 .kv { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 0; }
 .kv > .mono { font-size: 12.5px; color: var(--fg); }
-.kv-meta { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--meta); letter-spacing: 0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kv-meta { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--fg-2); letter-spacing: 0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .finding-card .fc-key { color: var(--meta); }
 .finding-card .fc-facets { color: var(--fg-2); }
 .findings-surface { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -5614,5 +5600,891 @@ pre.code { font-family: var(--font-mono); font-size: var(--text-xs); background:
   .public-preview-row .mono {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+}
+
+
+/* ═══ Open Design shared foundation · 2026-09 ═══
+   Canonical shared geometry and density. This final layer intentionally
+   supersedes legacy route-era variants while preserving their behavior. */
+html {
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Shell */
+.app-shell {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  background: var(--bg);
+  transition: grid-template-columns var(--motion-base) var(--motion-ease);
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
+}
+
+.sidebar {
+  border-right-color: var(--border-soft);
+  background: var(--bg);
+  padding: var(--space-5) var(--space-3);
+}
+
+.sidebar-head {
+  min-height: 48px;
+  padding: 0 var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.brand {
+  min-height: 44px;
+  gap: var(--space-3);
+  padding: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.brand:hover {
+  color: var(--fg);
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.brand-mark .ring {
+  stroke: var(--fg);
+}
+
+.brand-mark .core {
+  fill: var(--accent);
+  transform: scale(0.9);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.sidebar-collapsed .brand {
+  display: inline-flex;
+}
+
+.sidebar-collapsed .brand .brand-mark {
+  width: 40px;
+  height: 40px;
+}
+
+.nav-scroll {
+  padding-top: var(--space-3);
+}
+
+.nav-group > p {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  color: var(--meta);
+  letter-spacing: 0.12em;
+}
+
+.nav-item {
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  padding: 9px var(--space-3);
+}
+
+.nav-item.active,
+.nav-item.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-on);
+  font-weight: 600;
+}
+
+.nav-item.active svg,
+.nav-item.is-active svg {
+  color: currentColor;
+}
+
+.nav-item.active .nav-count,
+.nav-item.is-active .nav-count {
+  background: color-mix(in oklab, var(--accent-on), transparent 84%);
+  color: var(--accent-on);
+}
+
+.topbar {
+  min-height: 64px;
+  border-bottom-color: var(--border-soft);
+  background: var(--topbar-bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  padding: var(--space-3) var(--space-8);
+}
+
+.content {
+  max-width: var(--page-max);
+  margin-inline: auto;
+  gap: var(--space-8);
+  padding: var(--space-8);
+}
+
+.page-head {
+  margin-bottom: 0;
+  gap: var(--space-6);
+}
+
+.page-head h1 {
+  margin-top: var(--space-1);
+  font-family: var(--font-display);
+  font-size: clamp(var(--text-xl), 3vw, var(--text-2xl));
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+/* Cards */
+.card,
+[data-ui='card'].card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-6);
+  box-shadow: var(--card-shadow);
+  color: var(--fg);
+  transition: border-color var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease);
+}
+
+.card-raised,
+[data-ui='card'].card-raised {
+  background: var(--surface);
+  box-shadow: var(--elev-raised);
+}
+
+.card-header,
+[data-ui='card'] .card-header {
+  align-items: flex-start;
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  border: 0;
+}
+
+.card-title,
+[data-ui='card'] .card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.card-description,
+[data-ui='card'] .card-description {
+  color: var(--fg-2);
+}
+
+.card-footer,
+[data-ui='card'] .card-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+.card-compact,
+.card--dense {
+  padding: var(--space-4);
+}
+
+.card-compact .card-header,
+.card--dense > .card-header {
+  margin: 0 0 var(--space-4);
+  padding: 0;
+}
+
+/* Buttons — default is the single primary CTA vocabulary. */
+.btn,
+[data-ui='button'].btn {
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-5);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
+}
+
+.btn-default,
+[data-ui='button'].btn-default {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.btn-default:hover:not(:disabled),
+[data-ui='button'].btn-default:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: var(--accent-on);
+  box-shadow: none;
+}
+
+.btn-default:active:not(:disabled),
+[data-ui='button'].btn-default:active:not(:disabled) {
+  border-color: var(--accent-active);
+  background: var(--accent-active);
+  color: var(--accent-on);
+}
+
+.btn-secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--wash);
+  color: var(--fg);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-2);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--wash-strong);
+  color: var(--fg);
+}
+
+.btn-danger,
+[data-ui='button'].btn-danger {
+  border-color: color-mix(in oklab, var(--danger), transparent 45%);
+  background: transparent;
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled),
+[data-ui='button'].btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in oklab, var(--danger), transparent 88%);
+  color: var(--danger);
+}
+
+.btn-danger:active:not(:disabled),
+[data-ui='button'].btn-danger:active:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in oklab, var(--danger), transparent 82%);
+  color: var(--danger);
+}
+
+.btn-sm {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  font-size: var(--text-xs);
+}
+
+.btn-icon,
+[data-ui='button'].btn-icon {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.42;
+}
+
+/* Inset mono status chips */
+.badge,
+.badge-sans,
+.badge.badge-sans,
+[data-ui='badge'].badge {
+  min-height: 24px;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset-sm);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+.badge-default,
+.badge-muted,
+[data-ui='badge'].badge-default,
+[data-ui='badge'].badge-muted {
+  background: var(--surface-sunk);
+  color: var(--fg-2);
+}
+
+.badge-success {
+  border-color: color-mix(in oklab, var(--success), transparent var(--status-border-mix));
+  background: color-mix(in oklab, var(--success), transparent var(--status-fill-mix));
+}
+
+.badge-warn {
+  border-color: color-mix(in oklab, var(--warn), transparent var(--status-border-mix));
+  background: color-mix(in oklab, var(--warn), transparent var(--status-fill-mix));
+}
+
+.badge-danger {
+  border-color: color-mix(in oklab, var(--danger), transparent var(--status-border-mix));
+  background: color-mix(in oklab, var(--danger), transparent var(--status-fill-mix));
+}
+
+.badge-info {
+  border-color: color-mix(in oklab, var(--accent), transparent var(--status-border-mix));
+  background: color-mix(in oklab, var(--accent), transparent var(--status-fill-mix));
+}
+
+/* Inputs and custom select */
+.input,
+select.select,
+.input.select,
+.select-display,
+.auth-form input,
+.auth-form select,
+.auth-form textarea {
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-sunk);
+  box-shadow: none;
+  color: var(--fg);
+}
+
+.select-display {
+  padding: 9px var(--space-3);
+}
+
+.select-display:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.select-shell.open .select-display,
+.select-display:focus-visible,
+select.select:focus,
+.input.select:focus {
+  border-color: var(--focus-color);
+  box-shadow: var(--focus-ring);
+}
+
+.select-menu {
+  top: calc(100% + var(--space-2));
+  gap: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--elev-raised);
+  padding: var(--space-2);
+  transform: translateY(calc(-1 * var(--space-1)));
+  transition: opacity var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+
+.select-option {
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+}
+
+.select-option.active {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+/* Pill tabs */
+.tabs {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: var(--space-2);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunk);
+  padding: var(--space-1);
+}
+
+.tab {
+  min-height: 36px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  color: var(--muted-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition: background var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease);
+}
+
+.tab:hover {
+  color: var(--fg);
+}
+
+.tab.active,
+.tab.is-active {
+  border-color: var(--border);
+  background: var(--surface);
+  box-shadow: var(--elev-ring);
+  color: var(--fg);
+}
+
+.tab .tab-count,
+.tab.active .tab-count,
+.tab.is-active .tab-count {
+  background: var(--wash-strong);
+  color: currentColor;
+}
+
+/* Tables */
+th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.table-wrap,
+.table-wrap:has(> .data-table),
+.table-wrap.data-table-empty-wrap {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .data-table-head th,
+.table-wrap .data-table .data-table-head th {
+  height: 42px;
+  padding: 0 var(--space-4);
+  border-bottom: 2px solid var(--border);
+  background: var(--wash);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.table-wrap .data-table tbody td {
+  min-height: 0;
+  padding: 12px var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
+  color: var(--fg-2);
+  transition: background var(--motion-fast) var(--motion-ease), box-shadow var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+}
+
+.table-wrap .data-table tbody tr:nth-child(even) td,
+.table-wrap .data-table tbody tr.table-row-zebra td {
+  background: var(--wash);
+}
+
+.table-wrap .data-table tbody tr:hover td,
+.table-wrap .data-table tbody tr.table-row-zebra:hover td {
+  background: color-mix(in oklab, var(--accent), transparent 90%);
+}
+
+.table-wrap .data-table tbody tr:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.table-wrap .data-table tbody tr[aria-selected='true'] td,
+.table-wrap .data-table tbody tr.table-row-selected td {
+  background: color-mix(in oklab, var(--accent), transparent 86%);
+}
+
+.table-wrap .data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table-wrap .data-table tbody .btn-sm {
+  min-height: 34px;
+}
+
+/* Progress and loading */
+.progress {
+  height: 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: var(--wash-strong);
+}
+
+.progress-sm { height: 5px; }
+.progress-lg { height: 10px; }
+
+.progress .progress-bar {
+  width: 100%;
+  background: var(--accent);
+  transition: transform var(--motion-slow) var(--motion-ease);
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin var(--motion-slow) linear infinite;
+}
+
+.btn-inline-spinner {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.skeleton,
+.skeleton-text,
+.skeleton-row,
+.gauge--segmented::before {
+  animation: none;
+}
+
+/* Empty states */
+.empty-state {
+  gap: var(--space-4);
+  padding: var(--space-12) var(--space-6);
+}
+
+.empty-icon,
+.empty-state-visual {
+  width: 56px;
+  height: 56px;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunk);
+  box-shadow: var(--elev-inset);
+  color: var(--muted-text);
+  opacity: 1;
+}
+
+.empty-state h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.empty-state p {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  color: var(--fg-2);
+}
+
+/* Mobile drawer + true horizontal table scrolling. */
+@media (max-width: 1120px) {
+  .app-shell,
+  .app-shell.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .sidebar-collapsed .sidebar {
+    left: 0;
+    width: min(86vw, 320px);
+    padding: var(--space-5) var(--space-3);
+    visibility: hidden;
+    transform: translateX(-105%);
+    transition: transform var(--motion-base) var(--motion-ease), visibility var(--motion-base) step-end;
+  }
+
+  .sidebar.open {
+    left: 0;
+    visibility: visible;
+    transform: translateX(0);
+    transition: transform var(--motion-base) var(--motion-ease), visibility var(--motion-fast) step-start;
+  }
+
+  .scrim {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    background: var(--overlay-scrim);
+    transition: opacity var(--motion-base) var(--motion-ease);
+  }
+
+  .scrim.open {
+    display: block;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (max-width: 700px) {
+  .public-topnav-inner {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .public-topnav-actions {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .public-topnav .brand span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .content {
+    gap: var(--space-6);
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .topbar {
+    padding: var(--space-2) var(--space-4);
+  }
+
+  .tabs .tab {
+    width: auto;
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+
+  .table-wrap,
+  .table-wrap:has(> .data-table) {
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+  }
+
+  .table-wrap table,
+  .table-wrap .data-table {
+    display: table;
+    min-width: 640px;
+  }
+
+  .table-wrap thead,
+  .table-wrap .data-table thead {
+    position: static;
+    display: table-header-group;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .table-wrap tbody { display: table-row-group; }
+  .table-wrap tr,
+  .table-wrap tbody tr:not(.table-empty-row) {
+    display: table-row;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+  }
+
+  .table-wrap th,
+  .table-wrap td,
+  .table-wrap tbody tr:not(.table-empty-row) td {
+    display: table-cell;
+    min-width: auto;
+    max-width: none;
+    padding: 12px var(--space-4);
+    white-space: nowrap;
+  }
+
+  .table-wrap tbody tr:not(.table-empty-row) td::before {
+    display: none;
+    content: none;
+  }
+
+  button,
+  .btn,
+  [data-ui='button'].btn,
+  .btn-sm,
+  .btn-icon,
+  .nav-item,
+  .brand,
+  .select-display,
+  .select-option,
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  .btn-icon,
+  [data-ui='button'].btn-icon {
+    width: 44px;
+    min-width: 44px;
+  }
+
+  .table-wrap .data-table tbody .btn-sm {
+    min-height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .btn,
+  [data-ui='button'].btn,
+  .btn-sm,
+  .btn-icon,
+  .nav-item,
+  .tab,
+  .brand,
+  .select-display,
+  .select-option {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Task 13 shared interaction hardening: one root fix for wrapped-search focus and coarse input. */
+body .targets-page .targets-search:focus-within,
+body .content .catalog-search-control:focus-within,
+body .content .audit-search-pill:focus-within,
+body .tg-detail-view .rule-search:focus-within {
+  border-color: var(--focus-color);
+  box-shadow: var(--focus-ring);
+}
+
+@media (pointer: coarse) {
+  /* These must NOT be wrapped in :where(): it contributes zero specificity, so component
+     rules like `.filter-chip { min-height: 32px }` won an override and left real 32px tap
+     targets on touch devices. Plain selector lists keep their own specificity and win by
+     source order instead. */
+  button,
+  [role="button"],
+  .btn,
+  .btn-sm,
+  .btn-icon,
+  .nav-item,
+  .tab,
+  .filter-chip,
+  .select-display,
+  .select-option,
+  select,
+  summary,
+  .target-primary-copy {
+    min-block-size: 44px;
+  }
+
+  /* `[data-ui='button'].btn-icon` sets width/min-width: 40px with higher specificity, so the
+     coarse override must match that specificity or icon buttons stay 40px wide on touch. */
+  .btn-icon,
+  [data-ui='button'].btn-icon,
+  .menu-btn,
+  [data-ui='button'].menu-btn,
+  .theme-toggle,
+  [data-ui='button'].theme-toggle,
+  .sidebar-collapse,
+  [data-ui='button'].sidebar-collapse,
+  .sidebar-close,
+  [data-ui='button'].sidebar-close {
+    min-inline-size: 44px;
+  }
+
+  /* Checkbox and radio controls keep their compact visual box but must still satisfy the
+     WCAG 2.5.8 minimum target size. Component rules such as
+     `.product-form .check-row input` (20px) and `.domain-scope-option input` (min-height: 0)
+     carry higher specificity, so they are listed explicitly rather than relying on the
+     generic element selector. */
+  input[type="checkbox"],
+  input[type="radio"],
+  .product-form .check-row input[type="checkbox"],
+  .product-form .check-row input[type="radio"],
+  .integration-page .domain-scope-option input[type="checkbox"],
+  .integration-page .domain-scope-option input[type="radio"],
+  .domain-scope-option input[type="checkbox"],
+  .domain-scope-option input[type="radio"] {
+    inline-size: 24px;
+    min-inline-size: 24px;
+    block-size: 24px;
+    min-block-size: 24px;
+    flex: 0 0 24px;
+  }
+
+  details > summary,
+  .filter-chip,
+  .select-display,
+  .select-option,
+  .target-primary-copy {
+    display: flex;
+    align-items: center;
+  }
+
+  .link-btn,
+  .sidebar-foot a,
+  .public-actions a,
+  .public-footer a,
+  .row-actions > a {
+    min-block-size: 44px;
+    align-items: center;
   }
 }

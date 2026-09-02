@@ -1,16 +1,22 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { after, before, describe, it } from 'node:test';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+import { validateProbeResultBody } from '../../src/lib/probeResultValidation.mjs';
+import { probeDnsWireQuery } from '../../src/lib/dnsWireQuery.mjs';
+import { executeCapabilityProbe } from '../../src/lib/capabilityProbes.mjs';
+import { buildSignedProbeJobRecord } from '../../src/lib/probeJobs.mjs';
 import {
-  MAX_PROBE_PROFILE_REQUESTS,
+  CHECK_CATALOG,
   MAX_PROBE_PROFILE_TIMEOUT_MS,
   WAF_SAFE_CHECK_IDS,
   buildProbeProfile,
   getCheckById,
+  maxProbeRequestsForKind,
 } from '../../src/contracts/checks.mjs';
 import { createServer } from '../../src/server.mjs';
 import {
@@ -26,6 +32,9 @@ import { runProtocolTransportFixture } from './protocol-transport-watchdog.mjs';
 import {
   PROBE_WORKER_CYCLE_TIMEOUT_MS,
   WORKER_VERSION,
+  buildResultBody,
+  executorNameForProbeKind,
+  executeProbeForJob,
   fetchHttpHeadWithSafeRedirects,
   parseWorkerConfig,
   pollAndProcessOnce,
@@ -41,6 +50,7 @@ import {
 } from '../../workers/probe-worker.mjs';
 
 const WORKER_SECRET = 'probe-worker-secret-at-least-32-chars!!';
+const STRONG_WORKER_SECRET = randomBytes(32).toString('base64url');
 const PROBE_WORKER_ENV = {
   ASTRANULL_PROBE_WORKER_SECRET: WORKER_SECRET,
   ASTRANULL_PROBE_TENANT_ID: 'ten_demo',
@@ -113,8 +123,58 @@ describe('probe worker config', () => {
     );
   });
 
+  it('rejects low-entropy worker secrets in every deployment profile', () => {
+    for (const env of [
+      { NODE_ENV: 'test' },
+      { NODE_ENV: 'production' },
+      { NODE_ENV: 'test', ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging' },
+    ]) {
+      assert.throws(
+        () => parseWorkerConfig([], {
+          ...env,
+          ASTRANULL_PROBE_WORKER_SECRET: 'q'.repeat(48),
+          ASTRANULL_PROBE_TENANT_ID: 'ten_demo',
+        }),
+        /hmac_secret_low_entropy/,
+      );
+      assert.equal(parseWorkerConfig([], {
+        ...env,
+        ASTRANULL_PROBE_WORKER_SECRET: STRONG_WORKER_SECRET,
+        ASTRANULL_PROBE_TENANT_ID: 'ten_demo',
+      }).secret, STRONG_WORKER_SECRET);
+    }
+  });
+
+  it('rejects known-public sequential and arithmetic worker key material', () => {
+    for (const [secret, error] of [
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString('hex'), 'hmac_secret_known_public'],
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index + 32)).toString('hex'), 'hmac_secret_patterned'],
+    ]) {
+      assert.throws(
+        () => parseWorkerConfig([], {
+          NODE_ENV: 'test',
+          ASTRANULL_PROBE_WORKER_SECRET: secret,
+          ASTRANULL_PROBE_TENANT_ID: 'ten_demo',
+        }),
+        new RegExp(error),
+      );
+    }
+  });
+
+  it('fails closed on an invalid deployment profile', () => {
+    assert.throws(
+      () => parseWorkerConfig([], {
+        ASTRANULL_PROBE_WORKER_SECRET: STRONG_WORKER_SECRET,
+        ASTRANULL_PROBE_TENANT_ID: 'ten_demo',
+        ASTRANULL_DEPLOYMENT_PROFILE: 'invalid',
+      }),
+      /Invalid ASTRANULL_DEPLOYMENT_PROFILE/,
+    );
+  });
+
   it('bounds poll interval', () => {
     const cfg = parseWorkerConfig(['--poll-interval-ms', '50'], PROBE_WORKER_ENV);
+
     assert.equal(cfg.pollIntervalMs, 1000);
     const cfgMax = parseWorkerConfig(['--poll-interval-ms', '999999'], PROBE_WORKER_ENV);
     assert.equal(cfgMax.pollIntervalMs, 60_000);
@@ -124,6 +184,772 @@ describe('probe worker config', () => {
     const msg = redactSecrets(`failed: ${WORKER_SECRET}`, WORKER_SECRET);
     assert.equal(msg.includes(WORKER_SECRET), false);
     assert.match(msg, /\[redacted\]/);
+  });
+});
+
+describe('probe worker safety accounting', () => {
+  it('reports exact over-cap execution and lets the control plane reject it', () => {
+    const job = baseJob({
+      constraints: { max_requests: 1, timeout_ms: 100 },
+    });
+    const body = buildResultBody(job, 'connected', { probe_kind: 'host_sni_bypass' }, {
+      requests_sent: 2,
+      duration_ms: 101,
+    });
+
+    assert.equal(body.safety_attestation.requests_sent, 2);
+    assert.equal(body.safety_attestation.duration_ms, 101);
+    const validation = validateProbeResultBody(body, job.constraints, {
+      probeKind: job.probe_profile.kind,
+    });
+    assert.equal(validation.status, 422);
+    assert.equal(validation.error, 'safety_attestation_exceeded');
+  });
+
+  it('allows only the bounded fixed, ratio, and maximum scheduler overshoot for timeouts', () => {
+    const job = baseJob({
+      constraints: { max_requests: 1, timeout_ms: 100 },
+      target: { kind: 'ip', value: '198.51.100.7' },
+    });
+    const result = (externalResult, durationMs, timeoutMs = 100) => validateProbeResultBody({
+      external_result: externalResult,
+      safety_attestation: { requests_sent: 1, duration_ms: durationMs },
+    }, { ...job.constraints, timeout_ms: timeoutMs }, {
+      probeKind: job.probe_profile.kind,
+      probeProfile: job.probe_profile,
+      target: job.target,
+    });
+
+    assert.equal(result('timeout', 105).ok, true, '100ms + fixed 5ms');
+    assert.equal(result('timeout', 106).error, 'safety_attestation_exceeded');
+    assert.equal(result('timeout', 1275, 1250).ok, true, '1250ms + ratio 25ms');
+    assert.equal(result('timeout', 1276, 1250).error, 'safety_attestation_exceeded');
+    assert.equal(result('timeout', 5050, 5000).ok, true, '5000ms + capped 50ms');
+    assert.equal(result('timeout', 5051, 5000).error, 'safety_attestation_exceeded');
+    assert.equal(result('error', 101).error, 'safety_attestation_exceeded');
+    assert.equal(result('connected', 101).error, 'safety_attestation_exceeded');
+  });
+
+  it('allows duration-only scheduler overshoot for exact pre-probe resolver deadline errors', () => {
+    const constraints = {
+      max_requests: 3,
+      max_probe_requests: 1,
+      min_destination_resolver_attempts: 2,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 3,
+      timeout_ms: 100,
+    };
+    const exactError = ({
+      durationMs = 105,
+      errorClass = 'probe_job_deadline_exceeded',
+      probeRequests = 0,
+      destinationAttempts = 1,
+      includeSplit = true,
+    } = {}) => validateProbeResultBody({
+      external_result: 'error',
+      metadata: { error_class: errorClass },
+      safety_attestation: {
+        requests_sent: probeRequests + destinationAttempts,
+        duration_ms: durationMs,
+        ...(includeSplit ? {
+          probe_requests_sent: probeRequests,
+          destination_resolver_attempts: destinationAttempts,
+          total_operations: probeRequests + destinationAttempts,
+        } : {}),
+      },
+    }, includeSplit ? constraints : { max_requests: 1, timeout_ms: 100 }, {
+      probeKind: 'outside_in_waf_scan',
+      probeProfile: { kind: 'outside_in_waf_scan', max_requests: 1 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    });
+
+    assert.equal(exactError().ok, true);
+    assert.equal(exactError({ errorClass: 'probe_destination_dns_timeout' }).ok, true);
+    assert.equal(exactError({ durationMs: 106 }).error, 'safety_attestation_exceeded');
+    assert.equal(exactError({ errorClass: 'EAI_AGAIN' }).error, 'safety_attestation_exceeded');
+    assert.equal(exactError({ probeRequests: 1 }).error, 'safety_attestation_exceeded');
+    assert.equal(exactError({ destinationAttempts: 0 }).error, 'safety_attestation_exceeded');
+    assert.equal(exactError({ includeSplit: false }).error, 'safety_attestation_exceeded');
+  });
+
+  it('reports exact probe, destination-resolver, and total operation counts', async () => {
+    let resolverCalls = 0;
+    let fetchCalls = 0;
+    const job = baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: {
+        max_requests: 3,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 2,
+        max_total_operations: 3,
+        timeout_ms: 100,
+      },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 100 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    });
+    const outcome = await executeProbeForJob(job, {
+      signedJobVerified: true,
+      resolve4Fn: async () => {
+        resolverCalls += 1;
+        return ['203.0.113.10'];
+      },
+      resolve6Fn: async () => {
+        resolverCalls += 1;
+        return [];
+      },
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return { status: 200, headers: { get: () => null } };
+      },
+    });
+
+    assert.equal(resolverCalls, 2);
+    assert.equal(fetchCalls, 1);
+    assert.equal(outcome.requests_sent, 3);
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 2);
+    assert.equal(outcome.total_operations, 3);
+
+    const body = buildResultBody(job, outcome.external_result, outcome.metadata, outcome);
+    assert.deepEqual(
+      {
+        requests_sent: body.safety_attestation.requests_sent,
+        probe_requests_sent: body.safety_attestation.probe_requests_sent,
+        destination_resolver_attempts:
+          body.safety_attestation.destination_resolver_attempts,
+        total_operations: body.safety_attestation.total_operations,
+      },
+      {
+        requests_sent: 3,
+        probe_requests_sent: 1,
+        destination_resolver_attempts: 2,
+        total_operations: 3,
+      },
+    );
+    assert.equal(validateProbeResultBody(body, job.constraints, {
+      probeKind: job.probe_profile.kind,
+    }).ok, true);
+  });
+
+  it('real-catalog outside-in jobs pin and attest every initializer without raw DNS/TLS hints', async () => {
+    const check = getCheckById('waf.fingerprint.safe');
+    const signedJob = buildSignedProbeJobRecord({
+      run: {
+        id: 'run_waf_real_catalog_accounting',
+        tenant_id: 'ten_demo',
+        safety_constraints: check.safety_constraints,
+      },
+      check,
+      target: {
+        id: 'tgt_waf_real_catalog_accounting',
+        kind: 'url',
+        value: 'https://edge.example.test/signed-path',
+      },
+      probeWorkerSecret: WORKER_SECRET,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      newId: () => 'pjob_waf_real_catalog_accounting',
+    });
+
+    assert.equal(verifyProbeJobSignature(signedJob, WORKER_SECRET), true);
+    assert.equal(signedJob.probe_profile.kind, 'outside_in_waf_scan');
+    assert.equal(signedJob.probe_profile.max_requests, 13);
+    assert.equal(signedJob.probe_profile.follow_redirects, false);
+    assert.equal(signedJob.probe_profile.collect.includes('dns_chain_hint'), false);
+    assert.equal(signedJob.probe_profile.collect.includes('tls_fingerprint_hint'), false);
+    assert.deepEqual({
+      max_probe_requests: signedJob.constraints.max_probe_requests,
+      max_destination_resolver_attempts: signedJob.constraints.max_destination_resolver_attempts,
+      max_total_operations: signedJob.constraints.max_total_operations,
+    }, {
+      max_probe_requests: 13,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 15,
+    });
+
+    const calls = {
+      destinationA: 0,
+      destinationAAAA: 0,
+      http: 0,
+      cnameHint: 0,
+      addressHintA: 0,
+      addressHintAAAA: 0,
+      tlsHint: 0,
+    };
+    const tlsHelperHostnames = [];
+    const httpOptions = [];
+    const body = await processJob({ secret: WORKER_SECRET }, signedJob, {
+      resolve4Fn: async () => {
+        calls.destinationA += 1;
+        return ['203.0.113.10'];
+      },
+      resolve6Fn: async () => {
+        calls.destinationAAAA += 1;
+        return [];
+      },
+      resolveCname: async () => {
+        calls.cnameHint += 1;
+        return ['retarget.example.test'];
+      },
+      resolve4: async () => {
+        calls.addressHintA += 1;
+        return ['198.51.100.22'];
+      },
+      resolve6: async () => {
+        calls.addressHintAAAA += 1;
+        return ['2001:db8::22'];
+      },
+      tlsConnect: (options) => {
+        calls.tlsHint += 1;
+        tlsHelperHostnames.push(options?.servername ?? options?.host ?? null);
+        throw new Error('standalone TLS hint collection must remain disabled');
+      },
+      httpsRequestFn: (options, callback) => {
+        calls.http += 1;
+        httpOptions.push(options);
+        const request = new EventEmitter();
+        request.write = () => {};
+        request.destroy = (error) => { if (error) request.emit('error', error); };
+        request.end = () => {
+          const response = new PassThrough();
+          response.statusCode = 302;
+          response.headers = {
+            location: 'https://redirect.example.test/',
+            server: 'cloudflare',
+            'cf-ray': `ray-${calls.http}`,
+          };
+          callback(response);
+          response.end('Cloudflare');
+        };
+        return request;
+      },
+    });
+
+    assert.deepEqual(calls, {
+      destinationA: 1,
+      destinationAAAA: 1,
+      http: 12,
+      cnameHint: 0,
+      addressHintA: 0,
+      addressHintAAAA: 0,
+      tlsHint: 0,
+    });
+    assert.deepEqual(tlsHelperHostnames, []);
+    for (const options of httpOptions) {
+      assert.equal(options.hostname, '203.0.113.10');
+      assert.equal(options.servername, 'edge.example.test');
+      assert.equal(options.headers.Host, 'edge.example.test');
+      assert.equal(options.rejectUnauthorized, true);
+    }
+    const actualInitializerCalls = Object.values(calls)
+      .reduce((total, count) => total + count, 0);
+    assert.equal(actualInitializerCalls, 14);
+    assert.deepEqual({
+      requests_sent: body.safety_attestation.requests_sent,
+      probe_requests_sent: body.safety_attestation.probe_requests_sent,
+      destination_resolver_attempts: body.safety_attestation.destination_resolver_attempts,
+      total_operations: body.safety_attestation.total_operations,
+    }, {
+      requests_sent: 14,
+      probe_requests_sent: 12,
+      destination_resolver_attempts: 2,
+      total_operations: 14,
+    });
+    assert.equal(actualInitializerCalls, body.safety_attestation.total_operations);
+    assert.equal(body.metadata.network_hints_collected, false);
+    assert.equal(body.metadata.redirect_following_enabled, false);
+    for (const field of [
+      'dns_chain_hint',
+      'dns_cname_chain',
+      'dns_resolved_ips',
+      'tls_protocol_hint',
+      'tls_cipher_hint',
+      'vendor_chain_hints',
+    ]) {
+      assert.equal(Object.hasOwn(body.metadata, field), false, field);
+    }
+    assert.equal(Object.hasOwn(body.metadata.edge_signature, 'address_matches'), false);
+    assert.equal(Object.hasOwn(body.metadata.edge_signature, 'cname_matches'), false);
+    assert.equal(validateProbeResultBody(body, signedJob.constraints, {
+      probeKind: signedJob.probe_profile.kind,
+      probeProfile: signedJob.probe_profile,
+      target: signedJob.target,
+    }).ok, true);
+
+    let httpAfterReservationFailure = 0;
+    await assert.rejects(
+      () => executeCapabilityProbe(signedJob, {
+        signedJobVerified: true,
+        vettedHost: 'edge.example.test',
+        vettedAddresses: ['203.0.113.10'],
+        remainingJobTimeoutMs: () => 1000,
+        observedJobDurationMs: () => 1,
+        beforeProbeIoAttempt: () => {
+          throw Object.assign(new Error('reservation refused'), {
+            code: 'signed_operation_budget_exceeded',
+          });
+        },
+        httpsRequestFn: () => {
+          httpAfterReservationFailure += 1;
+          throw new Error('HTTP must not initialize after reservation failure');
+        },
+      }),
+      (error) => error?.code === 'signed_operation_budget_exceeded',
+    );
+    assert.equal(httpAfterReservationFailure, 0);
+  });
+
+  const delegatedCapOneCases = [
+    {
+      kind: 'waf_class_marker_probe',
+      checkId: 'waf.http_method_policy_marker.safe',
+      expected: 'not_run',
+      status: 403,
+    },
+    {
+      kind: 'waf_evasion_marker_probe',
+      checkId: 'waf.evasion_unicode_normalization.safe',
+      expected: 'not_run',
+      status: 403,
+    },
+    {
+      kind: 'l7_resource_posture_probe',
+      checkId: 'l7.compressed_request_decompression.posture',
+      expected: 'blocked',
+      status: 413,
+    },
+  ];
+
+  for (const scenario of delegatedCapOneCases) {
+    for (const entrypoint of ['executeProbeForJob', 'processJob']) {
+      it(`${entrypoint} accounts and normalizes ${scenario.kind} at cap 1`, async () => {
+        const check = getCheckById(scenario.checkId);
+        const signedTarget = 'https://edge.example.test/signed/path?keep=1';
+        const signedJob = baseJob({
+          check_id: scenario.checkId,
+          vector_family: check.vector_family,
+          target: {
+            kind: 'url',
+            value: signedTarget,
+            url: 'https://attacker.invalid/legacy-url',
+            fqdn: 'attacker.invalid',
+          },
+          probe_profile: {
+            ...check.probe_profile,
+            url: 'https://attacker.invalid/profile-url',
+            endpoint: 'https://attacker.invalid/profile-endpoint',
+          },
+          constraints: {
+            max_requests: 3,
+            max_probe_requests: 1,
+            min_destination_resolver_attempts: 2,
+            max_destination_resolver_attempts: 2,
+            max_total_operations: 3,
+            timeout_ms: 1000,
+          },
+        });
+        assert.ok(
+          signedJob.probe_profile.max_requests > 1,
+          `${scenario.kind} must retain its generated catalog budget before signed reduction`,
+        );
+        const calls = [];
+        let resolverCalls = 0;
+        const deps = {
+          resolve4Fn: async () => {
+            resolverCalls += 1;
+            return ['203.0.113.10'];
+          },
+          resolve6Fn: async () => {
+            resolverCalls += 1;
+            return [];
+          },
+          fetchFn: async (url, init) => {
+            calls.push({ url: String(url), init });
+            return new Response('', { status: scenario.status });
+          },
+        };
+
+        let body;
+        if (entrypoint === 'processJob') {
+          body = await processJob({ secret: WORKER_SECRET }, signedJob, deps);
+        } else {
+          const outcome = await executeProbeForJob(signedJob, {
+            ...deps,
+            signedJobVerified: true,
+          });
+          body = buildResultBody(
+            signedJob,
+            outcome.external_result,
+            outcome.metadata,
+            outcome,
+          );
+        }
+
+        assert.equal(resolverCalls, 2);
+        assert.equal(calls.length, 1);
+        const calledUrl = new URL(calls[0].url);
+        assert.equal(calledUrl.origin, 'https://edge.example.test');
+        assert.equal(calledUrl.pathname, '/signed/path');
+        assert.equal(calledUrl.searchParams.get('keep'), '1');
+        assert.doesNotMatch(calls[0].url, /attacker\.invalid/);
+        assert.equal(calls[0].init.redirect, 'manual');
+        assert.equal(body.external_result, scenario.expected);
+        assert.ok(['blocked', 'connected', 'timeout', 'error', 'not_run']
+          .includes(body.external_result));
+        if (scenario.expected === 'not_run') {
+          assert.equal(body.metadata.observation_only, true);
+          assert.equal(body.metadata.readiness_conclusion, false);
+        }
+        assert.deepEqual({
+          requests_sent: body.safety_attestation.requests_sent,
+          probe_requests_sent: body.safety_attestation.probe_requests_sent,
+          destination_resolver_attempts: body.safety_attestation.destination_resolver_attempts,
+          total_operations: body.safety_attestation.total_operations,
+        }, {
+          requests_sent: 3,
+          probe_requests_sent: 1,
+          destination_resolver_attempts: 2,
+          total_operations: 3,
+        });
+        assert.equal(validateProbeResultBody(body, signedJob.constraints, {
+          probeKind: scenario.kind,
+          probeProfile: signedJob.probe_profile,
+          target: signedJob.target,
+        }).ok, true);
+      });
+    }
+  }
+
+  it('delegated transport failures are errors, never semantic WAF/L7 posture', async () => {
+    for (const scenario of delegatedCapOneCases) {
+      const check = getCheckById(scenario.checkId);
+      const signedJob = baseJob({
+        check_id: scenario.checkId,
+        vector_family: check.vector_family,
+        target: { kind: 'url', value: 'https://edge.example.test/signed/path' },
+        probe_profile: check.probe_profile,
+        constraints: {
+          max_requests: 3,
+          max_probe_requests: 1,
+          min_destination_resolver_attempts: 2,
+          max_destination_resolver_attempts: 2,
+          max_total_operations: 3,
+          timeout_ms: 1000,
+        },
+      });
+      let fetchCalls = 0;
+      const outcome = await executeProbeForJob(signedJob, {
+        signedJobVerified: true,
+        resolve4Fn: async () => ['203.0.113.10'],
+        resolve6Fn: async () => [],
+        fetchFn: async () => {
+          fetchCalls += 1;
+          throw Object.assign(new Error('temporary transport failure'), { code: 'ECONNRESET' });
+        },
+      });
+      assert.equal(fetchCalls, 1, scenario.kind);
+      assert.equal(outcome.external_result, 'error', scenario.kind);
+      assert.equal(outcome.metadata.error_class, 'ECONNRESET', scenario.kind);
+      assert.equal(outcome.probe_requests_sent, 1, scenario.kind);
+      assert.equal(outcome.destination_resolver_attempts, 2, scenario.kind);
+    }
+  });
+
+  it('validates legacy hostname max_requests as probe-only plus bounded resolver accounting', async () => {
+    const job = baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 1000 },
+      target: { kind: 'fqdn', value: 'legacy.example.test' },
+    });
+    const outcome = await executeProbeForJob(job, {
+      signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
+    });
+    const body = buildResultBody(job, outcome.external_result, outcome.metadata, outcome);
+    const validated = validateProbeResultBody(body, job.constraints, {
+      probeKind: job.probe_profile.kind,
+      probeProfile: job.probe_profile,
+      target: job.target,
+    });
+
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 2);
+    assert.equal(outcome.total_operations, 3);
+    assert.equal(validated.ok, true);
+  });
+
+  it('accepts a truly legacy unsplit hostname result using observable probe accounting', () => {
+    const result = validateProbeResultBody({
+      external_result: 'connected',
+      safety_attestation: { requests_sent: 1, duration_ms: 10 },
+    }, { max_requests: 1, timeout_ms: 100 }, {
+      probeKind: 'bot_challenge_probe',
+      probeProfile: { kind: 'bot_challenge_probe', max_requests: 1 },
+      target: { kind: 'fqdn', value: 'legacy.example.test' },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it('rejects hostname under-attestation that omits A and AAAA destination vetting', () => {
+    const constraints = {
+      max_requests: 3,
+      max_probe_requests: 1,
+      min_destination_resolver_attempts: 2,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 3,
+      timeout_ms: 100,
+    };
+    const result = validateProbeResultBody({
+      external_result: 'connected',
+      metadata: { probe_kind: 'bot_challenge_probe' },
+      safety_attestation: {
+        requests_sent: 1,
+        probe_requests_sent: 1,
+        destination_resolver_attempts: 0,
+        total_operations: 1,
+        duration_ms: 10,
+      },
+    }, constraints, { probeKind: 'bot_challenge_probe' });
+
+    assert.equal(result.ok, undefined);
+    assert.equal(result.status, 422);
+    assert.equal(result.error, 'safety_attestation_exceeded');
+  });
+
+  it('rejects connected results with no mandatory probe operation', () => {
+    const result = validateProbeResultBody({
+      external_result: 'connected',
+      metadata: { probe_kind: 'http_head' },
+      safety_attestation: {
+        requests_sent: 2,
+        probe_requests_sent: 0,
+        destination_resolver_attempts: 2,
+        total_operations: 2,
+        duration_ms: 10,
+      },
+    }, {
+      max_requests: 3,
+      max_probe_requests: 1,
+      min_destination_resolver_attempts: 2,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 3,
+      timeout_ms: 100,
+    }, { probeKind: 'http_head' });
+
+    assert.equal(result.status, 422);
+    assert.equal(result.error, 'safety_attestation_exceeded');
+  });
+
+  it('rejects zero-probe blocked/timeout claims regardless of destination-gate metadata', () => {
+    const constraints = {
+      max_requests: 3,
+      max_probe_requests: 1,
+      min_destination_resolver_attempts: 2,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 3,
+      timeout_ms: 100,
+    };
+    for (const externalResult of ['blocked', 'timeout']) {
+      const result = validateProbeResultBody({
+        external_result: externalResult,
+        metadata: {
+          probe_kind: 'destination_gate',
+          error_class: 'destination_not_routable',
+        },
+        safety_attestation: {
+          requests_sent: 2,
+          probe_requests_sent: 0,
+          destination_resolver_attempts: 2,
+          total_operations: 2,
+          duration_ms: 10,
+        },
+      }, constraints, {
+        probeKind: 'http_head',
+        probeProfile: { kind: 'http_head', max_requests: 1 },
+        target: { kind: 'fqdn', value: 'missing.example.test' },
+      });
+      assert.equal(result.error, 'safety_attestation_exceeded', externalResult);
+    }
+
+    const legitimateError = validateProbeResultBody({
+      external_result: 'error',
+      safety_attestation: {
+        requests_sent: 0,
+        probe_requests_sent: 0,
+        destination_resolver_attempts: 0,
+        total_operations: 0,
+        duration_ms: 1,
+      },
+    }, constraints, {
+      probeKind: 'http_head',
+      probeProfile: { kind: 'http_head', max_requests: 1 },
+      target: { kind: 'fqdn', value: 'missing.example.test' },
+    });
+    assert.equal(legitimateError.ok, true);
+  });
+
+  it('does not let deadline metadata waive a signed hostname resolver floor', () => {
+    const result = validateProbeResultBody({
+      external_result: 'timeout',
+      metadata: { probe_kind: 'http_head', error_class: 'probe_job_deadline_exceeded' },
+      safety_attestation: {
+        requests_sent: 0,
+        probe_requests_sent: 0,
+        destination_resolver_attempts: 0,
+        total_operations: 0,
+        duration_ms: 10,
+      },
+    }, {
+      max_requests: 3,
+      max_probe_requests: 1,
+      min_destination_resolver_attempts: 2,
+      max_destination_resolver_attempts: 2,
+      max_total_operations: 3,
+      timeout_ms: 100,
+    }, { probeKind: 'http_head' });
+
+    assert.equal(result.status, 422);
+    assert.equal(result.error, 'safety_attestation_exceeded');
+  });
+
+  it('rejects a signed probe cap above probe_profile.max_requests before egress', async () => {
+    let resolverCalls = 0;
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: {
+        max_requests: 4,
+        max_probe_requests: 2,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 2,
+        max_total_operations: 4,
+        timeout_ms: 100,
+      },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 100 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    }), {
+      resolve4Fn: async () => { resolverCalls += 1; return ['203.0.113.10']; },
+      resolve6Fn: async () => { resolverCalls += 1; return []; },
+      fetchFn: async () => { fetchCalls += 1; return { status: 200, headers: { get: () => null } }; },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'probe_cap_exceeds_signed_profile');
+    assert.equal(outcome.total_operations, 0);
+    assert.equal(resolverCalls, 0);
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('rejects an undersized signed resolver cap before resolution or probe egress', async () => {
+    let resolverCalls = 0;
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: {
+        max_requests: 2,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 1,
+        max_total_operations: 2,
+        timeout_ms: 100,
+      },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 100 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    }), {
+      signedJobVerified: true,
+      resolve4Fn: async () => { resolverCalls += 1; return ['203.0.113.10']; },
+      resolve6Fn: async () => { resolverCalls += 1; return []; },
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return { status: 200, headers: { get: () => null } };
+      },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'incoherent_signed_operation_caps');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(outcome.destination_resolver_attempts, 0);
+    assert.equal(outcome.total_operations, 0);
+    assert.equal(resolverCalls, 0);
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('allows zero duration only for zero-I/O error/not_run results', () => {
+    const job = baseJob();
+    assert.throws(
+      () => buildResultBody(job, 'error', {}, { requests_sent: -1, duration_ms: 1 }),
+      /requests_sent/,
+    );
+    for (const externalResult of ['error', 'not_run']) {
+      const body = buildResultBody(job, externalResult, {}, {
+        requests_sent: 0,
+        duration_ms: 0,
+      });
+      assert.equal(body.safety_attestation.duration_ms, 0);
+      assert.equal(validateProbeResultBody(body, job.constraints, {
+        probeKind: job.probe_profile.kind,
+        probeProfile: job.probe_profile,
+        target: job.target,
+      }).ok, true);
+    }
+    assert.throws(
+      () => buildResultBody(job, 'connected', {}, { requests_sent: 0, duration_ms: 0 }),
+      /zero-duration/,
+    );
+    assert.throws(
+      () => buildResultBody(job, 'error', {}, { requests_sent: 1, duration_ms: 0 }),
+      /duration_ms must be positive/,
+    );
+    assert.throws(
+      () => buildResultBody(job, 'error', {}, { requests_sent: 0, duration_ms: 1.5 }),
+      /duration_ms/,
+    );
+  });
+
+  it('rejects an underbudget origin job before destination vetting or probe egress', async () => {
+    for (const [kind, requiredRequests] of [
+      ['origin_leak_scan', 3],
+    ]) {
+      let resolverCalls = 0;
+      let fetchCalls = 0;
+      let socketCalls = 0;
+      const outcome = await executeProbeForJob(baseJob({
+        check_id: kind === 'origin_leak_scan'
+          ? 'origin.leak_scan.safe'
+          : (kind === 'http3_control_probe'
+            ? 'protocol.http3_control_stream.readiness'
+            : 'protocol.http3_quic_exposure.safe'),
+        vector_family: kind === 'origin_leak_scan' ? 'origin' : 'protocol',
+        constraints: { max_requests: 1, timeout_ms: 100 },
+        probe_profile: { kind, max_requests: 1, timeout_ms: 100 },
+        target: { kind: 'fqdn', value: 'owned.example.test' },
+      }), {
+        signedJobVerified: true,
+        resolve4Fn: async () => { resolverCalls += 1; return ['203.0.113.10']; },
+        resolve6Fn: async () => { resolverCalls += 1; return []; },
+        fetchFn: async () => {
+          fetchCalls += 1;
+          return { status: 200, headers: { get: () => null } };
+        },
+        createSocket: () => { socketCalls += 1; throw new Error('must not create socket'); },
+      });
+
+      assert.equal(outcome.external_result, 'error', kind);
+      assert.equal(outcome.metadata.error_class, 'signed_request_budget_below_mandatory_floor', kind);
+      assert.equal(outcome.metadata.required_requests, requiredRequests, kind);
+      assert.equal(outcome.requests_sent, 0, kind);
+      assert.ok(outcome.duration_ms > 0, kind);
+      assert.equal(resolverCalls, 0, kind);
+      assert.equal(fetchCalls, 0, kind);
+      assert.equal(socketCalls, 0, kind);
+    }
   });
 });
 
@@ -220,11 +1046,12 @@ describe('WAF safe probe profiles', () => {
     for (const checkId of WAF_SAFE_CHECK_IDS) {
       const check = getCheckById(checkId);
       const profile = check.probe_profile;
-      assert.ok(profile.max_requests <= MAX_PROBE_PROFILE_REQUESTS, checkId);
+      const kindCap = maxProbeRequestsForKind(profile.kind);
+      assert.ok(profile.max_requests <= kindCap, checkId);
       assert.ok(profile.timeout_ms <= MAX_PROBE_PROFILE_TIMEOUT_MS, checkId);
       const job = baseJob({ check_id: checkId });
       assert.equal(verifyProbeJobSignature(job, WORKER_SECRET), true);
-      job.probe_profile = { ...job.probe_profile, max_requests: MAX_PROBE_PROFILE_REQUESTS + 1 };
+      job.probe_profile = { ...job.probe_profile, max_requests: kindCap + 1 };
       assert.equal(verifyProbeJobSignature(job, WORKER_SECRET), false);
     }
   });
@@ -371,9 +1198,109 @@ describe('probe worker DNS helper', () => {
     });
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'dns_resolve');
-    assert.equal(outcome.metadata.profile_kind, 'dns_resolve');
+    assert.equal(outcome.metadata.profile_kind, 'dns_wire_query');
   });
 });
+
+
+  it('accounts DNS wire hostname NS+A+AAAA resolution and supports an IPv6-only nameserver', async () => {
+    const resolutionCalls = [];
+    const socketTypes = [];
+    const job = baseJob({
+      check_id: 'dns.authoritative_response.safe',
+      vector_family: 'dns',
+      constraints: {
+        max_requests: 4,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 3,
+        max_destination_resolver_attempts: 3,
+        max_total_operations: 4,
+        timeout_ms: 1000,
+      },
+      probe_profile: {
+        kind: 'dns_wire_query',
+        max_requests: 1,
+        timeout_ms: 1000,
+        dns_qtype: 'SOA',
+        dns_transport: 'udp',
+      },
+      target: { kind: 'fqdn', value: 'owned.example' },
+    });
+    const outcome = await executeProbeForJob(job, {
+      resolveNsFn: async (zone) => {
+        resolutionCalls.push(['NS', zone]);
+        return ['ns6.owned.example'];
+      },
+      resolve4Fn: async (host) => {
+        resolutionCalls.push(['A', host]);
+        return [];
+      },
+      resolve6Fn: async (host) => {
+        resolutionCalls.push(['AAAA', host]);
+        return ['2001:db8::53'];
+      },
+      createSocket: (type) => {
+        socketTypes.push(type);
+        const socket = new EventEmitter();
+        socket.send = (query, port, host, callback) => {
+          callback?.();
+          const response = Buffer.from(query);
+          response.writeUInt16BE(0x8400, 2);
+          setImmediate(() => socket.emit('message', response, { address: host, port }));
+        };
+        socket.close = () => {};
+        return socket;
+      },
+    });
+
+    assert.deepEqual(resolutionCalls, [
+      ['NS', 'owned.example'],
+      ['A', 'ns6.owned.example'],
+      ['AAAA', 'ns6.owned.example'],
+    ]);
+    assert.deepEqual(socketTypes, ['udp6']);
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 3);
+    assert.equal(outcome.total_operations, 4);
+  });
+
+  it('propagates DNS wire resolver budget exhaustion before transport', async () => {
+    let operations = 0;
+    let sockets = 0;
+    const reserve = () => {
+      operations += 1;
+      if (operations > 2) {
+        throw Object.assign(new Error('budget exhausted'), {
+          code: 'signed_operation_budget_exceeded',
+        });
+      }
+    };
+    await assert.rejects(
+      () => probeDnsWireQuery(baseJob({
+        check_id: 'dns.authoritative_response.safe',
+        vector_family: 'dns',
+        constraints: { max_requests: 1, timeout_ms: 1000 },
+        probe_profile: {
+          kind: 'dns_wire_query',
+          max_requests: 1,
+          timeout_ms: 1000,
+          dns_qtype: 'SOA',
+          dns_transport: 'udp',
+        },
+        target: { kind: 'fqdn', value: 'owned.example' },
+      }), {
+        recordDestinationResolverAttempt: reserve,
+        resolveNsFn: async () => ['ns.owned.example'],
+        resolve4Fn: async () => { reserve(); return ['203.0.113.53']; },
+        resolve6Fn: async () => { reserve(); return []; },
+        createSocket: () => { sockets += 1; throw new Error('must not create socket'); },
+      }),
+      (error) => error?.code === 'signed_operation_budget_exceeded',
+    );
+    assert.equal(operations, 3);
+    assert.equal(sockets, 0);
+  });
 
 
 describe('probe worker liveness deadlines', () => {
@@ -391,6 +1318,116 @@ describe('probe worker liveness deadlines', () => {
       }),
       (error) => error?.code === 'probe_destination_dns_timeout',
     );
+  });
+
+  it('rejects a transient sibling-family answer during direct destination classification', async () => {
+    await assert.rejects(
+      () => vetProbeDestination(baseJob({
+        target: { kind: 'fqdn', value: 'edge.example.test' },
+      }), {
+        resolve4Fn: async () => ['203.0.113.10'],
+        resolve6Fn: async () => {
+          throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+        },
+      }),
+      (error) => error?.code === 'EAI_AGAIN',
+    );
+  });
+
+  it('returns inconclusive error and performs no egress on transient sibling-family DNS', async () => {
+    let fetchCalls = 0;
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: { max_requests: 1, timeout_ms: 100 },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 100 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    }), {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => {
+        throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      },
+      fetchFn: async () => { fetchCalls += 1; return { status: 200, headers: { get: () => null } }; },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(outcome.probe_requests_sent, 0);
+    assert.equal(outcome.destination_resolver_attempts, 2);
+    assert.equal(fetchCalls, 0);
+  });
+
+  it('charges slow destination preflight and probe work to one signed deadline', async () => {
+    let fetchCalls = 0;
+    const started = process.hrtime.bigint();
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: 'l7.bot_challenge_marker.safe',
+      vector_family: 'l7',
+      constraints: { max_requests: 1, timeout_ms: 50 },
+      probe_profile: { kind: 'bot_challenge_probe', max_requests: 1, timeout_ms: 50 },
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+    }), {
+      signedJobVerified: true,
+      resolve4Fn: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return ['203.0.113.10'];
+      },
+      resolve6Fn: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return [];
+      },
+      // Ignores AbortSignal to reproduce the old preflight + fresh probe timeout overrun.
+      fetchFn: async () => {
+        fetchCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return { status: 200, headers: { get: () => null } };
+      },
+    });
+    const wallMs = Number((process.hrtime.bigint() - started + 999_999n) / 1_000_000n);
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(fetchCalls, 1);
+    assert.equal(outcome.requests_sent, 3);
+    assert.equal(outcome.metadata.request_accounting.probe_logical_attempts, 1);
+    assert.equal(outcome.metadata.request_accounting.destination_vetting_resolver_attempts, 2);
+    assert.ok(outcome.duration_ms >= 45, `duration ${outcome.duration_ms}ms omitted preflight`);
+    assert.ok(Math.abs(outcome.duration_ms - wallMs) <= 5, `${outcome.duration_ms} vs ${wallMs}`);
+    assert.ok(wallMs < 90, `fresh full probe timeout overran to ${wallMs}ms`);
+  });
+
+  it('accounts for timed-out discovered-destination resolver attempts exactly', async () => {
+    const never = () => new Promise(() => {});
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: 'dns.zone_transfer_exposure.safe',
+      vector_family: 'dns',
+      constraints: {
+        max_requests: 6,
+        max_probe_requests: 2,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 4,
+        max_total_operations: 6,
+        timeout_ms: 50,
+      },
+      probe_profile: { kind: 'dns_axfr_leak', max_requests: 2, timeout_ms: 50 },
+      target: { kind: 'fqdn', value: 'owned.example' },
+    }), {
+      resolve4Fn: (host) => host === 'owned.example'
+        ? Promise.resolve(['203.0.113.10'])
+        : never(),
+      resolve6Fn: (host) => host === 'owned.example'
+        ? Promise.resolve([])
+        : never(),
+      resolveNsFn: async () => ['ns.owned.example'],
+      connectFn: () => { throw new Error('must not connect before destination classification'); },
+    });
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 4);
+    assert.equal(outcome.total_operations, 5);
+    assert.equal(outcome.requests_sent, 5);
   });
 
   it('fails a hung cycle without writing a later healthy heartbeat', async () => {
@@ -669,6 +1706,75 @@ describe('probe worker poll integration', () => {
 });
 
 describe('executeProbeForJob routing', () => {
+  it('maps every worker-executed catalog kind and keeps D-02 checks off HTTP HEAD', () => {
+    const inProcessCheckIds = [];
+    const socGatedCheckIds = [];
+    for (const check of CHECK_CATALOG) {
+      const kind = check.probe_profile?.kind;
+      if (!kind) {
+        assert.equal(check.safety_class, 'soc_gated', `${check.check_id} lacks a worker profile`);
+        socGatedCheckIds.push(check.check_id);
+        continue;
+      }
+      if (kind === 'ops_readiness') {
+        inProcessCheckIds.push(check.check_id);
+        continue;
+      }
+      assert.notEqual(
+        executorNameForProbeKind(kind),
+        null,
+        `${check.check_id} declares unmapped probe kind ${kind}`,
+      );
+    }
+    assert.deepEqual(inProcessCheckIds.sort(), [
+      'ops.kill_switch_drill.safe',
+      'ops.runbook_contact_validation.safe',
+    ]);
+    assert.ok(socGatedCheckIds.length > 0);
+
+    const affectedCheckIds = [
+      'amp.memcached_exposure.safe',
+      'amp.dns_any_txt_exposure.safe',
+      'amp.authoritative_resolver_exposure.safe',
+      'reflect.portmap_service_exposure.safe',
+      'reflect.tcp_middlebox_exposure.safe',
+      'reflect.redis_direct_exposure.safe',
+    ];
+    for (const checkId of affectedCheckIds) {
+      const check = CHECK_CATALOG.find((candidate) => candidate.check_id === checkId);
+      assert.ok(check, `${checkId} must remain in CHECK_CATALOG`);
+      const executorName = executorNameForProbeKind(check.probe_profile.kind);
+      assert.notEqual(executorName, null, `${checkId} must resolve an executor`);
+      assert.notEqual(executorName, 'probeHttpHead', `${checkId} must not fall back to HTTP HEAD`);
+    }
+  });
+
+  it('rejects an unknown kind without invoking any network dependency', async () => {
+    let networkCalls = 0;
+    const unexpectedNetworkCall = () => {
+      networkCalls += 1;
+      throw new Error('unknown probe kind must not touch the network');
+    };
+    const outcome = await executeProbeForJob(baseJob({
+      probe_profile: { kind: 'unknown_probe_kind', max_requests: 1, timeout_ms: 100 },
+      constraints: { max_requests: 1, timeout_ms: 100 },
+    }), {
+      createSocket: unexpectedNetworkCall,
+      connectFn: unexpectedNetworkCall,
+      fetchFn: unexpectedNetworkCall,
+      resolve4Fn: unexpectedNetworkCall,
+      resolve6Fn: unexpectedNetworkCall,
+      resolveNsFn: unexpectedNetworkCall,
+    });
+
+    assert.equal(executorNameForProbeKind('unknown_probe_kind'), null);
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'unsupported_probe_kind');
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(outcome.probe_requests_sent, 0);
+    assert.equal(networkCalls, 0);
+  });
+
   const CAPABILITY_ROUTING_CASES = [
     { kind: 'origin_leak_scan', check_id: 'origin.leak_scan.safe', vector_family: 'origin' },
     { kind: 'host_sni_bypass', check_id: 'origin.direct_reachability.safe', vector_family: 'origin', target: { kind: 'fqdn', value: 'edge.test', metadata: { direct_origin_ip: '198.51.100.7' } }, probe_profile: { kind: 'host_sni_bypass', protected_host: 'edge.test', max_requests: 1, timeout_ms: 500 } },
@@ -781,13 +1887,20 @@ describe('executeProbeForJob routing', () => {
     const outcome = await executeProbeForJob(job, {
       resolve4Fn: async () => ['203.0.113.10'],
       resolve6Fn: async () => [],
-      createSocket: () => ({
-        send(_payload, _port, host, callback) {
+      createSocket: () => {
+        const socket = new EventEmitter();
+        socket.send = (_payload, _port, host, callback) => {
           assert.equal(host, '203.0.113.10');
           callback(null);
-        },
-        close() {},
-      }),
+          queueMicrotask(() => socket.emit(
+            'message',
+            Buffer.alloc(12),
+            { address: host, port: 9999 },
+          ));
+        };
+        socket.close = () => {};
+        return socket;
+      },
     });
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.probe_kind, 'udp_probe');
@@ -867,7 +1980,7 @@ describe('executeProbeForJob routing', () => {
     return baseJob({ check_id: 'l7.bot_challenge_marker.safe', target });
   }
 
-  it('blocks an ip target pointed at cloud metadata before any connect', async () => {
+  it('errors on an IP target pointed at cloud metadata before any connect', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     let connectCalls = 0;
     const outcome = await executeProbeForJob(scanJob({ kind: 'ip', value: '169.254.169.254' }), {
@@ -875,14 +1988,14 @@ describe('executeProbeForJob routing', () => {
       signedJobVerified: true,
       connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'destination_not_routable');
     assert.equal(outcome.metadata.blocked_address, '169.254.169.254');
     assert.equal(outcome.requests_sent, 0);
     assert.equal(connectCalls, 0);
   });
 
-  it('blocks an fqdn target resolving to RFC1918 space before any fetch', async () => {
+  it('errors on an FQDN target resolving to RFC1918 space before any fetch', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     let fetchCalls = 0;
     const outcome = await executeProbeForJob(httpJob({ kind: 'fqdn', value: 'internal.example.test' }), {
@@ -892,14 +2005,14 @@ describe('executeProbeForJob routing', () => {
       resolve6Fn: async () => [],
       fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'destination_not_routable');
     assert.equal(outcome.metadata.blocked_address, '10.0.0.5');
     assert.equal(outcome.metadata.destination_host, 'internal.example.test');
     assert.equal(fetchCalls, 0);
   });
 
-  it('blocks when only one address in a resolved set is non-routable', async () => {
+  it('errors when any address in a resolved set is non-routable', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     let fetchCalls = 0;
     const outcome = await executeProbeForJob(httpJob({ kind: 'fqdn', value: 'split.example.test' }), {
@@ -909,7 +2022,7 @@ describe('executeProbeForJob routing', () => {
       resolve6Fn: async () => [],
       fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.error_class, 'destination_not_routable');
     assert.equal(fetchCalls, 0);
   });
@@ -967,7 +2080,9 @@ describe('executeProbeForJob routing', () => {
     });
 
     assert.equal(outcome.external_result, 'connected');
-    assert.equal(outcome.requests_sent, 1);
+    assert.equal(outcome.requests_sent, 3);
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 2);
     assert.equal(requestOptions.hostname, '203.0.113.10');
     assert.equal(requestOptions.headers.Host, 'rebind.example.test');
     assert.equal(resolve4Calls, 1);
@@ -979,7 +2094,7 @@ describe('executeProbeForJob routing', () => {
     assert.match(output.stdout, /preflight-http1:ok/);
   });
 
-  it('sends zero requests when hostname preflight returns zero A/AAAA answers', async () => {
+  it('sends zero probes when hostname preflight returns zero A/AAAA answers', async () => {
     const { executeProbeForJob } = await import('../../workers/probe-worker.mjs');
     let requests = 0;
     const outcome = await executeProbeForJob(baseJob({
@@ -992,10 +2107,12 @@ describe('executeProbeForJob routing', () => {
       httpRequestFn: () => { requests += 1; throw new Error('must not request'); },
     });
 
-    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.external_result, 'error');
     assert.equal(outcome.metadata.probe_kind, 'destination_gate');
     assert.equal(outcome.metadata.reason, 'no_resolved_addresses');
-    assert.equal(outcome.requests_sent, 0);
+    assert.equal(outcome.requests_sent, 2);
+    assert.equal(outcome.probe_requests_sent, 0);
+    assert.equal(outcome.destination_resolver_attempts, 2);
     assert.equal(requests, 0);
   });
 
@@ -1028,7 +2145,7 @@ describe('executeProbeForJob routing', () => {
         signedJobVerified: true,
         fetchFn: async () => { fetchCalls += 1; throw new Error('must not fetch'); },
       });
-      assert.equal(outcome.external_result, 'blocked');
+      assert.equal(outcome.external_result, 'error');
       assert.equal(outcome.metadata.error_class, 'destination_not_routable');
       assert.equal(outcome.metadata.private_destination_opt_in_refused, true);
       assert.equal(fetchCalls, 0);
@@ -1057,7 +2174,7 @@ describe('executeProbeForJob routing', () => {
       signedJobVerified: true,
       fetchFn: async () => { metadataFetches += 1; throw new Error('must not fetch'); },
     });
-    assert.equal(metadata.external_result, 'blocked');
+    assert.equal(metadata.external_result, 'error');
     assert.equal(metadata.metadata.error_class, 'destination_not_routable');
     assert.equal(metadataFetches, 0);
   });
@@ -1078,5 +2195,75 @@ describe('executeProbeForJob routing', () => {
     assert.ok(body.safety_attestation.requests_sent <= job.constraints.max_requests);
     assert.ok(body.safety_attestation.duration_ms <= job.constraints.timeout_ms);
     await new Promise((resolve) => server.close(resolve));
+  });
+});
+
+
+describe('probe worker authoritative pre-attempt accounting regressions', () => {
+  it('attests exactly one probe for a hung gRPC request and returns the canonical deadline error', { timeout: 1000 }, async () => {
+    const check = getCheckById('protocol.grpc_reflection_stream.safe');
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: check.check_id,
+      vector_family: check.vector_family,
+      target: { kind: 'url', value: 'https://grpc.example.test/service' },
+      probe_profile: { ...check.probe_profile, timeout_ms: 30 },
+      constraints: {
+        max_requests: 3,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 2,
+        max_total_operations: 3,
+        timeout_ms: 30,
+      },
+    }), {
+      signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      http2RequestFn: () => new Promise(() => {}),
+    });
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.destination_resolver_attempts, 2);
+    assert.equal(outcome.total_operations, 3);
+    assert.equal(outcome.metadata.request_accounting.probe_logical_attempts, 1);
+  });
+
+  it('does not let an adapter-returned request count inflate authoritative attestation', async () => {
+    const check = getCheckById('waf.http_method_policy_marker.safe');
+    const outcome = await executeProbeForJob(baseJob({
+      check_id: check.check_id,
+      vector_family: check.vector_family,
+      target: { kind: 'url', value: 'https://edge.example.test/signed/path' },
+      probe_profile: check.probe_profile,
+      constraints: {
+        max_requests: 3,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 2,
+        max_total_operations: 3,
+        timeout_ms: 1000,
+      },
+    }), {
+      signedJobVerified: true,
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => new Response('', { status: 403 }),
+      wafClassProbeFn: async ({ url, fetchFn }) => {
+        await fetchFn(url, { method: 'GET' });
+        return {
+          posture: 'protected',
+          marker_results: [{ placement: 'query', blocked: true }],
+          requests_sent: 99,
+        };
+      },
+    });
+
+    assert.equal(outcome.external_result, 'blocked');
+    assert.equal(outcome.probe_requests_sent, 1);
+    assert.equal(outcome.metadata.request_accounting.probe_logical_attempts, 1);
+    assert.equal(outcome.destination_resolver_attempts, 2);
+    assert.equal(outcome.total_operations, 3);
   });
 });

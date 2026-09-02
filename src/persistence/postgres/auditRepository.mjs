@@ -103,7 +103,17 @@ export function createAuditRepository(pool) {
     /**
      * Redact, chain, and persist a raw audit event under a tenant-scoped advisory lock.
      * @param {Record<string, unknown>} entry
-     * @param {{ now?: Date }} [options]
+     * @param {{
+     *   now?: Date,
+     *   client?: import('pg').PoolClient,
+     *   auditLockHeld?: boolean,
+     *   idempotency?: {
+     *     actions?: string[],
+     *     resourceType?: string | null,
+     *     resourceId?: string | null,
+     *     metadata?: Record<string, unknown>,
+     *   },
+     * }} [options]
      */
     async appendAuditEvent(entry, options = {}) {
       const tenantId = String(entry?.tenant_id ?? '').trim();
@@ -112,7 +122,45 @@ export function createAuditRepository(pool) {
       }
 
       return runWithTenantClient(pool, tenantId, options.client, async (client) => {
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenantId]);
+        if (options.auditLockHeld !== true) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenantId]);
+        }
+
+        if (options.idempotency) {
+          const actions = Array.isArray(options.idempotency.actions)
+            ? options.idempotency.actions.filter(
+              (action) => typeof action === 'string' && action !== '',
+            )
+            : [entry.action];
+          if (actions.length === 0) {
+            throw new Error('appendAuditEvent idempotency requires at least one action.');
+          }
+          const resourceType = options.idempotency.resourceType
+            ?? entry.resource_type
+            ?? null;
+          const resourceId = options.idempotency.resourceId
+            ?? entry.resource_id
+            ?? null;
+          const metadata = options.idempotency.metadata;
+          if (metadata != null && (typeof metadata !== 'object' || Array.isArray(metadata))) {
+            throw new Error('appendAuditEvent idempotency metadata must be an object.');
+          }
+          const existing = await client.query(
+            `SELECT id, tenant_id, timestamp, sequence, prev_hash, entry_hash,
+                    actor_user_id, actor_role, action, resource_type, resource_id, metadata_json
+             FROM audit_logs
+             WHERE tenant_id = $1
+               AND action = ANY($2::text[])
+               AND resource_type IS NOT DISTINCT FROM $3
+               AND resource_id IS NOT DISTINCT FROM $4
+               AND metadata_json @> $5::jsonb
+             ORDER BY sequence DESC
+             LIMIT 1`,
+            [tenantId, actions, resourceType, resourceId, JSON.stringify(metadata ?? {})],
+          );
+          if (existing.rows[0]) return rowToAuditEntry(existing.rows[0]);
+        }
+
         const { rows } = await client.query(LAST_AUDIT_ROW_SQL, [tenantId]);
         const lastRow = rowToAuditEntry(rows[0] ?? null);
         const record = buildAuditRecord(entry, lastRow, options.now);

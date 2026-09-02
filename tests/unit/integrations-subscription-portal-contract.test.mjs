@@ -15,6 +15,14 @@ const ROUTER_SOURCE = readFileSync(
   new URL('../../apps/web/react/src/pages/router.tsx', import.meta.url),
   'utf8',
 );
+const API_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/lib/api.ts', import.meta.url),
+  'utf8',
+);
+const PAYLOAD_GATE_SOURCE = readFileSync(
+  new URL('../../apps/web/react/src/lib/payload-commit-generation.mjs', import.meta.url),
+  'utf8',
+);
 const LOADING_SOURCE = readFileSync(
   new URL('../../apps/web/react/src/lib/empty-from-api.tsx', import.meta.url),
   'utf8',
@@ -29,12 +37,20 @@ function section(start, end) {
 }
 
 describe('Route-level hydration truthfulness', () => {
-  it('blocks reports and every other route behind hydration instead of a route allowlist', () => {
+  it('gates both React state and the shared portal cache with one route-generation ticket', () => {
     assert.match(APP_SOURCE, /const \[hydratingRoute, setHydratingRoute\] = useState<RouteId \| null>\(null\)/);
-    assert.match(APP_SOURCE, /const requestId = \+\+routeHydrationRequestId\.current/);
+    assert.match(APP_SOURCE, /const payloadCommitGate = useRef\(createPayloadCommitGate\(route\)\)/);
+    assert.match(APP_SOURCE, /load: \(isCurrent\) => options\.datasets/);
+    assert.match(APP_SOURCE, /const scopedSession = sessionForRoute\(nextSession, nextRoute\)/);
+    assert.match(APP_SOURCE, /fetchPortalDatasets\(nextConfig, scopedSession, options\.datasets, isCurrent\)/);
+    assert.match(APP_SOURCE, /shouldCommitCache: isCurrent/);
     assert.match(APP_SOURCE, /setHydratingRoute\(route\)/);
-    assert.match(APP_SOURCE, /routeHydrationRequestId\.current !== requestId/);
     assert.match(APP_SOURCE, /hydrating=\{hydratingRoute === route\}/);
+
+    assert.match(PAYLOAD_GATE_SOURCE, /const isCurrent = \(\) => gate\.isCurrent\(ticket\)/);
+    assert.match(PAYLOAD_GATE_SOURCE, /const payload = await load\(isCurrent\)/);
+    assert.match(API_SOURCE, /shouldCommitCache\?: \(\) => boolean/);
+    assert.match(API_SOURCE, /if \(options\.shouldCommitCache\?\.\(\) \?\? true\) \{\s*portalDataCache\.set/);
 
     assert.match(ROUTER_SOURCE, /function routeHydrationLabel\(route: RouteId\)[\s\S]*return `Loading \${route\.replaceAll\('-', ' '\)}`/);
     assert.match(ROUTER_SOURCE, /if \(hydrating\) \{[\s\S]*<PortalLoadingSkeleton rows=\{4\} label=\{routeHydrationLabel\(route\)\} \/>/);

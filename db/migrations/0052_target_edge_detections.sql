@@ -8,12 +8,36 @@
 -- values, or block-page bodies, and none are stored here. `evidence_json` holds vendor match
 -- descriptors, cdncheck address/CNAME provenance, and the resolved chain for the declared target.
 
+-- Parent keys for the exact target/group and run/group/target provenance FKs below. Migration
+-- 0046 normally installed the target key already; retain this guard so a clean 0052 contract is
+-- self-contained and fails closed instead of silently omitting the required parent relationship.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'targets'::regclass
+      AND conname = 'targets_tenant_group_id_key'
+  ) THEN
+    ALTER TABLE targets
+      ADD CONSTRAINT targets_tenant_group_id_key
+      UNIQUE (tenant_id, target_group_id, id);
+  END IF;
+END;
+$$;
+
+-- The global run primary key already makes every tuple unique; this named composite key makes the
+-- exact tenant + run + group + target relationship referencable.
+ALTER TABLE test_runs
+  ADD CONSTRAINT test_runs_tenant_run_group_target_key
+  UNIQUE (tenant_id, id, target_group_id, target_id);
+
 CREATE TABLE IF NOT EXISTS target_edge_detections (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   target_group_id TEXT NOT NULL,
   target_id TEXT NOT NULL,
-  test_run_id TEXT,
+  test_run_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'inconclusive',
   reason TEXT,
   waf_status TEXT NOT NULL DEFAULT 'inconclusive',
@@ -68,6 +92,17 @@ ALTER TABLE target_edge_detections
 ALTER TABLE target_edge_detections
   ADD CONSTRAINT fk_target_edge_detections_test_run_tenant
   FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
+
+-- Coherent provenance: independent existence is insufficient. The target must belong to the exact
+-- group, and the run must bind that same target/group tuple.
+ALTER TABLE target_edge_detections
+  ADD CONSTRAINT fk_target_edge_detections_target_binding
+  FOREIGN KEY (tenant_id, target_group_id, target_id)
+  REFERENCES targets (tenant_id, target_group_id, id);
+ALTER TABLE target_edge_detections
+  ADD CONSTRAINT fk_target_edge_detections_run_binding
+  FOREIGN KEY (tenant_id, test_run_id, target_group_id, target_id)
+  REFERENCES test_runs (tenant_id, id, target_group_id, target_id);
 
 ALTER TABLE target_edge_detections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE target_edge_detections FORCE ROW LEVEL SECURITY;

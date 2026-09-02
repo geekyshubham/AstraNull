@@ -473,8 +473,8 @@ const DNS_ADDRESSES_PER_FAMILY_MAX = 4;
 
 /**
  * Optional standalone CNAME/A/AAAA lookup chain for metadata-only WAF/CDN catalog matching.
- * Signed-worker execution enables this collector only when the signed probe profile declares the
- * `dns_chain_hint` collect capability, because its DNS operations sit outside the HTTP budget.
+ * This raw collector is direct-helper opt-in only; the signed capability adapter keeps it disabled
+ * because these operations are not separately signed, reserved, counted, pinned, and bounded.
  *
  * Returns the display `dns_chain` string plus the structured `cname_chain`/`resolved_ips` the
  * pinned cdncheck corpus consumes. Structured fields avoid re-parsing the display string.
@@ -546,7 +546,9 @@ export async function resolveOutsideInDnsHints(hostname, deps = {}) {
 }
 
 /**
- * One bounded TLS handshake read (protocol + cipher name only). Does not count toward HTTP budget.
+ * Optional standalone TLS handshake read (protocol + cipher name only). This raw collector is
+ * direct-helper opt-in only; signed outside-in execution keeps it disabled unless a future
+ * operation is separately signed, reserved, counted, deadline-bounded, and destination-pinned.
  * @param {string} url
  * @param {{ tlsConnect?: typeof tls.connect, timeoutMs?: number }} [deps]
  */
@@ -724,6 +726,12 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
     const bodyText = await readBoundedResponseBody(res);
     return { res, bodyText, error: null };
   } catch (err) {
+    if (
+      err?.code === 'signed_operation_budget_exceeded'
+      || err?.code === 'probe_job_deadline_exceeded'
+    ) {
+      throw err;
+    }
     return { res: null, bodyText: '', error: err };
   } finally {
     clearTimeout(timer);
@@ -1198,8 +1206,12 @@ export async function runOutsideInWafScan(options = {}) {
         confidence: match.confidence,
         matched_signals: match.matched_signals,
       })),
-      address_matches: edgeSignature.address_matches,
-      cname_matches: edgeSignature.cname_matches,
+      ...(collectNetworkHints
+        ? {
+            address_matches: edgeSignature.address_matches,
+            cname_matches: edgeSignature.cname_matches,
+          }
+        : {}),
     },
     edge_signature_corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
     network_hints_collected: collectNetworkHints,

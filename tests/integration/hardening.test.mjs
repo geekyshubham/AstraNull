@@ -199,7 +199,7 @@ describe('hardening acceptance gaps', () => {
     assert.equal(cancelled.status, 200);
   });
 
-  it('finalizes blocked safe check to protected with no observation', async () => {
+  it('finalizes blocked TCP liveness evidence as inconclusive with no observation', async () => {
     const h = demoHeaders('engineer');
     const { agentId, credential } = await registerAgent();
     await request(baseUrl, 'POST', `/v1/agents/${agentId}/heartbeat`, {
@@ -223,7 +223,8 @@ describe('hardening acceptance gaps', () => {
 
     const finalized = await request(baseUrl, 'POST', `/v1/test-runs/${runId}/finalize`, { headers: h });
     assert.equal(finalized.status, 200);
-    assert.equal(finalized.json.verdict.verdict, 'protected');
+    assert.equal(finalized.json.verdict.verdict, 'inconclusive');
+    assert.match(finalized.json.verdict.explanation, /transport or liveness metadata only/i);
 
     const events = await request(baseUrl, 'GET', `/v1/test-runs/${runId}/events`, { headers: h });
     assert.ok(events.json.items.some((e) => e.signal_type === 'agent_no_observation'));

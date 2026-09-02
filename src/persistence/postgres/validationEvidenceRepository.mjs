@@ -1,4 +1,4 @@
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, check_id, created_by, initiated_by,
   risk_class, safety_class, vector_family, status, probe_external_result, awaiting_external_probe,
@@ -58,6 +58,7 @@ const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
 const MAX_TEST_RUN_LIST_LIMIT = 500;
 const DEFAULT_RUN_EVENTS_LIST_LIMIT = 200;
 const MAX_RUN_EVENTS_LIST_LIMIT = 1000;
+const MAX_RUN_EVIDENCE_BATCH_IDS = 500;
 const DEFAULT_EVIDENCE_LIST_LIMIT = 100;
 const MAX_EVIDENCE_LIST_LIMIT = 500;
 
@@ -78,6 +79,22 @@ function normalizeTestRunListLimit(limit) {
 
 function normalizeRunEventsListLimit(limit) {
   return normalizeBoundedLimit(limit, DEFAULT_RUN_EVENTS_LIST_LIMIT, MAX_RUN_EVENTS_LIST_LIMIT);
+}
+
+function normalizeRunIdBatch(runIds, label) {
+  if (!Array.isArray(runIds)) return [];
+  const unique = [];
+  const seen = new Set();
+  for (const value of runIds) {
+    const runId = typeof value === 'string' ? value.trim() : '';
+    if (!runId || seen.has(runId)) continue;
+    seen.add(runId);
+    unique.push(runId);
+  }
+  if (unique.length > MAX_RUN_EVIDENCE_BATCH_IDS) {
+    throw new RangeError(`${label} accepts at most ${MAX_RUN_EVIDENCE_BATCH_IDS} run ids.`);
+  }
+  return unique;
 }
 
 function normalizeEvidenceListLimit(limit) {
@@ -279,8 +296,8 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async getTestRun(ctx, id) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async getTestRun(ctx, id, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${TEST_RUN_COLUMNS}
            FROM test_runs
@@ -355,8 +372,8 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async updateTestRun(ctx, id, patch) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async updateTestRun(ctx, id, patch, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const sets = [];
         const params = [];
         let paramIndex = 1;
@@ -486,11 +503,11 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async appendEvent(ctx, record) {
+    async appendEvent(ctx, record, options = {}) {
       const tenantId = ctx.tenantId;
       const metadataJson = JSON.stringify(asObject(record.metadata ?? record.metadata_json));
 
-      return withTenantContext(pool, tenantId, async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO events (
              id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
@@ -586,7 +603,7 @@ export function createValidationEvidenceRepository(pool) {
 
     async listRunEvents(ctx, runId, options = {}) {
       const boundedLimit = normalizeRunEventsListLimit(options.limit);
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const params = [ctx.tenantId, runId];
         const conditions = ['tenant_id = $1', 'test_run_id = $2'];
         let paramIndex = 3;
@@ -617,7 +634,96 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async appendProbeResultEventIdempotent(ctx, record) {
+
+    /**
+     * Load the state-readiness verdict/event slice without per-run repository calls.
+     *
+     * Both parameterized statements use one tenant transaction client. Verdict selection is
+     * deterministic even for restored pre-uniqueness data: the newest `(created_at, id)` wins
+     * for each requested run, while results retain requested-run order. Event rows preserve the
+     * existing oldest-first per-run order and the existing 1,000-row per-run ceiling. The caller
+     * remains responsible for trusted-producer filtering.
+     */
+    async loadRunEvidenceBatch(ctx, selection = {}, options = {}) {
+      const runIds = normalizeRunIdBatch(selection.runIds, 'loadRunEvidenceBatch.runIds');
+      const baseEventRunIds = normalizeRunIdBatch(
+        selection.eventRunIds,
+        'loadRunEvidenceBatch.eventRunIds',
+      );
+      const eventLimitPerRun = normalizeRunEventsListLimit(selection.eventLimitPerRun);
+
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        let verdicts = [];
+        if (runIds.length > 0) {
+          const { rows } = await client.query(
+            `WITH selected(run_id, ordinal) AS (
+               SELECT run_id, ordinal
+               FROM unnest($2::text[]) WITH ORDINALITY AS requested(run_id, ordinal)
+             )
+             SELECT latest.*
+             FROM selected
+             JOIN LATERAL (
+               SELECT ${VERDICT_COLUMNS}
+               FROM verdicts
+               WHERE tenant_id = $1 AND test_run_id = selected.run_id
+               ORDER BY created_at DESC, id DESC
+               LIMIT 1
+             ) latest ON TRUE
+             ORDER BY selected.ordinal`,
+            [ctx.tenantId, runIds],
+          );
+          verdicts = rows.map(mapVerdictRow);
+        }
+
+        const eventRunIds = new Set(baseEventRunIds);
+        for (const verdict of verdicts) {
+          if (verdict.evidence_ids.length > 0) eventRunIds.add(verdict.test_run_id);
+        }
+        if (eventRunIds.size > MAX_RUN_EVIDENCE_BATCH_IDS) {
+          throw new RangeError(
+            `loadRunEvidenceBatch event selection accepts at most ${MAX_RUN_EVIDENCE_BATCH_IDS} run ids.`,
+          );
+        }
+
+        let events = [];
+        if (eventRunIds.size > 0) {
+          const orderedEventRunIds = [...baseEventRunIds];
+          const orderedEventRunIdSet = new Set(orderedEventRunIds);
+          for (const runId of runIds) {
+            if (eventRunIds.has(runId) && !orderedEventRunIdSet.has(runId)) {
+              orderedEventRunIds.push(runId);
+              orderedEventRunIdSet.add(runId);
+            }
+          }
+          const { rows } = await client.query(
+            `WITH selected(run_id, ordinal) AS (
+               SELECT run_id, ordinal
+               FROM unnest($2::text[]) WITH ORDINALITY AS requested(run_id, ordinal)
+             ), ranked AS (
+               SELECT events.*, selected.ordinal,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY events.test_run_id
+                        ORDER BY events.timestamp
+                      ) AS per_run_position
+               FROM selected
+               JOIN events
+                 ON events.tenant_id = $1
+                AND events.test_run_id = selected.run_id
+             )
+             SELECT ${EVENT_COLUMNS}
+             FROM ranked
+             WHERE per_run_position <= $3
+             ORDER BY ordinal, timestamp`,
+            [ctx.tenantId, orderedEventRunIds, eventLimitPerRun],
+          );
+          events = rows.map(mapEventRow);
+        }
+
+        return { verdicts, events };
+      });
+    },
+
+    async appendProbeResultEventIdempotent(ctx, record, options = {}) {
       if (record.test_run_id == null || record.test_run_id === '') {
         throw new Error('appendProbeResultEventIdempotent requires record.test_run_id');
       }
@@ -638,7 +744,7 @@ export function createValidationEvidenceRepository(pool) {
       const metadataJson = JSON.stringify(asObject(record.metadata ?? record.metadata_json));
       const signalType = 'probe_result';
 
-      return withTenantContext(pool, tenantId, async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO events (
              id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
@@ -658,6 +764,13 @@ export function createValidationEvidenceRepository(pool) {
              producer_kind = EXCLUDED.producer_kind,
              timestamp = EXCLUDED.timestamp,
              metadata_json = EXCLUDED.metadata_json
+           WHERE events.target_id IS NOT DISTINCT FROM EXCLUDED.target_id
+             AND events.check_id IS NOT DISTINCT FROM EXCLUDED.check_id
+             AND (
+               events.metadata_json->>'probe_job_id' IS NULL
+               OR events.metadata_json->>'probe_job_id'
+                 = EXCLUDED.metadata_json->>'probe_job_id'
+             )
            RETURNING ${EVENT_COLUMNS}`,
           [
             record.id,
@@ -680,15 +793,27 @@ export function createValidationEvidenceRepository(pool) {
     },
 
     /**
-     * Upsert the current WAF/CDN edge detection for a target.
-     * `uniq_target_edge_detection_target` keeps exactly one current row per target.
-     * Accepts an optional caller transaction client so the write can join probe-result ingest.
+     * Refresh the durable WAF/CDN edge detection for a target.
+     *
+     * Postgres twin of `src/services/targetEdgeDetectionStore.mjs`. Runs on the probe-ingest
+     * transaction client so the detection and the probe event it was derived from commit or
+     * roll back together. `uniq_target_edge_detection_target` keeps exactly one current row
+     * per (tenant_id, target_id); a re-run updates in place.
+     *
+     * Column values must come from `edgeDetectionRowFields()` — label-only evidence, never raw
+     * headers, cookies, or block-page bodies.
      */
     async upsertTargetEdgeDetection(ctx, record, options = {}) {
       const tenantId = ctx.tenantId;
-      if (!tenantId || !record?.id || !record?.target_id || !record?.target_group_id) return null;
+      if (
+        !tenantId
+        || !record?.id
+        || !record?.target_id
+        || !record?.target_group_id
+        || !record?.test_run_id
+      ) return null;
 
-      const runQuery = async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO target_edge_detections (
              id, tenant_id, target_group_id, target_id, test_run_id, status, reason,
@@ -696,14 +821,22 @@ export function createValidationEvidenceRepository(pool) {
              cdn_status, cdn_provider, cdn_type, cdn_providers,
              confidence, conflicting_vendor_signals, corpus_version, evidence_json, observed_at
            )
-           VALUES (
-             $1, $2, $3, $4, $5, $6, $7,
+           SELECT
+             $1, $2, authoritative_run.target_group_id, authoritative_run.target_id,
+             authoritative_run.id, $6, $7,
              $8, $9, $10, $11,
              $12, $13, $14, $15,
              $16, $17, $18, $19::jsonb, $20::timestamptz
-           )
+           FROM test_runs authoritative_run
+           JOIN targets authoritative_target
+             ON authoritative_target.tenant_id = authoritative_run.tenant_id
+            AND authoritative_target.target_group_id = authoritative_run.target_group_id
+            AND authoritative_target.id = authoritative_run.target_id
+           WHERE authoritative_run.tenant_id = $2
+             AND authoritative_run.id = $5
+             AND authoritative_run.target_group_id = $3
+             AND authoritative_run.target_id = $4
            ON CONFLICT (tenant_id, target_id) DO UPDATE SET
-             target_group_id = EXCLUDED.target_group_id,
              test_run_id = EXCLUDED.test_run_id,
              status = EXCLUDED.status,
              reason = EXCLUDED.reason,
@@ -721,6 +854,8 @@ export function createValidationEvidenceRepository(pool) {
              evidence_json = EXCLUDED.evidence_json,
              observed_at = EXCLUDED.observed_at,
              updated_at = NOW()
+           WHERE target_edge_detections.target_group_id = EXCLUDED.target_group_id
+             AND target_edge_detections.target_id = EXCLUDED.target_id
            RETURNING id, target_id, target_group_id, status, updated_at`,
           [
             record.id,
@@ -746,18 +881,44 @@ export function createValidationEvidenceRepository(pool) {
           ],
         );
         return rows[0] ?? null;
-      };
-
-      return options.client
-        ? runQuery(options.client)
-        : withTenantContext(pool, tenantId, runQuery);
+      });
     },
 
-    async appendEvidence(ctx, record) {
+    async appendEvidence(ctx, record, options = {}) {
       const tenantId = ctx.tenantId;
       const metadataJson = JSON.stringify(asObject(record.metadata ?? record.metadata_json));
 
-      return withTenantContext(pool, tenantId, async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
+        if (options.idempotentByRelatedEvent === true) {
+          if (record.related_event_id == null || record.related_event_id === '') {
+            throw new Error(
+              'appendEvidence idempotentByRelatedEvent requires record.related_event_id',
+            );
+          }
+          const identity = [
+            tenantId,
+            record.test_run_id ?? null,
+            record.label ?? null,
+            record.related_event_id,
+          ];
+          await client.query(
+            'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+            [`evidence_related_event:${JSON.stringify(identity)}`],
+          );
+          const existing = await client.query(
+            `SELECT ${EVIDENCE_COLUMNS}
+             FROM evidence_vault
+             WHERE tenant_id = $1
+               AND test_run_id IS NOT DISTINCT FROM $2
+               AND label IS NOT DISTINCT FROM $3
+               AND related_event_id = $4
+             ORDER BY created_at
+             LIMIT 1`,
+            identity,
+          );
+          if (existing.rows[0]) return mapEvidenceRow(existing.rows[0]);
+        }
+
         const { rows } = await client.query(
           `INSERT INTO evidence_vault (
              id, tenant_id, test_run_id, label, metadata_json, related_event_id, created_at
@@ -849,20 +1010,22 @@ export function createValidationEvidenceRepository(pool) {
      *
      * @returns {Promise<object>} the stored verdict, never null
      */
-    async createVerdictIfAbsent(ctx, record) {
+    async createVerdictIfAbsent(ctx, record, options = {}) {
       const tenantId = ctx.tenantId;
       const evidenceIds = asStringArray(record.evidence_ids);
       const placementJson = placementConfidenceJson(record);
 
-      return withTenantContext(pool, tenantId, async (client) => {
-        await client.query(
-          'SELECT pg_advisory_xact_lock(hashtext($1))',
-          [`test_run_mutation:${record.test_run_id}`],
-        );
-        await client.query(
-          'SELECT pg_advisory_xact_lock(hashtext($1))',
-          [`kill_switch_state:${tenantId}`],
-        );
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
+        if (options.mutationLocksHeld !== true) {
+          await client.query(
+            'SELECT pg_advisory_xact_lock(hashtext($1))',
+            [`test_run_mutation:${record.test_run_id}`],
+          );
+          await client.query(
+            'SELECT pg_advisory_xact_lock(hashtext($1))',
+            [`kill_switch_state:${tenantId}`],
+          );
+        }
         const killSwitchResult = await client.query(
           `SELECT active FROM soc_kill_switch WHERE tenant_id = $1`,
           [tenantId],
@@ -978,90 +1141,60 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async withRunMutationLock(ctx, runId, callback) {
+    async withRunMutationLock(ctx, runId, callback, options = {}) {
       const lockKey = `test_run_mutation:${runId}`;
       const killSwitchLockKey = `kill_switch_state:${ctx.tenantId}`;
-      const client = await pool.connect();
-      let runLockAcquired = false;
-      let killSwitchLockAcquired = false;
-      try {
-        const { rows } = await client.query(
-          'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
-          [lockKey],
-        );
-        runLockAcquired = rows[0]?.acquired === true;
-        if (!runLockAcquired) return { acquired: false, result: null };
-        await client.query('SELECT pg_advisory_lock(hashtext($1))', [killSwitchLockKey]);
-        killSwitchLockAcquired = true;
-        return { acquired: true, result: await callback() };
-      } finally {
-        if (killSwitchLockAcquired) {
-          try {
-            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [killSwitchLockKey]);
-          } catch {
-            // locks are released when the session ends; do not mask the original error
-          }
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        if (options.wait === true) {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockKey]);
+        } else {
+          const { rows } = await client.query(
+            'SELECT pg_try_advisory_xact_lock(hashtext($1)) AS acquired',
+            [lockKey],
+          );
+          if (rows[0]?.acquired !== true) return { acquired: false, result: null };
         }
-        if (runLockAcquired) {
-          try {
-            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
-          } catch {
-            // locks are released when the session ends; do not mask the original error
-          }
-        }
-        client.release();
-      }
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [killSwitchLockKey]);
+        return { acquired: true, result: await callback(client) };
+      });
     },
 
     /**
-     * Serialize finalization of one run across concurrent sweeper instances.
+     * Serialize one finalization inside the transaction that already owns the tenant audit lock.
      *
-     * Uses a *session*-level try-lock rather than `pg_advisory_xact_lock`: finalization
-     * spans many independent transactions (each repository call opens its own), so a
-     * transaction-scoped lock would be released before the finalize work began and would
-     * provide no exclusion at all. The lock is held on a dedicated client for the whole
-     * callback and always released in `finally`.
+     * The caller must supply that exact client. Requiring it is deliberate: falling back to the
+     * pool here can deadlock a max=1 pool and would split finalization reads/writes across lock
+     * scopes. The blocking run lock preserves global mutation ordering; the kill-switch lock is
+     * acquired next, matching every other run mutation path. Both remain held until the outer
+     * tenant-audit transaction commits or rolls back.
      *
-     * The key is namespaced (`verdict_finalize:<runId>`) so it cannot collide with the
-     * `hashtext(tenant_id)` locks taken by the audit/retention repositories — a collision
-     * there would block the audit append made from inside this callback on another client.
-     *
-     * Correctness does not rest on this lock: `uniq_verdict_per_test_run` plus
-     * `ON CONFLICT DO NOTHING` guarantee a single verdict even without it. The lock
-     * only stops two sweepers doing redundant, discarded work.
-     *
-     * @param {{ tenantId: string }} _ctx
+     * @param {{ tenantId: string }} ctx
      * @param {string} runId
-     * @param {() => Promise<T>} callback
+     * @param {(client: import('pg').PoolClient) => Promise<T>} callback
+     * @param {{ client?: import('pg').PoolClient }} [options]
      * @returns {Promise<{ acquired: boolean, result: T | null }>}
      * @template T
      */
-    async withRunFinalizationLock(_ctx, runId, callback) {
-      const lockKey = `verdict_finalize:${runId}`;
-      const client = await pool.connect();
-      let acquired = false;
-      try {
-        const { rows } = await client.query(
-          'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
-          [lockKey],
+    async withRunFinalizationLock(ctx, runId, callback, options = {}) {
+      if (!options.client) {
+        throw new Error(
+          'withRunFinalizationLock requires the tenant audit transaction client.',
         );
-        acquired = rows[0]?.acquired === true;
-        if (!acquired) return { acquired: false, result: null };
-        return { acquired: true, result: await callback() };
-      } finally {
-        if (acquired) {
-          try {
-            await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
-          } catch {
-            // lock is released when the session ends; do not mask the original error
-          }
-        }
-        client.release();
       }
+      const client = options.client;
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [`test_run_mutation:${runId}`],
+      );
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [`kill_switch_state:${ctx.tenantId}`],
+      );
+      return { acquired: true, result: await callback(client) };
     },
 
-    async getVerdictForRun(ctx, runId) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async getVerdictForRun(ctx, runId, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${VERDICT_COLUMNS}
            FROM verdicts
@@ -1072,8 +1205,8 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async findOpenFinding(ctx, { target_group_id, target_id, check_id }) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+    async findOpenFinding(ctx, { target_group_id, target_id, check_id }, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${FINDING_COLUMNS}
            FROM findings
@@ -1128,7 +1261,7 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
-    async upsertOpenFindingFromVerdict(ctx, record) {
+    async upsertOpenFindingFromVerdict(ctx, record, options = {}) {
       if (record.status !== undefined && record.status !== 'open') {
         throw new Error(
           `upsertOpenFindingFromVerdict only accepts open findings; got status ${JSON.stringify(record.status)}`,
@@ -1140,17 +1273,42 @@ export function createValidationEvidenceRepository(pool) {
       const status = 'open';
       const updatedAt = record.updated_at ?? new Date().toISOString();
 
-      return withTenantContext(pool, tenantId, async (client) => {
+      return runWithTenantClient(pool, tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO findings (
              id, tenant_id, target_group_id, target_id, test_run_id, check_id, title, severity,
              status, evidence_ids, notes, remediation_template, verdict_id, last_verdict_id,
              assignee, created_at, updated_at
            )
-           VALUES (
+           SELECT
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
              $16::timestamptz, $17::timestamptz
-           )
+           FROM verdicts incoming
+           WHERE incoming.tenant_id = $2
+             AND incoming.id = $14
+             AND incoming.test_run_id = $5
+             AND incoming.target_id IS NOT DISTINCT FROM $4
+             AND incoming.check_id IS NOT DISTINCT FROM $6
+             AND NOT EXISTS (
+               SELECT 1
+               FROM findings prior
+               LEFT JOIN verdicts prior_verdict
+                 ON prior_verdict.tenant_id = prior.tenant_id
+                AND prior_verdict.id = COALESCE(prior.last_verdict_id, prior.verdict_id)
+               WHERE prior.tenant_id = $2
+                 AND prior.target_group_id IS NOT DISTINCT FROM $3
+                 AND prior.target_id IS NOT DISTINCT FROM $4
+                 AND prior.check_id IS NOT DISTINCT FROM $6
+                 AND (
+                   prior.verdict_id = $14
+                   OR prior.last_verdict_id = $14
+                   OR prior_verdict.created_at > incoming.created_at
+                   OR (
+                     prior_verdict.created_at = incoming.created_at
+                     AND prior_verdict.id >= incoming.id
+                   )
+                 )
+             )
            ON CONFLICT (tenant_id, target_group_id, target_id, check_id) WHERE status = 'open'
            DO UPDATE SET
              test_run_id = EXCLUDED.test_run_id,
@@ -1161,6 +1319,23 @@ export function createValidationEvidenceRepository(pool) {
              remediation_template = EXCLUDED.remediation_template,
              last_verdict_id = EXCLUDED.last_verdict_id,
              updated_at = EXCLUDED.updated_at
+           WHERE EXISTS (
+             SELECT 1
+             FROM verdicts incoming
+             LEFT JOIN verdicts incumbent
+               ON incumbent.tenant_id = findings.tenant_id
+              AND incumbent.id = COALESCE(findings.last_verdict_id, findings.verdict_id)
+             WHERE incoming.tenant_id = findings.tenant_id
+               AND incoming.id = EXCLUDED.last_verdict_id
+               AND (
+                 incumbent.id IS NULL
+                 OR incoming.created_at > incumbent.created_at
+                 OR (
+                   incoming.created_at = incumbent.created_at
+                   AND incoming.id > incumbent.id
+                 )
+               )
+           )
            RETURNING ${FINDING_COLUMNS}`,
           [
             record.id,
@@ -1182,7 +1357,7 @@ export function createValidationEvidenceRepository(pool) {
             updatedAt,
           ],
         );
-        return mapFindingRow(rows[0]);
+        return mapFindingRow(rows[0] ?? null);
       });
     },
 
@@ -1252,8 +1427,20 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
+    async countOpenFindings(ctx, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT COUNT(*)::int AS open_count
+           FROM findings
+           WHERE tenant_id = $1 AND status = 'open'`,
+          [ctx.tenantId],
+        );
+        return Number(rows[0]?.open_count ?? 0);
+      });
+    },
+
     async listFindings(ctx, options = {}) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const params = [ctx.tenantId];
         const conditions = ['tenant_id = $1'];
         let paramIndex = 2;
@@ -1273,6 +1460,11 @@ export function createValidationEvidenceRepository(pool) {
           params.push(options.test_run_id);
           paramIndex += 1;
         }
+        if (options.check_id != null && options.check_id !== '') {
+          conditions.push(`check_id = $${paramIndex}`);
+          params.push(options.check_id);
+          paramIndex += 1;
+        }
 
         const limit = Number(options.limit);
         let limitClause = '';
@@ -1281,12 +1473,13 @@ export function createValidationEvidenceRepository(pool) {
           limitClause = ` LIMIT $${paramIndex}`;
           paramIndex += 1;
         }
+        const lockClause = options.forUpdate === true ? ' FOR UPDATE' : '';
 
         const { rows } = await client.query(
           `SELECT ${FINDING_COLUMNS}
            FROM findings
            WHERE ${conditions.join(' AND ')}
-           ORDER BY created_at DESC${limitClause}`,
+           ORDER BY created_at DESC${limitClause}${lockClause}`,
           params,
         );
         return rows.map(mapFindingRow);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -162,9 +163,9 @@ export function productionOidcPreflightEnv() {
     ASTRANULL_OIDC_ISSUER: 'https://idp.example/oauth2/default',
     ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
     ASTRANULL_OIDC_JWKS_URL: 'https://idp.example/oauth2/default/v1/keys',
-    ASTRANULL_SECRET_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
-    ASTRANULL_DATABASE_URL: 'postgresql://preflight:secret@db.example:5432/astranull',
-    ASTRANULL_PROBE_WORKER_SECRET: 'preflight-probe-worker-secret-32-chars!!',
+    ASTRANULL_SECRET_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+    ASTRANULL_DATABASE_URL: `postgresql://preflight:${randomBytes(24).toString('base64url')}@db.example:5432/astranull`,
+    ASTRANULL_PROBE_WORKER_SECRET: randomBytes(32).toString('base64url'),
   };
 }
 

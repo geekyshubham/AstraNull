@@ -149,6 +149,45 @@ function jobForWorkerResponse(job) {
 }
 
 /**
+ * Structural half of the reciprocal ownership challenge binding.
+ *
+ * Open/active status is deliberately enforced by the lease query, while this predicate also
+ * applies to terminal reads and transitions so an exact completed retry can be recognized after
+ * verification closure without allowing a malformed historical row to reconcile.
+ */
+function reciprocalOwnershipJobBindingSql(jobAlias) {
+  return `(
+    (
+      ${jobAlias}.check_id <> 'ownership.challenge'
+      AND ${jobAlias}.ownership_verification_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ownership_verifications ordinary_binding
+        WHERE ordinary_binding.tenant_id = ${jobAlias}.tenant_id
+          AND ordinary_binding.probe_job_id = ${jobAlias}.id
+      )
+    )
+    OR (
+      ${jobAlias}.check_id = 'ownership.challenge'
+      AND ${jobAlias}.ownership_verification_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM ownership_verifications binding
+        WHERE binding.tenant_id = ${jobAlias}.tenant_id
+          AND binding.id = ${jobAlias}.ownership_verification_id
+          AND binding.probe_job_id = ${jobAlias}.id
+          AND ${jobAlias}.test_run_id = binding.id
+          AND ${jobAlias}.target_id = binding.agent_id
+          AND ${jobAlias}.nonce_hash = binding.challenge_nonce_hash
+          AND ${jobAlias}.target_descriptor_json->>'kind' = 'fqdn'
+          AND lower(btrim(${jobAlias}.target_descriptor_json->>'value'))
+            = lower(btrim(binding.declared_fqdn))
+      )
+    )
+  )`;
+}
+
+/**
  * @param {import('pg').Pool} pool
  */
 export function createProbeJobRepository(pool) {
@@ -170,6 +209,21 @@ export function createProbeJobRepository(pool) {
       const leasedAt = options.leasedAt ?? new Date().toISOString();
 
       return runWithTenantClient(pool, tenantId, options.client, async (client) => {
+        // This is the authoritative lease gate. The service-level read is only an inexpensive
+        // precheck: activation and leasing serialize on this exact key, then leasing re-reads
+        // the flag on the lock-holding transaction before it can mutate a job.
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtext($1))',
+          [`kill_switch_state:${tenantId}`],
+        );
+        const killSwitchResult = await client.query(
+          `SELECT active
+           FROM soc_kill_switch
+           WHERE tenant_id = $1`,
+          [tenantId],
+        );
+        if (killSwitchResult.rows[0]?.active === true) return [];
+
         const { rows } = await client.query(
           `WITH picked AS (
              SELECT candidate.id, candidate.status AS prior_status
@@ -179,6 +233,7 @@ export function createProbeJobRepository(pool) {
                  candidate.status = 'pending'
                  OR (candidate.status = 'leased' AND candidate.leased_at < now() - ${LEASE_TTL_INTERVAL_SQL})
                )
+               AND ${reciprocalOwnershipJobBindingSql('candidate')}
                AND (
                  (candidate.ownership_verification_id IS NULL AND EXISTS (
                    SELECT 1
@@ -244,8 +299,9 @@ export function createProbeJobRepository(pool) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${PROBE_JOB_COLUMNS}
-           FROM probe_jobs
-           WHERE tenant_id = $1 AND test_run_id = $2
+           FROM probe_jobs AS j
+           WHERE j.tenant_id = $1 AND j.test_run_id = $2
+             AND ${reciprocalOwnershipJobBindingSql('j')}
            ORDER BY created_at
            LIMIT 2`,
           [ctx.tenantId, testRunId],
@@ -261,8 +317,9 @@ export function createProbeJobRepository(pool) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
           `SELECT ${PROBE_JOB_COLUMNS}
-           FROM probe_jobs
-           WHERE tenant_id = $1 AND id = $2`,
+           FROM probe_jobs AS j
+           WHERE j.tenant_id = $1 AND j.id = $2
+             AND ${reciprocalOwnershipJobBindingSql('j')}`,
           [ctx.tenantId, id],
         );
         return mapProbeJobRow(rows[0] ?? null);
@@ -277,6 +334,7 @@ export function createProbeJobRepository(pool) {
                leased_at = $4::timestamptz,
                leased_by = $3
            WHERE j.tenant_id = $1 AND j.id = $2 AND j.status = 'pending'
+             AND ${reciprocalOwnershipJobBindingSql('j')}
              AND (
                (j.ownership_verification_id IS NULL AND EXISTS (
                  SELECT 1 FROM test_runs tr
@@ -363,12 +421,13 @@ export function createProbeJobRepository(pool) {
         const expectedLeasedBy = expected.leased_by ?? null;
         const expectedLeasedAt = expected.leased_at ?? null;
         const { rows } = await client.query(
-          `UPDATE probe_jobs
+          `UPDATE probe_jobs AS j
            SET status = 'leased', leased_at = $4::timestamptz, leased_by = $3
-           WHERE tenant_id = $1 AND id = $2
-             AND status = $5
-             AND leased_by IS NOT DISTINCT FROM $6
-             AND leased_at IS NOT DISTINCT FROM $7::timestamptz
+           WHERE j.tenant_id = $1 AND j.id = $2
+             AND j.status = $5
+             AND j.leased_by IS NOT DISTINCT FROM $6
+             AND j.leased_at IS NOT DISTINCT FROM $7::timestamptz
+             AND ${reciprocalOwnershipJobBindingSql('j')}
            RETURNING ${PROBE_JOB_COLUMNS}`,
           [ctx.tenantId, id, workerId, leasedAt, expectedStatus, expectedLeasedBy, expectedLeasedAt],
         );
@@ -379,13 +438,14 @@ export function createProbeJobRepository(pool) {
     async markJobCompleted(ctx, id, completedAt, lease = {}, options = {}) {
       return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const { rows } = await client.query(
-          `UPDATE probe_jobs
+          `UPDATE probe_jobs AS j
            SET status = 'completed',
                completed_at = $3::timestamptz
-           WHERE tenant_id = $1 AND id = $2
-             AND status = 'leased'
-             AND leased_by = $4
-             AND leased_at = $5::timestamptz
+           WHERE j.tenant_id = $1 AND j.id = $2
+             AND j.status = 'leased'
+             AND j.leased_by = $4
+             AND j.leased_at = $5::timestamptz
+             AND ${reciprocalOwnershipJobBindingSql('j')}
            RETURNING ${PROBE_JOB_COLUMNS}`,
           [ctx.tenantId, id, completedAt, lease.workerId, lease.leasedAt],
         );
@@ -432,7 +492,8 @@ export function createProbeJobRepository(pool) {
           [JSON.stringify([tenantId, record.test_run_id])],
         );
         const existingResult = await client.query(
-          `SELECT ${PROBE_JOB_COLUMNS}
+          `SELECT ${PROBE_JOB_COLUMNS},
+                  ${reciprocalOwnershipJobBindingSql('probe_jobs')} AS ownership_binding_valid
            FROM probe_jobs
            WHERE tenant_id = $1 AND test_run_id = $2
            ORDER BY created_at
@@ -442,8 +503,12 @@ export function createProbeJobRepository(pool) {
         if (existingResult.rows.length > 1) {
           throw new Error('multiple_probe_jobs_for_test_run');
         }
-        const existing = mapProbeJobRow(existingResult.rows[0] ?? null);
+        const existingRow = existingResult.rows[0] ?? null;
+        const existing = mapProbeJobRow(existingRow);
         if (existing) {
+          if (existingRow.ownership_binding_valid !== true) {
+            throw new Error('probe_job_ownership_binding_conflict');
+          }
           const sameBinding = existing.check_id === record.check_id
             && (existing.target_id ?? null) === (record.target_id ?? null)
             && (existing.ownership_verification_id ?? null) === ownershipVerificationId;

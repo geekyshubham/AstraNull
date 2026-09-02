@@ -1,18 +1,18 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { ShieldCheck } from 'lucide-react';
+import { Badge } from '../ui/badge';
 import { AnchorButton, Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Tabs } from '../ui/tabs';
-import { agentInstallApiBase } from '../../lib/agent-helpers';
-import { resolveAgentReleaseMetadata } from '../../lib/agent-release-metadata';
-import type { PortalData } from '../../lib/types';
+import { resolveAgentInstallRelease, type AgentInstallRelease } from '../../lib/agent-install-release.mjs';
+import type { DataItem } from '../../lib/types';
 
 const INSTALL_TABS = [
-  { id: 'linux', label: 'Linux one-liner' },
+  { id: 'tarball', label: 'Signed tarball prep' },
   { id: 'container', label: 'Container image' },
   { id: 'helm', label: 'Kubernetes/Helm' },
   { id: 'deb', label: 'Debian/Ubuntu' },
   { id: 'rpm', label: 'RHEL/Fedora' },
-  { id: 'tarball', label: 'Air-gapped tarball' },
   { id: 'puppet', label: 'Puppet' },
   { id: 'ansible', label: 'Ansible' }
 ] as const;
@@ -29,177 +29,197 @@ function installPanelId(tabId: InstallTabId) {
   return `agent-install-panel-${tabId}`;
 }
 
-function ReleaseMetaField({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <span>{label}</span>
-      {children}
-    </div>
-  );
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function InstallCodeBlock({ tabId, label, code }: { tabId: InstallTabId; label: string; code: string }) {
-  return (
-    <pre
-      className="codeblock"
-      id={installPanelId(tabId)}
-      role="tabpanel"
-      aria-label={`${label} install commands`}
-      tabIndex={0}
-      style={INSTALL_CODE_STYLE}
-    >
-      {code}
-    </pre>
-  );
-}
+function buildDownloadPreparationSnippet(release: AgentInstallRelease | null, tabId: InstallTabId) {
+  if (!release || tabId !== 'tarball') return '';
+  return `set -eu
+umask 077
+mkdir -p astranull-agent-download
+cd astranull-agent-download
 
-function buildInstallSnippet(
-  tabId: InstallTabId,
-  apiBase: string,
-  installToken: string,
-  release: ReturnType<typeof resolveAgentReleaseMetadata>
-): string {
-  switch (tabId) {
-    case 'linux':
-      return `curl -fsSL ${apiBase}/agents/install.sh \\
-  | sudo ASTRANULL_API_URL="${apiBase}" \\
-       ASTRANULL_BOOTSTRAP_TOKEN="${installToken}" bash`;
-    case 'container':
-      return `docker run -d --name astranull-agent \\
-  -e ASTRANULL_API_URL="${apiBase}" \\
-  -e ASTRANULL_BOOTSTRAP_TOKEN="${installToken}" \\
-  ${release.packageName}:latest`;
-    case 'helm':
-      return `helm upgrade --install astranull-agent ./charts/agent \\
-  --namespace astranull --create-namespace \\
-  --set apiUrl="${apiBase}" \\
-  --set image.tag="${release.version}" \\
-  --set bootstrapToken="${installToken}"`;
-    case 'deb':
-      return `curl -fsSL -O ${apiBase}/agents/${release.packageName}_${release.version}_amd64.deb
-sudo dpkg -i ${release.packageName}_${release.version}_amd64.deb
-sudo install -m 0640 /dev/stdin /etc/astranull/agent.env <<'EOF'
-ASTRANULL_API_URL=${apiBase}
-ASTRANULL_BOOTSTRAP_TOKEN=${installToken}
-EOF
-sudo systemctl enable --now astranull-agent`;
-    case 'rpm':
-      return `curl -fsSL -O ${apiBase}/agents/${release.packageName}-${release.version}.noarch.rpm
-sudo dnf install ./${release.packageName}-${release.version}.noarch.rpm
-sudo systemctl enable --now astranull-agent`;
-    case 'tarball':
-      return `curl -fsSL -O ${apiBase}/agents/${release.packageName}-${release.version}.tar.gz
-curl -fsSL -O ${apiBase}/agents/${release.packageName}-${release.version}.manifest.json
-curl -fsSL -O ${apiBase}/agents/${release.packageName}-${release.version}.manifest.sig
-# Verify manifest signature, then extract to /opt/astranull`;
-    case 'puppet':
-      return `class { 'astranull::agent':
-  api_url       => '${apiBase}',
-  bootstrap     => Sensitive('${installToken}'),
-  package_digest => '${release.digest}',
-  outbound_only => true,
-}`;
-    case 'ansible':
-      return `- name: Install AstraNull agent
-  ansible.builtin.include_role:
-    name: astranull.agent
-  vars:
-    astranull_api_url: "${apiBase}"
-    astranull_bootstrap_token: "{{ vault_bootstrap_token }}"
-    astranull_package_digest: "${release.digest}"`;
-    default:
-      return '';
+# Fetch each accepted HTTPS URL exactly. curl does not follow redirects; non-2xx responses fail.
+download_exact() {
+  url="$1"
+  output="$2"
+  partial="\${output}.partial"
+  rm -f "$partial"
+  status="$(curl --fail --silent --show-error --proto '=https' \\
+    --output "$partial" --write-out '%{http_code}' "$url")" || {
+    rm -f "$partial"
+    return 1
   }
+  case "$status" in
+    2??) mv -f "$partial" "$output" ;;
+    *)
+      rm -f "$partial"
+      printf 'Download rejected: %s returned HTTP %s (redirects are not followed).\\n' "$url" "$status" >&2
+      return 1
+      ;;
+  esac
+}
+
+download_exact ${shellQuote(release.manifestUrl)} manifest.json
+download_exact ${shellQuote(release.signatureUrl)} manifest.json.sig
+download_exact ${shellQuote(release.artifactUrl)} ${shellQuote(release.artifactName)}
+printf '%s  %s\\n' ${shellQuote(release.digest)} ${shellQuote(release.artifactName)} | sha256sum --check --strict -
+
+read -r -s -p "Paste one-time bootstrap token: " ASTRANULL_TOKEN
+printf '\\n'
+sudo install -d -m 0700 /var/lib/astranull
+sudo install -m 0600 /dev/null /var/lib/astranull/bootstrap-token
+if ! printf '%s' "$ASTRANULL_TOKEN" | sudo tee /var/lib/astranull/bootstrap-token >/dev/null; then
+  unset ASTRANULL_TOKEN
+  exit 1
+fi
+unset ASTRANULL_TOKEN
+
+# STOP: checksum-verified download and token-file preparation only; the agent is not installed.
+# Signature verification is mandatory before extraction or installation. Use trusted Ed25519
+# SPKI material whose SHA-256 fingerprint is ${release.signingFingerprint}, then run the agent
+# verifier with manifest.json, manifest.json.sig, ${release.artifactName}, and expected version
+# ${release.version}. Do not extract or install when signature verification fails.`;
+}
+
+function ReleaseMetaField({ label, children }: { label: string; children: ReactNode }) {
+  return <div><span>{label}</span>{children}</div>;
 }
 
 export function AgentInstallMatrix({
-  data,
   tokenSecret,
   onCreateToken,
   createBusy,
-  actionsDisabled
+  actionsDisabled,
+  updateReleases,
+  trustKeys,
+  metadataLoading,
+  releaseLoadError,
+  trustKeyLoadError
 }: {
-  data: PortalData;
   tokenSecret: string;
   onCreateToken: () => void;
   createBusy: boolean;
   actionsDisabled: boolean;
+  updateReleases: DataItem[];
+  trustKeys: DataItem[];
+  metadataLoading: boolean;
+  releaseLoadError: string;
+  trustKeyLoadError: string;
 }) {
-  const [tab, setTab] = useState<InstallTabId>('linux');
-  const release = resolveAgentReleaseMetadata(data.releaseEvidence);
-  const apiBase = agentInstallApiBase();
-  const installToken = tokenSecret || '<BOOTSTRAP_TOKEN>';
-  const tabOptions = INSTALL_TABS.map((item) => ({ id: item.id, label: item.label }));
+  const [tab, setTab] = useState<InstallTabId>('tarball');
+  const [copyNotice, setCopyNotice] = useState('');
+  const resolution = useMemo(() => {
+    if (metadataLoading) return { release: null, reason: 'Loading signed release and trust metadata.' };
+    if (releaseLoadError || trustKeyLoadError) {
+      return { release: null, reason: [releaseLoadError, trustKeyLoadError].filter(Boolean).join(' ') };
+    }
+    return resolveAgentInstallRelease(updateReleases, trustKeys);
+  }, [metadataLoading, releaseLoadError, trustKeyLoadError, updateReleases, trustKeys]);
+  const release = resolution.release;
+  const snippet = useMemo(() => buildDownloadPreparationSnippet(release, tab), [release, tab]);
   const activeTab = INSTALL_TABS.find((item) => item.id === tab) ?? INSTALL_TABS[0];
 
-  const snippet = useMemo(
-    () => buildInstallSnippet(tab, apiBase, installToken, release),
-    [tab, apiBase, installToken, release]
-  );
+  async function copySnippet() {
+    if (!snippet) return;
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopyNotice('Download and token-preparation commands copied.');
+    } catch {
+      setCopyNotice('Copy failed. Select the commands and copy them manually.');
+    }
+  }
 
   return (
-    <Card>
+    <Card className="agent-install-matrix">
       <CardHeader>
-        <CardTitle>Deploy an agent</CardTitle>
-        <CardDescription>Outbound-only install paths. Release metadata is sourced from production release evidence records.</CardDescription>
+        <div>
+          <CardTitle>Install an optional observation agent</CardTitle>
+          <CardDescription>Prepare signed materials for an outbound-only observer. Core outside-in validation remains agentless; an agent adds internal or origin corroboration.</CardDescription>
+        </div>
+        <div className="row-actions" aria-label="Agent install safety boundaries">
+          <Badge tone="success">Outbound only</Badge>
+          <Badge tone="muted">Optional evidence</Badge>
+        </div>
       </CardHeader>
       <CardContent className="stack-tight">
-        <div className="release-metadata-bar kv-list kv-list--compact" aria-label="Agent release metadata">
-          <ReleaseMetaField label="Release">
-            <strong className="mono" title="From agent_install_matrix / agent_sbom_provenance evidence">
-              {release.version}
-            </strong>
-          </ReleaseMetaField>
-          <ReleaseMetaField label="Image digest">
-            <strong className="mono" title="Package SHA-256 from SBOM evidence">
-              {release.digest}
-            </strong>
-          </ReleaseMetaField>
-          <ReleaseMetaField label="Cosign">
-            <strong title="Signature status from release evidence">{release.cosignStatus}</strong>
-          </ReleaseMetaField>
-          <ReleaseMetaField label="SBOM">
-            {release.sbomUri !== '—' ? (
-              <AnchorButton size="sm" variant="ghost" href={release.sbomUri} aria-label="Open CycloneDX 1.5 SBOM">
-                CycloneDX 1.5
-              </AnchorButton>
-            ) : (
-              <strong>—</strong>
-            )}
-          </ReleaseMetaField>
-          <ReleaseMetaField label="Provenance">
-            {release.provenanceUri !== '—' ? (
-              <AnchorButton size="sm" variant="ghost" href={release.provenanceUri} aria-label="Open SLSA v1 provenance">
-                SLSA v1
-              </AnchorButton>
-            ) : (
-              <strong>—</strong>
-            )}
-          </ReleaseMetaField>
+        {release ? (
+          <div className="release-metadata-bar kv-list kv-list--compact" aria-label="Accepted signed agent release metadata">
+            <ReleaseMetaField label="Release"><strong className="mono">{release.version}</strong></ReleaseMetaField>
+            <ReleaseMetaField label="Artifact"><strong className="mono">{release.artifactName}</strong></ReleaseMetaField>
+            <ReleaseMetaField label="SHA-256"><strong className="mono" title={release.digest}>{release.digest}</strong></ReleaseMetaField>
+            <ReleaseMetaField label="Trust key"><strong className="mono" title={release.signingFingerprint}>{release.signingFingerprint}</strong></ReleaseMetaField>
+            <ReleaseMetaField label="Distribution">
+              <span className="row-actions">
+                <AnchorButton size="sm" variant="ghost" href={release.manifestUrl} aria-label={`Open signed manifest for agent release ${release.version}`}>Manifest</AnchorButton>
+                <AnchorButton size="sm" variant="ghost" href={release.signatureUrl} aria-label={`Open detached signature for agent release ${release.version}`}>Signature</AnchorButton>
+                <AnchorButton size="sm" variant="ghost" href={release.artifactUrl} aria-label={`Open tarball artifact for agent release ${release.version}`}>Artifact</AnchorButton>
+              </span>
+            </ReleaseMetaField>
+          </div>
+        ) : (
+          <div className="form-banner neutral" role="status" aria-live="polite">
+            Agent download preparation is unavailable. {resolution.reason}
+          </div>
+        )}
+        <div className="callout info" role="note">
+          <span className="callout-icon" aria-hidden="true"><ShieldCheck size={17} /></span>
+          <div className="callout-body">
+            <p className="callout-title">Observe-only boundary</p>
+            <p className="callout-desc">The agent never originates validation traffic, holds cloud credentials, or opens an inbound management port. Verify the accepted signature before extraction. Copying these commands only prepares a verified download on your host; it does not install the agent, and AstraNull performs no installation for you.</p>
+          </div>
         </div>
         <div className="row-actions page-toolbar">
           <Button
             loading={createBusy}
             disabled={actionsDisabled}
             onClick={onCreateToken}
-            aria-label="Create bootstrap token for agent install"
+            aria-label="Create one-time bootstrap token for agent download preparation"
           >
             Create bootstrap token
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={!snippet}
+            onClick={() => void copySnippet()}
+            aria-label={`Copy ${activeTab.label.toLowerCase()} commands`}
+          >
+            Copy commands
           </Button>
         </div>
         <Tabs
           value={tab}
-          options={tabOptions}
-          onChange={(value) => setTab(value as InstallTabId)}
+          options={INSTALL_TABS.map((item) => ({ id: item.id, label: item.label }))}
+          onChange={(value) => { setTab(value as InstallTabId); setCopyNotice(''); }}
           className="tabs-wrap"
+          ariaLabel="Agent installation packages"
           getPanelId={installPanelId}
         />
-        <InstallCodeBlock tabId={tab} label={activeTab.label} code={snippet} />
+        {snippet ? (
+          <pre
+            className="codeblock"
+            id={installPanelId(tab)}
+            role="tabpanel"
+            aria-label={`${activeTab.label} commands`}
+            tabIndex={0}
+            style={INSTALL_CODE_STYLE}
+          >
+            {snippet}
+          </pre>
+        ) : (
+          <div id={installPanelId(tab)} role="tabpanel" tabIndex={0} className="form-banner neutral">
+            {release
+              ? `${activeTab.label} distribution metadata is not published by the accepted release. No commands are available.`
+              : 'Commands remain disabled until an active signed tarball release and active tenant-approved trust key are available.'}
+          </div>
+        )}
         {tokenSecret ? (
-          <p className="muted" role="status">
-            One-time token shown. It will not be displayed again after refresh.
+          <p className="muted" role="status" aria-live="polite">
+            A one-time token is available in the protected token panel. The commands prompt for it interactively and write it to a mode-0600 file; they do not place it in argv.
           </p>
         ) : null}
+        {copyNotice ? <p className="muted" role="status" aria-live="polite">{copyNotice}</p> : null}
       </CardContent>
     </Card>
   );

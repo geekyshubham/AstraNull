@@ -261,27 +261,32 @@ export const ROUTE_BY_ID = new Map<RouteId, NavItem>(
 
 function routeIdFromHash(hash: string): RouteId | null {
   const raw = hash.replace(/^#/, '');
+  if (!raw) return null;
   const routePart = raw.includes('?') ? raw.slice(0, raw.indexOf('?')) : raw;
   return ROUTE_BY_ID.has(routePart as RouteId) ? routePart as RouteId : null;
 }
 
+/** Resolve only real React routes. Unknown hashes never inherit the pathname's dashboard. */
+export function resolvePortalRoute(pathname: string, hash = ''): RouteId {
+  if (hash.replace(/^#/, '')) return routeIdFromHash(hash) ?? 'not-found';
+
+  const pathRoute = pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+  if (pathname === '/internal/admin') return 'admin';
+  if (pathname === '/internal/soc') return 'internal-soc';
+  if (pathRoute === 'internal-soc.html') return 'internal-soc';
+  if (pathRoute === 'index.html' || pathRoute === 'app' || pathRoute === '') return 'dashboard';
+
+  const normalizedPathRoute = pathRoute.endsWith('.html') ? pathRoute.slice(0, -5) : pathRoute;
+  if (ROUTE_BY_ID.has(normalizedPathRoute as RouteId)) return normalizedPathRoute as RouteId;
+  return 'not-found';
+}
+
 export function getRouteFromHash(): RouteId {
-  return routeIdFromHash(window.location.hash) ?? 'dashboard';
+  return resolvePortalRoute(window.location.pathname, window.location.hash);
 }
 
 export function getRouteFromLocation(): RouteId {
-  const hashRoute = routeIdFromHash(window.location.hash);
-  if (hashRoute) return hashRoute;
-  const pathRoute = window.location.pathname.replace(/^\/+/, '').replace(/\/+$/, '');
-  if (window.location.pathname === '/internal/admin') return 'admin';
-  if (window.location.pathname === '/internal/soc') return 'internal-soc';
-  if (pathRoute === 'internal-soc.html') return 'internal-soc';
-  if (pathRoute === 'index.html') return 'dashboard';
-  const normalizedPathRoute = pathRoute.endsWith('.html') ? pathRoute.slice(0, -5) : pathRoute;
-  if (ROUTE_BY_ID.has(normalizedPathRoute as RouteId)) return normalizedPathRoute as RouteId;
-  if (ROUTE_BY_ID.has(pathRoute as RouteId)) return pathRoute as RouteId;
-  if (pathRoute === 'app' || pathRoute === '') return 'dashboard';
-  return 'dashboard';
+  return resolvePortalRoute(window.location.pathname, window.location.hash);
 }
 
 export const PLATFORM_PROMISE =

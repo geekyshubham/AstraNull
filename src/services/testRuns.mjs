@@ -13,7 +13,7 @@ import { newId } from '../lib/ids.mjs';
 import { enrichProbeMetadataWithWafCatalog } from '../lib/wafProductCatalog.mjs';
 import { getStore, persistStore } from '../store.mjs';
 import { enqueueAgentJob } from './agents.mjs';
-import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVerdict, withinCorrelationWindow } from './correlation.mjs';
+import { correlateExternalOnlyVerdict, correlateOpsReadinessVerdict, correlateVerdict, probeEventHasProbeIo, withinCorrelationWindow } from './correlation.mjs';
 import { upsertFindingFromVerdict } from './findings.mjs';
 import { executeOpsReadinessProbe, isOpsReadinessProbeKind } from '../lib/opsReadinessValidation.mjs';
 import { simulateProbeResult } from './probeStub.mjs';
@@ -374,6 +374,15 @@ export function maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
   const agent = boundOnlineAgentForRun(run);
   if (hasMatchingObservation(run)) {
     return finalizeVerdictIfReady(run, agent);
+  }
+  const group = store.targetGroups.find(
+    (g) => g.id === run.target_group_id && g.tenant_id === run.tenant_id,
+  );
+  if (group?.validation_mode === 'external_only') {
+    if (run.status === 'running') run.status = 'collecting';
+    const verdict = finalizeVerdictIfReady(run, agent, { agentObserved: false });
+    persistStore();
+    return verdict;
   }
   if (isCollectionWindowExpired(run)) {
     return maybeFinalizeCollectingRun(run);
@@ -1099,9 +1108,11 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
 
   const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
   const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
+  const probeKind = getCheckById(run.check_id)?.probe_profile?.kind ?? null;
+  const probeIoObserved = probeEventHasProbeIo(probeEvent);
 
   const result = externalOnly
-    ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior })
+    ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved })
     : correlateVerdict({
       externalResult,
       agentObserved,
@@ -1110,6 +1121,8 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
       agentBound: Boolean(
         agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
       ),
+      probeKind,
+      probeIoObserved,
     });
 
   const evidenceIds = store.events

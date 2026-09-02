@@ -4,7 +4,12 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { cn } from '../../lib/utils';
 
 const SELECT_MENU_MAX_HEIGHT = 280;
-const SELECT_MENU_GAP = 6;
+/**
+ * Must equal the rendered `.select-menu` top offset in `styles.css`, which resolves to
+ * `var(--space-2)` (8px). When this constant was smaller than the real offset, the computed
+ * max-height left the menu hanging past its boundary by the difference.
+ */
+const SELECT_MENU_GAP = 8;
 const SELECT_VIEWPORT_GUTTER = 8;
 
 export type SelectOption = {

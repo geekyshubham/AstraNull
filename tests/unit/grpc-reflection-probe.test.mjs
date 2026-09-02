@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { probeGrpcReflection } from '../../src/lib/capabilityProbes.mjs';
 import { buildProbeProfile, getCheckById } from '../../src/contracts/checks.mjs';
@@ -41,6 +42,15 @@ describe('grpc_reflection_probe (DET-021)', () => {
     assert.ok(check);
     assert.equal(check.probe_profile.kind, 'grpc_reflection_probe');
     assert.equal(check.probe_profile.max_requests, 1);
+  });
+
+  it('generated check library recognizes the gRPC reflection probe kind', () => {
+    const html = readFileSync(new URL('../../docs/check-library.html', import.meta.url), 'utf8');
+    assert.match(
+      html,
+      /<code>grpc_reflection_probe<\/code><\/td><td>One bounded TLS HTTP\/2 gRPC health or reflection request/,
+    );
+    assert.equal(html.includes('Probe kind: grpc_reflection_probe'), false);
   });
 
   it('sends one valid reflection frame and prefers trailer grpc-status', async () => {
@@ -160,5 +170,59 @@ describe('grpc_reflection_probe (DET-021)', () => {
   it('pins a real TLS HTTP/2 socket, preserves SNI/authority, and reads trailers', { timeout: 6000 }, async () => {
     const output = await runProtocolTransportFixture('grpc');
     assert.match(output.stdout, /grpc:ok/);
+  });
+});
+
+
+describe('grpc reflection synchronous accounting and hard deadline', () => {
+  it('initiates only after synchronous reservation', async () => {
+    const events = [];
+    const result = await probeGrpcReflection(makeJob(), {
+      beforeProbeIoAttempt: () => events.push('reserve'),
+      http2RequestFn: async () => {
+        events.push('io');
+        return h2Response();
+      },
+    });
+    assert.deepEqual(events, ['reserve', 'io']);
+    assert.equal(result.requests_sent, 1);
+  });
+
+  it('performs no HTTP/2 I/O when reservation fails', async () => {
+    const events = [];
+    const result = await probeGrpcReflection(makeJob(), {
+      beforeProbeIoAttempt: () => {
+        events.push('reserve');
+        throw Object.assign(new Error('cap exhausted'), {
+          code: 'signed_probe_request_budget_exceeded',
+        });
+      },
+      http2RequestFn: async () => {
+        events.push('io');
+        return h2Response();
+      },
+    });
+    assert.deepEqual(events, ['reserve']);
+    assert.equal(result.external_result, 'error');
+    assert.equal(result.metadata.error_class, 'signed_probe_request_budget_exceeded');
+    assert.equal(result.requests_sent, 0);
+  });
+
+  it('hard-times out a transport that ignores AbortSignal after exactly one reservation', { timeout: 1000 }, async () => {
+    const events = [];
+    const result = await probeGrpcReflection(makeJob({
+      constraints: { timeout_ms: 20, max_requests: 1, max_probe_requests: 1 },
+      probe_profile: { ...makeJob().probe_profile, timeout_ms: 20 },
+    }), {
+      beforeProbeIoAttempt: () => events.push('reserve'),
+      http2RequestFn: () => {
+        events.push('io');
+        return new Promise(() => {});
+      },
+    });
+    assert.deepEqual(events, ['reserve', 'io']);
+    assert.equal(result.external_result, 'timeout');
+    assert.equal(result.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(result.requests_sent, 1);
   });
 });

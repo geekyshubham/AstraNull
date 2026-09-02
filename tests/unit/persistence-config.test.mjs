@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
@@ -10,7 +10,10 @@ import {
   resolveProbeMode,
 } from '../../src/config.mjs';
 
-const TEST_ENC_KEY = 'a'.repeat(64);
+const TEST_ENC_KEY = randomBytes(32).toString('base64');
+const TEST_PROBE_SECRET = randomBytes(32).toString('base64url');
+const TEST_CONNECTOR_ENC_KEY = randomBytes(32).toString('hex');
+const TEST_DATABASE_URL = `postgres://user:${randomBytes(24).toString('base64url')}@localhost/astranull`;
 
 function setProductionOidcEnv() {
   process.env.ASTRANULL_AUTH_MODE = 'oidc-jwt';
@@ -71,9 +74,9 @@ describe('production persistence fail-closed', () => {
     setProductionOidcEnv();
     process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
     process.env.ASTRANULL_PROBE_MODE = 'signed-worker';
-    process.env.ASTRANULL_PROBE_WORKER_SECRET = 'p'.repeat(32);
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
-    process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
+    process.env.ASTRANULL_DATABASE_URL = TEST_DATABASE_URL;
     const cfg = loadRuntimeConfig();
     assert.equal(cfg.persistenceMode, 'postgres');
     assert.equal(cfg.databaseUrlConfigured, true);
@@ -87,6 +90,64 @@ describe('production persistence fail-closed', () => {
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
     const testCfg = loadRuntimeConfig();
     assert.equal(testCfg.persistenceMode, 'postgres');
+  });
+
+  it('validates every explicit signed-worker secret outside hosted/production too', () => {
+    const localBase = {
+      NODE_ENV: 'test',
+      ASTRANULL_NO_PERSIST: '1',
+      ASTRANULL_PROBE_MODE: 'signed-worker',
+    };
+    const cases = [
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString('hex'), 'hmac_secret_known_public'],
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index + 32)).toString('hex'), 'hmac_secret_patterned'],
+      ['q'.repeat(48), 'hmac_secret_low_entropy'],
+    ];
+    for (const [secret, error] of cases) {
+      assert.throws(
+        () => loadRuntimeConfig({ ...localBase, ASTRANULL_PROBE_WORKER_SECRET: secret }),
+        new RegExp(error),
+      );
+    }
+    const generated = randomBytes(32).toString('base64url');
+    assert.equal(loadRuntimeConfig({
+      ...localBase,
+      ASTRANULL_PROBE_WORKER_SECRET: generated,
+    }).probeWorkerSecret, generated);
+  });
+
+  it('rejects low-entropy probe-worker secrets in production and hosted staging', () => {
+    const productionBase = {
+      NODE_ENV: 'production',
+      ASTRANULL_AUTH_MODE: 'oidc-jwt',
+      ASTRANULL_OIDC_ISSUER: 'https://idp.example',
+      ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
+      ASTRANULL_OIDC_JWKS_URL: 'https://idp.example/jwks',
+      ASTRANULL_SECRET_ENCRYPTION_KEY: TEST_ENC_KEY,
+      ASTRANULL_PROBE_MODE: 'signed-worker',
+      ASTRANULL_PERSISTENCE_MODE: 'postgres',
+      ASTRANULL_DATABASE_URL: TEST_DATABASE_URL,
+    };
+    const hostedBase = {
+      NODE_ENV: 'test',
+      ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
+      ASTRANULL_NO_PERSIST: '1',
+      ASTRANULL_PROBE_MODE: 'signed-worker',
+    };
+
+    for (const base of [productionBase, hostedBase]) {
+      assert.throws(
+        () => loadRuntimeConfig({
+          ...base,
+          ASTRANULL_PROBE_WORKER_SECRET: 'q'.repeat(48),
+        }),
+        /hmac_secret_low_entropy/,
+      );
+      assert.equal(loadRuntimeConfig({
+        ...base,
+        ASTRANULL_PROBE_WORKER_SECRET: TEST_PROBE_SECRET,
+      }).probeWorkerSecret, TEST_PROBE_SECRET);
+    }
   });
 
   it('allows ASTRANULL_NO_PERSIST=1 only outside production', () => {
@@ -118,7 +179,7 @@ describe('production persistence fail-closed', () => {
     setProductionOidcEnv();
     process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
-    process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
+    process.env.ASTRANULL_DATABASE_URL = TEST_DATABASE_URL;
     delete process.env.ASTRANULL_PROBE_MODE;
     delete process.env.ASTRANULL_PROBE_WORKER_SECRET;
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_PROBE_WORKER_SECRET/);
@@ -135,7 +196,7 @@ describe('production persistence fail-closed', () => {
     setProductionOidcEnv();
     process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
-    process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
+    process.env.ASTRANULL_DATABASE_URL = TEST_DATABASE_URL;
     assert.throws(
       () => loadRuntimeConfig(),
       /ASTRANULL_PROBE_MODE=simulation is not permitted when NODE_ENV=production/,
@@ -193,12 +254,12 @@ describe('production persistence fail-closed', () => {
     process.env.NODE_ENV = 'production';
     setProductionOidcEnv();
     process.env.ASTRANULL_SECRET_ENCRYPTION_KEY = TEST_ENC_KEY;
-    process.env.ASTRANULL_PROBE_WORKER_SECRET = 'p'.repeat(32);
+    process.env.ASTRANULL_PROBE_WORKER_SECRET = TEST_PROBE_SECRET;
     process.env.ASTRANULL_PERSISTENCE_MODE = 'postgres';
-    process.env.ASTRANULL_DATABASE_URL = 'postgres://user:pass@localhost/astranull';
+    process.env.ASTRANULL_DATABASE_URL = TEST_DATABASE_URL;
     process.env.ASTRANULL_WAF_POSTURE_ENABLED = '1';
     process.env.ASTRANULL_CONNECTORS_ENABLED = '1';
-    process.env.ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
+    process.env.ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY = TEST_CONNECTOR_ENC_KEY;
     delete process.env.ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY;
     assert.throws(() => loadRuntimeConfig(), /ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY/);
 

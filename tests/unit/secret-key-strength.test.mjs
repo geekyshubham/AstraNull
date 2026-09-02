@@ -103,41 +103,43 @@ describe('secret encryption key strength — decoded entropy', () => {
 });
 
 describe('secret encryption key strength — deployment profile gating', () => {
-  it('warns but does not throw under hosted-staging even when NODE_ENV=production', () => {
-    // Mirrors the live astranull.site configuration. Gating must key off the
-    // deployment profile, never NODE_ENV, or this deployment stops booting.
+  it('rejects known-public and weak keys under hosted-staging', () => {
+    for (const key of [
+      Buffer.from(PUBLISHED_FIXTURE_KEY_HEX, 'hex'),
+      Buffer.alloc(32, 0x2a),
+    ]) {
+      assert.throws(
+        () => assertStrongSecretEncryptionKey(key, {
+          ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
+        }),
+        /Refusing to start/,
+      );
+    }
+  });
+
+  it('rejects a weak key when NODE_ENV=production with no profile set', () => {
     const key = Buffer.from(PUBLISHED_FIXTURE_KEY_HEX, 'hex');
-    const { warnings } = withCapturedWarnings(() =>
-      assertStrongSecretEncryptionKey(key, {
-        NODE_ENV: 'production',
-        ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
-      }),
-    );
-    assert.ok(
-      warnings.some((w) => /WARNING/.test(w) && /weak/i.test(w)),
-      `expected a loud warning, got: ${JSON.stringify(warnings)}`,
+    assert.throws(
+      () => assertStrongSecretEncryptionKey(key, { NODE_ENV: 'production' }),
+      /Refusing to start/,
     );
   });
 
-  it('warns but does not throw when NODE_ENV=production with no profile set', () => {
-    const key = Buffer.from(PUBLISHED_FIXTURE_KEY_HEX, 'hex');
-    const { warnings } = withCapturedWarnings(() =>
-      assertStrongSecretEncryptionKey(key, { NODE_ENV: 'production' }),
-    );
-    assert.equal(warnings.length, 1);
-  });
-
-  it('throws only for the production profile', () => {
+  it('rejects the production profile but only warns in local development', () => {
     const key = Buffer.from(PUBLISHED_FIXTURE_KEY_HEX, 'hex');
     assert.throws(
       () => assertStrongSecretEncryptionKey(key, { ASTRANULL_DEPLOYMENT_PROFILE: 'production' }),
       /Refusing to start/,
     );
-    assert.doesNotThrow(() =>
-      withCapturedWarnings(() =>
-        assertStrongSecretEncryptionKey(key, { ASTRANULL_DEPLOYMENT_PROFILE: 'local-staging' }),
-      ),
-    );
+    for (const env of [
+      {},
+      { NODE_ENV: 'development' },
+      { ASTRANULL_DEPLOYMENT_PROFILE: 'local-staging' },
+    ]) {
+      const { warnings } = withCapturedWarnings(() => assertStrongSecretEncryptionKey(key, env));
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /WARNING.*weak/i);
+    }
   });
 });
 
@@ -173,15 +175,13 @@ describe('loadSecretEncryptionKey enforces strength', () => {
     assert.equal(key.length, 32);
   });
 
-  it('still boots hosted-staging with the compromised key, with a warning', () => {
-    const { result: key, warnings } = withCapturedWarnings(() =>
-      loadSecretEncryptionKey({
-        NODE_ENV: 'production',
+  it('rejects the compromised key via the loader under hosted-staging', () => {
+    assert.throws(
+      () => loadSecretEncryptionKey({
         ASTRANULL_DEPLOYMENT_PROFILE: 'hosted-staging',
         ASTRANULL_SECRET_ENCRYPTION_KEY: PUBLISHED_FIXTURE_KEY_HEX,
       }),
+      /Refusing to start/,
     );
-    assert.equal(key.length, 32);
-    assert.ok(warnings.some((w) => /weak/i.test(w)));
   });
 });

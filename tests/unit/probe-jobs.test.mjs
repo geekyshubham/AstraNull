@@ -3,8 +3,10 @@ import { describe, it } from 'node:test';
 import { getCheckById } from '../../src/contracts/checks.mjs';
 import {
   buildSignedProbeJobRecord,
+  normalizeJobConstraints,
   resolveJobProbeProfile,
   targetDescriptor,
+  verifyProbeJobSignature,
 } from '../../src/lib/probeJobs.mjs';
 
 const SECRET = 'a'.repeat(32);
@@ -19,6 +21,176 @@ describe('probeJobs capability profile plumbing', () => {
     assert.equal(profile.kind, 'host_sni_bypass');
     assert.equal(profile.direct_ip, '198.51.100.7');
     assert.equal(profile.protected_host, 'edge.example.test');
+  });
+
+  it('signs mandatory multi-operation profiles only with their true operation floor', () => {
+    for (const [checkId, requiredRequests] of [
+      ['origin.leak_scan.safe', 3],
+      ['dns.zone_transfer_exposure.safe', 2],
+      ['reflect.quic_reflection_exposure.safe', 1],
+      ['protocol.http3_control_stream.readiness', 1],
+    ]) {
+      const check = getCheckById(checkId);
+      const signed = buildSignedProbeJobRecord({
+        run: {
+          id: `run_${checkId}`,
+          tenant_id: 'ten_1',
+          safety_constraints: check.safety_constraints,
+        },
+        check,
+        target: { id: `target_${checkId}`, kind: 'fqdn', value: 'owned.example' },
+        probeWorkerSecret: SECRET,
+        now: new Date('2026-09-01T00:00:00.000Z'),
+        newId: () => `job_${checkId}`,
+      });
+
+      assert.ok(check.probe_profile.max_requests >= requiredRequests, checkId);
+      assert.ok(signed.probe_profile.max_requests >= requiredRequests, checkId);
+      assert.ok(signed.constraints.max_requests >= requiredRequests, checkId);
+      assert.equal(verifyProbeJobSignature(signed, SECRET), true, checkId);
+      assert.throws(
+        () => normalizeJobConstraints(
+          { max_requests: requiredRequests - 1 },
+          check.probe_profile,
+        ),
+        new RegExp(`requires a signed max_requests budget of ${requiredRequests}`),
+        checkId,
+      );
+      assert.throws(
+        () => normalizeJobConstraints(
+          {},
+          { ...check.probe_profile, max_requests: requiredRequests - 1 },
+        ),
+        new RegExp(`requires a signed max_requests budget of ${requiredRequests}`),
+        checkId,
+      );
+    }
+  });
+
+  it('forces redirects off and strips standalone DNS/TLS claims from signed WAF profiles', () => {
+    const check = getCheckById('waf.fingerprint.safe');
+    const signed = buildSignedProbeJobRecord({
+      run: {
+        id: 'run_waf_no_raw_hints',
+        tenant_id: 'ten_1',
+        safety_constraints: check.safety_constraints,
+      },
+      check,
+      target: {
+        id: 'target_waf_no_raw_hints',
+        kind: 'url',
+        value: 'https://edge.example.test/probe',
+      },
+      probeProfile: {
+        ...check.probe_profile,
+        follow_redirects: true,
+        collect: [
+          ...(check.probe_profile.collect ?? []),
+          'dns_chain_hint',
+          'tls_fingerprint_hint',
+        ],
+      },
+      probeWorkerSecret: SECRET,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      newId: () => 'job_waf_no_raw_hints',
+    });
+
+    assert.equal(verifyProbeJobSignature(signed, SECRET), true);
+    assert.equal(signed.probe_profile.follow_redirects, false);
+    assert.equal(signed.probe_profile.collect.includes('dns_chain_hint'), false);
+    assert.equal(signed.probe_profile.collect.includes('tls_fingerprint_hint'), false);
+  });
+
+  it('signs additive total, probe-only, and destination-resolver caps', () => {
+    const check = getCheckById('path.protected_canary.safe');
+    const build = (target) => buildSignedProbeJobRecord({
+      run: {
+        id: `run_${target.kind}`,
+        tenant_id: 'ten_1',
+        safety_constraints: { max_requests: 1 },
+      },
+      check,
+      target: { id: `target_${target.kind}`, ...target },
+      probeWorkerSecret: SECRET,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      newId: () => `job_${target.kind}`,
+    });
+
+    const hostnameJob = build({ kind: 'fqdn', value: 'owned.example' });
+    assert.deepEqual(
+      {
+        max_requests: hostnameJob.constraints.max_requests,
+        max_probe_requests: hostnameJob.constraints.max_probe_requests,
+        min_destination_resolver_attempts:
+          hostnameJob.constraints.min_destination_resolver_attempts,
+        max_destination_resolver_attempts:
+          hostnameJob.constraints.max_destination_resolver_attempts,
+        max_total_operations: hostnameJob.constraints.max_total_operations,
+      },
+      {
+        max_requests: 3,
+        max_probe_requests: 1,
+        min_destination_resolver_attempts: 2,
+        max_destination_resolver_attempts: 2,
+        max_total_operations: 3,
+      },
+    );
+    assert.equal(verifyProbeJobSignature(hostnameJob, SECRET), true);
+    hostnameJob.constraints.max_total_operations = 4;
+    assert.equal(verifyProbeJobSignature(hostnameJob, SECRET), false);
+
+    const literalJob = build({ kind: 'ip', value: '198.51.100.7' });
+    assert.equal(literalJob.constraints.max_probe_requests, 1);
+    assert.equal(literalJob.constraints.min_destination_resolver_attempts, 0);
+    assert.equal(literalJob.constraints.max_destination_resolver_attempts, 0);
+    assert.equal(literalJob.constraints.max_total_operations, 1);
+    assert.equal(literalJob.constraints.max_requests, 1);
+  });
+
+  it('signs DNS wire hostname allowance for NS plus A and AAAA classification', () => {
+    const check = getCheckById('dns.authoritative_response.safe');
+    const job = buildSignedProbeJobRecord({
+      run: {
+        id: 'run_dns_wire_caps',
+        tenant_id: 'ten_1',
+        safety_constraints: { max_requests: 1 },
+      },
+      check,
+      target: { id: 'target_dns_wire_caps', kind: 'fqdn', value: 'owned.example' },
+      probeWorkerSecret: SECRET,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      newId: () => 'job_dns_wire_caps',
+    });
+
+    assert.equal(job.constraints.max_probe_requests, 1);
+    assert.equal(job.constraints.min_destination_resolver_attempts, 3);
+    assert.equal(job.constraints.max_destination_resolver_attempts, 3);
+    assert.equal(job.constraints.max_total_operations, 4);
+    assert.equal(job.constraints.max_requests, 4);
+    assert.equal(verifyProbeJobSignature(job, SECRET), true);
+  });
+
+  it('signs AXFR allowance for initial and discovered destination classification', () => {
+    const check = getCheckById('dns.zone_transfer_exposure.safe');
+    const job = buildSignedProbeJobRecord({
+      run: {
+        id: 'run_axfr_caps',
+        tenant_id: 'ten_1',
+        safety_constraints: { max_requests: 2 },
+      },
+      check,
+      target: { id: 'target_axfr_caps', kind: 'fqdn', value: 'owned.example' },
+      probeWorkerSecret: SECRET,
+      now: new Date('2026-09-01T00:00:00.000Z'),
+      newId: () => 'job_axfr_caps',
+    });
+
+    assert.equal(job.constraints.max_probe_requests, 2);
+    assert.equal(job.constraints.min_destination_resolver_attempts, 2);
+    assert.equal(job.constraints.max_destination_resolver_attempts, 4);
+    assert.equal(job.constraints.max_total_operations, 6);
+    assert.equal(job.constraints.max_requests, 6);
+    assert.equal(verifyProbeJobSignature(job, SECRET), true);
   });
 
   // These checks ship no curated ports/paths/nameserver defaults, so "the key is dropped"
@@ -257,7 +429,7 @@ describe('probeJobs capability profile plumbing', () => {
   it('exact-binds AXFR zone and declared-domain metadata after canonical comparison', () => {
     const check = getCheckById('dns.zone_transfer_exposure.safe');
     const build = ({ probeProfile, metadata }) => buildSignedProbeJobRecord({
-      run: { id: 'run_axfr', tenant_id: 'ten_1', safety_constraints: { max_requests: 1 } },
+      run: { id: 'run_axfr', tenant_id: 'ten_1', safety_constraints: { max_requests: 2 } },
       check,
       target: {
         id: 'tgt_axfr',

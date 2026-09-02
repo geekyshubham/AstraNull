@@ -44,17 +44,21 @@ export function MiniTrend({ points, className }: MiniTrendProps) {
     <svg
       className={cn('mini-trend', className)}
       viewBox="0 0 100 56"
-      preserveAspectRatio="xMidYMid meet"
+      preserveAspectRatio="none"
       role="img"
       aria-label={trendLabel}
+      focusable="false"
     >
+      <title>{trendLabel}</title>
       <path className="mini-trend-fill" d={`${path} L 100 56 L 0 56 Z`} fill={MINI_TREND_FILL} />
       <path
         className="mini-trend-line"
         d={path}
         fill="none"
         stroke={MINI_TREND_STROKE}
-        strokeWidth={1.5}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
       />
     </svg>

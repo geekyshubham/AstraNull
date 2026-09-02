@@ -1,4 +1,5 @@
 import {
+  createHash,
   createHmac,
   createPrivateKey,
   createPublicKey,
@@ -39,6 +40,38 @@ const HMAC_MIN_BITS_PER_BYTE = 3;
 const HEX_SECRET_RE = /^[0-9a-fA-F]+$/;
 const BASE64_SECRET_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const BASE64URL_SECRET_RE = /^[A-Za-z0-9_-]+={0,2}$/;
+
+// SHA-256 fingerprints of decoded key material that has appeared in public examples or
+// deterministic local fallbacks. Values are never retained or emitted by validation.
+const KNOWN_PUBLIC_HMAC_KEY_MATERIAL_DIGESTS = new Set([
+  '630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd',
+  'bde078b7e4f2a75dbf3fad2aaf026836778052117d0ea18e3446167dffe51e9a',
+  'c8fd592fba2b5e527cf10a136575d5d12a9d243d3f82d17d8152c9c66a0481fd',
+]);
+
+function smallestRepeatingPeriod(bytes) {
+  for (let period = 1; period <= Math.floor(bytes.length / 2); period += 1) {
+    let repeats = true;
+    for (let index = period; index < bytes.length; index += 1) {
+      if (bytes[index] !== bytes[index % period]) {
+        repeats = false;
+        break;
+      }
+    }
+    if (repeats) return period;
+  }
+  return bytes.length;
+}
+
+function hasArithmeticOrPatternedBytes(bytes) {
+  if (bytes.length < 8) return false;
+  const deltas = Buffer.alloc(bytes.length - 1);
+  for (let index = 1; index < bytes.length; index += 1) {
+    deltas[index - 1] = (bytes[index] - bytes[index - 1] + 256) % 256;
+  }
+  return smallestRepeatingPeriod(bytes) < bytes.length
+    || smallestRepeatingPeriod(deltas) <= 4;
+}
 
 const SIGNABLE_CUSTODY_FIELDS = Object.freeze([
   'schema_version',
@@ -111,6 +144,10 @@ export function validateHmacSecretEntropy(secret) {
   if (bytes.length < HMAC_MIN_KEY_BYTES) {
     return { ok: false, error: 'hmac_secret_too_short' };
   }
+  const materialDigest = createHash('sha256').update(bytes).digest('hex');
+  if (KNOWN_PUBLIC_HMAC_KEY_MATERIAL_DIGESTS.has(materialDigest)) {
+    return { ok: false, error: 'hmac_secret_known_public' };
+  }
   const counts = new Map();
   for (const byte of bytes) {
     counts.set(byte, (counts.get(byte) ?? 0) + 1);
@@ -125,6 +162,9 @@ export function validateHmacSecretEntropy(secret) {
   }
   if (bitsPerByte < HMAC_MIN_BITS_PER_BYTE) {
     return { ok: false, error: 'hmac_secret_low_entropy' };
+  }
+  if (hasArithmeticOrPatternedBytes(bytes)) {
+    return { ok: false, error: 'hmac_secret_patterned' };
   }
   return { ok: true, secret: trimmed, keyMaterial: bytes };
 }

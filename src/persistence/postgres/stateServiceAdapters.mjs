@@ -10,6 +10,7 @@ import {
 } from '../../lib/placementDiagnostics.mjs';
 import { buildGetStatePayload } from '../../lib/statePayload.mjs';
 import { isTrustedProducerEvent } from '../../lib/trustedEventProvenance.mjs';
+import { runVerdictSupportsReadiness } from '../../lib/readinessVerdicts.mjs';
 
 /** Evidence older than this window earns no freshness credit. */
 const RECENT_EVIDENCE_WINDOW_DAYS = 30;
@@ -47,10 +48,9 @@ export const STATE_AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze(['listAgents
 /** @type {readonly string[]} */
 export const STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
   'listTestRuns',
-  'getVerdictForRun',
-  'listRunEvents',
+  'loadRunEvidenceBatch',
   'listEvidence',
-  'listFindings',
+  'countOpenFindings',
 ]);
 
 /** @type {readonly string[]} */
@@ -130,11 +130,8 @@ function assertStateRepositories(repositories) {
   }
 }
 
-function runHasEvidenceBacking(run, verdict, events, vaultItems) {
-  if (verdict) return true;
-  if (events.length > 0) return true;
-  if (vaultItems.length > 0) return true;
-  return false;
+function runHasEvidenceBacking(run, verdict) {
+  return runVerdictSupportsReadiness(run, verdict);
 }
 
 function collectEvidenceTimestamps(run, verdict, events, vaultItems) {
@@ -174,76 +171,42 @@ function agentsForTenant(agents, tenantId) {
   return agents.filter((a) => a.tenant_id === tenantId && a.status !== 'revoked');
 }
 
-function boundAgentsForGroup(agents, targetGroupId) {
-  return agents.filter((a) => a.target_group_id === targetGroupId);
+function indexAgentsByGroup(agents) {
+  const byGroup = new Map();
+  for (const agent of agents) {
+    if (agent.target_group_id == null) continue;
+    const groupAgents = byGroup.get(agent.target_group_id) ?? [];
+    groupAgents.push(agent);
+    byGroup.set(agent.target_group_id, groupAgents);
+  }
+  return byGroup;
 }
 
-function onlineAgentIds(agentList) {
-  return agentList.filter((a) => a.status === 'online').map((a) => a.id);
-}
-
-function runIdsForGroup(runs, tenantId, targetGroupId) {
-  return new Set(
-    runs
-      .filter((r) => r.tenant_id === tenantId
-        && r.target_group_id === targetGroupId
-        && ['completed', 'verdicted'].includes(r.status))
-      .map((r) => r.id),
-  );
-}
-
-function countRecentObservationsForGroup(
-  eventsByRun,
-  runs,
-  tenantId,
-  targetGroupId,
-  nowMs,
-  signalType = null,
-) {
-  const runIds = runIdsForGroup(runs, tenantId, targetGroupId);
-  if (runIds.size === 0) return 0;
-  let count = 0;
-  for (const runId of runIds) {
-    for (const e of eventsByRun.get(runId) ?? []) {
-      if (e.tenant_id !== tenantId) continue;
-      const sig = e.signal_type;
-      if (signalType) {
-        if (sig === signalType && isRecentMs(parseTs(e.timestamp ?? e.created_at), nowMs)) count += 1;
-      } else if (
-        AGENT_OBSERVATION_SIGNALS.has(sig)
-        && isRecentMs(parseTs(e.timestamp ?? e.created_at), nowMs)
+function indexRecentObservationsByGroup(eventsByRun, runs, tenantId, nowMs) {
+  const byGroup = new Map();
+  for (const run of runs) {
+    if (run.tenant_id !== tenantId || !run.target_group_id || !runStatusEligible(run)) continue;
+    for (const event of eventsByRun.get(run.id) ?? []) {
+      if (
+        event.tenant_id !== tenantId
+        || !AGENT_OBSERVATION_SIGNALS.has(event.signal_type)
+        || !isRecentMs(parseTs(event.timestamp ?? event.created_at), nowMs)
       ) {
-        count += 1;
+        continue;
       }
+      const summary = byGroup.get(run.target_group_id) ?? { count: 0, proven: false };
+      summary.count += 1;
+      if (event.signal_type === PROVEN_OBSERVATION_SIGNAL) summary.proven = true;
+      byGroup.set(run.target_group_id, summary);
     }
   }
-  return count;
+  return byGroup;
 }
 
-function hasRecentProvenObservation(eventsByRun, runs, tenantId, targetGroupId, nowMs) {
-  return (
-    countRecentObservationsForGroup(
-      eventsByRun,
-      runs,
-      tenantId,
-      targetGroupId,
-      nowMs,
-      PROVEN_OBSERVATION_SIGNAL,
-    ) > 0
-  );
-}
-
-function diagnoseGroup(group, agents, unboundOnlineIds, eventsByRun, runs, tenantId, nowMs) {
-  const bound = boundAgentsForGroup(agents, group.id);
-  const boundIds = bound.map((a) => a.id);
-  const onlineBoundIds = onlineAgentIds(bound);
-  const recentObservationCount = countRecentObservationsForGroup(
-    eventsByRun,
-    runs,
-    tenantId,
-    group.id,
-    nowMs,
-  );
+function diagnoseGroup(group, bound, unboundOnlineIds, observation) {
+  const boundIds = bound.map((agent) => agent.id);
+  const onlineBoundIds = bound.filter((agent) => agent.status === 'online').map((agent) => agent.id);
+  const recentObservationCount = observation?.count ?? 0;
   const warnings = [];
   let status;
 
@@ -254,7 +217,7 @@ function diagnoseGroup(group, agents, unboundOnlineIds, eventsByRun, runs, tenan
   } else if (onlineBoundIds.length === 0) {
     status = 'misplaced_risk';
     warnings.push('no_online_bound_agent');
-  } else if (!hasRecentProvenObservation(eventsByRun, runs, tenantId, group.id, nowMs)) {
+  } else if (observation?.proven !== true) {
     status = 'needs_baseline';
     warnings.push('no_recent_observation');
   } else {
@@ -288,7 +251,7 @@ function computeReadinessSummary({
   groups,
   agents,
   runs,
-  findings,
+  openFindingsCount,
   verdictByRun,
   eventsByRun,
   evidenceByRun,
@@ -297,7 +260,6 @@ function computeReadinessSummary({
   nowMs,
 }) {
   const onlineAgents = agents.filter((a) => a.status === 'online');
-  const openFindings = findings.filter((f) => f.status === 'open');
   const factors = [];
 
   const declaredGroupIds = new Set(groups.map((g) => g.id));
@@ -354,8 +316,15 @@ function computeReadinessSummary({
 
   const unboundOnline = agents.filter((a) => a.status === 'online' && a.target_group_id == null);
   const unboundOnlineIds = unboundOnline.map((a) => a.id);
-  const groupDiagnostics = groups.map((g) =>
-    diagnoseGroup(g, agents, unboundOnlineIds, eventsByRun, runs, tenantId, nowMs),
+  const agentsByGroup = indexAgentsByGroup(agents);
+  const observationsByGroup = indexRecentObservationsByGroup(eventsByRun, runs, tenantId, nowMs);
+  const groupDiagnostics = groups.map((group) =>
+    diagnoseGroup(
+      group,
+      agentsByGroup.get(group.id) ?? [],
+      unboundOnlineIds,
+      observationsByGroup.get(group.id),
+    ),
   );
   const placementDiagnostics = {
     tenant_id: tenantId,
@@ -406,7 +375,10 @@ function computeReadinessSummary({
     placement_diagnostics: publicPlacementDiagnosticsPayload(placementDiagnostics),
   });
 
-  const verdicts = [...verdictByRun.values()];
+  const runsById = new Map(runs.map((run) => [run.id, run]));
+  const verdicts = [...verdictByRun.entries()]
+    .filter(([runId, verdict]) => runVerdictSupportsReadiness(runsById.get(runId), verdict))
+    .map(([, verdict]) => verdict);
   const recentVerdicts = verdicts.filter((v) => isRecentMs(parseTs(v.created_at), nowMs));
   const staleVerdicts = verdicts.filter((v) => {
     const ms = parseTs(v.created_at);
@@ -419,14 +391,14 @@ function computeReadinessSummary({
     verdictDetail =
       'No verdict evidence recorded; absence of findings is not proof of readiness until verdict evidence exists.';
   } else if (recentVerdicts.length === 0) {
-    verdictDetail = `${openFindings.length} open finding(s); ${verdicts.length} verdict(s) recorded (0 recent`;
+    verdictDetail = `${openFindingsCount} open finding(s); ${verdicts.length} verdict(s) recorded (0 recent`;
     if (staleVerdicts.length) verdictDetail += `, ${staleVerdicts.length} stale`;
     verdictDetail +=
       '). Stale or missing recent verdict evidence does not support full posture credit.';
   } else {
-    const penalty = Math.min(WEIGHT_VERDICTS, openFindings.length * 10);
+    const penalty = Math.min(WEIGHT_VERDICTS, openFindingsCount * 10);
     verdictScore = Math.max(0, WEIGHT_VERDICTS - penalty);
-    verdictDetail = `${openFindings.length} open finding(s); ${verdicts.length} verdict(s) recorded (${recentVerdicts.length} recent`;
+    verdictDetail = `${openFindingsCount} open finding(s); ${verdicts.length} verdict(s) recorded (${recentVerdicts.length} recent`;
     if (staleVerdicts.length) verdictDetail += `, ${staleVerdicts.length} stale`;
     verdictDetail += ').';
   }
@@ -622,47 +594,16 @@ export function createPostgresStateServices(repositories, options = {}) {
       const tenantId = ctx.tenantId;
       const nowMs = nowFn().getTime();
 
-      let rollup = null;
-      if (typeof coreCatalog.getCurrentTenant === 'function') {
-        const tenant = await coreCatalog.getCurrentTenant(ctx);
-        rollup = tenant?.dashboard_rollup && typeof tenant.dashboard_rollup === 'object'
-          ? tenant.dashboard_rollup
-          : null;
-      }
+      // dashboard_rollup.readiness is unversioned and may reflect obsolete scoring rules.
+      // Repository-backed evidence below is the authoritative Postgres readiness source.
       const highScaleWired = typeof highScale.listHighScaleRequests === 'function';
-
-      if (rollup?.readiness && typeof rollup.readiness === 'object') {
-        const [killSwitchRecord, rollupHighScaleRequests] = await Promise.all([
-          killSwitch.getKillSwitchRecord(ctx),
-          highScaleWired ? highScale.listHighScaleRequests(ctx) : [],
-        ]);
-        const tenantHighScaleRequests = Array.isArray(rollupHighScaleRequests)
-          ? rollupHighScaleRequests.filter((row) => row.tenant_id === tenantId)
-          : [];
-        return buildGetStatePayload({
-          tenantId,
-          rollup,
-          computed: {
-            readiness: rollup.readiness,
-            target_groups: Number(rollup.target_groups ?? 0),
-            agents_online: Number(rollup.agents_online ?? 0),
-            recent_runs: Array.isArray(rollup.recent_runs) ? rollup.recent_runs : [],
-            open_findings: Number(rollup.open_findings ?? 0),
-            high_scale_requests: tenantHighScaleRequests.length
-              || Number(rollup.high_scale_requests ?? 0),
-          },
-          killSwitch: sanitizeKillSwitchRecord(killSwitchRecord, tenantId),
-          highScaleWired,
-          highScaleRequests: tenantHighScaleRequests,
-        });
-      }
 
       const [
         groups,
         agents,
         runs,
         evidenceItems,
-        findings,
+        openFindingsCount,
         highScaleRequests,
         killSwitchRecord,
       ] = await Promise.all([
@@ -670,7 +611,7 @@ export function createPostgresStateServices(repositories, options = {}) {
         agentControl.listAgents(ctx),
         validationEvidence.listTestRuns(ctx, { limit: TEST_RUN_LIST_LIMIT }),
         validationEvidence.listEvidence(ctx, { limit: EVIDENCE_LIST_LIMIT }),
-        validationEvidence.listFindings(ctx),
+        validationEvidence.countOpenFindings(ctx),
         highScale.listHighScaleRequests(ctx),
         killSwitch.getKillSwitchRecord(ctx),
       ]);
@@ -678,39 +619,47 @@ export function createPostgresStateServices(repositories, options = {}) {
       const tenantAgents = agentsForTenant(agents, tenantId);
       const sortedRuns = sortRunsNewestFirst(runs);
 
-      /** @type {Map<string, object>} */
-      const verdictByRun = new Map();
-      await Promise.all(
-        runs.map(async (run) => {
-          if (!runStatusEligible(run)) return;
-          const verdict = await validationEvidence.getVerdictForRun(ctx, run.id);
-          if (verdict) verdictByRun.set(run.id, verdict);
-        }),
+      const eligibleRuns = runs.filter(runStatusEligible);
+      const eligibleRunIds = new Set(eligibleRuns.map((run) => run.id));
+      const eventRunIds = new Set(
+        sortedRuns
+          .filter(runStatusEligible)
+          .slice(0, RUN_EVENT_FETCH_RUN_LIMIT)
+          .map((run) => run.id),
       );
-
-      const eventRunIds = new Set(sortedRuns.slice(0, RUN_EVENT_FETCH_RUN_LIMIT).map((run) => run.id));
       for (const item of evidenceItems) {
         if (item.related_event_id && item.test_run_id) eventRunIds.add(item.test_run_id);
       }
-      for (const [runId, verdict] of verdictByRun) {
-        if (Array.isArray(verdict.evidence_ids) && verdict.evidence_ids.length > 0) {
-          eventRunIds.add(runId);
+      const baseEventRunIds = sortedRuns
+        .filter((run) => eventRunIds.has(run.id))
+        .map((run) => run.id);
+      const runEvidence = await validationEvidence.loadRunEvidenceBatch(ctx, {
+        runIds: eligibleRuns.map((run) => run.id),
+        eventRunIds: baseEventRunIds,
+        eventLimitPerRun: RUN_EVENTS_LIMIT,
+      });
+
+      /** @type {Map<string, object>} */
+      const verdictByRun = new Map();
+      for (const verdict of Array.isArray(runEvidence?.verdicts) ? runEvidence.verdicts : []) {
+        if (eligibleRunIds.has(verdict?.test_run_id)) {
+          verdictByRun.set(verdict.test_run_id, verdict);
         }
       }
-      const eventFetchRuns = sortedRuns.filter((run) => eventRunIds.has(run.id));
+
+      const selectedEventRunIds = new Set(baseEventRunIds);
+      for (const [runId, verdict] of verdictByRun) {
+        if (Array.isArray(verdict.evidence_ids) && verdict.evidence_ids.length > 0) {
+          selectedEventRunIds.add(runId);
+        }
+      }
       /** @type {Map<string, object[]>} */
       const eventsByRun = new Map();
-      await Promise.all(
-        eventFetchRuns.map(async (run) => {
-          const events = await validationEvidence.listRunEvents(ctx, run.id, {
-            limit: RUN_EVENTS_LIMIT,
-          });
-          eventsByRun.set(
-            run.id,
-            (Array.isArray(events) ? events : []).filter(isTrustedProducerEvent),
-          );
-        }),
-      );
+      for (const runId of selectedEventRunIds) eventsByRun.set(runId, []);
+      for (const event of Array.isArray(runEvidence?.events) ? runEvidence.events : []) {
+        if (!selectedEventRunIds.has(event?.test_run_id) || !isTrustedProducerEvent(event)) continue;
+        eventsByRun.get(event.test_run_id).push(event);
+      }
       const evidenceByRun = indexEvidenceByRun(
         evidenceItems.filter((item) => evidenceBackedByTrustedLinkedEvent(item, eventsByRun)),
       );
@@ -725,7 +674,7 @@ export function createPostgresStateServices(repositories, options = {}) {
         groups,
         agents: tenantAgents,
         runs,
-        findings,
+        openFindingsCount,
         verdictByRun,
         eventsByRun,
         evidenceByRun,
@@ -746,7 +695,7 @@ export function createPostgresStateServices(repositories, options = {}) {
           target_groups: groups.length,
           agents_online: tenantAgents.filter((a) => a.status === 'online').length,
           recent_runs: sortedRuns.slice(0, RECENT_RUNS_LIMIT),
-          open_findings: findings.filter((f) => f.status === 'open').length,
+          open_findings: openFindingsCount,
           high_scale_requests: tenantHighScaleRequests.length,
         },
         killSwitch: sanitizeKillSwitchRecord(killSwitchRecord, tenantId),

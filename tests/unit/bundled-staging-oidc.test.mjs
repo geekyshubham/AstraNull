@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { generateKeyPairSync } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import {
   getBundledStagingJwksDocument,
+  assertBundledStagingOidcFixtureUsable,
   mintBundledStagingOidcJwt,
   resetBundledStagingOidcFixtureCache,
   resolveBundledStagingOidcIssuer,
@@ -10,6 +11,9 @@ import {
 } from '../../src/lib/bundledStagingOidc.mjs';
 import { resolveDeploymentProfile } from '../../src/lib/deploymentProfile.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+
+const TEST_SECRET_ENCRYPTION_KEY = randomBytes(32).toString('hex');
+const TEST_PROBE_WORKER_SECRET = randomBytes(32).toString('base64url');
 
 /**
  * RSA modulus of the fixture key that was committed to this public repo until 2026-08-01.
@@ -24,19 +28,50 @@ const BURNED_PUBLIC_MODULUS =
   + 's7LhK9aNSnOnEf1S-vLgaOVHdf2kFHjJleY-LaZ0UffEjI1Ebhu_mUDr8MYFwEduGny1HPeQVa4lHs6-ITQ';
 
 /** A throwaway, never-published fixture — regenerated per call so no key is shared across tests. */
-function freshFixture() {
-  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+function freshFixture({ modulusLength = 2048, kid = 'test-rsa-1' } = {}) {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength });
   const publicJwk = publicKey.export({ format: 'jwk' });
-  publicJwk.kid = 'test-rsa-1';
+  publicJwk.kid = kid;
   publicJwk.alg = 'RS256';
   publicJwk.use = 'sig';
   return {
     issuer_suffix: '/staging-oidc',
     audience: 'astranull-hosted-staging',
-    kid: 'test-rsa-1',
+    kid,
     public_jwk: publicJwk,
     private_key_pem: privateKey.export({ type: 'pkcs8', format: 'pem' }),
   };
+}
+
+function fixtureEnv(fixture) {
+  return {
+    ASTRANULL_BUNDLED_STAGING_OIDC: '1',
+    ASTRANULL_PUBLIC_BASE_URL: 'https://staging.example.test',
+    ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON:
+      typeof fixture === 'string' ? fixture : JSON.stringify(fixture),
+  };
+}
+
+function assertStartupRejects(fixture, extraSecretNeedles = []) {
+  resetBundledStagingOidcFixtureCache();
+  let captured;
+  assert.throws(
+    () => assertBundledStagingOidcFixtureUsable(fixtureEnv(fixture)),
+    (error) => {
+      captured = error;
+      return true;
+    },
+  );
+  const needles = [
+    fixture?.private_key_pem,
+    fixture?.public_jwk?.n,
+    fixture?.public_jwk?.d,
+    ...extraSecretNeedles,
+  ].filter((value) => typeof value === 'string' && value.length >= 8);
+  for (const needle of needles) {
+    assert.equal(captured.message.includes(needle), false, 'error must not echo key material');
+  }
+  return captured.message;
 }
 
 describe('bundled staging OIDC', () => {
@@ -83,6 +118,71 @@ describe('bundled staging OIDC', () => {
     assert.match(token, /^eyJ/);
   });
 
+  it('startup rejects malformed PEM and non-RSA private keys without crypto details', () => {
+    const malformed = freshFixture();
+    malformed.private_key_pem = 'TOP-SECRET-MALFORMED-PEM-MARKER';
+    const malformedMessage = assertStartupRejects(malformed, [malformed.private_key_pem]);
+    assert.match(malformedMessage, /invalid private signing key/);
+    assert.doesNotMatch(malformedMessage, /decoder|openssl|asn1/i);
+
+    const nonRsa = freshFixture();
+    const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    nonRsa.private_key_pem = privateKey.export({ type: 'pkcs8', format: 'pem' });
+    assert.match(assertStartupRejects(nonRsa), /RSA private signing key/);
+  });
+
+  it('startup rejects RSA-1024 even when its public JWK matches', () => {
+    const weak = freshFixture({ modulusLength: 1024 });
+    assert.match(assertStartupRejects(weak), /at least 2048 bits/);
+  });
+
+  it('startup rejects bad JWK kty, alg, use, kid, canonical n/e, and private fields', () => {
+    const cases = [
+      ['kty', (fixture) => { fixture.public_jwk.kty = 'EC'; }, /kty=RSA/],
+      ['alg', (fixture) => { fixture.public_jwk.alg = 'RS512'; }, /alg=RS256/],
+      ['use', (fixture) => { fixture.public_jwk.use = 'enc'; }, /use=sig/],
+      ['kid', (fixture) => {
+        fixture.kid = 'short';
+        fixture.public_jwk.kid = 'short';
+      }, /bounded public signing key id/],
+      ['n', (fixture) => { fixture.public_jwk.n = `${fixture.public_jwk.n}=`; }, /canonical base64url/],
+      ['e', (fixture) => { fixture.public_jwk.e = 'AAQAB'; }, /canonical base64url/],
+      ['private', (fixture) => {
+        fixture.public_jwk.d = 'PRIVATE-JWK-MATERIAL-MUST-NOT-LEAK';
+      }, /must not contain private key fields/],
+    ];
+    for (const [label, mutate, expected] of cases) {
+      const fixture = freshFixture();
+      mutate(fixture);
+      const message = assertStartupRejects(fixture);
+      assert.match(message, expected, label);
+    }
+  });
+
+  it('startup rejects kid mismatch and public n/e that do not match the private key', () => {
+    const kidMismatch = freshFixture();
+    kidMismatch.kid = 'different-rsa-kid';
+    assert.match(assertStartupRejects(kidMismatch), /kid does not match/);
+
+    const keyMismatch = freshFixture();
+    const other = freshFixture();
+    keyMismatch.public_jwk.n = other.public_jwk.n;
+    keyMismatch.public_jwk.e = other.public_jwk.e;
+    assert.match(assertStartupRejects(keyMismatch), /does not match private_key_pem/);
+  });
+
+  it('inline cache key includes fixture content and cannot reuse a prior valid fixture', () => {
+    resetBundledStagingOidcFixtureCache();
+    const valid = freshFixture();
+    assert.doesNotThrow(() => assertBundledStagingOidcFixtureUsable(fixtureEnv(valid)));
+
+    const malformed = { ...valid, public_jwk: { ...valid.public_jwk, alg: 'RS512' } };
+    assert.throws(
+      () => assertBundledStagingOidcFixtureUsable(fixtureEnv(malformed)),
+      /alg=RS256/,
+    );
+  });
+
   it('refuses the signing key that was published in this repository', () => {
     // Identification is by public modulus, so this needs no compromised private key: a fresh
     // keypair carrying the published modulus is enough to prove the check fires. That is also
@@ -122,10 +222,10 @@ describe('bundled staging OIDC', () => {
       ASTRANULL_AUTH_MODE: 'oidc-jwt',
       ASTRANULL_PUBLIC_BASE_URL: 'https://staging.example.test',
       ASTRANULL_PROBE_MODE: 'signed-worker',
-      ASTRANULL_PROBE_WORKER_SECRET: 'hosted-staging-probe-worker-secret-32c',
+      ASTRANULL_PROBE_WORKER_SECRET: TEST_PROBE_WORKER_SECRET,
       ASTRANULL_AGENT_IDENTITY_MODE: 'bearer',
       ASTRANULL_HIGH_SCALE_ADAPTER_MODE: 'disabled',
-      ASTRANULL_SECRET_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      ASTRANULL_SECRET_ENCRYPTION_KEY: TEST_SECRET_ENCRYPTION_KEY,
     });
     assert.equal(config.deploymentProfile, 'hosted-staging');
     assert.equal(config.agentIdentityMode, 'bearer');
@@ -153,11 +253,11 @@ describe('bundled staging OIDC', () => {
       ASTRANULL_PERSISTENCE_MODE: 'postgres',
       ASTRANULL_AUTH_MODE: 'oidc-jwt',
       ASTRANULL_PROBE_MODE: 'signed-worker',
-      ASTRANULL_PROBE_WORKER_SECRET: 'hosted-staging-probe-worker-secret-32c',
+      ASTRANULL_PROBE_WORKER_SECRET: TEST_PROBE_WORKER_SECRET,
       ASTRANULL_AGENT_IDENTITY_MODE: 'bearer',
       ASTRANULL_HIGH_SCALE_ADAPTER_MODE: 'disabled',
       ASTRANULL_SECRET_ENCRYPTION_KEY:
-        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        TEST_SECRET_ENCRYPTION_KEY,
       ...extra,
     });
 

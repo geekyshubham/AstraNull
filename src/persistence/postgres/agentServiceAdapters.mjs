@@ -23,7 +23,10 @@ export const AGENT_CONTROL_REPOSITORY_METHODS = Object.freeze([
 ]);
 
 /** @type {readonly string[]} */
-export const AGENT_AUDIT_REPOSITORY_METHODS = Object.freeze(['appendAuditEvent']);
+export const AGENT_AUDIT_REPOSITORY_METHODS = Object.freeze([
+  'appendAuditEvent',
+  'withTenantAuditLock',
+]);
 
 /** @type {readonly string[]} */
 export const POSTGRES_AGENT_SERVICE_METHODS = Object.freeze([
@@ -257,20 +260,31 @@ export function createPostgresAgentServices(repositories, options = {}) {
 
     async ackJob(agent, jobId) {
       const ackedAt = nowFn().toISOString();
-      const job = await agentControl.ackAgentJob(
-        { tenantId: agent.tenant_id, agentId: agent.id, jobId },
-        ackedAt,
-      );
-      if (!job) return null;
-      await appendAudit({
-        tenant_id: agent.tenant_id,
-        actor_user_id: 'agent',
-        actor_role: 'agent',
-        action: 'agent.job_acked',
-        resource_type: 'agent_job',
-        resource_id: jobId,
+      return audit.withTenantAuditLock(agent.tenant_id, async ({ client }) => {
+        const result = await agentControl.ackAgentJob(
+          { tenantId: agent.tenant_id, agentId: agent.id, jobId },
+          ackedAt,
+          { client },
+        );
+        if (!result) return null;
+        await audit.appendAuditEvent({
+          tenant_id: agent.tenant_id,
+          actor_user_id: 'agent',
+          actor_role: 'agent',
+          action: 'agent.job_acked',
+          resource_type: 'agent_job',
+          resource_id: jobId,
+        }, {
+          client,
+          now: nowFn(),
+          idempotency: {
+            actions: ['agent.job_acked'],
+            resourceType: 'agent_job',
+            resourceId: jobId,
+          },
+        });
+        return result.job;
       });
-      return job;
     },
 
     async revokeAgent(ctx, id) {

@@ -36,6 +36,162 @@ describe('db schema contract', () => {
     assert.ok(result.errors.some((error) => /missing required file 0045_ownership/.test(error)));
   });
 
+
+  it('enforces reciprocal ownership probe-job binding in schema and additive migration 0051', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migrationSql = readFileSync(
+      path.join(ROOT, 'db', 'migrations', '0051_reciprocal_ownership_probe_jobs.sql'),
+      'utf8',
+    );
+
+    for (const sql of [schemaSql, migrationSql]) {
+      assert.match(sql, /IF NEW\.check_id = 'ownership\.challenge' OR NEW\.ownership_verification_id IS NOT NULL THEN\s+RETURN NEW/m);
+      assert.match(sql, /UPDATE OF id, tenant_id, test_run_id, target_id, check_id/);
+      assert.match(sql, /fk_ownership_verifications_probe_job_tenant[\s\S]*?REFERENCES probe_jobs \(tenant_id, id\)[\s\S]*?DEFERRABLE INITIALLY DEFERRED/m);
+      assert.match(sql, /fk_probe_jobs_ownership_verification_tenant[\s\S]*?REFERENCES ownership_verifications \(tenant_id, id\)[\s\S]*?DEFERRABLE INITIALLY DEFERRED/m);
+      assert.match(sql, /CREATE CONSTRAINT TRIGGER ownership_verifications_reciprocal_probe_job\s+AFTER INSERT OR UPDATE\s+ON ownership_verifications\s+DEFERRABLE INITIALLY DEFERRED/m);
+      assert.match(sql, /CREATE CONSTRAINT TRIGGER probe_jobs_reciprocal_ownership_verification\s+AFTER INSERT OR UPDATE\s+ON probe_jobs\s+DEFERRABLE INITIALLY DEFERRED/m);
+      assert.match(sql, /j\.ownership_verification_id = ov\.id/);
+      assert.match(sql, /j\.ownership_verification_id = NEW\.id[\s\S]*?j\.id IS DISTINCT FROM current_probe_job_id[\s\S]*?FOR KEY SHARE/m);
+      assert.match(sql, /ov\.probe_job_id = NEW\.id[\s\S]*?ov\.id IS DISTINCT FROM current_ownership_verification_id[\s\S]*?FOR KEY SHARE/m);
+      assert.match(sql, /IF current_probe_job_id IS NULL THEN\s+RETURN NEW/m);
+      assert.match(sql, /j\.test_run_id = ov\.id/);
+      assert.match(sql, /j\.target_id = ov\.agent_id/);
+      assert.match(sql, /j\.check_id = 'ownership\.challenge'/);
+      assert.match(sql, /j\.nonce_hash = ov\.challenge_nonce_hash/);
+      assert.match(sql, /ordinary probe job cannot be referenced as an ownership challenge job/);
+      assert.match(sql, /LOCK TABLE ownership_verifications, probe_jobs IN SHARE ROW EXCLUSIVE MODE/);
+      assert.match(sql, /preexisting ownership verification\/probe job binding is malformed/);
+    }
+  });
+
+  it('schema validator rejects an UPDATE-only reciprocal ownership trigger', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8').replace(
+      /CREATE CONSTRAINT TRIGGER ownership_verifications_reciprocal_probe_job\s+AFTER INSERT OR UPDATE/,
+      'CREATE CONSTRAINT TRIGGER ownership_verifications_reciprocal_probe_job\nAFTER UPDATE',
+    );
+    const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
+      .filter((name) => name.endsWith('.sql'))
+      .sort()
+      .map((name) => ({ name, sql: readFileSync(path.join(ROOT, 'db', 'migrations', name), 'utf8') }));
+
+    const result = validateDbSchema({ schemaSql, migrationSqls });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) =>
+      /schema:reciprocal_ownership:ownership verification reciprocal trigger/.test(error)));
+  });
+
+  it('fails closed when reciprocal ownership migration 0051 is absent', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
+      .filter((name) => name.endsWith('.sql') && name !== '0051_reciprocal_ownership_probe_jobs.sql')
+      .sort()
+      .map((name) => ({ name, sql: readFileSync(path.join(ROOT, 'db', 'migrations', name), 'utf8') }));
+    const result = validateDbSchema({ schemaSql, migrationSqls });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => /missing required file 0051_reciprocal_ownership/.test(error)));
+  });
+
+  it('binds edge detections to one exact run, target, and group in 0052 plus 0053', () => {
+    const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
+    const migration0052 = readFileSync(
+      path.join(ROOT, 'db', 'migrations', '0052_target_edge_detections.sql'),
+      'utf8',
+    );
+    const migration0053 = readFileSync(
+      path.join(ROOT, 'db', 'migrations', '0053_target_edge_detection_provenance.sql'),
+      'utf8',
+    );
+
+    for (const sql of [schemaSql, migration0052]) {
+      assert.match(sql, /test_run_id TEXT NOT NULL/);
+      assert.match(
+        sql,
+        /targets_tenant_group_id_key[\s\S]*?UNIQUE \(tenant_id, target_group_id, id\)/m,
+      );
+      assert.match(
+        sql,
+        /test_runs_tenant_run_group_target_key[\s\S]*?UNIQUE \(tenant_id, id, target_group_id, target_id\)/m,
+      );
+      assert.match(
+        sql,
+        /fk_target_edge_detections_target_binding[\s\S]*?FOREIGN KEY \(tenant_id, target_group_id, target_id\)[\s\S]*?REFERENCES targets \(tenant_id, target_group_id, id\)/m,
+      );
+      assert.match(
+        sql,
+        /fk_target_edge_detections_run_binding[\s\S]*?FOREIGN KEY \(tenant_id, test_run_id, target_group_id, target_id\)[\s\S]*?REFERENCES test_runs \(tenant_id, id, target_group_id, target_id\)/m,
+      );
+    }
+    assert.match(
+      migration0053,
+      /LOCK TABLE target_edge_detections, test_runs, targets IN SHARE ROW EXCLUSIVE MODE/,
+    );
+    assert.match(migration0053, /preexisting target edge detection provenance is malformed/);
+    assert.match(migration0053, /ALTER COLUMN test_run_id SET NOT NULL/);
+    assert.match(
+      migration0053,
+      /targets_tenant_group_id_key[\s\S]*?UNIQUE \(tenant_id, target_group_id, id\)/m,
+    );
+    assert.match(
+      migration0053,
+      /test_runs_tenant_run_group_target_key[\s\S]*?UNIQUE \(tenant_id, id, target_group_id, target_id\)/m,
+    );
+    for (const binding of ['target', 'run']) {
+      assert.match(
+        migration0053,
+        new RegExp(
+          `ADD CONSTRAINT fk_target_edge_detections_${binding}_binding[\\s\\S]*?NOT VALID;`,
+          'm',
+        ),
+      );
+      assert.match(
+        migration0053,
+        new RegExp(`VALIDATE CONSTRAINT fk_target_edge_detections_${binding}_binding`),
+      );
+    }
+
+    const migrationSqls = readdirSync(path.join(ROOT, 'db', 'migrations'))
+      .filter((name) => name.endsWith('.sql'))
+      .sort()
+      .map((name) => ({ name, sql: readFileSync(path.join(ROOT, 'db', 'migrations', name), 'utf8') }));
+    const missing0053 = validateDbSchema({
+      schemaSql,
+      migrationSqls: migrationSqls.filter(
+        ({ name }) => name !== '0053_target_edge_detection_provenance.sql',
+      ),
+    });
+    assert.equal(missing0053.ok, false);
+    assert.ok(missing0053.errors.some((error) => /missing required file 0053_target_edge/.test(error)));
+
+    const weakenedSchema = schemaSql.replace(
+      /ALTER TABLE target_edge_detections ADD CONSTRAINT fk_target_edge_detections_run_binding[\s\S]*?;\n/,
+      '',
+    );
+    assert.notEqual(weakenedSchema, schemaSql);
+    const schemaValidation = validateDbSchema({ schemaSql: weakenedSchema, migrationSqls });
+    assert.equal(schemaValidation.ok, false);
+    assert.ok(schemaValidation.errors.some((error) =>
+      /schema:edge_provenance:edge run must belong to the exact recorded target/.test(error)));
+
+    const weakenedMigrationSqls = migrationSqls.map((migration) => migration.name === '0053_target_edge_detection_provenance.sql'
+      ? {
+          ...migration,
+          sql: migration.sql.replace(
+            /    ALTER TABLE target_edge_detections\n      ADD CONSTRAINT fk_target_edge_detections_target_binding[\s\S]*?      NOT VALID;\n/,
+            '',
+          ),
+        }
+      : migration);
+    assert.notEqual(
+      weakenedMigrationSqls.find(({ name }) => name === '0053_target_edge_detection_provenance.sql').sql,
+      migration0053,
+    );
+    const migrationValidation = validateDbSchema({ schemaSql, migrationSqls: weakenedMigrationSqls });
+    assert.equal(migrationValidation.ok, false);
+    assert.ok(migrationValidation.errors.some((error) =>
+      /migration:0053:edge_provenance:upgrade must add the exact target binding/.test(error)));
+  });
+
   it('hardens LOA tenancy and scheduled dispatches in schema and forward migration', () => {
     const schemaSql = readFileSync(path.join(ROOT, 'db', 'schema.sql'), 'utf8');
     const migrationSql = readFileSync(

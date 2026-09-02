@@ -84,7 +84,7 @@ function ThemeToggle({ theme, onToggle }: { theme: 'light' | 'dark'; onToggle: (
   const label = isDark ? 'Switch to light theme' : 'Switch to dark theme';
   return (
     <ShellIconButton label={label} onClick={onToggle} className="theme-toggle">
-      {isDark ? <Moon size={18} aria-hidden="true" focusable="false" /> : <Sun size={18} aria-hidden="true" focusable="false" />}
+      {isDark ? <Sun size={18} aria-hidden="true" focusable="false" /> : <Moon size={18} aria-hidden="true" focusable="false" />}
     </ShellIconButton>
   );
 }
@@ -106,6 +106,8 @@ export function AppShell({
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const routeArrivedRef = useRef(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem('astranull.react.sidebar.collapsed') === '1';
@@ -113,7 +115,9 @@ export function AppShell({
       return false;
     }
   });
-  const current = ROUTE_BY_ID.get(route) ?? NAV_ITEMS[0];
+  const current = route === 'not-found'
+    ? { id: 'not-found', label: 'Not found', group: 'overview' as const }
+    : ROUTE_BY_ID.get(route) ?? NAV_ITEMS[0];
   const tenantId = session.tenant_id ?? data.state?.tenant_id ?? 'unknown';
   const environment = (data.state as { environment?: string } | null)?.environment ?? '';
   const visibleNavItems = useMemo(() => {
@@ -185,6 +189,24 @@ export function AppShell({
     };
   }, [sidebarOpen]);
 
+  /**
+   * Announce the current location to assistive tech and browser history the same way a
+   * multi-page app would: a route-specific title, and focus moved to the content region
+   * on arrival so keyboard users do not restart from the top of the navigation.
+   */
+  useEffect(() => {
+    document.title = `${current.label} · ${NAV_GROUP_LABELS[current.group]} · AstraNull`;
+  }, [current.label, current.group]);
+
+  useEffect(() => {
+    if (!routeArrivedRef.current) {
+      // Skip the initial mount so a fresh page load keeps the document's natural focus.
+      routeArrivedRef.current = true;
+      return;
+    }
+    mainRef.current?.focus({ preventScroll: true });
+  }, [route]);
+
   function navigate(next: RouteId) {
     window.location.hash = next;
     onRouteChange(next);
@@ -233,6 +255,7 @@ export function AppShell({
 
   return (
     <div className={cn('app-shell', sidebarCollapsed && 'sidebar-collapsed')}>
+      <a className="skip-link" href="#portal-main">Skip to main content</a>
       <aside
         id="portal-navigation"
         ref={sidebarRef}
@@ -295,7 +318,13 @@ export function AppShell({
         </div>
       </aside>
       <div className={cn('scrim', sidebarOpen && 'open')} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
-      <main className="main">
+      <main
+        className="main"
+        id="portal-main"
+        ref={mainRef}
+        tabIndex={-1}
+        aria-label={`${current.label} workspace`}
+      >
         <header className="topbar">
           <ShellIconButton label="Open navigation" className="menu-btn" buttonRef={menuButtonRef} expanded={sidebarOpen} controls="portal-navigation" onClick={() => setSidebarOpen(true)}>
             <Menu size={18} aria-hidden="true" focusable="false" />

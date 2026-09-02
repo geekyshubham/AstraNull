@@ -49,6 +49,7 @@ test.describe('portal dynamic provenance', () => {
 
   test('FT-PROV-dyn-01 dashboard readiness score updates after store mutation + server restart', async ({ page }) => {
     const { boostedScore, penalizedScore } = expectedReadinessScores();
+    expect(boostedScore).toBeGreaterThan(0);
     expect(boostedScore).toBeGreaterThan(penalizedScore);
 
     await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
@@ -80,7 +81,7 @@ test.describe('portal dynamic provenance', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'findings', baseUrl);
 
-    const openTab = page.getByRole('tab', { name: /Open/i });
+    const openTab = page.locator('.ft-status .ft-tab').filter({ hasText: /^Open/ });
     const pageSizeSelect = page.locator('.findings-pager select').last();
     await expect(openTab.locator('.ft-count')).toHaveText(String(PROVENANCE_FINDINGS.baselineOpenCount));
     await expect(page.locator('.findings-pager')).toContainText(`of ${PROVENANCE_FINDINGS.baselineOpenCount}`);
@@ -168,9 +169,9 @@ test.describe('portal dynamic provenance', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', baseUrl);
 
-    const connectorsTile = page.locator('.dash-waf-grid .dw-kpi').filter({ hasText: 'Connectors' });
-    await expect(connectorsTile.locator('.dw-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.baselineActive));
-    await expect(connectorsTile.locator('.dw-note')).toContainText('healthy');
+    const connectorsTile = page.locator('.kpi-row .kpi-cell').filter({ hasText: 'Connectors' });
+    await expect(connectorsTile.locator('.kpi-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.baselineActive));
+    await expect(connectorsTile.locator('.kpi-delta')).toContainText(`${PROVENANCE_WAF_CONNECTORS.baselineDegraded} degraded`);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceConnectorDegraded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -179,8 +180,8 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedSummary.connectors_degraded).toBe(PROVENANCE_WAF_CONNECTORS.mutatedDegraded);
 
     await page.goto(`${mutatedBaseUrl}/app#dashboard`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(connectorsTile.locator('.dw-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.mutatedActive));
-    await expect(connectorsTile.locator('.dw-note')).toContainText(`${PROVENANCE_WAF_CONNECTORS.mutatedDegraded} degraded`);
+    await expect(connectorsTile.locator('.kpi-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.mutatedActive));
+    await expect(connectorsTile.locator('.kpi-delta')).toContainText(`${PROVENANCE_WAF_CONNECTORS.mutatedDegraded} degraded`);
   });
 
   test('FT-PROV-dyn-06 finding remediation badge and delivered_via line update after mutation', async ({ page }) => {

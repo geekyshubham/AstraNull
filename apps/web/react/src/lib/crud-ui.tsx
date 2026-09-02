@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { EmptyState } from '../components/ui/empty-state';
 import { Button } from '../components/ui/button';
@@ -180,36 +180,60 @@ export function FormModal({
   );
 }
 
-export function useConfirmModal() {
-  const [state, setState] = useState<{
-    open: boolean;
-    title: string;
-    description: ReactNode;
-    confirmLabel: string;
-    requireTypedId?: string;
-    onConfirm?: () => void | Promise<void>;
-  }>({ open: false, title: '', description: '', confirmLabel: 'Confirm' });
+export type ConfirmRequest = {
+  title: string;
+  description: ReactNode;
+  confirmLabel?: string;
+  confirmTone?: 'danger' | 'default';
+  requireTypedId?: string;
+};
 
-  const requestConfirm = useCallback((opts: {
-    title: string;
-    description: ReactNode;
-    confirmLabel?: string;
-    requireTypedId?: string;
-    onConfirm: () => void | Promise<void>;
-  }) => {
-    setState({
-      open: true,
-      title: opts.title,
-      description: opts.description,
-      confirmLabel: opts.confirmLabel ?? 'Confirm',
-      requireTypedId: opts.requireTypedId,
-      onConfirm: opts.onConfirm
+type ConfirmContextValue = {
+  confirm: (request: ConfirmRequest) => Promise<boolean>;
+};
+
+const ConfirmContext = createContext<ConfirmContextValue | null>(null);
+
+export function ConfirmModalProvider({ children }: { children: ReactNode }) {
+  const [request, setRequest] = useState<ConfirmRequest | null>(null);
+  const resolverRef = useRef<((accepted: boolean) => void) | null>(null);
+
+  const settle = useCallback((accepted: boolean) => {
+    const resolve = resolverRef.current;
+    resolverRef.current = null;
+    setRequest(null);
+    resolve?.(accepted);
+  }, []);
+
+  const confirm = useCallback((next: ConfirmRequest) => {
+    resolverRef.current?.(false);
+    return new Promise<boolean>((resolve) => {
+      resolverRef.current = resolve;
+      setRequest(next);
     });
   }, []);
 
-  const close = useCallback(() => {
-    setState((prev) => ({ ...prev, open: false, onConfirm: undefined }));
-  }, []);
+  useEffect(() => () => resolverRef.current?.(false), []);
 
-  return { state, requestConfirm, close };
+  return (
+    <ConfirmContext.Provider value={{ confirm }}>
+      {children}
+      <ConfirmModal
+        open={Boolean(request)}
+        title={request?.title ?? 'Confirm action'}
+        description={request?.description ?? ''}
+        confirmLabel={request?.confirmLabel ?? 'Confirm'}
+        confirmTone={request?.confirmTone ?? 'danger'}
+        requireTypedId={request?.requireTypedId}
+        onCancel={() => settle(false)}
+        onConfirm={() => settle(true)}
+      />
+    </ConfirmContext.Provider>
+  );
+}
+
+export function useConfirmModal() {
+  const value = useContext(ConfirmContext);
+  if (!value) throw new Error('useConfirmModal must be used inside ConfirmModalProvider.');
+  return value;
 }

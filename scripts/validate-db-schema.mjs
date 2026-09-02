@@ -354,7 +354,99 @@ const REQUIRED_MIGRATION_FILES = [
   '0045_ownership_and_policy_dispatch_hardening.sql',
   '0046_exact_target_provider_onboarding.sql',
   '0047_signed_connector_poll_jobs.sql',
+  '0051_reciprocal_ownership_probe_jobs.sql',
   '0052_target_edge_detections.sql',
+  '0053_target_edge_detection_provenance.sql',
+];
+
+const RECIPROCAL_OWNERSHIP_SQL_REQUIREMENTS = [
+  [
+    /fk_ownership_verifications_probe_job_tenant[\s\S]*?REFERENCES probe_jobs \(tenant_id, id\)[\s\S]*?DEFERRABLE INITIALLY DEFERRED/m,
+    'ownership verification -> probe job FK must be initially deferred',
+  ],
+  [
+    /fk_probe_jobs_ownership_verification_tenant[\s\S]*?REFERENCES ownership_verifications \(tenant_id, id\)[\s\S]*?DEFERRABLE INITIALLY DEFERRED/m,
+    'probe job -> ownership verification FK must be initially deferred',
+  ],
+  [
+    /CREATE CONSTRAINT TRIGGER ownership_verifications_reciprocal_probe_job\s+AFTER INSERT OR UPDATE\s+ON ownership_verifications\s+DEFERRABLE INITIALLY DEFERRED/m,
+    'ownership verification reciprocal trigger must defer INSERT and UPDATE checks',
+  ],
+  [
+    /CREATE CONSTRAINT TRIGGER probe_jobs_reciprocal_ownership_verification\s+AFTER INSERT OR UPDATE\s+ON probe_jobs\s+DEFERRABLE INITIALLY DEFERRED/m,
+    'probe job reciprocal trigger must defer INSERT and UPDATE checks',
+  ],
+  [
+    /j\.ownership_verification_id = ov\.id[\s\S]*?j\.test_run_id = ov\.id[\s\S]*?j\.target_id = ov\.agent_id[\s\S]*?j\.check_id = 'ownership\.challenge'[\s\S]*?j\.nonce_hash = ov\.challenge_nonce_hash/m,
+    'reciprocal trigger must validate the complete ownership tuple and check classification',
+  ],
+  [
+    /ordinary probe job cannot be referenced as an ownership challenge job/,
+    'ordinary probe jobs must be rejected as ownership jobs',
+  ],
+  [
+    /LOCK TABLE ownership_verifications, probe_jobs IN SHARE ROW EXCLUSIVE MODE[\s\S]*?preexisting ownership verification\/probe job binding is malformed/m,
+    'migration must fail closed on preexisting malformed reciprocal rows under a write lock',
+  ],
+];
+
+
+const EDGE_PROVENANCE_RELATIONAL_SQL_REQUIREMENTS = [
+  [
+    /CREATE TABLE(?: IF NOT EXISTS)? target_edge_detections[\s\S]*?test_run_id TEXT NOT NULL/m,
+    'target edge detections must require a run id',
+  ],
+  [
+    /targets_tenant_group_id_key[\s\S]*?UNIQUE \(tenant_id, target_group_id, id\)/m,
+    'targets must expose an exact tenant/group/target parent key',
+  ],
+  [
+    /test_runs_tenant_run_group_target_key[\s\S]*?UNIQUE \(tenant_id, id, target_group_id, target_id\)/m,
+    'test runs must expose an exact tenant/run/group/target parent key',
+  ],
+  [
+    /fk_target_edge_detections_target_binding[\s\S]*?FOREIGN KEY \(tenant_id, target_group_id, target_id\)[\s\S]*?REFERENCES targets \(tenant_id, target_group_id, id\)/m,
+    'edge target must belong to the exact recorded group',
+  ],
+  [
+    /fk_target_edge_detections_run_binding[\s\S]*?FOREIGN KEY \(tenant_id, test_run_id, target_group_id, target_id\)[\s\S]*?REFERENCES test_runs \(tenant_id, id, target_group_id, target_id\)/m,
+    'edge run must belong to the exact recorded target and group',
+  ],
+];
+
+const EDGE_PROVENANCE_UPGRADE_SQL_REQUIREMENTS = [
+  [
+    /LOCK TABLE target_edge_detections, test_runs, targets IN SHARE ROW EXCLUSIVE MODE[\s\S]*?preexisting target edge detection provenance is malformed/m,
+    'upgrade must fail closed on malformed rows under a write lock',
+  ],
+  [
+    /ALTER TABLE target_edge_detections\s+ALTER COLUMN test_run_id SET NOT NULL/m,
+    'upgrade must make the run binding mandatory',
+  ],
+  [
+    /targets_tenant_group_id_key[\s\S]*?UNIQUE \(tenant_id, target_group_id, id\)/m,
+    'upgrade must establish the tenant/group/target parent key',
+  ],
+  [
+    /test_runs_tenant_run_group_target_key[\s\S]*?UNIQUE \(tenant_id, id, target_group_id, target_id\)/m,
+    'upgrade must establish the tenant/run/group/target parent key',
+  ],
+  [
+    /ADD CONSTRAINT fk_target_edge_detections_target_binding\s+FOREIGN KEY \(tenant_id, target_group_id, target_id\)\s+REFERENCES targets \(tenant_id, target_group_id, id\)\s+NOT VALID;/m,
+    'upgrade must add the exact target binding without trusting historical rows',
+  ],
+  [
+    /ADD CONSTRAINT fk_target_edge_detections_run_binding\s+FOREIGN KEY \(tenant_id, test_run_id, target_group_id, target_id\)\s+REFERENCES test_runs \(tenant_id, id, target_group_id, target_id\)\s+NOT VALID;/m,
+    'upgrade must add the exact run binding without trusting historical rows',
+  ],
+  [
+    /VALIDATE CONSTRAINT fk_target_edge_detections_target_binding/,
+    'upgrade must validate the exact target binding',
+  ],
+  [
+    /VALIDATE CONSTRAINT fk_target_edge_detections_run_binding/,
+    'upgrade must validate the exact run binding',
+  ],
 ];
 
 const REQUIRED_RLS = [
@@ -471,6 +563,8 @@ export const TENANT_CONSISTENT_FK_CONSTRAINTS = [
   'fk_target_edge_detections_target_tenant',
   'fk_target_edge_detections_target_group_tenant',
   'fk_target_edge_detections_test_run_tenant',
+  'fk_target_edge_detections_target_binding',
+  'fk_target_edge_detections_run_binding',
   'fk_waf_fingerprints_waf_asset_tenant',
   'fk_waf_fingerprints_test_run_tenant',
   'fk_waf_validation_runs_test_run_tenant',
@@ -510,10 +604,42 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
   const combinedMigration = stripSqlComments(
     loaded.migrationFiles.map((m) => (typeof m === 'string' ? m : m.sql)).join('\n'),
   );
-  const migrationNames = loaded.migrationFiles
-    .filter((migration) => typeof migration !== 'string')
-    .map((migration) => migration.name);
+  const namedMigrations = loaded.migrationFiles.filter(
+    (migration) => typeof migration !== 'string',
+  );
+  const migrationNames = namedMigrations.map((migration) => migration.name);
+  const migrationSqlByName = new Map(
+    namedMigrations.map((migration) => [migration.name, stripSqlComments(migration.sql)]),
+  );
+  const migration0052 = migrationSqlByName.get('0052_target_edge_detections.sql') ?? '';
+  const migration0053 = migrationSqlByName.get('0053_target_edge_detection_provenance.sql') ?? '';
   const schema = stripSqlComments(loaded.schemaSql ?? schemaSql);
+
+  for (const [pattern, requirement] of RECIPROCAL_OWNERSHIP_SQL_REQUIREMENTS) {
+    errors.push(assertPattern(`schema:reciprocal_ownership:${requirement}`, schema, pattern));
+    errors.push(
+      assertPattern(
+        `migration:reciprocal_ownership:${requirement}`,
+        combinedMigration,
+        pattern,
+      ),
+    );
+  }
+
+  for (const [pattern, requirement] of EDGE_PROVENANCE_RELATIONAL_SQL_REQUIREMENTS) {
+    errors.push(assertPattern(`schema:edge_provenance:${requirement}`, schema, pattern));
+    errors.push(assertPattern(`migration:0052:edge_provenance:${requirement}`, migration0052, pattern));
+  }
+  errors.push(
+    assertPattern(
+      'schema:edge_provenance:malformed-row fail-closed guard',
+      schema,
+      EDGE_PROVENANCE_UPGRADE_SQL_REQUIREMENTS[0][0],
+    ),
+  );
+  for (const [pattern, requirement] of EDGE_PROVENANCE_UPGRADE_SQL_REQUIREMENTS) {
+    errors.push(assertPattern(`migration:0053:edge_provenance:${requirement}`, migration0053, pattern));
+  }
 
   for (const table of REQUIRED_TABLES) {
     errors.push(assertPattern(`schema:${table}`, schema, new RegExp(`CREATE TABLE ${table}\\b`, 'i')));

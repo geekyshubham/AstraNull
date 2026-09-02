@@ -1,3 +1,4 @@
+import { isFindingOpen } from './finding-lifecycle.mjs';
 import type { DataItem, PortalData } from './types';
 
 function getString(item: DataItem, keys: string[], fallback = '') {
@@ -17,7 +18,7 @@ export function countAgentsOnline(agents: DataItem[]) {
 }
 
 export function countOpenFindings(findings: DataItem[]) {
-  return findings.filter((finding) => getString(finding, ['status'], 'open') === 'open').length;
+  return findings.filter(isFindingOpen).length;
 }
 
 export function countHighScaleRequests(highScale: DataItem[]) {

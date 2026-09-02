@@ -380,6 +380,34 @@ describe('evidence signing HMAC secret entropy floor', () => {
     });
   });
 
+  it('rejects known-public and patterned decoded key material', () => {
+    const knownSequential = Buffer.from(
+      Array.from({ length: 32 }, (_, index) => index),
+    ).toString('hex');
+    assert.deepEqual(validateHmacSecretEntropy(knownSequential), {
+      ok: false,
+      error: 'hmac_secret_known_public',
+    });
+
+    const arithmetic = Buffer.from(
+      Array.from({ length: 32 }, (_, index) => index + 32),
+    ).toString('hex');
+    assert.deepEqual(validateHmacSecretEntropy(arithmetic), {
+      ok: false,
+      error: 'hmac_secret_patterned',
+    });
+
+    const cycle = Buffer.from([
+      ...Array.from({ length: 16 }, (_, index) => index * 7 + 3),
+      ...Array.from({ length: 16 }, (_, index) => index * 7 + 3),
+    ]).toString('hex');
+    assert.deepEqual(validateHmacSecretEntropy(cycle), {
+      ok: false,
+      error: 'hmac_secret_patterned',
+    });
+    assert.equal(validateHmacSecretEntropy(randomBytes(32).toString('base64url')).ok, true);
+  });
+
   it('validates decoded bytes rather than character count', () => {
     // 32 hex characters decode to only 16 bytes of key material.
     const hex16Bytes = randomBytes(16).toString('hex');

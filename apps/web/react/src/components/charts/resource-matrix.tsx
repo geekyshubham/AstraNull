@@ -48,7 +48,7 @@ const STATUS_TONE: Record<ResourceMatrixStatus, 'success' | 'warn' | 'danger' | 
   not_applicable: 'muted',
 };
 
-const STATUS_LABEL: Record<ResourceMatrixStatus, string> = {
+const READINESS_STATUS_LABEL: Record<ResourceMatrixStatus, string> = {
   protected: 'Protected',
   exposed: 'Exposed',
   inconclusive: 'Inconclusive',
@@ -56,6 +56,21 @@ const STATUS_LABEL: Record<ResourceMatrixStatus, string> = {
   not_run: 'Not run',
   not_applicable: 'Not applicable',
 };
+
+const VALIDATION_STATUS_LABEL: Record<ResourceMatrixStatus, string> = {
+  protected: 'Passing evidence',
+  exposed: 'Finding',
+  inconclusive: 'Inconclusive',
+  stale: 'Stale',
+  not_run: 'Not validated',
+  not_applicable: 'Not applicable',
+};
+
+function statusLabel(family: ResourceFamily, status: ResourceMatrixStatus) {
+  return family.visualization === 'readiness_posture'
+    ? READINESS_STATUS_LABEL[status]
+    : VALIDATION_STATUS_LABEL[status];
+}
 
 const CELL_STYLE: Record<ResourceMatrixStatus, CSSProperties> = {
   protected: {
@@ -162,13 +177,16 @@ function latestLabel(value: string | null) {
 }
 
 function cellDescription(family: ResourceFamily, state: ResourceFamilyVerdictState) {
+  const scope = family.scoredForDdosReadiness
+    ? 'Included in DDoS readiness posture.'
+    : 'Validation-only coverage; excluded from DDoS readiness scoring.';
   if (state.status === 'not_applicable') {
-    return `${family.label}: no mapped checks support this target group's declared target kinds.`;
+    return `${family.label}: no mapped checks support this target group's declared target kinds. ${family.description} ${scope}`;
   }
   if (state.status === 'not_run') {
-    return `${family.label}: no stored verdict found in the loaded API window for ${state.applicableCheckCount} applicable checks.`;
+    return `${family.label}: no stored verdict found in the loaded API window for ${state.applicableCheckCount} applicable checks. ${family.description} ${scope}`;
   }
-  return `${family.label} (${family.metric}): ${STATUS_LABEL[state.status]}. ${state.testedCheckCount} of ${state.applicableCheckCount} applicable checks tested; ${state.freshCheckCount} fresh and ${state.staleCheckCount} stale. ${latestLabel(state.latestEvidenceAt)}.`;
+  return `${family.label} (${family.metric}): ${statusLabel(family, state.status)}. ${state.testedCheckCount} of ${state.applicableCheckCount} applicable checks tested; ${state.freshCheckCount} fresh and ${state.staleCheckCount} stale. ${latestLabel(state.latestEvidenceAt)}. ${scope}`;
 }
 
 function MatrixCell({
@@ -189,7 +207,7 @@ function MatrixCell({
       title={description}
       aria-label={description}
     >
-      <strong style={{ display: 'block' }}>{STATUS_LABEL[state.status]}</strong>
+      <strong style={{ display: 'block' }}>{statusLabel(family, state.status)}</strong>
       <small style={{ display: 'block', marginTop: '0.2rem', color: 'inherit' }}>{count}</small>
     </span>
   );
@@ -198,11 +216,11 @@ function MatrixCell({
 function MatrixLegend() {
   return (
     <div className="heatmap-legend" aria-label="Matrix status legend">
-      <Badge tone="success">Protected</Badge>
-      <Badge tone="danger">Exposed</Badge>
+      <Badge tone="success">Protected / passing evidence</Badge>
+      <Badge tone="danger">Exposed / finding</Badge>
       <Badge tone="warn">Inconclusive</Badge>
       <Badge tone="warn">Stale</Badge>
-      <Badge tone="muted">Not run</Badge>
+      <Badge tone="muted">Not run / not validated</Badge>
       <Badge tone="muted">Not applicable</Badge>
     </div>
   );
@@ -220,6 +238,8 @@ export function ResourceMatrix({
 }: ResourceMatrixProps) {
   const descriptionId = useId();
   const groups = useMemo(() => resourceMatrixGroups(targetGroups), [targetGroups]);
+  const readinessFamilyCount = RESOURCE_FAMILIES.filter((family) => family.scoredForDdosReadiness).length;
+  const validationFamilyCount = RESOURCE_FAMILIES.length - readinessFamilyCount;
   const mappedCheckIds = useMemo(() => {
     const ids = new Set<string>();
     for (const family of RESOURCE_FAMILIES) {
@@ -347,8 +367,9 @@ export function ResourceMatrix({
   return (
     <>
       <p id={descriptionId} className="muted" style={{ marginTop: 0 }}>
+        Every shipped exhausted-resource family is shown: {readinessFamilyCount} availability families contribute to DDoS readiness posture and {validationFamilyCount} application-security families show validation coverage only.
         Each cell uses the latest evidence-referenced stored verdict per applicable check. Evidence is fresh for {RESOURCE_EVIDENCE_FRESHNESS_DAYS} days.
-        Protected requires fresh pass evidence for every applicable check; partial coverage remains inconclusive.
+        Protected or passing evidence requires a fresh pass for every applicable check; partial coverage remains inconclusive.
       </p>
       <div
         className="heatmap"
@@ -359,14 +380,17 @@ export function ResourceMatrix({
       >
         <table style={{ borderCollapse: 'separate', borderSpacing: '0.4rem', minWidth: '100%', width: 'max-content' }}>
           <caption style={{ textAlign: 'left', padding: '0 0.4rem 0.4rem', color: 'var(--fg-2)' }}>
-            All {groups.length} active target groups. Scroll horizontally to review every resource family.
+            All {groups.length} active target groups across all {RESOURCE_FAMILIES.length} shipped exhausted-resource families. Scroll horizontally to review every family.
           </caption>
           <thead>
             <tr>
               <th className="heatmap-head" scope="col" style={{ textAlign: 'left', minWidth: '10rem' }}>Target group</th>
               {RESOURCE_FAMILIES.map((family) => (
-                <th className="heatmap-head" scope="col" key={family.id} title={`Primary metric: ${family.metric}`}>
-                  {family.label}
+                <th className="heatmap-head" scope="col" key={family.id} title={family.description}>
+                  <span style={{ display: 'block' }}>{family.label}</span>
+                  <small style={{ display: 'block', marginTop: '0.2rem', color: 'var(--fg-2)', fontWeight: 400 }}>
+                    {family.metric} · {family.scoredForDdosReadiness ? 'DDoS readiness' : 'validation only'}
+                  </small>
                 </th>
               ))}
             </tr>
@@ -406,7 +430,7 @@ export function ResourceMatrix({
       </div>
       <MatrixLegend />
       <p className="muted" style={{ marginBottom: 0 }}>
-        “Not run” means no evidence-backed stored verdict was found in the bounded records returned by the API; it is not proof that no historical run exists.
+        “Not run” or “Not validated” means no evidence-backed stored verdict was found in the bounded records returned by the API; it is not proof that no historical run exists.
       </p>
     </>
   );

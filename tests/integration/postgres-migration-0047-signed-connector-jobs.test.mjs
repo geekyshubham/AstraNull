@@ -6,9 +6,13 @@ import {
   withEphemeralPostgres,
 } from '../helpers/pg-harness.mjs';
 import { createWafPostureRepository } from '../../src/persistence/postgres/wafPostureRepository.mjs';
-import { listMigrationFiles, runMigrations } from '../../src/persistence/postgres/migrations.mjs';
+import {
+  fetchAppliedMigrationVersions,
+  listMigrationFiles,
+  runMigrations,
+} from '../../src/persistence/postgres/migrations.mjs';
 
-const MIGRATION_0050 = '0050_connector_poll_governance';
+const MIGRATION_0047 = '0047_signed_connector_poll_jobs';
 
 function envelope({ tenantId, connectorId, provider = 'cloudflare', revision = 1 }) {
   return {
@@ -30,10 +34,17 @@ describe('postgres migrations 0047-0049 connector authority', () => {
       return;
     }
 
-    await withEphemeralPostgres(async (pool) => {
+    await withEphemeralPostgres(async (pool, { latestVersion }) => {
       const files = listMigrationFiles(MIGRATIONS_DIR);
-      await runMigrations(pool, { migrationsDir: MIGRATIONS_DIR, files });
-      assert.equal(files.at(-1)?.version, MIGRATION_0050);
+      assert.equal(latestVersion, files.at(-1)?.version);
+      assert.ok(files.some(({ version }) => version === MIGRATION_0047));
+      const applied = await fetchAppliedMigrationVersions(pool);
+      assert.deepEqual(
+        files.filter(({ version }) => !applied.has(version)).map(({ version }) => version),
+        [],
+      );
+      const rerun = await runMigrations(pool, { migrationsDir: MIGRATIONS_DIR, files });
+      assert.ok(rerun.results.every(({ status }) => status === 'skipped'));
 
       await pool.query(`
         INSERT INTO tenants (id, name) VALUES
@@ -146,6 +157,6 @@ describe('postgres migrations 0047-0049 connector authority', () => {
          FROM pg_class WHERE oid = 'connector_poll_jobs'::regclass`,
       );
       assert.deepEqual(rls.rows[0], { relrowsecurity: true, relforcerowsecurity: true });
-    }, { label: 'migration-0047-signed-jobs' });
+    }, availability.env ?? process.env);
   });
 });

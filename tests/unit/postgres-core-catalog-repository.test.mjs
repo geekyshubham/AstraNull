@@ -54,20 +54,22 @@ function createRecordingPool(handler) {
   };
 }
 
-function createTestRepository(pool) {
-  return createCoreCatalogRepository(pool, {
-    auditRepository: {
-      async appendAuditEvent(entry) {
-        return { id: 'audit_test', ...entry };
-      },
-    },
-  });
+function createTestRepository(pool, auditRepository = {
+  async appendAuditEvent(entry) {
+    return { id: 'audit_test', ...entry };
+  },
+}) {
+  return createCoreCatalogRepository(pool, { auditRepository });
 }
 
 function dataQueries(client) {
   return client.queries.filter((q) => {
     const t = q.text.trim();
-    return t !== 'BEGIN' && t !== 'COMMIT' && t !== 'ROLLBACK' && !t.startsWith("SELECT set_config('app.tenant_id'");
+    return t !== 'BEGIN'
+      && t !== 'COMMIT'
+      && t !== 'ROLLBACK'
+      && !t.startsWith("SELECT set_config('app.tenant_id'")
+      && !t.startsWith('SELECT pg_advisory_xact_lock');
   });
 }
 
@@ -92,6 +94,96 @@ function assertUsesTenantPredicate(sql, params, tenantId) {
 function assertNoInterpolatedValue(sql, value) {
   if (value == null || value === '') return;
   assert.ok(!sql.includes(String(value)), `value must not be interpolated into SQL: ${value}`);
+}
+
+function createCatalogMutationPool() {
+  const tenantRow = {
+    id: CTX.tenantId,
+    name: 'Tenant',
+    privacy_settings: {},
+    created_at: FIXED_NOW,
+  };
+  const environmentRow = {
+    id: 'env_1',
+    tenant_id: CTX.tenantId,
+    name: 'Environment',
+    status: 'active',
+    privacy_settings: {},
+    settings_json: {},
+    created_at: FIXED_NOW,
+  };
+
+  return createRecordingPool((text, params) => {
+    if (text.includes('FROM tenants')) return { rows: [tenantRow] };
+    if (text.startsWith('UPDATE tenants')) return { rows: [tenantRow] };
+    if (text.startsWith('INSERT INTO environments')) {
+      return {
+        rows: [{
+          ...environmentRow,
+          id: params[0],
+          name: params[2],
+          privacy_settings: JSON.parse(params[4]),
+          settings_json: JSON.parse(params[5]),
+        }],
+      };
+    }
+    if (text.includes('FROM environments')) return { rows: [environmentRow] };
+    if (text.startsWith('UPDATE environments')) {
+      return {
+        rows: [{
+          ...environmentRow,
+          status: params.includes('archived') ? 'archived' : 'active',
+        }],
+      };
+    }
+    return { rows: [] };
+  });
+}
+
+function catalogMutations() {
+  return [
+    {
+      name: 'patchCurrentTenant',
+      action: 'tenant.updated',
+      resourceType: 'tenant',
+      resourceId: CTX.tenantId,
+      sql: 'UPDATE tenants',
+      run: (repo) => repo.patchCurrentTenant(CTX, { name: 'New' }, { now: FIXED_NOW }),
+    },
+    {
+      name: 'createEnvironment',
+      action: 'environment.created',
+      resourceType: 'environment',
+      resourceId: 'env_new',
+      sql: 'INSERT INTO environments',
+      run: (repo) => repo.createEnvironment(
+        CTX,
+        { name: 'New' },
+        { id: 'env_new', now: FIXED_NOW },
+      ),
+    },
+    {
+      name: 'patchEnvironment',
+      action: 'environment.updated',
+      resourceType: 'environment',
+      resourceId: 'env_1',
+      sql: 'UPDATE environments',
+      run: (repo) => repo.patchEnvironment(CTX, 'env_1', { name: 'New' }, { now: FIXED_NOW }),
+    },
+    {
+      name: 'archiveEnvironment',
+      action: 'environment.archived',
+      resourceType: 'environment',
+      resourceId: 'env_1',
+      sql: 'UPDATE environments',
+      run: (repo) => repo.patchEnvironment(
+        CTX,
+        'env_1',
+        { status: 'archived' },
+        { now: FIXED_NOW },
+      ),
+    },
+  ];
 }
 
 describe('postgres core catalog repository', () => {
@@ -214,7 +306,11 @@ describe('postgres core catalog repository', () => {
       }
       return { rows: [] };
     });
-    const repo = createTestRepository(pool);
+    const repo = createTestRepository(pool, {
+      async appendAuditEvent() {
+        assert.fail('tenant no-op must not be audited');
+      },
+    });
     const tenant = await repo.patchCurrentTenant(CTX, {});
     assert.equal(tenant.name, 'Demo Organization');
     assertTenantWrapped(pool.client, CTX.tenantId);
@@ -399,7 +495,11 @@ describe('postgres core catalog repository', () => {
       if (text.includes('FROM environments')) return { rows: [] };
       return { rows: [] };
     });
-    const repo = createTestRepository(pool);
+    const repo = createTestRepository(pool, {
+      async appendAuditEvent() {
+        assert.fail('missing environment must not be audited');
+      },
+    });
     assert.equal(await repo.patchEnvironment(CTX, 'env_missing', { name: 'x' }), null);
     assertTenantWrapped(pool.client, CTX.tenantId);
     const selects = dataQueries(pool.client).filter((q) => q.text.includes('SELECT'));
@@ -455,6 +555,68 @@ describe('postgres core catalog repository', () => {
     assert.equal(env.name, 'New');
     assert.equal(env.updated_at, FIXED_NOW);
     assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('audits catalog mutations on one transaction and rolls back when audit fails', async () => {
+    for (const mutation of catalogMutations()) {
+      const pool = createCatalogMutationPool();
+      let auditCall;
+      const repo = createTestRepository(pool, {
+        async appendAuditEvent(entry, options) {
+          auditCall = { entry, options, queryCount: pool.client.queries.length };
+          return { id: `audit_${mutation.action}`, ...entry };
+        },
+      });
+
+      assert.ok(await mutation.run(repo), mutation.name);
+      assert.equal(auditCall.entry.action, mutation.action, mutation.name);
+      assert.equal(auditCall.entry.resource_type, mutation.resourceType, mutation.name);
+      assert.equal(auditCall.entry.resource_id, mutation.resourceId, mutation.name);
+      assert.equal(auditCall.entry.tenant_id, CTX.tenantId, mutation.name);
+      assert.equal(auditCall.entry.actor_user_id, CTX.userId, mutation.name);
+      assert.equal(auditCall.entry.actor_role, CTX.role, mutation.name);
+      assert.equal(auditCall.options.client, pool.client, mutation.name);
+      assert.equal(auditCall.options.now.toISOString(), FIXED_NOW, mutation.name);
+      const auditLockIndex = pool.client.queries.findIndex(
+        (query) => query.text.includes('pg_advisory_xact_lock'),
+      );
+      const mutationIndex = pool.client.queries.findIndex(
+        (query) => query.text.startsWith(mutation.sql),
+      );
+      assert.ok(auditLockIndex >= 0, `${mutation.name} must acquire the tenant audit lock`);
+      assert.deepEqual(pool.client.queries[auditLockIndex].params, [CTX.tenantId]);
+      assert.ok(
+        auditLockIndex < mutationIndex,
+        `${mutation.name} must acquire the tenant audit lock before mutating rows`,
+      );
+      assert.ok(
+        mutationIndex < auditCall.queryCount,
+        `${mutation.name} must mutate before auditing`,
+      );
+      assert.equal(
+        auditCall.queryCount,
+        pool.client.queries.findIndex((query) => query.text.trim() === 'COMMIT'),
+        `${mutation.name} must audit before commit`,
+      );
+
+      const failingPool = createCatalogMutationPool();
+      const auditError = new Error(`audit unavailable: ${mutation.name}`);
+      const failingRepo = createTestRepository(failingPool, {
+        async appendAuditEvent(_entry, options) {
+          assert.equal(options.client, failingPool.client);
+          assert.ok(
+            dataQueries(failingPool.client).some((query) => query.text.startsWith(mutation.sql)),
+          );
+          throw auditError;
+        },
+      });
+
+      await assert.rejects(() => mutation.run(failingRepo), (error) => error === auditError);
+      const statements = failingPool.client.queries.map((query) => query.text.trim());
+      assert.equal(statements.at(-1), 'ROLLBACK', mutation.name);
+      assert.equal(statements.includes('COMMIT'), false, mutation.name);
+      assert.equal(failingPool.client.released, true, mutation.name);
+    }
   });
 
   it('listTargetGroups scopes by tenant_id', async () => {
@@ -688,7 +850,6 @@ describe('postgres core catalog repository', () => {
         check_count: 'chk_2',
         verdict: 'running',
         started_at: FIXED_NOW,
-        agent_id: null,
       },
       {
         id: 'run_1',
@@ -696,7 +857,6 @@ describe('postgres core catalog repository', () => {
         check_count: 'chk_1',
         verdict: 'completed',
         started_at: FIXED_NOW,
-        agent_id: null,
       },
     ]);
     assert.deepEqual(group.findings_on_group, [

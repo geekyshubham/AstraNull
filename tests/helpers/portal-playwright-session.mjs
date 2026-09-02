@@ -11,8 +11,16 @@ export const PORTAL_SESSION = Object.freeze({
   role: 'owner',
 });
 
-export const PORTAL_STAFF_SESSION = Object.freeze({
+/** Release evidence is narrowed to the auditor role in `route-access.ts`. */
+export const PORTAL_AUDITOR_SESSION = Object.freeze({
   mode: 'dev-headers',
+  principal: 'customer',
+  tenant_id: PORTAL_BASELINE_IDS.tenantId,
+  user_id: 'usr_auditor',
+  role: 'auditor',
+});
+
+export const PORTAL_STAFF_SESSION = Object.freeze({  mode: 'dev-headers',
   principal: 'staff',
   staff_id: 'staff_admin',
   staff_role: 'internal_admin',
@@ -110,7 +118,7 @@ export async function gotoPublicPortalRoute(page, pathname, baseUrl) {
 
 /**
  * @param {import('@playwright/test').Page} page
- * @param {'public' | 'customer' | 'staff-admin' | 'staff-soc'} surface
+ * @param {'public' | 'customer' | 'customer-auditor' | 'staff-admin' | 'staff-soc'} surface
  */
 export async function injectPortalSessionForSurface(page, surface) {
   if (surface === 'public') {
@@ -123,6 +131,10 @@ export async function injectPortalSessionForSurface(page, surface) {
   }
   if (surface === 'staff-soc') {
     await injectPortalDevHeadersSession(page, PORTAL_STAFF_SOC_SESSION);
+    return;
+  }
+  if (surface === 'customer-auditor') {
+    await injectPortalDevHeadersSession(page, PORTAL_AUDITOR_SESSION);
     return;
   }
   await injectPortalDevHeadersSession(page, PORTAL_SESSION);

@@ -52,16 +52,22 @@ function workerMetadata(event) {
 }
 
 function latestTrustedWorkerEvent(events, run) {
+  const runId = boundedString(run.id);
   const runNonce = boundedString(asRecord(run.correlation)?.nonce_hash, 256);
   const boundedEvents = Array.isArray(events) ? events.slice(-256) : [];
   for (let index = boundedEvents.length - 1; index >= 0; index -= 1) {
     const event = asRecord(boundedEvents[index]);
     if (!event || event.signal_type !== 'probe_result') continue;
+    if (boundedString(event.test_run_id) !== runId) continue;
     if (!isTrustedProducerEvent(event)) continue;
     if (event.check_id !== WAF_EDGE_DETECTION_CHECK_ID) continue;
     if (!TRUSTED_EVENT_SOURCES.has(event.source)) continue;
+    const expectedProducer = event.source === 'probe_worker'
+      ? 'signed_probe'
+      : 'internal_simulation';
+    if (event.producer_kind !== expectedProducer) continue;
     const eventNonce = boundedString(event.nonce_hash, 256);
-    if (runNonce && eventNonce !== runNonce) continue;
+    if (eventNonce !== runNonce) continue;
     return event;
   }
   return null;

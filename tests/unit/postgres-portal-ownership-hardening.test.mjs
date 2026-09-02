@@ -258,6 +258,95 @@ function recordingPool(handler) {
 }
 
 describe('postgres portal audited transaction boundary', () => {
+  it('awaits target-detail reads in order on one tenant-scoped transaction client', async () => {
+    const events = [];
+    let activeQueries = 0;
+    let maxActiveQueries = 0;
+    let connectCount = 0;
+    let released = false;
+
+    function queryLabel(text) {
+      const sql = String(text).trim();
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return sql;
+      if (sql.includes("set_config('app.tenant_id'")) return 'tenant-context';
+      if (sql.includes('SELECT * FROM targets WHERE')) return 'target';
+      if (sql.includes('FROM target_verifications')) return 'verifications';
+      if (sql.includes('FROM loa_signatures')) return 'loa';
+      if (sql.includes('COUNT(*) FILTER')) return 'finding-counts';
+      if (sql.includes('FROM findings')) return 'findings';
+      if (sql.includes('FROM test_runs')) return 'runs';
+      if (sql.includes('SELECT * FROM waf_assets')) return 'waf-asset';
+      if (sql.includes('FROM agents')) return 'agent-binding';
+      if (sql.includes('FROM waf_posture_snapshots')) return 'waf-snapshot';
+      if (sql.includes('FROM target_edge_detections')) return 'edge-detection';
+      return sql;
+    }
+
+    const client = {
+      async query(text) {
+        const label = queryLabel(text);
+        assert.equal(activeQueries, 0, `client.query overlap before ${label}`);
+        activeQueries += 1;
+        maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+        events.push(`start:${label}`);
+        try {
+          await new Promise((resolve) => setImmediate(resolve));
+          if (label === 'target') {
+            return { rows: [{
+              id: 'tgt_ordered', tenant_id: CTX.tenantId, target_group_id: 'tg_ordered',
+              kind: 'fqdn', value: 'ordered.example.test', metadata_json: {},
+              created_at: NOW.toISOString(),
+            }] };
+          }
+          if (label === 'finding-counts') {
+            return { rows: [{ open_count: 0, closed_count: 0 }] };
+          }
+          return { rows: [] };
+        } finally {
+          events.push(`finish:${label}`);
+          activeQueries -= 1;
+        }
+      },
+      release() { released = true; },
+    };
+    const pool = {
+      async connect() {
+        connectCount += 1;
+        return client;
+      },
+    };
+
+    const bundle = await createPortalRevampRepository(pool).getTargetDetailBundle(
+      CTX,
+      'tgt_ordered',
+      { findings_limit: 20 },
+    );
+
+    assert.equal(bundle.target.id, 'tgt_ordered');
+    assert.equal(connectCount, 1);
+    assert.equal(maxActiveQueries, 1);
+    assert.equal(released, true);
+    const orderedLabels = [
+      'BEGIN',
+      'tenant-context',
+      'target',
+      'verifications',
+      'loa',
+      'findings',
+      'finding-counts',
+      'runs',
+      'waf-asset',
+      'agent-binding',
+      'waf-snapshot',
+      'edge-detection',
+      'COMMIT',
+    ];
+    assert.deepEqual(
+      events,
+      orderedLabels.flatMap((label) => [`start:${label}`, `finish:${label}`]),
+    );
+  });
+
   it('expires and audits a timed-out LOA before replacement on the same locked client', async () => {
     const pool = recordingPool((text, params) => {
       const sql = String(text);

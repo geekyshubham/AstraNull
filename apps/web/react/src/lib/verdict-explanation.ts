@@ -21,6 +21,27 @@ function getNestedString(item: DataItem | null | undefined, path: string[], fall
   return fallback;
 }
 
+export function isSignedProbeEvidenceEvent(event: DataItem) {
+  return getString(event, ['signal_type']) === 'probe_result'
+    && getString(event, ['producer_kind']) === 'signed_probe';
+}
+
+export function isAuthenticatedAgentObservationEvent(event: DataItem) {
+  return getString(event, ['signal_type']) === 'agent_observation'
+    && getString(event, ['producer_kind']) === 'authenticated_agent';
+}
+
+export function isInternalControlPlaneNoObservationEvent(event: DataItem) {
+  return getString(event, ['signal_type']) === 'agent_no_observation'
+    && getString(event, ['producer_kind']) === 'internal_control_plane';
+}
+
+function isTrustedVerdictEvidenceEvent(event: DataItem) {
+  return isSignedProbeEvidenceEvent(event)
+    || isAuthenticatedAgentObservationEvent(event)
+    || isInternalControlPlaneNoObservationEvent(event);
+}
+
 function verdictExplanationMetaMode(event: DataItem) {
   const meta = (event.metadata as DataItem | undefined) ?? {};
   const signalType = getString(event, ['signal_type'], '');
@@ -83,12 +104,8 @@ function resolveWafPostureRemediation(context: {
 }) {
   const reasonCodes = parseFindingReasonCodes(context.finding);
   const postureStatus = parseFindingPostureStatus(context.finding);
-  const probeEvents = (context.events ?? []).filter(
-    (event) => getString(event, ['signal_type']) === 'probe_result',
-  );
-  const noObsEvents = (context.events ?? []).filter(
-    (event) => getString(event, ['signal_type']) === 'agent_no_observation',
-  );
+  const probeEvents = (context.events ?? []).filter(isSignedProbeEvidenceEvent);
+  const noObsEvents = (context.events ?? []).filter(isInternalControlPlaneNoObservationEvent);
   const steps: string[] = [];
 
   if (reasonCodes.includes('origin_bypass_confirmed')) {
@@ -132,10 +149,11 @@ export function resolveRemediationTemplate(
 }
 
 export function summarizeExternalProbeEvidence(probeEvents: DataItem[]) {
-  if (!probeEvents.length) {
-    return 'No probe_result events recorded for this run yet; external probe evidence is missing or limited.';
+  const trustedProbeEvents = probeEvents.filter(isSignedProbeEvidenceEvent);
+  if (!trustedProbeEvents.length) {
+    return 'No signed probe_result events recorded for this run yet; external probe evidence is missing or limited.';
   }
-  return probeEvents
+  return trustedProbeEvents
     .map((event) => {
       const parts: string[] = [];
       if (event.timestamp) parts.push(String(event.timestamp));
@@ -152,9 +170,11 @@ export function summarizeExternalProbeEvidence(probeEvents: DataItem[]) {
 }
 
 export function summarizeInternalAgentEvidence(obsEvents: DataItem[], noObsEvents: DataItem[]) {
+  const trustedObsEvents = obsEvents.filter(isAuthenticatedAgentObservationEvent);
+  const trustedNoObsEvents = noObsEvents.filter(isInternalControlPlaneNoObservationEvent);
   const lines: string[] = [];
-  if (obsEvents.length) {
-    obsEvents.forEach((event) => {
+  if (trustedObsEvents.length) {
+    trustedObsEvents.forEach((event) => {
       const parts: string[] = [];
       if (event.timestamp) parts.push(String(event.timestamp));
       if (event.agent_id) parts.push(`agent ${String(event.agent_id)}`);
@@ -165,9 +185,9 @@ export function summarizeInternalAgentEvidence(obsEvents: DataItem[], noObsEvent
       lines.push(parts.length ? parts.join(' · ') : 'agent_observation recorded');
     });
   } else {
-    lines.push('No agent_observation events in this run timeline.');
+    lines.push('No authenticated agent_observation events in this run timeline.');
   }
-  noObsEvents.forEach((event) => {
+  trustedNoObsEvents.forEach((event) => {
     const meta = (event.metadata as DataItem | undefined) ?? {};
     const reason = meta.reason ? String(meta.reason) : 'no observation within bounded window';
     lines.push(`agent_no_observation · ${reason}`);
@@ -176,9 +196,13 @@ export function summarizeInternalAgentEvidence(obsEvents: DataItem[], noObsEvent
 }
 
 export function summarizeObservationMode(events: DataItem[]) {
-  const agentSignals = events.filter((event) => ['agent_observation', 'agent_no_observation'].includes(getString(event, ['signal_type'])));
-  const pool = agentSignals.length ? agentSignals : events;
-  if (!pool.length) return 'Observation mode cannot be determined — no agent or probe events yet.';
+  const trustedEvents = events.filter(isTrustedVerdictEvidenceEvent);
+  const agentSignals = trustedEvents.filter((event) => (
+    isAuthenticatedAgentObservationEvent(event)
+    || isInternalControlPlaneNoObservationEvent(event)
+  ));
+  const pool = agentSignals.length ? agentSignals : trustedEvents;
+  if (!pool.length) return 'Observation mode cannot be determined — no trusted agent or probe events yet.';
   const modes = [...new Set(pool.map((event) => verdictExplanationMetaMode(event)))];
   return modes.join(', ');
 }
@@ -188,7 +212,9 @@ export function summarizePlacementConfidence(
   noObsEvents: DataItem[],
   verdictPlacement?: DataItem
 ) {
-  if (verdictPlacement && typeof verdictPlacement === 'object') {
+  const trustedMatchingObs = matchingObs.filter(isAuthenticatedAgentObservationEvent);
+  const trustedNoObsEvents = noObsEvents.filter(isInternalControlPlaneNoObservationEvent);
+  if (trustedMatchingObs.length && verdictPlacement && typeof verdictPlacement === 'object') {
     const parts: string[] = [];
     if (verdictPlacement.level) parts.push(String(verdictPlacement.level));
     if (verdictPlacement.observation_mode) parts.push(`mode ${String(verdictPlacement.observation_mode)}`);
@@ -196,13 +222,13 @@ export function summarizePlacementConfidence(
     if (verdictPlacement.agent_id) parts.push(`agent ${String(verdictPlacement.agent_id)}`);
     if (parts.length) return parts.join(' · ');
   }
-  if (matchingObs.length) {
-    return 'Placement confidence is supported by job-bound agent observation correlated to this run.';
+  if (trustedMatchingObs.length) {
+    return 'Placement confidence is supported by job-bound authenticated agent observation correlated to this run.';
   }
-  if (noObsEvents.length) {
-    return 'Placement confidence is limited: the observation window ended with agent_no_observation and no matching observation.';
+  if (trustedNoObsEvents.length) {
+    return 'Placement confidence is limited: the trusted observation window ended with agent_no_observation and no matching authenticated observation.';
   }
-  return 'Placement confidence cannot be proven from run events yet.';
+  return 'Placement confidence cannot be proven from trusted run events yet.';
 }
 
 export function buildVerdictExplanationFields(
@@ -212,9 +238,9 @@ export function buildVerdictExplanationFields(
 ): VerdictExplanationField[] {
   if (!detail?.verdict || typeof detail.verdict !== 'object') return [];
 
-  const probeEvents = events.filter((event) => getString(event, ['signal_type']) === 'probe_result');
-  const obsEvents = events.filter((event) => getString(event, ['signal_type']) === 'agent_observation');
-  const noObsEvents = events.filter((event) => getString(event, ['signal_type']) === 'agent_no_observation');
+  const probeEvents = events.filter(isSignedProbeEvidenceEvent);
+  const obsEvents = events.filter(isAuthenticatedAgentObservationEvent);
+  const noObsEvents = events.filter(isInternalControlPlaneNoObservationEvent);
   const nonceHash = getNestedString(detail, ['correlation', 'nonce_hash'], '');
   const matchingObs = nonceHash
     ? obsEvents.filter((event) => getString(event, ['nonce_hash'], '') === nonceHash)

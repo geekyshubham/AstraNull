@@ -14,6 +14,7 @@ import { isLiveCapabilityProbeAuthorized } from '../capabilityProbeAuth.mjs';
 import { normalizeProbeHttpPath } from '../../contracts/checks.mjs';
 import { pinnedFetch } from '../pinnedHttpRequest.mjs';
 import { BENIGN_CLASS_MARKERS } from '../outsideInWafScanner.mjs';
+import { resolveProbeRequestBudget } from '../probeRequestBudget.mjs';
 
 export const L7_RESOURCE_POSTURE_PROBE_KIND = 'l7_resource_posture_probe';
 
@@ -71,17 +72,21 @@ export function buildL7ResourcePostureProfile({
 }
 
 function resolveEndpoint(job) {
-  const target = job?.target ?? {};
-  const path = normalizeProbeHttpPath(job?.probe_profile?.probe_path) ?? '/';
+  const value = String(job?.target?.value ?? '').trim();
+  if (!value) return null;
   let base;
   try {
-    if (typeof target.url === 'string' && target.url) base = new URL(target.url);
-    else if (typeof target.fqdn === 'string' && target.fqdn) base = new URL(`https://${target.fqdn}`);
-    else return null;
+    base = /^https?:\/\//i.test(value) ? new URL(value) : new URL(`https://${value}/`);
   } catch {
     return null;
   }
-  return { origin: base.origin, path };
+  const configuredPath = normalizeProbeHttpPath(job?.probe_profile?.probe_path);
+  if (configuredPath) {
+    base.pathname = configuredPath;
+    base.search = '';
+  }
+  base.hash = '';
+  return { url: base, path: base.pathname };
 }
 
 // Each spec declares an oversize/compressed shape via headers only. `body` and `query`
@@ -173,7 +178,15 @@ export async function probeL7ResourcePosture(job, deps = {}) {
 
   const timeoutMs = boundedPostureTimeoutMs(job?.probe_profile?.timeout_ms);
   const requestFn = deps.requestFn ?? defaultRequestFn;
-  const specs = requestSpecsForMarkerClass(markerClass).slice(0, L7_RESOURCE_POSTURE_MAX_REQUESTS);
+  const profileBudget = Number(job?.probe_profile?.max_requests);
+  const maxRequests = Math.min(
+    Number.isInteger(profileBudget) && profileBudget > 0
+      ? profileBudget
+      : L7_RESOURCE_POSTURE_MAX_REQUESTS,
+    resolveProbeRequestBudget(job),
+    L7_RESOURCE_POSTURE_MAX_REQUESTS,
+  );
+  const specs = requestSpecsForMarkerClass(markerClass).slice(0, maxRequests);
 
   let requestsSent = 0;
   let enforced = false;
@@ -185,12 +198,15 @@ export async function probeL7ResourcePosture(job, deps = {}) {
       // Defensive guard: never emit an oversize actual payload.
       continue;
     }
-    const url = spec.query
-      ? `${endpoint.origin}${endpoint.path}?${spec.query}`
-      : `${endpoint.origin}${endpoint.path}`;
+    const requestUrl = new URL(endpoint.url.href);
+    if (spec.query) {
+      for (const [name, value] of new URLSearchParams(spec.query)) {
+        requestUrl.searchParams.append(name, value);
+      }
+    }
     requestsSent += 1;
     try {
-      const resp = await requestFn(url, {
+      const resp = await requestFn(requestUrl.href, {
         method: spec.method,
         headers: spec.headers,
         body: spec.body,
@@ -200,9 +216,9 @@ export async function probeL7ResourcePosture(job, deps = {}) {
       observedStatuses.push(status);
       if (ENFORCED_STATUSES.has(status)) enforced = true;
       else if (status >= 100 && status < 400) accepted = true;
-    } catch (error) {
+    } catch {
       observedStatuses.push(0);
-      void error;
+      break;
     }
     if (enforced) break;
   }

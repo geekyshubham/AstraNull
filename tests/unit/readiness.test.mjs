@@ -14,8 +14,18 @@ import {
   WEIGHT_VERDICTS,
 } from '../../src/services/readiness.mjs';
 import { REQUIRED_ARTIFACT_TYPES } from '../../src/services/highScale.mjs';
+import {
+  catalogCheckSupportsReadiness,
+  evidenceTierForProbeKind,
+} from '../../src/lib/readinessVerdicts.mjs';
 import { artifactProofBody } from '../helpers/highScalePayload.mjs';
-import { getStore } from '../../src/store.mjs';
+import { getStore, resetStoreForTests } from '../../src/store.mjs';
+import { buildPortalBaselineStore, PORTAL_BASELINE_IDS } from '../fixtures/portal-baseline/seed.mjs';
+import { buildPortalDemoStore, PORTAL_DEMO_IDS } from '../fixtures/portal-demo/seed.mjs';
+import {
+  applyPortalBaselineReadinessBoost,
+  applyPortalBaselineReadinessPenalty,
+} from '../fixtures/portal-baseline/readiness.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 function daysAgo(n) {
@@ -54,6 +64,109 @@ describe('readiness scoring', () => {
     }
   });
 
+  it('selects the baseline readiness run by stable ID/check after unrelated runs are prepended', () => {
+    function storeWithUnrelatedFirst() {
+      const store = buildPortalBaselineStore();
+      store.testRuns.unshift({
+        id: 'run_unrelated_prepend',
+        tenant_id: PORTAL_BASELINE_IDS.tenantId,
+        target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
+        target_id: PORTAL_BASELINE_IDS.targetId,
+        check_id: 'dns.authoritative_response.safe',
+        status: 'completed',
+        created_at: new Date().toISOString(),
+      });
+      return store;
+    }
+
+    const boostedStore = storeWithUnrelatedFirst();
+    applyPortalBaselineReadinessBoost(boostedStore);
+    const boostedEvent = boostedStore.events.find((event) => event.id === 'evt_portal_baseline_boost');
+    assert.equal(boostedEvent.test_run_id, PORTAL_BASELINE_IDS.readinessRunId);
+    assert.equal(boostedEvent.check_id, PORTAL_BASELINE_IDS.checkId);
+    assert.equal(
+      boostedStore.testRuns.find((run) => run.id === boostedEvent.test_run_id)?.check_id,
+      boostedEvent.check_id,
+    );
+    assert.equal(
+      boostedStore.verdicts.find((verdict) => verdict.id === 'vrd_portal_baseline_boost')?.test_run_id,
+      PORTAL_BASELINE_IDS.readinessRunId,
+    );
+    resetStoreForTests(boostedStore);
+    const boosted = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
+
+    const penalizedStore = storeWithUnrelatedFirst();
+    applyPortalBaselineReadinessPenalty(penalizedStore);
+    resetStoreForTests(penalizedStore);
+    const penalized = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
+
+    for (const result of [boosted, penalized]) {
+      assert.ok(Number.isInteger(result.score));
+      assert.ok(result.score >= 0 && result.score <= 100);
+      assert.ok(result.factors.length >= 4);
+      assert.ok(result.factors.every((entry) => entry.key && entry.label && entry.detail));
+    }
+    assert.ok(boosted.score > penalized.score, `${boosted.score} must exceed ${penalized.score}`);
+  });
+
+  it('keeps portal-demo freshness and penalty scoring on the remapped tenant', () => {
+    const boostedStore = buildPortalDemoStore();
+    resetStoreForTests(boostedStore);
+
+    const boosted = computeReadiness(PORTAL_DEMO_IDS.tenantId);
+    assert.equal(boosted.score, 80);
+    assert.equal(factor(boosted, 'coverage').score, 40);
+    assert.equal(factor(boosted, 'verdicts').score, WEIGHT_VERDICTS);
+    assert.equal(factor(boosted, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
+    assert.match(factor(boosted, 'evidence_freshness').detail, /1 run\(s\), 1 target group\(s\)/);
+
+    const unmappedTenant = computeReadiness(PORTAL_BASELINE_IDS.tenantId);
+    assert.equal(unmappedTenant.score, 0);
+    assert.equal(factor(unmappedTenant, 'evidence_freshness').score, 0);
+
+    const penalizedStore = buildPortalDemoStore();
+    applyPortalBaselineReadinessPenalty(penalizedStore);
+    const run = penalizedStore.testRuns.find((entry) => (
+      entry.id === PORTAL_DEMO_IDS.runId && entry.check_id === PORTAL_BASELINE_IDS.checkId
+    ));
+    const penalty = penalizedStore.findings.find(
+      (entry) => entry.id === 'fnd_portal_baseline_penalty',
+    );
+    assert.ok(run);
+    assert.ok(penalty);
+    assert.equal(penalty.tenant_id, PORTAL_DEMO_IDS.tenantId);
+    assert.equal(penalty.test_run_id, run.id);
+    assert.equal(penalty.target_group_id, run.target_group_id);
+    assert.equal(penalty.target_id, run.target_id);
+    assert.equal(penalty.check_id, run.check_id);
+    assert.equal(
+      penalizedStore.findings.some((entry) => (
+        entry.id === penalty.id && entry.tenant_id === PORTAL_BASELINE_IDS.tenantId
+      )),
+      false,
+    );
+
+    resetStoreForTests(penalizedStore);
+    const penalized = computeReadiness(PORTAL_DEMO_IDS.tenantId);
+    assert.equal(penalized.score, 55);
+    assert.equal(factor(penalized, 'verdicts').score, 0);
+    assert.equal(factor(penalized, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
+  });
+
+  it('recomputes authoritative zero instead of returning stale unversioned score 97', () => {
+    freshStore();
+    const store = getStore();
+    store.stateRollups.ten_demo = {
+      readiness: { score: 97, factors: [], updated_at: '2025-01-01T00:00:00.000Z' },
+    };
+
+    const readiness = computeReadiness('ten_demo');
+
+    assert.equal(store.stateRollups.ten_demo.readiness.score, 97);
+    assert.equal(readiness.score, 0);
+    assert.notStrictEqual(readiness, store.stateRollups.ten_demo.readiness);
+  });
+
   it('empty tenant state stays explainable and does not award SOC points by absence', () => {
     freshStore();
     const r = computeReadiness('ten_demo');
@@ -66,6 +179,24 @@ describe('readiness scoring', () => {
     const verdictsFactor = factor(r, 'verdicts');
     assert.equal(verdictsFactor.score, 0);
     assert.match(verdictsFactor.detail, /absence of findings is not proof/i);
+  });
+
+  it('classifies readiness semantics from the authoritative catalog check', () => {
+    for (const checkId of [
+      'dns.authoritative_response.safe',
+      'l3.forbidden_tcp_port.safe',
+      'l3.forbidden_udp_port.safe',
+      'pattern.carpet_bombing.readiness',
+      'l7.http_method_restriction.safe',
+      'protocol.http3_control_stream.readiness',
+    ]) {
+      assert.equal(catalogCheckSupportsReadiness(checkId), false, checkId);
+    }
+    assert.equal(catalogCheckSupportsReadiness('origin.direct_reachability.safe'), true);
+    assert.equal(catalogCheckSupportsReadiness('ops.runbook_contact_validation.safe'), true);
+    assert.equal(catalogCheckSupportsReadiness('unknown.check'), false);
+    assert.equal(evidenceTierForProbeKind('http_method_matrix'), 'E2');
+    assert.equal(evidenceTierForProbeKind('http3_control_probe'), 'E2');
   });
 
   it('stale completed run does not earn evidence freshness', () => {
@@ -120,6 +251,44 @@ describe('readiness scoring', () => {
     assert.equal(factor(r, 'evidence_freshness').score, 0);
     assert.match(factor(r, 'evidence_freshness').detail, /No evidence-backed validations yet/);
     assert.equal(factor(r, 'coverage').score, 0);
+  });
+
+  it('ignores an evidence-bound protected verdict for an authoritative observation-only check', () => {
+    freshStore();
+    const store = getStore();
+    const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_transport_only',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'dns.authoritative_response.safe',
+      status: 'verdicted',
+      completed_at: now,
+      created_at: now,
+    });
+    store.events.push({
+      id: 'evt_transport_only',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_transport_only',
+      signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
+      timestamp: now,
+      metadata: { profile_kind: 'host_sni_bypass', external_result: 'blocked' },
+    });
+    store.verdicts.push({
+      id: 'verdict_transport_only',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_transport_only',
+      verdict: 'protected',
+      evidence_ids: ['evt_transport_only'],
+      created_at: now,
+    });
+
+    const readiness = computeReadiness('ten_demo');
+    assert.equal(factor(readiness, 'coverage').score, 0);
+    assert.equal(factor(readiness, 'verdicts').score, 0);
+    assert.equal(factor(readiness, 'evidence_freshness').score, 0);
   });
 
   it('does not award readiness for vault evidence linked to a legacy reserved event', () => {
@@ -228,6 +397,44 @@ describe('readiness scoring', () => {
     assert.equal(factor(r, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
     assert.equal(factor(r, 'coverage').score, 40);
     assert.match(factor(r, 'coverage').detail, /1 of 1 target group/);
+  });
+
+  it('preserves readiness credit for an evidence-bound ops readiness verdict', () => {
+    freshStore();
+    const store = getStore();
+    const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_ops_ready',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'ops.runbook_contact_validation.safe',
+      status: 'verdicted',
+      completed_at: now,
+      created_at: now,
+    });
+    store.events.push({
+      id: 'evt_ops_ready',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_ops_ready',
+      signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
+      timestamp: now,
+      metadata: { external_result: 'connected', ops_validation_ok: true },
+    });
+    store.verdicts.push({
+      id: 'verdict_ops_ready',
+      tenant_id: 'ten_demo',
+      test_run_id: 'run_ops_ready',
+      verdict: 'protected',
+      evidence_ids: ['evt_ops_ready'],
+      created_at: now,
+    });
+
+    const readiness = computeReadiness('ten_demo');
+    assert.equal(factor(readiness, 'coverage').score, 40);
+    assert.equal(factor(readiness, 'verdicts').score, WEIGHT_VERDICTS);
+    assert.equal(factor(readiness, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
   });
 
   it('high-scale request with accepted required artifacts and two distinct approvals earns SOC points', () => {
@@ -394,6 +601,16 @@ describe('readiness scoring', () => {
     freshStore();
     const store = getStore();
     const now = new Date().toISOString();
+    store.testRuns.push({
+      id: 'run_x',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_reachability.safe',
+      status: 'verdicted',
+      completed_at: now,
+      created_at: now,
+    });
     const evidenceId = addTrustedVerdictEvidence(store, 'run_x', 'evt_penalty', now);
     store.verdicts.push({
       id: 'v_penalty',
@@ -588,6 +805,16 @@ describe('readiness scoring', () => {
     freshStore();
     const store = getStore();
     const oldEvidenceAt = daysAgo(RECENT_EVIDENCE_WINDOW_DAYS + 2);
+    store.testRuns.push({
+      id: 'run_old',
+      tenant_id: 'ten_demo',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'origin.direct_reachability.safe',
+      status: 'verdicted',
+      completed_at: oldEvidenceAt,
+      created_at: oldEvidenceAt,
+    });
     const evidenceId = addTrustedVerdictEvidence(store, 'run_old', 'evt_old', oldEvidenceAt);
     store.verdicts.push({
       id: 'v_old',

@@ -14,13 +14,14 @@ import {
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatNumber } from '../lib/utils';
 import { resolveTargetVerificationProvenance, VerifyChip } from '../lib/verify-chip';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { EmptyState } from '../components/ui/empty-state';
+import { useConfirmModal } from '../lib/crud-ui';
 
 const TARGETS_PAGE_STYLES = `
 .targets-page .targets-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--border-soft); gap: 1px; }
@@ -31,49 +32,26 @@ const TARGETS_PAGE_STYLES = `
 .targets-page .targets-intake-form { display: grid; grid-template-columns: minmax(200px, 1.15fr) minmax(180px, .85fr) minmax(180px, .85fr) auto; gap: var(--space-3); align-items: end; }
 .targets-page .targets-intake-form label { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1-5); color: var(--fg); font-size: var(--text-sm); font-weight: 500; }
 .targets-page .targets-intake-form input, .targets-page .targets-intake-form select { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 12px; }
-.targets-page .targets-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); margin-bottom: var(--space-4); }
-.targets-page .targets-search { display: flex; min-width: min(100%, 300px); flex: 1 1 280px; align-items: center; gap: var(--space-2); min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); padding: 0 var(--space-3); }
+.targets-page .targets-toolbar { display: grid; grid-template-columns: minmax(240px, 1.5fr) repeat(4, minmax(150px, 1fr)); align-items: end; gap: var(--space-3); margin-bottom: var(--space-3); }
+.targets-page .targets-search { display: flex; min-width: 0; align-items: center; gap: var(--space-2); min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface-sunk); padding: 0 var(--space-3); }
 .targets-page .targets-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); }
-.targets-page .targets-filter { display: flex; min-width: 160px; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
-.targets-page .targets-filter select { min-height: 42px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); padding: 8px 10px; }
+.targets-page .targets-filter { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); color: var(--fg-2); font-size: var(--text-xs); }
+.targets-page .targets-filter select { width: 100%; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-sunk); color: var(--fg); padding: 8px 10px; }
+.targets-page .targets-result-count { margin: 0 0 var(--space-3); color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }
 .targets-page .target-primary { display: flex; min-width: 220px; align-items: center; gap: var(--space-3); }
 .targets-page .target-primary-icon, .targets-page .provider-mark { display: inline-grid; width: 34px; height: 34px; flex: none; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 3%); color: var(--fg-2); }
 .targets-page .target-primary-copy, .targets-page .source-cell { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.targets-page a.target-primary-copy { border-radius: var(--radius-sm); color: inherit; text-decoration: none; }
+.targets-page a.target-primary-copy:hover strong { color: var(--accent); }
+.targets-page a.target-primary-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .targets-page .target-primary-copy strong { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-family: var(--font-mono); font-size: var(--text-sm); }
 .targets-page .target-primary-copy span, .targets-page .source-cell small { color: var(--muted); font-size: var(--text-xs); }
 .targets-page .provider-line { display: flex; min-width: 170px; align-items: center; gap: var(--space-2); }
 .targets-page .provider-mark { width: 30px; height: 30px; border-radius: var(--radius-pill); }
 .targets-page .target-row-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .targets-page .target-row-actions .btn { min-height: 34px; }
-@media (min-width: 901px) {
-  .targets-page .data-table { width: 100%; table-layout: fixed; }
-  .targets-page .data-table th:nth-child(1) { width: 22%; }
-  .targets-page .data-table th:nth-child(2) { width: 12%; }
-  .targets-page .data-table th:nth-child(3) { width: 13%; }
-  .targets-page .data-table th:nth-child(4) { width: 12%; }
-  .targets-page .data-table th:nth-child(5) { width: 14%; }
-  .targets-page .data-table th:nth-child(6) { width: 9%; }
-  .targets-page .data-table th:nth-child(7) { width: 18%; }
-  .targets-page .target-primary,
-  .targets-page .provider-line { min-width: 0; }
-  .targets-page .provider-line { align-items: flex-start; }
-  .targets-page .data-table td { min-width: 0; overflow-wrap: anywhere; }
-}
-@media (min-width: 701px) and (max-width: 900px) {
-  .targets-page .targets-table-wrap { overflow-x: visible; }
-  .targets-page .targets-table-wrap .data-table,
-  .targets-page .targets-table-wrap tbody { display: block; width: 100%; }
-  .targets-page .targets-table-wrap thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .targets-page .targets-table-wrap tbody { display: grid; gap: var(--space-3); }
-  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); padding: var(--space-4); }
-  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td { display: grid; grid-template-columns: minmax(92px, .42fr) minmax(0, 1fr); gap: var(--space-3); align-items: start; min-width: 0; border-bottom: 0; padding: var(--space-1) 0; }
-  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td::before { content: attr(data-label); color: var(--fg-2); font-size: var(--text-xs); font-weight: 600; }
-  .targets-page .targets-table-wrap tbody tr:not(.table-empty-row) td:last-child { grid-column: 1 / -1; }
-  .targets-page .target-primary,
-  .targets-page .provider-line { min-width: 0; }
-  .targets-page .target-row-actions { align-items: center; flex-direction: row; }
-  .targets-page .target-row-actions .btn { width: auto; justify-content: center; }
-}
+.targets-page .targets-table-wrap .data-table { min-width: 1180px; }
+@media (max-width: 1120px) { .targets-page .targets-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-search { grid-column: 1 / -1; } }
 @media (max-width: 900px) {
   .targets-page .target-row-actions .btn { min-height: 44px; }
 }
@@ -82,7 +60,7 @@ const TARGETS_PAGE_STYLES = `
   .targets-page .target-row-actions .btn { width: 100%; justify-content: center; }
 }
 @media (max-width: 1000px) { .targets-page .targets-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .targets-page .targets-intake-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 620px) { .targets-page .targets-summary, .targets-page .targets-intake-form { grid-template-columns: 1fr; } .targets-page .targets-filter { flex: 1 1 100%; } .targets-page .targets-intake-form .btn { width: 100%; } }
+@media (max-width: 620px) { .targets-page .targets-summary, .targets-page .targets-intake-form, .targets-page .targets-toolbar { grid-template-columns: 1fr; } .targets-page .targets-search { grid-column: auto; } .targets-page .targets-intake-form .btn { width: 100%; } }
 `;
 
 type Tone = NonNullable<BadgeProps['tone']>;
@@ -121,6 +99,15 @@ function sourceLabel(item: DataItem) {
   const integration = getString(item, ['import_integration', 'import_source'], '');
   if (integration && integration !== '—') return integration;
   return getString(metadata, ['source_app', 'app', 'source'], getString(item, ['source'], 'manual'));
+}
+
+function targetKindLabel(item: DataItem) {
+  const kind = getString(item, ['kind'], 'unknown').toLowerCase();
+  const value = getString(item, ['value'], '');
+  if (kind === 'fqdn' || kind === 'hostname' || kind === 'domain') return 'Hostname';
+  if (kind === 'ip') return value.includes(':') ? 'IPv6' : 'IPv4';
+  if (kind === 'cidr') return 'CIDR';
+  return kind.replace(/_/g, ' ');
 }
 
 function providerKey(value: string) {
@@ -163,9 +150,12 @@ export function TargetsPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [query, setQuery] = useState('');
   const [verificationFilter, setVerificationFilter] = useState('all');
   const [eligibilityFilter, setEligibilityFilter] = useState('all');
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [kindFilter, setKindFilter] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -180,7 +170,11 @@ export function TargetsPage({
       const eligibility = getString(item, ['eligibility'], 'unknown').toLowerCase();
       if (verificationFilter === 'verified' && !isVerified(state)) return false;
       if (verificationFilter === 'unverified' && isVerified(state)) return false;
+      const groupId = getString(item, ['target_group_id'], '');
+      const kind = getString(item, ['kind'], 'unknown').toLowerCase();
       if (eligibilityFilter !== 'all' && eligibility !== eligibilityFilter) return false;
+      if (groupFilter !== 'all' && groupId !== groupFilter) return false;
+      if (kindFilter !== 'all' && kind !== kindFilter) return false;
       if (!needle) return true;
       return [
         getString(item, ['value'], ''),
@@ -189,13 +183,16 @@ export function TargetsPage({
         sourceLabel(item)
       ].some((value) => value.toLowerCase().includes(needle));
     });
-  }, [targets, query, verificationFilter, eligibilityFilter]);
+  }, [targets, query, verificationFilter, eligibilityFilter, groupFilter, kindFilter]);
 
   const verifiedCount = targets.filter((item) => isVerified(verificationState(item))).length;
   const eligibleCount = targets.filter((item) => getString(item, ['eligibility'], '').toLowerCase() === 'eligible').length;
-  const integrationCount = new Set(
-    targets.map(sourceLabel).filter((source) => !['manual', 'astranull portal', '—'].includes(source.toLowerCase()))
-  ).size;
+  const blockedCount = targets.filter((item) => {
+    const state = verificationState(item);
+    const eligibility = getString(item, ['eligibility'], 'unknown').toLowerCase();
+    return !isVerified(state) || eligibility !== 'eligible';
+  }).length;
+  const targetKinds = [...new Set(targets.map((item) => getString(item, ['kind'], 'unknown').toLowerCase()).filter(Boolean))].sort();
 
   async function addDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -232,7 +229,11 @@ export function TargetsPage({
     const groupId = getString(item, ['target_group_id'], '');
     const value = getString(item, ['value'], targetId);
     if (!targetId || !groupId) return;
-    if (!window.confirm(`Remove ${value} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`)) return;
+    if (!await confirm({
+      title: 'Remove declared target',
+      description: `Remove ${value} from declared scope? Existing evidence is retained. Active runs must finish or be cancelled first.`,
+      confirmLabel: 'Remove target'
+    })) return;
     setBusy(`remove-${targetId}`);
     setMessage('');
     setError('');
@@ -254,13 +255,14 @@ export function TargetsPage({
       render: (item) => (
         <span className="target-primary">
           <span className="target-primary-icon" aria-hidden="true">{getString(item, ['kind'], 'fqdn') === 'ip' ? <Server size={16} /> : <Globe2 size={16} />}</span>
-          <span className="target-primary-copy">
+          <a className="target-primary-copy" href={buildDetailHref('target-detail', getString(item, ['id'], ''))}>
             <strong title={getString(item, ['value'], '')}>{getString(item, ['value'], '—')}</strong>
-            <span>{getString(item, ['kind'], 'unknown')} · {getString(item, ['environment_name', 'environment_id'], 'Unassigned environment')}</span>
-          </span>
+            <span>{getString(item, ['environment_name', 'environment_id'], 'Unassigned environment')}</span>
+          </a>
         </span>
       )
     },
+    { key: 'kind', label: 'Kind', render: (item) => <Badge tone="muted">{targetKindLabel(item)}</Badge> },
     {
       key: 'group',
       label: 'Target group',
@@ -296,6 +298,7 @@ export function TargetsPage({
         return <span className="provider-line"><ProviderIcon source={source} /><span className="source-cell"><strong>{source.replace(/_/g, ' ')}</strong><small>{getString(item, ['source'], 'manual')}</small></span></span>;
       }
     },
+    { key: 'validated', label: 'Last validated', render: (item) => <span className="mono small">{item.last_validated_at || item.last_validation_at ? formatDate(item.last_validated_at ?? item.last_validation_at) : 'Never'}</span> },
     { key: 'added', label: 'Added', render: (item) => <span className="mono small">{formatDate(item.created_at)}</span> },
     {
       key: 'actions',
@@ -324,21 +327,24 @@ export function TargetsPage({
       <style>{TARGETS_PAGE_STYLES}</style>
       <div className="page-head">
         <div>
-          <p className="eyebrow">Declared scope</p>
+          <p className="eyebrow">Proof for customer-declared scope</p>
           <h1>Targets</h1>
-          <p>Every configured hostname and IP, with ownership provenance, test eligibility, source integration, and group policy context.</p>
+          <p>All declared hostnames and IPs, with separate ownership proof and fail-closed eligibility before bounded validation can run.</p>
         </div>
-        <Button onClick={() => setShowAdd((current) => !current)}><Plus size={16} /> Add single domain</Button>
+        <div className="row-actions">
+          <Button variant="secondary" onClick={() => { setVerificationFilter('unverified'); setEligibilityFilter('all'); }}>Review blocked</Button>
+          <Button onClick={() => setShowAdd((current) => !current)}><Plus size={16} /> Add single domain</Button>
+        </div>
       </div>
 
       {message ? <div className="form-banner" role="status">{message}</div> : null}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
 
       <div className="targets-summary" aria-label="Target inventory summary">
-        <div className="targets-summary-cell"><span>Configured targets</span><strong>{targets.length}</strong></div>
-        <div className="targets-summary-cell"><span>Ownership verified</span><strong>{verifiedCount}</strong></div>
-        <div className="targets-summary-cell"><span>Eligible for tests</span><strong>{eligibleCount}</strong></div>
-        <div className="targets-summary-cell"><span>Import integrations represented</span><strong>{integrationCount}</strong></div>
+        <div className="targets-summary-cell"><span>Declared targets</span><strong>{formatNumber(targets.length)}</strong></div>
+        <div className="targets-summary-cell"><span>Ownership verified</span><strong>{formatNumber(verifiedCount)}</strong></div>
+        <div className="targets-summary-cell"><span>Eligible for validation</span><strong>{formatNumber(eligibleCount)}</strong></div>
+        <div className="targets-summary-cell"><span>Unverified or blocked</span><strong>{formatNumber(blockedCount)}</strong></div>
       </div>
 
       {showAdd ? (
@@ -360,14 +366,17 @@ export function TargetsPage({
 
       <Card>
         <CardHeader>
-          <div><CardTitle>Target inventory</CardTitle><CardDescription>{filtered.length} of {targets.length} configured targets. Use Open target for evidence-backed detail; other row actions remain independent.</CardDescription></div>
+          <div><CardTitle>Target inventory</CardTitle><CardDescription>{formatNumber(filtered.length)} of {formatNumber(targets.length)} configured targets. Use Open target for evidence-backed detail; other row actions remain independent.</CardDescription></div>
         </CardHeader>
         <CardContent>
           <div className="targets-toolbar">
             <label className="targets-search"><Search size={16} aria-hidden="true" /><span className="sr-only">Search targets</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search hostname, group, environment, or provider" /></label>
             <label className="targets-filter"><span>Verification</span><select value={verificationFilter} onChange={(event) => setVerificationFilter(event.target.value)}><option value="all">All states</option><option value="verified">Verified</option><option value="unverified">Not verified</option></select></label>
-            <label className="targets-filter"><span>Eligibility</span><select value={eligibilityFilter} onChange={(event) => setEligibilityFilter(event.target.value)}><option value="all">All targets</option><option value="eligible">Eligible</option><option value="not_eligible">Not eligible</option></select></label>
+            <label className="targets-filter"><span>Eligibility</span><select value={eligibilityFilter} onChange={(event) => setEligibilityFilter(event.target.value)}><option value="all">All decisions</option><option value="eligible">Eligible</option><option value="not_eligible">Not eligible</option><option value="ineligible">Ineligible</option></select></label>
+            <label className="targets-filter"><span>Target group</span><select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}><option value="all">All groups</option>{groups.flatMap((group) => { const id = getString(group, ['id'], ''); return id ? [<option key={id} value={id}>{getString(group, ['name', 'id'], id)}</option>] : []; })}</select></label>
+            <label className="targets-filter"><span>Kind</span><select value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{targetKinds.map((kind) => <option key={kind} value={kind}>{targetKindLabel({ kind })}</option>)}</select></label>
           </div>
+          <p className="targets-result-count" aria-live="polite">{formatNumber(filtered.length)} matching {filtered.length === 1 ? 'target' : 'targets'}</p>
           <DataTable
             className="targets-table-wrap"
             columns={columns}

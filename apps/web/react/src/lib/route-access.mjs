@@ -38,6 +38,14 @@ export function canAccessRoute(role, routeId, context = {}) {
     return principal === 'staff' && STAFF_SOC_ROLES.has(staffRole);
   }
 
+  // Customer datasets intentionally do not hydrate for a non-impersonating staff
+  // session. Keep those routes out of the staff surface rather than rendering
+  // their fallbacks as authoritative empty tenant state. Queue detail remains
+  // shared, but staff access requires an operational SOC role.
+  if (principal === 'staff') {
+    return routeId === 'queue-detail' && STAFF_SOC_ROLES.has(staffRole);
+  }
+
   const narrowedRoles = ROUTE_CUSTOMER_ROLES[routeId];
   if (narrowedRoles && !narrowedRoles.includes(normalizedRole)) {
     return false;

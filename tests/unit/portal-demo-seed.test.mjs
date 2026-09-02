@@ -28,4 +28,33 @@ describe('portal demo seed fixture', () => {
     assert.ok(store.bootstrapTokens.filter((row) => row.tenant_id === tenantId).length >= 1);
     assert.ok(store.reports.some((row) => row.id === PORTAL_DEMO_IDS.reportId));
   });
+
+  it('does not fabricate agent attribution fields on test runs', () => {
+    const store = buildPortalDemoStore();
+    const unsupportedFields = ['agent_id', 'agentId', 'agent_ids', 'agentIds'];
+    assert.ok(
+      store.testRuns.every((run) => unsupportedFields.every((field) => !Object.hasOwn(run, field))),
+      'agent attribution belongs to exact run-event provenance, not test-run fixtures',
+    );
+  });
+
+  it('binds readiness evidence to the remapped durable portal-demo run', () => {
+    const store = buildPortalDemoStore();
+    const run = store.testRuns.find((entry) => (
+      entry.id === PORTAL_DEMO_IDS.runId && entry.check_id === 'origin.leak_scan.safe'
+    ));
+    assert.ok(run);
+
+    for (const record of [
+      store.events.find((entry) => entry.id === 'evt_portal_baseline_boost'),
+      store.verdicts.find((entry) => entry.id === 'vrd_portal_baseline_boost'),
+    ]) {
+      assert.ok(record);
+      assert.equal(record.tenant_id, PORTAL_DEMO_IDS.tenantId);
+      assert.equal(record.test_run_id, run.id);
+      assert.equal(record.target_group_id, run.target_group_id);
+      assert.equal(record.target_id, run.target_id);
+      assert.equal(record.check_id, run.check_id);
+    }
+  });
 });

@@ -6,6 +6,8 @@ import {
   formatVectorFamilyLabel,
   groupFindingsByTargetGroup,
   groupFindingsByVector,
+  findingStatus,
+  isFindingOpen,
   isFindingSlaBreach,
   resolveFindingRetestAction
 } from '../../apps/web/react/src/lib/findings-helpers.ts';
@@ -28,6 +30,27 @@ describe('findings-helpers', () => {
     assert.equal(kpis.acceptedRiskCount, 1);
     assert.equal(kpis.closed30dCount, 1);
     assert.equal(kpis.slaBreachCount, 1);
+  });
+
+  it('normalizes state-only lifecycle records from the portal API', () => {
+    const findings = [
+      { id: 'state-open', state: ' Open ', severity: 'critical', created_at: '2026-07-01T00:00:00.000Z' },
+      { id: 'state-accepted', state: ' ACCEPTED ', severity: 'medium', created_at: '2026-07-02T00:00:00.000Z' },
+      { id: 'state-closed', state: ' closed ', severity: 'low', created_at: '2026-06-01T00:00:00.000Z', updated_at: '2026-07-04T00:00:00.000Z' }
+    ];
+
+    const kpis = computeFindingKpis(findings, NOW);
+    assert.equal(kpis.openCount, 1);
+    assert.equal(kpis.acceptedRiskCount, 1);
+    assert.equal(kpis.closed30dCount, 1);
+    assert.equal(kpis.slaBreachCount, 1);
+    assert.deepEqual(filterFindingsByTab(findings, 'open', [], NOW).map((finding) => finding.id), ['state-open']);
+    assert.deepEqual(filterFindingsByTab(findings, 'accepted-risk', [], NOW).map((finding) => finding.id), ['state-accepted']);
+    assert.deepEqual(filterFindingsByTab(findings, 'closed', [], NOW).map((finding) => finding.id), ['state-closed']);
+    assert.equal(findingStatus({ status: ' CLOSED ', state: 'open' }), 'closed');
+    assert.equal(findingStatus({ status: '   ', state: ' Resolved ' }), 'resolved');
+    assert.equal(isFindingOpen({ state: ' oPeN ' }), true);
+    assert.equal(isFindingOpen({ state: ' closed ' }), false);
   });
 
   it('filters findings by UX tab ids including vector and SLA views', () => {

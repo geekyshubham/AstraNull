@@ -311,6 +311,72 @@ describe('postgres validation evidence repository', () => {
     assert.deepEqual(q.params, [CTX.tenantId, RUN_ID, 200]);
   });
 
+  it('loads 500 runs with two parameterized data queries on one tenant transaction', async () => {
+    const runIds = Array.from({ length: 500 }, (_, index) => `run_batch_${index}`);
+    const pool = createRecordingPool((sql, params) => {
+      if (sql.includes('JOIN LATERAL')) {
+        assert.deepEqual(params, [CTX.tenantId, runIds]);
+        return {
+          rows: [{
+            id: 'verdict_batch_499',
+            tenant_id: CTX.tenantId,
+            test_run_id: runIds[499],
+            verdict: 'protected',
+            evidence_ids: ['event_batch_499'],
+            created_at: FIXED_NOW,
+          }],
+        };
+      }
+      if (sql.includes('ROW_NUMBER() OVER')) {
+        assert.deepEqual(params, [CTX.tenantId, [runIds[0], runIds[499]], 1000]);
+        return {
+          rows: [{
+            id: 'event_batch_499',
+            tenant_id: CTX.tenantId,
+            test_run_id: runIds[499],
+            signal_type: 'probe_result',
+            producer_kind: 'signed_probe',
+            timestamp: FIXED_NOW,
+            metadata_json: {},
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    const result = await repo.loadRunEvidenceBatch(CTX, {
+      runIds,
+      eventRunIds: [runIds[0]],
+      eventLimitPerRun: 50_000,
+    });
+
+    assert.equal(result.verdicts.length, 1);
+    assert.equal(result.events.length, 1);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const queries = dataQueries(pool.client);
+    assert.equal(queries.length, 2, '500 runs must remain O(1) SQL calls');
+    assert.match(queries[0].text, /unnest\(\$2::text\[\]\) WITH ORDINALITY/);
+    assert.match(queries[0].text, /ORDER BY created_at DESC, id DESC\s+LIMIT 1/);
+    assert.match(queries[0].text, /ORDER BY selected\.ordinal\s*$/);
+    assert.match(queries[1].text, /PARTITION BY events\.test_run_id\s+ORDER BY events\.timestamp/);
+    assert.match(queries[1].text, /WHERE per_run_position <= \$3/);
+    assert.ok(queries.every(({ text: sql }) => !sql.includes(runIds[499])));
+  });
+
+  it('rejects oversized run batches before opening a transaction', async () => {
+    const pool = createRecordingPool(() => ({ rows: [] }));
+    const repo = createValidationEvidenceRepository(pool);
+
+    await assert.rejects(
+      () => repo.loadRunEvidenceBatch(CTX, {
+        runIds: Array.from({ length: 501 }, (_, index) => `run_${index}`),
+      }),
+      /at most 500 run ids/,
+    );
+    assert.equal(pool.client.queries.length, 0);
+  });
+
   it('appendEvidence and getEvidence use tenant-scoped vault access', async () => {
     const pool = createRecordingPool((text, params) => {
       if (text.startsWith('INSERT INTO evidence_vault')) {
@@ -355,6 +421,113 @@ describe('postgres validation evidence repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
     const [q] = dataQueries(pool.client);
     assert.match(q.text, /WHERE tenant_id = \$1 AND id = \$2/);
+  });
+
+  it('derives edge provenance from the authoritative run and cannot retarget on conflict', async () => {
+    const pool = createRecordingPool((sql, params) => {
+      if (!sql.startsWith('INSERT INTO target_edge_detections')) return { rows: [] };
+      assert.match(sql, /FROM test_runs authoritative_run/);
+      assert.match(
+        sql,
+        /JOIN targets authoritative_target[\s\S]*authoritative_target\.target_group_id = authoritative_run\.target_group_id[\s\S]*authoritative_target\.id = authoritative_run\.target_id/,
+      );
+      assert.match(sql, /authoritative_run\.id = \$5/);
+      assert.match(sql, /authoritative_run\.target_group_id = \$3/);
+      assert.match(sql, /authoritative_run\.target_id = \$4/);
+      const conflictUpdate = sql.match(
+        /ON CONFLICT \(tenant_id, target_id\) DO UPDATE SET([\s\S]*?)WHERE target_edge_detections/,
+      )?.[1] ?? '';
+      assert.match(conflictUpdate, /test_run_id = EXCLUDED\.test_run_id/);
+      assert.doesNotMatch(
+        conflictUpdate,
+        /^\s*(?:id|tenant_id|target_group_id|target_id)\s*=/m,
+        'conflict refresh must not rewrite identity provenance',
+      );
+      assert.match(
+        sql,
+        /WHERE target_edge_detections\.target_group_id = EXCLUDED\.target_group_id\s+AND target_edge_detections\.target_id = EXCLUDED\.target_id\s+RETURNING/,
+      );
+      assert.deepEqual(params.slice(0, 5), [
+        'edge_1',
+        CTX.tenantId,
+        'tg_1',
+        'tgt_1',
+        RUN_ID,
+      ]);
+      return {
+        rows: [{
+          id: 'edge_1',
+          target_id: 'tgt_1',
+          target_group_id: 'tg_1',
+          status: 'detected',
+          updated_at: FIXED_NOW,
+        }],
+      };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    const result = await repo.upsertTargetEdgeDetection(CTX, {
+      id: 'edge_1',
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      test_run_id: RUN_ID,
+      status: 'detected',
+      evidence_json: {},
+      observed_at: FIXED_NOW,
+    }, { client: pool.client });
+
+    assert.equal(result.id, 'edge_1');
+    assert.equal(pool.client.queries.length, 1, 'caller transaction client must be reused');
+    assert.equal(pool.client.released, false);
+  });
+
+  it('appendEvidence can idempotently reuse evidence for the same related event', async () => {
+    const relatedEventId = 'event_probe_1';
+    const pool = createRecordingPool((text, params) => {
+      if (text.includes('FROM evidence_vault') && text.includes('related_event_id = $4')) {
+        assert.deepEqual(params, [
+          CTX.tenantId,
+          RUN_ID,
+          'probe_worker_evidence',
+          relatedEventId,
+        ]);
+        return {
+          rows: [{
+            id: EVIDENCE_ID,
+            tenant_id: CTX.tenantId,
+            test_run_id: RUN_ID,
+            label: 'probe_worker_evidence',
+            metadata_json: { external_result: 'blocked' },
+            related_event_id: relatedEventId,
+            created_at: FIXED_NOW,
+          }],
+        };
+      }
+      if (text.startsWith('INSERT INTO evidence_vault')) {
+        throw new Error('idempotent replay must not insert evidence');
+      }
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    const result = await repo.appendEvidence(
+      CTX,
+      {
+        id: 'evidence_replay',
+        test_run_id: RUN_ID,
+        label: 'probe_worker_evidence',
+        related_event_id: relatedEventId,
+        created_at: FIXED_NOW,
+      },
+      { idempotentByRelatedEvent: true },
+    );
+
+    assert.equal(result.id, EVIDENCE_ID);
+    assert.deepEqual(result.metadata, { external_result: 'blocked' });
+    assert.ok(
+      pool.client.queries.some(({ text }) => text.includes('hashtextextended($1, 0)')),
+    );
+    assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
   it('createVerdict and getVerdictForRun are tenant-scoped', async () => {
@@ -520,6 +693,27 @@ describe('postgres validation evidence repository', () => {
     assertUsesTenantPredicate(q.text, q.params, CTX.tenantId);
   });
 
+  it('countOpenFindings uses a tenant-scoped aggregate without materializing rows', async () => {
+    const pool = createRecordingPool((text, params) => {
+      if (text.includes('COUNT(*)::int AS open_count')) {
+        assertUsesTenantPredicate(text, params, CTX.tenantId);
+        return { rows: [{ open_count: 33_334 }] };
+      }
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    const count = await repo.countOpenFindings(CTX);
+
+    assert.equal(count, 33_334);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const [query] = dataQueries(pool.client);
+    assert.match(query.text, /COUNT\(\*\)::int AS open_count/);
+    assert.match(query.text, /WHERE tenant_id = \$1 AND status = 'open'/);
+    assert.doesNotMatch(query.text, /ORDER BY|LIMIT/);
+    assert.deepEqual(query.params, [CTX.tenantId]);
+  });
+
   it('listFindings applies test_run_id, target, and bounded limit filters', async () => {
     let captured;
     const pool = createRecordingPool((text, params) => {
@@ -545,6 +739,32 @@ describe('postgres validation evidence repository', () => {
     assert.ok(captured.params.includes('tg_1'));
     assert.ok(captured.params.includes('tgt_1'));
     assert.ok(captured.params.includes(25));
+  });
+
+  it('listFindings locks all statuses for a full tuple on the provided transaction client', async () => {
+    const pool = createRecordingPool((text) => {
+      if (text.includes('FROM findings')) return { rows: [] };
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    await repo.listFindings(CTX, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: 'chk_1',
+      forUpdate: true,
+      client: pool.client,
+    });
+
+    assert.equal(pool.client.queries.length, 1, 'provided client must not open a nested transaction');
+    assert.equal(pool.client.released, false);
+    const [query] = pool.client.queries;
+    assert.match(query.text, /target_group_id = \$2/);
+    assert.match(query.text, /target_id = \$3/);
+    assert.match(query.text, /check_id = \$4/);
+    assert.match(query.text, /ORDER BY created_at DESC FOR UPDATE\s*$/);
+    assert.doesNotMatch(query.text, /status = 'open'/);
+    assert.deepEqual(query.params, [CTX.tenantId, 'tg_1', 'tgt_1', 'chk_1']);
   });
 
   it('listTestRuns applies bounded LIMIT and optional filters with parameterized tenant', async () => {
@@ -712,6 +932,14 @@ describe('postgres validation evidence repository', () => {
         );
         assert.match(text, /DO UPDATE SET/);
         assert.match(text, /event_id = COALESCE\(EXCLUDED\.event_id, events\.event_id\)/);
+        assert.match(
+          text,
+          /WHERE events\.target_id IS NOT DISTINCT FROM EXCLUDED\.target_id[\s\S]*events\.check_id IS NOT DISTINCT FROM EXCLUDED\.check_id/,
+        );
+        assert.match(
+          text,
+          /events\.metadata_json->>'probe_job_id' IS NULL[\s\S]*events\.metadata_json->>'probe_job_id'[\s\S]*= EXCLUDED\.metadata_json->>'probe_job_id'/,
+        );
         assert.ok(params.includes('probe_result'));
         assert.ok(params.includes('nh_probe'));
         return {
@@ -869,15 +1097,28 @@ describe('postgres validation evidence repository', () => {
     );
   });
 
-  it('upsertOpenFindingFromVerdict uses open-finding partial conflict and updates last_verdict_id', async () => {
+  it('upsertOpenFindingFromVerdict atomically enforces durable tuple and strict chronology', async () => {
     const pool = createRecordingPool((text, params) => {
       if (text.startsWith('INSERT INTO findings')) {
+        assert.match(text, /FROM verdicts incoming/);
+        assert.match(text, /incoming\.tenant_id = \$2/);
+        assert.match(text, /incoming\.id = \$14/);
+        assert.match(text, /incoming\.test_run_id = \$5/);
+        assert.match(text, /incoming\.target_id IS NOT DISTINCT FROM \$4/);
+        assert.match(text, /incoming\.check_id IS NOT DISTINCT FROM \$6/);
+        assert.match(text, /NOT EXISTS \([\s\S]*FROM findings prior/);
+        assert.match(text, /prior\.verdict_id = \$14[\s\S]*prior\.last_verdict_id = \$14/);
+        assert.match(text, /prior_verdict\.created_at > incoming\.created_at/);
+        assert.match(text, /prior_verdict\.created_at = incoming\.created_at[\s\S]*prior_verdict\.id >= incoming\.id/);
         assert.match(
           text,
           /ON CONFLICT \(tenant_id, target_group_id, target_id, check_id\) WHERE status = 'open'/,
         );
         assert.match(text, /last_verdict_id = EXCLUDED\.last_verdict_id/);
         assert.match(text, /DO UPDATE SET/);
+        assert.match(text, /WHERE EXISTS \([\s\S]*FROM verdicts incoming[\s\S]*LEFT JOIN verdicts incumbent/);
+        assert.match(text, /incoming\.created_at > incumbent\.created_at/);
+        assert.match(text, /incoming\.created_at = incumbent\.created_at[\s\S]*incoming\.id > incumbent\.id/);
         assert.equal(params[8], 'open');
         assert.ok(params.includes(VERDICT_ID));
         return {
@@ -917,6 +1158,32 @@ describe('postgres validation evidence repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('returns null without a nested transaction when chronology blocks finding publication', async () => {
+    const pool = createRecordingPool((text) => {
+      if (text.startsWith('INSERT INTO findings')) return { rows: [] };
+      return { rows: [] };
+    });
+    const repo = createValidationEvidenceRepository(pool);
+
+    const finding = await repo.upsertOpenFindingFromVerdict(CTX, {
+      id: FINDING_ID,
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      test_run_id: RUN_ID,
+      check_id: 'chk_1',
+      title: 'Older publication',
+      severity: 'high',
+      verdict_id: VERDICT_ID,
+      last_verdict_id: VERDICT_ID,
+      evidence_ids: ['ev_1'],
+      created_at: FIXED_NOW,
+    }, { client: pool.client });
+
+    assert.equal(finding, null);
+    assert.equal(pool.client.queries.length, 1);
+    assert.equal(pool.client.released, false);
+  });
+
   it('upsertOpenFindingFromVerdict rejects non-open status before any DB access', async () => {
     const pool = createRecordingPool(() => ({ rows: [] }));
     const repo = createValidationEvidenceRepository(pool);
@@ -936,5 +1203,52 @@ describe('postgres validation evidence repository', () => {
       /only accepts open findings/,
     );
     assert.equal(pool.client.queries.length, 0);
+  });
+});
+
+
+describe('postgres validation finalization transaction ownership', () => {
+  it('requires the audit transaction client and never performs a second checkout', async () => {
+    let checkouts = 0;
+    const queries = [];
+    const transactionClient = {
+      async query(text, params) {
+        queries.push({ text, params });
+        return { rows: [] };
+      },
+    };
+    const pool = {
+      async connect() {
+        checkouts += 1;
+        throw new Error('finalization attempted a second checkout');
+      },
+    };
+    const repo = createValidationEvidenceRepository(pool);
+    let callbackClient;
+
+    const result = await repo.withRunFinalizationLock(
+      CTX,
+      RUN_ID,
+      async (client) => {
+        callbackClient = client;
+        return 'done';
+      },
+      { client: transactionClient },
+    );
+
+    assert.deepEqual(result, { acquired: true, result: 'done' });
+    assert.equal(callbackClient, transactionClient);
+    assert.equal(checkouts, 0);
+    assert.equal(queries.length, 2);
+    assert.match(queries[0].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(queries[0].params, [`test_run_mutation:${RUN_ID}`]);
+    assert.match(queries[1].text, /pg_advisory_xact_lock/);
+    assert.deepEqual(queries[1].params, [`kill_switch_state:${CTX.tenantId}`]);
+
+    await assert.rejects(
+      () => repo.withRunFinalizationLock(CTX, RUN_ID, async () => null),
+      /requires the tenant audit transaction client/,
+    );
+    assert.equal(checkouts, 0, 'missing-client failure must not silently fall back to the pool');
   });
 });

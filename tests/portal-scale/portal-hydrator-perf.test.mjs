@@ -260,9 +260,11 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
     assert.equal(pgProfile.targetGroups, PORTAL_SCALE_PROFILE.targetGroups);
     assert.equal(pgProfile.findings, PORTAL_SCALE_PROFILE.findings);
     assert.equal(pgProfile.targets, PORTAL_SCALE_PROFILE.targets);
+    assert.equal(pgProfile.runs, 500);
     console.log(
       `portal-hydrator-perf postgres: ${pgProfile.targetGroups} groups / `
-      + `${pgProfile.findings} findings / ${pgProfile.targets} targets / ${pgProfile.agents} agents`,
+      + `${pgProfile.findings} findings / ${pgProfile.targets} targets / `
+      + `${pgProfile.agents} agents / ${pgProfile.runs} runs`,
     );
   });
 
@@ -284,9 +286,36 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
           ? () => run(pgCtx, pgIds[spec.arg])
           : () => run(pgCtx);
 
+        if (spec.method === 'getState') {
+          await withTenantContext(pool, pgIds.tenantId, async (client) => {
+            const { rows } = await client.query(
+              `SELECT
+                 (SELECT COUNT(*)::int FROM target_groups
+                  WHERE tenant_id = $1 AND archived_at IS NULL AND deleted_at IS NULL) AS target_groups,
+                 (SELECT COUNT(*)::int FROM targets
+                  WHERE tenant_id = $1 AND deleted_at IS NULL) AS targets,
+                 (SELECT COUNT(*)::int FROM findings
+                  WHERE tenant_id = $1 AND status = 'open') AS open_findings`,
+              [pgIds.tenantId],
+            );
+            assert.deepEqual(rows[0], {
+              target_groups: 10_000,
+              targets: 5_000,
+              open_findings: 33_334,
+            });
+            console.log('FT-PERF-PG-COUNTS 10,000 target groups / 5,000 targets / 33,334 open findings');
+          });
+        }
+
         for (let i = 0; i < WARMUP; i += 1) {
           const result = await invoke();
           assert.ok(result && !result.error, `warmup ${spec.method} failed: ${result?.error ?? 'null'}`);
+          if (spec.method === 'getState' && i === 0) {
+            assert.equal(result.target_groups, 10_000);
+            assert.equal(result.open_findings, 33_334);
+            assert.equal(Object.hasOwn(result, 'targets'), false);
+            assert.equal(Object.hasOwn(result, 'target_count'), false);
+          }
         }
 
         const samples = [];
@@ -299,7 +328,8 @@ describePortalScalePostgres('portal hydrator performance — postgres (doc 16 §
 
         const measured = p95(samples);
         console.log(
-          `${spec.id} postgres measured p95 ${measured.toFixed(2)}ms (budget ${spec.budgetMs}ms)`,
+          `${spec.id} postgres ${pgProfile.targetGroups} groups / ${pgProfile.runs} runs `
+          + `measured p95 ${measured.toFixed(2)}ms (budget ${spec.budgetMs}ms)`,
         );
         assert.ok(
           measured <= spec.budgetMs,

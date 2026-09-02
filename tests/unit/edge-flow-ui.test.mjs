@@ -32,6 +32,7 @@ function event(metadata, overrides = {}) {
     target_id: REQUEST.target_id,
     check_id: CHECK_ID,
     source: 'probe_worker',
+    producer_kind: 'signed_probe',
     signal_type: 'probe_result',
     nonce_hash: NONCE,
     timestamp: '2026-08-29T15:10:00.000Z',
@@ -86,7 +87,7 @@ describe('target-group WAF/CDN edge result projection', () => {
     const simulation = project(REQUEST, run('collecting'), {
       items: [event(
         { external_result: 'blocked', waf_detected: true },
-        { source: 'probe_simulation_stub' },
+        { source: 'probe_simulation_stub', producer_kind: 'internal_simulation' },
       )],
     });
     assert.equal(simulation.status, 'inconclusive');
@@ -147,16 +148,57 @@ describe('target-group WAF/CDN edge result projection', () => {
     });
   });
 
-  it('does not trust tenant-ingested or nonce-mismatched events', () => {
+  it('requires exact persisted provenance for worker and simulation probe events', () => {
+    const metadata = { external_result: 'blocked', waf_detected: true };
+    const rejected = [
+      event(metadata, { producer_kind: 'legacy_untrusted' }),
+      event(metadata, { producer_kind: 'public_api' }),
+      event(metadata, { producer_kind: undefined }),
+      event(metadata, { producer_kind: 'internal_simulation' }),
+      event(metadata, { source: 'probe_simulation_stub', producer_kind: 'signed_probe' }),
+      event(metadata, { source: 'probe_simulation_stub', producer_kind: 'legacy_untrusted' }),
+    ];
+
+    for (const untrusted of rejected) {
+      const result = project(REQUEST, run('verdicted'), { items: [untrusted] });
+      assert.equal(result.status, 'not_observed');
+      assert.equal(result.reason, 'worker_result_not_observed');
+      assert.equal(result.detection, null);
+    }
+
+    const signedWorker = project(REQUEST, run('collecting'), {
+      items: [event({ external_result: 'timeout', error_class: 'signed-worker-timeout' })],
+    });
+    assert.equal(signedWorker.status, 'error');
+    assert.equal(signedWorker.error_class, 'signed-worker-timeout');
+
+    const internalSimulation = project(REQUEST, run('collecting'), {
+      items: [event(metadata, {
+        source: 'probe_simulation_stub',
+        producer_kind: 'internal_simulation',
+      })],
+    });
+    assert.equal(internalSimulation.status, 'inconclusive');
+    assert.equal(internalSimulation.reason, 'simulation_not_detection');
+  });
+
+  it('does not trust tenant-ingested, nonce-mismatched, or cross-run events', () => {
     const tenantEvent = event({ external_result: 'blocked', waf_detected: true }, {
       source: 'tenant_event_ingest',
     });
     const wrongNonce = event({ external_result: 'blocked', waf_detected: true }, {
       nonce_hash: 'sha256:not-this-run',
     });
-    for (const untrusted of [tenantEvent, wrongNonce]) {
+    const missingRunId = event({ external_result: 'blocked', waf_detected: true }, {
+      test_run_id: undefined,
+    });
+    const wrongRunId = event({ external_result: 'blocked', waf_detected: true }, {
+      test_run_id: 'run_edge_ui_decoy',
+    });
+    for (const untrusted of [tenantEvent, wrongNonce, missingRunId, wrongRunId]) {
       const result = project(REQUEST, run('verdicted'), { items: [untrusted] });
       assert.equal(result.status, 'not_observed');
+      assert.equal(result.reason, 'worker_result_not_observed');
       assert.equal(result.detection, null);
     }
   });

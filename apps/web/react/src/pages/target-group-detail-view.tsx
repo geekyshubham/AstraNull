@@ -9,13 +9,16 @@ import {
 } from 'react';
 import { Activity, Bot, CalendarClock, Check, Globe, Plus, Search, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
+import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
+import { findingStatus } from '../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../lib/route-params';
 // @ts-ignore Plain ESM keeps these UI decisions directly executable by node:test.
 import { apiErrorCode, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { emptyStateFromApi, PortalLoadingSkeleton } from '../lib/empty-from-api';
+import { useConfirmModal } from '../lib/crud-ui';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -33,7 +36,7 @@ type OnboardTab = 'fqdn' | 'ip' | 'cloud';
 const ONBOARD_TAB_OPTIONS: TabOption<OnboardTab>[] = [
   { id: 'fqdn', label: 'Domain · DNS TXT' },
   { id: 'ip', label: 'IP address · Agent callback' },
-  { id: 'cloud', label: 'Cloud provider · pull inventory' }
+  { id: 'cloud', label: 'DNS provider · select zones' }
 ];
 
 /** §7.1 verification states that unlock the per-row Run test action. */
@@ -126,6 +129,11 @@ const tgDetailStyles = `
 .tg-detail-view .tg-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
 .tg-detail-view .tg-head-actions .btn { display: inline-flex; align-items: center; gap: var(--space-2); }
 .tg-detail-view .kpi-value--status { font-size: var(--text-lg); }
+.tg-detail-view .ownership-card .verify-ladder { margin-bottom: 0; }
+.tg-detail-view .ownership-card .form-banner { margin-bottom: var(--space-3); }
+.tg-detail-view .callout-desc,
+.tg-detail-view .detail-status-line .mono { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+
 .tg-detail-view .target-primary { display: flex; align-items: flex-start; gap: var(--space-3); min-width: 0; }
 .tg-detail-view .target-primary-copy { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .tg-detail-view .target-primary-copy strong { color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; }
@@ -278,15 +286,21 @@ function findEdgeProviderMatch(edgeSignature: DataItem, family: 'waf' | 'cdn') {
 }
 
 function findTrustedEdgeProbeEvent(events: DataItem[], run: DataItem) {
+  const selectedRunId = getString(run, ['id'], '');
   const correlation = asDataItem(run.correlation);
   const runNonce = getString(correlation, ['nonce_hash'], '');
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = asDataItem(events[index]);
     if (!event || getString(event, ['signal_type'], '') !== 'probe_result') continue;
+    if (getString(event, ['test_run_id'], '') !== selectedRunId) continue;
     if (getString(event, ['check_id'], '') !== EDGE_DETECTION_CHECK_ID) continue;
     const source = getString(event, ['source'], '');
-    if (source !== 'probe_worker' && source !== 'probe_simulation_stub') continue;
-    if (runNonce && getString(event, ['nonce_hash'], '') !== runNonce) continue;
+    const producerKind = getString(event, ['producer_kind'], '');
+    const hasTrustedProbeProvenance =
+      (source === 'probe_worker' && producerKind === 'signed_probe')
+      || (source === 'probe_simulation_stub' && producerKind === 'internal_simulation');
+    if (!hasTrustedProbeProvenance) continue;
+    if (getString(event, ['nonce_hash'], '') !== runNonce) continue;
     return event;
   }
   return null;
@@ -410,8 +424,6 @@ export function projectEdgeDetectionResult(requestState: DataItem, runValue: unk
   const topVendorMatch = firstDataItem(edgeSignature.vendor_matches);
   const topVendorName = boundedEdgeString(topVendorMatch?.name) || boundedEdgeString(topVendorMatch?.vendor);
   const topVendorConfidence = finiteEdgeNumber(topVendorMatch?.confidence ?? bestVendor?.confidence);
-  const dnsCnameChain = boundedEdgeList(metadata.dns_cname_chain);
-  const dnsResolvedIps = boundedEdgeList(metadata.dns_resolved_ips);
 
   return {
     ...base,
@@ -424,8 +436,6 @@ export function projectEdgeDetectionResult(requestState: DataItem, runValue: unk
       ...(cdnProviders.length > 0 ? { cdn_providers: cdnProviders } : {}),
       ...(topVendorName ? { top_vendor: topVendorName } : {}),
       ...(topVendorName && topVendorConfidence !== null ? { top_vendor_confidence: topVendorConfidence } : {}),
-      ...(dnsCnameChain.length > 0 ? { dns_cname_chain: dnsCnameChain } : {}),
-      ...(dnsResolvedIps.length > 0 ? { dns_resolved_ips: dnsResolvedIps } : {}),
       ...(conflictingVendorSignals ? { conflicting_vendor_signals: true } : {}),
       ...(corpusVersion ? { corpus_version: corpusVersion } : {}),
       ...(requestsSent !== null ? { requests_sent: requestsSent } : {}),
@@ -647,6 +657,7 @@ export function TargetGroupDetailView({
 }) {
   ensureTgDetailStyles();
 
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -1043,10 +1054,11 @@ export function TargetGroupDetailView({
     const targetId = getString(item, ['id'], '');
     if (!targetId) return;
     const targetLabel = getString(item, ['value'], targetId);
-    const confirmed = window.confirm(
-      `Remove ${targetLabel} from this target group?\n\nThis removes the declaration and stops future scheduled validation for this target. Active runs must finish or be cancelled first. Existing evidence is retained.`
-    );
-    if (!confirmed) return;
+    if (!await confirm({
+      title: 'Remove declared target',
+      description: `Remove ${targetLabel} from this target group?\n\nThis removes the declaration and stops future scheduled validation for this target. Active runs must finish or be cancelled first. Existing evidence is retained.`,
+      confirmLabel: 'Remove target'
+    })) return;
     await runAction(`remove-target-${targetId}`, async () => {
       await requestJson(
         config,
@@ -1831,17 +1843,20 @@ export function TargetGroupDetailView({
       label: 'Finding',
       render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', getString(item, ['id'], ''))}>{getString(item, ['title', 'id'], '')}</AnchorButton>
     },
-    { key: 'severity', label: 'Severity', render: (item) => getString(item, ['severity'], 'unknown') },
-    { key: 'status', label: 'Status', render: (item) => getString(item, ['status'], 'open') }
+    { key: 'severity', label: 'Severity', render: (item) => formatSeverityLabel(getString(item, ['severity'], 'unknown')) },
+    { key: 'status', label: 'Status', render: (item) => findingStatus(item) }
   ];
 
   const runColumns: TableColumn<DataItem>[] = [
     { key: 'run', label: 'Run', render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', getString(item, ['id'], ''))}>{getString(item, ['id'], '')}</AnchorButton> },
     { key: 'policy', label: 'Policy', render: (item) => getString(item, ['policy_id', 'test_policy_id'], '—') },
     { key: 'checks', label: 'Checks', render: (item) => String(item.check_count ?? getString(item, ['check_id'], '—')) },
-    { key: 'verdict', label: 'Verdict', render: (item) => getString(item, ['verdict', 'status'], 'pending') },
-    { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) },
-    { key: 'agent', label: 'Agent', render: (item) => getString(item, ['agent_id'], '—') }
+    { key: 'status', label: 'Lifecycle', render: (item) => humanizeLabel(getString(item, ['status'], 'pending')) },
+    { key: 'verdict', label: 'Verdict', render: (item) => {
+      const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? publishedRunVerdict(item) : '';
+      return verdict ? humanizeLabel(verdict) : <span className="muted">No verdict evidence</span>;
+    } },
+    { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
   ];
 
   const dnsHistoryColumns: TableColumn<DataItem>[] = [
@@ -1874,8 +1889,9 @@ export function TargetGroupDetailView({
   const edgeCdnProviders = boundedEdgeList(edgeDetectionEvidence?.cdn_providers);
   const edgeTopVendor = getString(edgeDetectionEvidence, ['top_vendor'], '');
   const edgeTopVendorConfidence = edgeConfidenceLabel(edgeDetectionEvidence?.top_vendor_confidence);
-  const edgeCnameChain = boundedEdgeList(edgeDetectionEvidence?.dns_cname_chain);
-  const edgeResolvedIps = boundedEdgeList(edgeDetectionEvidence?.dns_resolved_ips);
+  const groupEnvironmentId = getString(entity, ['environment_id'], '');
+  const groupCriticality = getString(entity, ['criticality', 'tier'], '');
+  const groupOwner = getString(entity, ['owner', 'owner_team', 'service_owner'], '');
 
   return (
     <div className="content tg-detail-view" aria-busy={loading || undefined}>
@@ -1886,11 +1902,15 @@ export function TargetGroupDetailView({
           <p className="tg-page-summary">{getString(entity, ['description'], 'Manage declared scope, prove ownership, and schedule readiness checks.')}</p>
           <div className="tg-title-meta">
             <span className="muted mono">{entityId}</span>
-            <Badge tone="muted">Environment {getString(entity, ['environment_id'], '—')}</Badge>
+            <Badge tone="muted">Environment {groupEnvironmentId || 'Not reported'}</Badge>
+            {groupCriticality ? <Badge tone="muted">{humanizeLabel(groupCriticality)}</Badge> : null}
+            {groupOwner ? <Badge tone="muted">Owner {groupOwner}</Badge> : null}
           </div>
         </div>
         <div className="tg-head-actions">
           <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
+          <Button size="sm" variant="secondary" onClick={() => openOnboardModal('cloud')}><Bot size={14} /> Import DNS zones</Button>
+          {groupEnvironmentId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('environment-detail', groupEnvironmentId)}>Environment</AnchorButton> : null}
           <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
         </div>
       </div>
@@ -1898,33 +1918,44 @@ export function TargetGroupDetailView({
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
       <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
-      {/* (1) Ownership ladder — Declared → DNS verified → Agent verified → User confirmed. */}
-      {ladderError ? <div className="form-banner error" role="alert">{ladderError}</div> : null}
-      {ladderLoading ? <PortalLoadingSkeleton rows={1} /> : null}
-      {!ladderLoading && ladderSteps.length === 0 ? (
-        emptyStateFromApi({
-          loading: ladderLoading,
-          icon: Target,
-          meta: ladder?.meta && typeof ladder.meta === 'object' ? ladder.meta as DataItem : null,
-        })
-      ) : null}
-      {!ladderLoading && ladderSteps.length > 0 ? (
-      <ol className="verify-ladder" aria-label="Ownership verification ladder">
-        {ladderSteps.map((step, index) => {
-          const done = step.done === true;
-          const now = !done && ladderSteps.slice(0, index).every((entry) => entry.done === true);
-          return (
-            <li key={getString(step, ['id'], String(index))} className={`vl-step${done ? ' is-done' : ''}${now ? ' is-now' : ''}`}>
-              <span className="vl-num" aria-hidden="true">{done ? <Check size={13} strokeWidth={2.6} /> : index + 1}</span>
-              <div className="vl-body">
-                <strong>{getString(step, ['label'], 'Step')}</strong>
-                <span className="vl-meta">{getString(step, ['count'], '0')} of {getString(step, ['total'], '0')}</span>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-      ) : null}
+      {/* (1) Ownership verification is a named evidence surface, not an unlabeled progress strip. */}
+      <Card className="ownership-card">
+        <CardHeader>
+          <div>
+            <CardTitle>Ownership verification</CardTitle>
+            <CardDescription>Aggregate target evidence returned by the ownership ladder API. Incomplete proof keeps bounded validation fail closed.</CardDescription>
+          </div>
+          <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
+        </CardHeader>
+        <CardContent>
+          {ladderError ? <div className="form-banner error" role="alert">{ladderError}</div> : null}
+          {ladderLoading ? <PortalLoadingSkeleton rows={1} /> : null}
+          {!ladderLoading && ladderSteps.length === 0 ? (
+            emptyStateFromApi({
+              loading: ladderLoading,
+              icon: Target,
+              meta: ladder?.meta && typeof ladder.meta === 'object' ? ladder.meta as DataItem : null,
+            })
+          ) : null}
+          {!ladderLoading && ladderSteps.length > 0 ? (
+            <ol className="verify-ladder" aria-label="Ownership verification ladder">
+              {ladderSteps.map((step, index) => {
+                const done = step.done === true;
+                const now = !done && ladderSteps.slice(0, index).every((entry) => entry.done === true);
+                return (
+                  <li key={getString(step, ['id'], String(index))} className={`vl-step${done ? ' is-done' : ''}${now ? ' is-now' : ''}`}>
+                    <span className="vl-num" aria-hidden="true">{done ? <Check size={13} strokeWidth={2.6} /> : index + 1}</span>
+                    <div className="vl-body">
+                      <strong>{getString(step, ['label'], 'Step')}</strong>
+                      <span className="vl-meta">{getString(step, ['count'], '0')} of {getString(step, ['total'], '0')}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {/* (2) KPI row — Targets · Ownership · LOA · Validation mode (matches prototype screen-target-group-detail). */}
       <div className="kpi-row">
@@ -2182,8 +2213,6 @@ export function TargetGroupDetailView({
                   {edgeTopVendor ? (
                     <span>Top vendor match {edgeTopVendor}{edgeTopVendorConfidence ? ` (${edgeTopVendorConfidence} confidence)` : ''}</span>
                   ) : null}
-                  {edgeCnameChain.length > 0 ? <span className="mono">CNAME {edgeCnameChain.join(' → ')}</span> : null}
-                  {edgeResolvedIps.length > 0 ? <span className="mono">Resolved {edgeResolvedIps.join(', ')}</span> : null}
                   {getString(edgeDetectionEvidence, ['corpus_version'], '') ? <span>Corpus v{getString(edgeDetectionEvidence, ['corpus_version'], '')}</span> : null}
                   {getString(edgeDetectionEvidence, ['requests_sent'], '') ? <span>{getString(edgeDetectionEvidence, ['requests_sent'], '')} bounded requests</span> : null}
                   {getString(edgeDetectionEvidence, ['observed_at'], '') ? <span>Observed {formatDate(edgeDetectionEvidence.observed_at)}</span> : null}
@@ -2199,7 +2228,7 @@ export function TargetGroupDetailView({
           <div className="target-run-selection" role="note">
             <span>Bounded run rule:</span>
             <strong>{getString(selectedPolicyCheck, ['name', 'check_id'], 'None selected')}</strong>
-            {effectiveSelectedPolicyCheckId ? <span className="mono muted small">{effectiveSelectedPolicyCheckId}</span> : <a href="#target-group-rules">Choose a rule below</a>}
+            {effectiveSelectedPolicyCheckId ? <span className="mono muted small">{effectiveSelectedPolicyCheckId}</span> : <a className="link-btn" href="#target-group-rules">Choose a rule below</a>}
           </div>
           <DataTable
             columns={targetColumns}
@@ -2210,7 +2239,7 @@ export function TargetGroupDetailView({
               <EmptyState
                 icon={Target}
                 title="No targets declared yet"
-                body="Declare a domain, IP, or cloud inventory selection to start validating this group. Nothing runs until a target is verified."
+                body="Declare a domain, IP, or selected DNS zone to start validating this group. Nothing runs until a target is verified."
                 actionLabel="Add target"
                 onAction={() => openOnboardModal()}
               />
@@ -2227,7 +2256,7 @@ export function TargetGroupDetailView({
             <CardTitle>Rules &amp; schedule</CardTitle>
             <CardDescription>Select the exact customer-runnable rule used by per-target bounded runs and any new schedule. Nothing is selected implicitly.</CardDescription>
           </div>
-          <Badge tone="info">{customerRunnableChecks.length} customer-runnable {customerRunnableChecks.length === 1 ? 'check' : 'checks'}</Badge>
+          <Badge tone="muted">{customerRunnableChecks.length} customer-runnable {customerRunnableChecks.length === 1 ? 'check' : 'checks'}</Badge>
         </CardHeader>
         <CardContent>
           <div className="safety-boundary" role="note" aria-label="Scheduling boundary">
@@ -2401,7 +2430,7 @@ export function TargetGroupDetailView({
         </CardContent>
       </Card>
 
-      {/* (7) Recent runs — 6-column run history. */}
+      {/* (7) Recent runs — canonical run fields only; agent attribution requires run events. */}
       <Card>
         <CardHeader><CardTitle>Recent runs</CardTitle></CardHeader>
         <CardContent>
@@ -2440,7 +2469,7 @@ export function TargetGroupDetailView({
                 empty={emptyStateFromApi({ icon: Bot, meta: inventoryMeta })}
               />
               <div className="row-actions">
-                <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected</Button>
+                <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected DNS zones</Button>
               </div>
             </div>
         </DetailModal>
@@ -2565,7 +2594,7 @@ export function TargetGroupDetailView({
                       <p>Scope required: <span className="mono">{scope}</span></p>
                       <p className="muted small">Status: {getString(connector, ['status', 'state'], 'unknown')}</p>
                       <div className="pc-actions">
-                        <Button size="sm" variant="ghost" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Open inventory</Button>
+                        <Button size="sm" variant="ghost" loading={busy === `inventory-${connectorId}`} onClick={() => void openInventory(connectorId)}>Select DNS zones</Button>
                       </div>
                     </div>
                   );
@@ -2580,7 +2609,7 @@ export function TargetGroupDetailView({
         <DetailModal title={`Sign LOA · ${getString(entity, ['name'], entityId)}`} onClose={() => setShowLoaModal(false)} error={error}>
             <form className="loa-body product-form" onSubmit={(event) => void submitLoa(event)}>
               <div className="loa-doc">
-                <h4>Authorization artifact</h4>
+                <h3>Authorization artifact</h3>
                 <dl className="loa-meta">
                   <dt>Customer</dt><dd>{getString(data.tenant, ['name', 'display_name'], session.tenant_id ?? '—')}</dd>
                   <dt>Tenant</dt><dd className="mono">{session.tenant_id ?? getString(data.state, ['tenant_id'], '—')}</dd>

@@ -1,74 +1,98 @@
-# AstraNull — DESIGN.md
+# AstraNull shared design system
 
-Design system for the AstraNull portal (`apps/web/react`). Register: **product** (design serves the product). Anchored on the Open Design prototype (`.grok-ui-reference/prototype-*`). Two themes: **dark (default)** and **light**.
+Authoritative foundation for `apps/web/react`, aligned to the latest Open Design project `6ecf11be-6a37-4ece-9b67-208b74aea6b6`. The Open Design HTML is a visual and information-architecture reference only; React remains responsible for routing, authorization, live data, mutations, redaction, and accessibility.
 
-## Principles
-- Calm, rigorous, defensible. Evidence-first. One accent (orange), used sparingly.
-- Every value is a CSS custom property token. No raw hex in components (enforced by `npm run lint:portal`).
-- Anti-slop: no gradient text, no >1px side-stripe accent borders, no emoji feature icons, no decorative eyebrow-on-every-section.
+## Product character
+
+Calm, rigorous, defensible, and evidence-first. AstraNull is an operational security console—not a hacker terminal, generic growth dashboard, cloud inventory scanner, or self-service traffic generator.
+
+- Dark is the default theme; light is fully supported.
+- Orange is the only brand/primary accent and is used sparingly.
+- Semantic green, amber, and red communicate status only.
+- No aurora, neon/cyan identity, gradients as decoration, glass-card stacks, scanlines, glow, or page-load choreography.
+- All component colors come from root theme tokens; no raw page/component colors.
 
 ## Typography
-- Display: `"Space Grotesk", "Inter", system-ui` — headings/KPI values, tracking `-0.04em`.
-- Body: `"Inter", system-ui` — 16px / 1.5.
-- Mono: `"JetBrains Mono", ui-monospace` — IDs, digests, timestamps, KPI labels.
 
-## Radii / spacing / motion
-- Radii: 4 / 8 / 16 / 9999. Spacing scale 4→32. Motion 150/200ms, `cubic-bezier(0.2,0,0,1)`, honor `prefers-reduced-motion`.
+- Display/headings: `"Space Grotesk", "Inter", system-ui`.
+- Body/UI: `"Inter", system-ui`.
+- Identifiers, digests, timestamps, table labels: `"JetBrains Mono", ui-monospace`.
+- Headings use compact line-height and measured negative tracking; body remains 16px/1.5.
 
-## Theme architecture
-- Tokens live in `:root` (dark default). Light theme overrides live under `:root[data-theme="light"]`.
-- `color-scheme: dark` on `:root`; `color-scheme: light` under `[data-theme="light"]`.
-- A **theme toggle** (sun/moon) sits in the topbar; persists to `localStorage['astranull.theme']`; initial theme applied in `main.tsx` before render (respect saved value, else `prefers-color-scheme`). No FOUC.
+## Core tokens
 
-## Dark theme tokens (current, keep)
+### Dark (default)
+
+```css
+--bg: #000000;
+--surface: #000000;
+--surface-sunk: #000000;
+--fg: #f0f0f0;
+--fg-2: #a1a4a5;
+--border: rgba(214, 235, 253, 0.19);
+--border-soft: rgba(217, 237, 254, 0.145);
+--border-strong: rgba(214, 235, 253, 0.34);
+--accent: #ff801f;
+--accent-on: #000000;
+--success: #11ff99;
+--warn: #ffc53d;
+--danger: #ff2047;
 ```
---bg #000000  --surface #000000  --surface-raised #000000
---fg #f0f0f0  --fg-2 #a1a4a5  --muted #7e8386  --meta #74797c
---border rgba(214,235,253,0.19)  --border-soft rgba(217,237,254,0.145)  --border-strong rgba(214,235,253,0.34)
---accent #ff801f  --accent-on #000000
---success #11ff99  --warn #ffc53d  --danger #ff2047
---elev-ring 0 0 0 1px var(--border)   --elev-raised (dark drop shadow)
+
+Dark depth comes from frost hairlines, not charcoal layers or glass blur. Canvas, cards, and raised surfaces remain pure black.
+
+### Light
+
+```css
+--bg: #f7f7f5;
+--surface: #ffffff;
+--surface-sunk: #f0f0ed;
+--fg: #16181c;
+--fg-2: #565b63;
+--border: rgba(19, 22, 28, 0.13);
+--border-soft: rgba(19, 22, 28, 0.075);
+--border-strong: rgba(19, 22, 28, 0.24);
+--accent: #ff801f;
+--accent-on: #000000;
+--success: #0a7c46;
+--warn: #96590a;
+--danger: #c11533;
 ```
 
-## Light theme tokens (NEW — `:root[data-theme="light"]`)
-Clean white surfaces, near-black ink, dark hairline borders on white, retained orange accent, and DARKER semantic colors (the neon dark values fail contrast on white). Verify body text ≥4.5:1.
-```
---void-black stays; override:
---bg #ffffff
---surface #ffffff
---surface-raised #f6f7f9
---fg #0b0d0f            (near-black ink, ~19.5:1 on white)
---fg-2 #44484d          (secondary, ~8.9:1)
---text-secondary #44484d
---muted #5b6066         (~6.4:1)
---meta #767b81          (~4.6:1, tertiary/meta)
---frost-border rgba(9,20,36,0.14)   (dark hairline on white)
---border rgba(9,20,36,0.14)
---border-soft rgba(9,20,36,0.08)
---border-strong rgba(9,20,36,0.24)
---accent #ff801f  (keep brand orange for fills)
---accent-on #ffffff  (white text on orange fills in light theme)
---accent-hover color-mix(in oklab, var(--accent), black 8%)
---accent-active color-mix(in oklab, var(--accent), black 16%)
---on-danger #ffffff
---success #0a9d63   (green, ~3.3:1 large / used as badge fill + dark text)
---warn #b45309      (amber)
---danger #d61f43    (red)
---info var(--accent)
---proof-surface color-mix(in oklab, var(--fg), transparent 96%)
---elev-ring 0 0 0 1px var(--border)
---elev-raised 0 1px 2px rgb(9 20 36 / 8%), 0 4px 12px rgb(9 20 36 / 6%)
---focus-ring 0 0 0 2px var(--bg), 0 0 0 4px var(--accent)
-color-scheme light
-```
-Badges: on light theme, semantic badges use the darker semantic color at low-alpha background + the semantic color as text (existing badge rules use color-mix on the semantic token, so they adapt; verify contrast). Verdict tones: danger=Gap, warn=Review, success=Pass (unchanged).
+Light depth comes from a tinted canvas, white surfaces, recessed wells, and restrained shadows. Orange stays byte-identical across themes. Because orange ink is only about 2.34:1 on the light canvas, primary controls use black-on-orange fills and light-theme focus uses neutral dark ink.
 
-## Components (both themes must look correct)
-Shell (sidebar, breadcrumb+search topbar, compact footer), underline tabs, design-system `Select` (dark/light chevron), flat joined KPI grid (`.metric-grid`/`.kpi-cell`), `DataTable`, `Badge`, `Button` (primary=orange, secondary, ghost, danger), cards/panels, readiness donut, empty states. All driven by tokens.
+## Geometry, spacing, and motion
 
-## Quality bar (target 10/10)
-- Contrast AA for body/meta in BOTH themes.
-- No horizontal overflow at 360/768/1440.
-- Visible focus on every interactive; reduced-motion honored.
-- `npx impeccable detect apps/web/react/src` → `[]` (or only justified inline-ignored).
-- Table-first read layouts; CRUD forms preserved.
+- Radius scale: 4 / 8 / 16 / pill.
+- Spacing scale: 4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48.
+- Sidebar: 248px expanded; responsive drawer below 1120px.
+- Main page measure: 1560px where the shell owns width.
+- Product motion: 120ms micro/hover, 200ms surfaces/drawers/modals, 300ms loading/value changes.
+- Animate only opacity and transform where practical. No decorative infinite motion; functional loading indicators may rotate.
+- `prefers-reduced-motion: reduce` disables all animation and transition and restores auto scrolling; computed-style browser guards pin this behavior.
+
+## Shared components
+
+- **Brand:** boxed 40px mark, orange core, Space Grotesk wordmark.
+- **Buttons:** one orange/black default primary CTA; neutral secondary; quiet ghost; outlined danger. Desktop density is 40px, compact 34px; all coarse/mobile targets are at least 44px.
+- **Cards:** 8px radius, 24px default padding, pure-black dark/white light surface, frost border; no divided raised-charcoal card chrome.
+- **Chips/badges:** inset pill, mono uppercase label, semantic tint only for state.
+- **Tabs:** inset pill rail with pill selections, horizontal overflow, complete roving-keyboard behavior.
+- **Inputs/selects:** 4px radius, 44px control height, recessed token surface, visible compliant focus, bounded popup placement.
+- **Tables:** scroll within their named keyboard-focusable region; mono uppercase masthead, 2px separation, zebra rhythm, orange hover wash and left edge, tabular numerics. Do not collapse data tables into unreadable mobile cards.
+- **Progress:** 7px pill track, semantic fills, transform-based value update.
+- **Empty state:** 56px inset icon visual, concise heading/body, optional real action.
+
+## Theme and accessibility contract
+
+- The early inline boot script applies saved `localStorage['astranull.theme']` before CSS/React; absent an explicit light preference, dark remains the default. The shell toggle persists changes.
+- Maintain WCAG AA body/secondary contrast in both themes. Never use color as the sole state signal.
+- Every interactive element has a visible focus state and keyboard semantics; wrapped search controls expose focus on their visible container.
+- Scrollable tab rails have a contextual accessible name and retain roving-keyboard navigation without an extra tab stop.
+- Mobile/coarse touch targets are at least 44px; shell menu/theme icons remain 18px inside 44px controls; no page-level horizontal overflow.
+- Long identifiers wrap safely; tables, code, and matrices own their internal horizontal scrolling.
+- Preserve loading, error, empty, cached-data, disabled, and authorization states.
+
+## Validation
+
+Required foundation gates: `npm run web:typecheck`, `npm run lint`, `npm run lint:portal`, `npm run web:build`, focused primitive/shell/accessibility tests, and Playwright smoke over dashboard, auth, and a detail route in dark/light at desktop/mobile.

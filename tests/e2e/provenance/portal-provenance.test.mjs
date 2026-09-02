@@ -1,105 +1,136 @@
-/**
- * FT-PROV-dyn dynamic provenance: node API checks (Playwright specs in portal-provenance.spec.mjs).
- */
+/** FT-PROV-dyn-01..07 dynamic provenance checks at the portal API boundary. */
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
-import { createServer } from '../../../src/server.mjs';
-import { resetStoreForTests } from '../../../src/store.mjs';
-import { computeReadiness } from '../../../src/services/readiness.mjs';
+import { after, describe, it } from 'node:test';
 import {
-  buildPortalBaselineStore,
-  PORTAL_BASELINE_IDS,
-} from '../../fixtures/portal-baseline/seed.mjs';
+  applyPortalProvenanceConnectorActive,
+  applyPortalProvenanceConnectorDegraded,
+  applyPortalProvenanceDnsLadderBaseline,
+  applyPortalProvenanceDnsLadderExpanded,
+  applyPortalProvenanceFindingsBaseline,
+  applyPortalProvenanceFindingsExpanded,
+  applyPortalProvenanceRemediationDelivered,
+  applyPortalProvenanceRemediationOpen,
+  applyPortalProvenanceSocQueueBaseline,
+  applyPortalProvenanceSocQueueExpanded,
+  applyPortalProvenanceWafPostureDrift,
+  applyPortalProvenanceWafPostureProtected,
+  PROVENANCE_DNS_LADDER,
+  PROVENANCE_FINDINGS,
+  PROVENANCE_REMEDIATION,
+  PROVENANCE_SOC_QUEUE,
+  PROVENANCE_WAF_CONNECTORS,
+  PROVENANCE_WAF_POSTURE,
+} from '../../fixtures/portal-baseline/provenance.mjs';
+import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import {
-  applyPortalBaselineReadinessBoost,
-  applyPortalBaselineReadinessPenalty,
-} from '../../fixtures/portal-baseline/readiness.mjs';
-import { demoHeaders, request } from '../../helpers/http.mjs';
+  countOpenFindings,
+  expectedReadinessScores,
+  fetchPortalFinding,
+  fetchPortalFindings,
+  fetchPortalHighScaleQueue,
+  fetchPortalReadinessScore,
+  fetchPortalTargetDetail,
+  fetchPortalVerificationLadder,
+  fetchPortalWafCoverageSummary,
+  getPortalPlaywrightBaseUrl,
+  restartPortalPlaywrightServer,
+  restartPortalPlaywrightWithReadinessPenalty,
+  startPortalPlaywrightServer,
+  stopPortalPlaywrightServer,
+} from '../../helpers/portal-playwright-server.mjs';
 
-const TEST_ENV = {
-  NODE_ENV: 'test',
-  ASTRANULL_AUTH_MODE: 'dev-headers',
-  ASTRANULL_NO_PERSIST: '1',
-};
-
-/** @type {import('node:http').Server | null} */
-let server = null;
-let baseUrl = '';
-
-function bootServer(mutate) {
-  for (const [key, value] of Object.entries(TEST_ENV)) {
-    process.env[key] = value;
-  }
-  const store = buildPortalBaselineStore();
-  mutate(store);
-  resetStoreForTests(store);
-  server?.close();
-  server = createServer({ env: { ...process.env, ...TEST_ENV } });
-  server.listen(0);
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : null;
-  if (!port) throw new Error('portal provenance server failed to bind');
-  baseUrl = `http://127.0.0.1:${port}`;
-}
-
-before(() => {
-  bootServer(applyPortalBaselineReadinessBoost);
-});
-
-after(() => {
-  server?.close();
+after(async () => {
+  await stopPortalPlaywrightServer();
 });
 
 describe('portal dynamic provenance (node API)', () => {
-  it('FT-PROV-dyn-01 readiness score changes after store mutation and server restart', async () => {
-    const headers = demoHeaders('owner', PORTAL_BASELINE_IDS.tenantId, 'usr_owner');
-    const boosted = await request(baseUrl, 'GET', '/v1/state', { headers });
-    assert.equal(boosted.status, 200);
-    const boostedScore = boosted.json?.readiness?.score;
-    assert.equal(typeof boostedScore, 'number');
+  it('FT-PROV-dyn-01 readiness boost changes to penalty after restart', async () => {
+    const expected = expectedReadinessScores();
+    assert.ok(expected.boostedScore > 0);
+    assert.ok(expected.boostedScore > expected.penalizedScore);
 
-    bootServer(applyPortalBaselineReadinessPenalty);
-    const penalized = await request(baseUrl, 'GET', '/v1/state', { headers });
-    assert.equal(penalized.status, 200);
-    const penalizedScore = penalized.json?.readiness?.score;
-    assert.equal(typeof penalizedScore, 'number');
-    assert.notEqual(boostedScore, penalizedScore);
-    assert.ok(penalizedScore < boostedScore);
+    await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
+    const boosted = await fetchPortalReadinessScore();
+    assert.equal(boosted, expected.boostedScore);
 
-    const storeScore = computeReadiness(PORTAL_BASELINE_IDS.tenantId).score;
-    assert.equal(storeScore, penalizedScore);
+    await restartPortalPlaywrightWithReadinessPenalty();
+    const penalized = await fetchPortalReadinessScore();
+    assert.equal(penalized, expected.penalizedScore);
+    assert.ok(penalized < boosted);
   });
 
-  it('FT-PROV-dyn-02 open findings count tracks store mutation', async () => {
-    const headers = demoHeaders('owner', PORTAL_BASELINE_IDS.tenantId, 'usr_owner');
-    const baseline = await request(baseUrl, 'GET', '/v1/findings?state=open', { headers });
-    assert.equal(baseline.status, 200);
-    const baselineCount = baseline.json.count;
+  it('FT-PROV-dyn-02 open findings change from 5 to 8', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceFindingsBaseline });
+    const baseline = await fetchPortalFindings();
+    assert.equal(countOpenFindings(baseline), PROVENANCE_FINDINGS.baselineOpenCount);
 
-    bootServer((store) => {
-      applyPortalBaselineReadinessBoost(store);
-      const openFindings = store.findings.filter(
-        (f) => f.tenant_id === PORTAL_BASELINE_IDS.tenantId && f.state === 'open',
-      );
-      for (let i = 0; i < 3; i += 1) {
-        store.findings.push({
-          id: `fnd_prov_dyn_${i}`,
-          tenant_id: PORTAL_BASELINE_IDS.tenantId,
-          target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
-          target_id: PORTAL_BASELINE_IDS.targetId,
-          severity: 's4',
-          title: `Provenance dyn ${i}`,
-          state: 'open',
-          opened_at: PORTAL_BASELINE_IDS.frozenAt,
-        });
-      }
-      assert.equal(openFindings.length + 3, store.findings.filter(
-        (f) => f.tenant_id === PORTAL_BASELINE_IDS.tenantId && f.state === 'open',
-      ).length);
-    });
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceFindingsExpanded });
+    const expanded = await fetchPortalFindings();
+    assert.equal(countOpenFindings(expanded), PROVENANCE_FINDINGS.mutatedOpenCount);
+    assert.equal(PROVENANCE_FINDINGS.baselineOpenCount, 5);
+    assert.equal(PROVENANCE_FINDINGS.mutatedOpenCount, 8);
+  });
 
-    const mutated = await request(baseUrl, 'GET', '/v1/findings?state=open', { headers });
-    assert.equal(mutated.status, 200);
-    assert.equal(mutated.json.count, baselineCount + 3);
+  it('FT-PROV-dyn-03 DNS verification ladder changes from 3 to 4', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderBaseline });
+    const baseline = await fetchPortalVerificationLadder();
+    const baselineDns = baseline.steps.find((step) => step.id === 'dns_verified');
+    assert.equal(baselineDns?.count, PROVENANCE_DNS_LADDER.baselineDnsVerified);
+    assert.equal(baselineDns?.total, PROVENANCE_DNS_LADDER.total);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderExpanded });
+    const expanded = await fetchPortalVerificationLadder();
+    const expandedDns = expanded.steps.find((step) => step.id === 'dns_verified');
+    assert.equal(expandedDns?.count, PROVENANCE_DNS_LADDER.mutatedDnsVerified);
+    assert.equal(PROVENANCE_DNS_LADDER.baselineDnsVerified, 3);
+    assert.equal(PROVENANCE_DNS_LADDER.mutatedDnsVerified, 4);
+  });
+
+  it('FT-PROV-dyn-04 WAF posture changes from protected to drift', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureProtected });
+    const baseline = await fetchPortalTargetDetail(PROVENANCE_WAF_POSTURE.targetId);
+    assert.equal(baseline.waf_posture?.posture, PROVENANCE_WAF_POSTURE.baselinePosture);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureDrift });
+    const drifted = await fetchPortalTargetDetail(PROVENANCE_WAF_POSTURE.targetId);
+    assert.equal(drifted.waf_posture?.posture, PROVENANCE_WAF_POSTURE.mutatedPosture);
+    assert.equal(drifted.waf_posture?.drift_reason, PROVENANCE_WAF_POSTURE.mutatedDriftReason);
+  });
+
+  it('FT-PROV-dyn-05 connector changes from active to degraded', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceConnectorActive });
+    const baseline = await fetchPortalWafCoverageSummary();
+    assert.equal(baseline.connectors_active, PROVENANCE_WAF_CONNECTORS.baselineActive);
+    assert.equal(baseline.connectors_degraded, PROVENANCE_WAF_CONNECTORS.baselineDegraded);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceConnectorDegraded });
+    const degraded = await fetchPortalWafCoverageSummary();
+    assert.equal(degraded.connectors_active, PROVENANCE_WAF_CONNECTORS.mutatedActive);
+    assert.equal(degraded.connectors_degraded, PROVENANCE_WAF_CONNECTORS.mutatedDegraded);
+  });
+
+  it('FT-PROV-dyn-06 remediation changes from open to delivered', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceRemediationOpen });
+    const baseline = await fetchPortalFinding(PROVENANCE_REMEDIATION.findingId);
+    assert.equal(baseline.remediation?.state, PROVENANCE_REMEDIATION.baselineState);
+    assert.equal(baseline.remediation?.description, PROVENANCE_REMEDIATION.baselineDescription);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceRemediationDelivered });
+    const delivered = await fetchPortalFinding(PROVENANCE_REMEDIATION.findingId);
+    assert.equal(delivered.remediation?.state, PROVENANCE_REMEDIATION.mutatedState);
+    assert.equal(delivered.remediation?.description, PROVENANCE_REMEDIATION.mutatedDescription);
+    assert.equal(delivered.remediation?.delivered_via, PROVENANCE_REMEDIATION.deliveredVia);
+  });
+
+  it('FT-PROV-dyn-07 SOC queue changes from one row to two rows', async () => {
+    await startPortalPlaywrightServer({ mutate: applyPortalProvenanceSocQueueBaseline });
+    const baseline = await fetchPortalHighScaleQueue();
+    assert.equal(baseline.length, 1);
+    assert.equal(baseline[0]?.id, PROVENANCE_SOC_QUEUE.baselineRequestId);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceSocQueueExpanded });
+    const expanded = await fetchPortalHighScaleQueue(getPortalPlaywrightBaseUrl());
+    assert.equal(expanded.length, 2);
+    assert.ok(expanded.some((row) => row.id === PROVENANCE_SOC_QUEUE.addedRequestId));
   });
 });

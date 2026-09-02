@@ -3,7 +3,7 @@ import {
   ownershipSummaryFromTargetStates,
 } from '../../lib/ownershipPolicy.mjs';
 import { isCurrentProviderDnsOwnershipProof } from '../../lib/connectorProviders/domainInventory.mjs';
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 const VERIFICATION_COLUMNS = `id, tenant_id, target_group_id, agent_id, declared_fqdn, status,
   challenge_nonce_hash, probe_observed, agent_observed, verified_at, confirmed_by_user_id,
@@ -249,11 +249,11 @@ export function createOwnershipVerificationRepository(pool) {
       });
     },
 
-    async recordOwnershipSignalAtomic(ctx, input, auditRepo) {
+    async recordOwnershipSignalAtomic(ctx, input, auditRepo, options = {}) {
       if (typeof auditRepo?.appendAuditEvent !== 'function') {
         throw new Error('Postgres ownership completion requires audit.appendAuditEvent().');
       }
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         let selected;
         if (input.verification_id) {
           selected = await client.query(
@@ -279,14 +279,24 @@ export function createOwnershipVerificationRepository(pool) {
 
         const record = mapOwnershipVerificationRow(selected.rows[0] ?? null);
         if (!record) return { error: 'ownership_verification_not_found', status: 404 };
-        if (!OPEN_STATUSES.includes(record.status)) {
-          return { error: 'ownership_verification_not_open', status: 409 };
-        }
         if (input.nonce_hash !== record.challenge_nonce_hash) {
           return { error: 'nonce_mismatch', status: 400 };
         }
         if (input.source !== 'probe' && input.source !== 'agent') {
           return { error: 'invalid_source', status: 400 };
+        }
+        if (
+          input.source === 'probe'
+          && (
+            typeof input.probe_job_id !== 'string'
+            || input.probe_job_id === ''
+            || record.probe_job_id !== input.probe_job_id
+          )
+        ) {
+          return { error: 'ownership_probe_job_binding_mismatch', status: 409 };
+        }
+        if (!OPEN_STATUSES.includes(record.status)) {
+          return { error: 'ownership_verification_not_open', status: 409 };
         }
 
         const probeObserved = record.probe_observed || input.source === 'probe';
@@ -392,11 +402,11 @@ export function createOwnershipVerificationRepository(pool) {
       });
     },
 
-    async confirmOwnershipAtomic(ctx, input, auditRepo) {
+    async confirmOwnershipAtomic(ctx, input, auditRepo, options = {}) {
       if (typeof auditRepo?.appendAuditEvent !== 'function') {
         throw new Error('Postgres ownership confirmation requires audit.appendAuditEvent().');
       }
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
         const selected = await client.query(
           `SELECT ${VERIFICATION_COLUMNS}
            FROM ownership_verifications

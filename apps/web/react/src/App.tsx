@@ -6,6 +6,7 @@ import {
   ensurePortalSession,
   fetchPortalData,
   fetchPortalDatasets,
+  isStaffSocRole,
   loadSession,
   portalSurface,
   REAUTH_REQUIRED_EVENT,
@@ -15,7 +16,10 @@ import {
   sessionIdentity
 } from './lib/api';
 import { getRouteFromLocation } from './lib/navigation';
+import { createPayloadCommitGate, runGenerationKeyedPayload } from './lib/payload-commit-generation.mjs';
 import { canAccessRoute } from './lib/route-access';
+import { getRouteTenantId } from './lib/route-params';
+import { ConfirmModalProvider } from './lib/crud-ui';
 import type { PortalConfig, PortalData, PortalDataset, RouteId, Session } from './lib/types';
 import { LoginPage, PublicLandingPage, SetPasswordPage, SignupPage, SignupStatusPage, StaffLoginPage } from './pages/public-pages';
 import { RouteView } from './pages/router';
@@ -37,6 +41,22 @@ function isPublicOnlyPath(path: string) {
   return ['/', '/landing.html', '/login', '/login.html', '/signup', '/signup.html', '/signup-status', '/set-password', '/internal/admin/login', '/staff-login.html'].includes(path);
 }
 
+function sessionForRoute(session: Session, route: RouteId): Session {
+  if (
+    session.principal !== 'staff' ||
+    !isStaffSocRole(session) ||
+    (route !== 'internal-soc' && route !== 'queue-detail')
+  ) {
+    return session;
+  }
+  const tenantId = getRouteTenantId(session.tenant_id ?? '').trim();
+  return { ...session, tenant_id: tenantId || undefined };
+}
+
+function fallbackRouteForPrincipal(principal: Session['principal']): RouteId {
+  return principal === 'staff' ? 'admin' : 'dashboard';
+}
+
 export default function App() {
   const [route, setRoute] = useState<RouteId>(() => getRouteFromLocation());
   const [path, setPath] = useState(() => window.location.pathname);
@@ -47,7 +67,8 @@ export default function App() {
   const [hydratingRoute, setHydratingRoute] = useState<RouteId | null>(null);
   const bootStarted = useRef(false);
   const lastHydratedRoute = useRef<RouteId | null>(null);
-  const routeHydrationRequestId = useRef(0);
+  const payloadCommitGate = useRef(createPayloadCommitGate(route));
+  payloadCommitGate.current.activate(route);
 
   const activeSession = useMemo(() => session ?? {}, [session]);
 
@@ -58,18 +79,25 @@ export default function App() {
     options: { datasets?: readonly PortalDataset[]; force?: boolean } = {}
   ) => {
     if (!nextConfig) return;
-    try {
-      const payload = options.datasets
-        ? await fetchPortalDatasets(nextConfig, nextSession, options.datasets)
-        : await fetchPortalData(nextConfig, nextSession, { route: nextRoute, force: options.force });
-      setData(payload);
-    } catch (error) {
-      setData((current) => ({
+    const scopedSession = sessionForRoute(nextSession, nextRoute);
+    await runGenerationKeyedPayload({
+      gate: payloadCommitGate.current,
+      routeKey: nextRoute,
+      load: (isCurrent) => options.datasets
+        ? fetchPortalDatasets(nextConfig, scopedSession, options.datasets, isCurrent)
+        : fetchPortalData(nextConfig, scopedSession, {
+          route: nextRoute,
+          force: options.force,
+          shouldCommitCache: isCurrent
+        }),
+      onCommit: (payload) => setData(payload),
+      onError: (error) => setData((current) => ({
         ...current,
         loaded: true,
         error: error instanceof Error ? error.message : 'Could not load workspace data.'
-      }));
-    }
+      })),
+      onSettled: () => setHydratingRoute((current) => current === nextRoute ? null : current),
+    });
   }, []);
 
   /**
@@ -121,12 +149,13 @@ export default function App() {
       if (nextSession) resetReauthGuard();
       if (!isPublicOnlyPath(window.location.pathname) && nextSession) {
         const requestedBootRoute = getRouteFromLocation();
+        const fallbackRoute = fallbackRouteForPrincipal(nextSession.principal);
         const bootRoute = canAccessRoute(nextSession.role, requestedBootRoute, {
           principal: nextSession.principal,
           staffRole: nextSession.staff_role,
-        }) ? requestedBootRoute : 'dashboard';
+        }) ? requestedBootRoute : fallbackRoute;
         if (bootRoute !== requestedBootRoute) {
-          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#dashboard`);
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${fallbackRoute}`);
         }
         setRoute(bootRoute);
         await refresh(nextConfig, nextSession, bootRoute);
@@ -153,11 +182,14 @@ export default function App() {
         principal: stored?.principal ?? activeSession.principal,
         staffRole: stored?.staff_role ?? activeSession.staff_role,
       };
+      const fallbackRoute = fallbackRouteForPrincipal(accessContext.principal);
       if (!canAccessRoute(role, nextRoute, accessContext)) {
-        window.location.replace(`${window.location.pathname}${window.location.search}#dashboard`);
-        if (lastHydratedRoute.current !== 'dashboard') setHydratingRoute('dashboard');
-        setRoute('dashboard');
+        payloadCommitGate.current.activate(fallbackRoute);
+        window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
+        if (lastHydratedRoute.current !== fallbackRoute) setHydratingRoute(fallbackRoute);
+        setRoute(fallbackRoute);
       } else {
+        payloadCommitGate.current.activate(nextRoute);
         if (lastHydratedRoute.current !== nextRoute) setHydratingRoute(nextRoute);
         setRoute(nextRoute);
       }
@@ -187,8 +219,10 @@ export default function App() {
       principal: activeSession.principal,
       staffRole: activeSession.staff_role,
     })) {
-      window.location.replace(`${window.location.pathname}${window.location.search}#dashboard`);
-      setRoute('dashboard');
+      const fallbackRoute = fallbackRouteForPrincipal(activeSession.principal);
+      payloadCommitGate.current.activate(fallbackRoute);
+      window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
+      setRoute(fallbackRoute);
     }
   }, [loading, config, route, activeSession.principal, activeSession.role, activeSession.staff_role]);
 
@@ -196,16 +230,13 @@ export default function App() {
     if (loading || !config || !session) return;
     if (isPublicOnlyPath(path)) return;
     if (lastHydratedRoute.current === route) return;
-    const requestId = ++routeHydrationRequestId.current;
     lastHydratedRoute.current = route;
     setHydratingRoute(route);
-    void refresh(config, session, route).finally(() => {
-      if (routeHydrationRequestId.current !== requestId) return;
-      setHydratingRoute((current) => current === route ? null : current);
-    });
+    void refresh(config, session, route);
   }, [route, loading, config, session, path, refresh]);
 
   function handleRouteChange(nextRoute: RouteId) {
+    payloadCommitGate.current.activate(nextRoute);
     if (nextRoute !== route && lastHydratedRoute.current !== nextRoute) {
       setHydratingRoute(nextRoute);
     }
@@ -253,6 +284,7 @@ export default function App() {
   if (path === '/internal/admin/login' || path === '/staff-login.html') return <StaffLoginPage config={config} />;
 
   return (
+    <ConfirmModalProvider>
     <AppShell
       route={route}
       session={activeSession}
@@ -271,5 +303,6 @@ export default function App() {
         hydrating={hydratingRoute === route}
       />
     </AppShell>
+    </ConfirmModalProvider>
   );
 }

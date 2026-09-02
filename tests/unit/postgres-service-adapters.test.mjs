@@ -357,6 +357,42 @@ describe('postgres auth service adapters', () => {
     assert.equal(auditEvents.at(-1)?.action, 'bootstrap_token.revoked');
   });
 
+  it('normalizes bootstrap prebind FQDN and preserves only the dev packaging allowlist', async () => {
+    const stored = [];
+    const { repositories } = createRecordingAuthRepositories({
+      createBootstrapToken: async (_ctx, record) => {
+        stored.push(record);
+        return record;
+      },
+    });
+    const { tokens } = createPostgresAuthServices(repositories, {
+      now: () => FIXED_NOW,
+      newId: () => `token_${stored.length + 1}`,
+    });
+    const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
+    const cases = [
+      ['image', 'image'],
+      ['standalone', 'standalone'],
+      ['helm', 'helm'],
+      ['docker', null],
+      ['HELM', null],
+      ['', null],
+      [undefined, null],
+    ];
+
+    for (const [deploymentPackaging, expectedPackaging] of cases) {
+      const created = await tokens.createBootstrapToken(ctx, {
+        prebind_fqdn: '  Probe.Edge.Example.COM  ',
+        deployment_packaging: deploymentPackaging,
+      });
+      assert.equal(created.token.prebind_fqdn, 'probe.edge.example.com');
+      assert.equal(created.token.deployment_packaging, expectedPackaging);
+    }
+
+    assert.equal(stored.length, cases.length);
+    assert.ok(stored.every((record) => record.prebind_fqdn === 'probe.edge.example.com'));
+  });
+
   it('addressed bootstrap consume uses atomic registration and audits used', async () => {
     const tokenId = 'token_consume';
     const tenantId = 'ten_demo';
@@ -512,6 +548,7 @@ describe('postgres auth service adapters', () => {
 
 function createRecordingAgentRepositories(overrides = {}) {
   const auditEvents = [];
+  const auditCalls = [];
   const agentControlCalls = [];
 
   const agentControl = {};
@@ -522,11 +559,28 @@ function createRecordingAgentRepositories(overrides = {}) {
     };
   }
 
+  const transactionClient = { kind: 'agent-audit-test-client' };
   const audit = {
-    appendAuditEvent: async (entry) => {
+    appendAuditEvent: async (...args) => {
+      const [entry, options = {}] = args;
+      auditCalls.push(args);
+      if (overrides.appendAuditEvent) return overrides.appendAuditEvent(...args);
+      const idempotency = options.idempotency;
+      if (idempotency) {
+        const actions = idempotency.actions ?? [entry.action];
+        const existing = auditEvents.find((event) =>
+          actions.includes(event.action)
+            && event.resource_type === idempotency.resourceType
+            && event.resource_id === idempotency.resourceId);
+        if (existing) return existing;
+      }
       auditEvents.push(entry);
       return entry;
     },
+    withTenantAuditLock: async (_tenantId, callback) => callback({
+      client: transactionClient,
+      prior: null,
+    }),
   };
 
   const repositories = { agentControl, audit };
@@ -540,7 +594,9 @@ function createRecordingAgentRepositories(overrides = {}) {
   return {
     repositories,
     auditEvents,
+    auditCalls,
     agentControlCalls,
+    transactionClient,
   };
 }
 
@@ -659,7 +715,7 @@ describe('postgres agent service adapters', () => {
       revokeAgent: async () => ({ ...agent, status: 'revoked' }),
       updateAgentHeartbeat: async () => ({ ...agent, version: '1.0' }),
       listPendingAgentJobs: async () => [job],
-      ackAgentJob: async () => job,
+      ackAgentJob: async () => ({ job, transitioned: true }),
     });
     const { agents } = createPostgresAgentServices(repositories, {
       tokens: { consumeBootstrapToken: async () => ({}) },
@@ -691,6 +747,103 @@ describe('postgres agent service adapters', () => {
     assert.equal(agentControlCalls[2].method, 'updateAgentHeartbeat');
     assert.deepEqual(agentControlCalls[3].args[0], { tenantId: 'ten_demo', agentId: 'agent_1' });
     assert.equal(agentControlCalls[4].method, 'ackAgentJob');
+  });
+
+  it('ackJob audits the transition once and returns acked or observed rows on replay', async () => {
+    const agent = { id: 'agent_1', tenant_id: 'ten_demo' };
+    const acked = {
+      id: 'job_1',
+      status: 'acked',
+      acked_at: FIXED_NOW.toISOString(),
+    };
+    const observed = {
+      ...acked,
+      status: 'observed',
+      observed_at: '2026-06-01T12:00:30.000Z',
+    };
+    const results = [
+      { job: acked, transitioned: true },
+      { job: acked, transitioned: false },
+      { job: observed, transitioned: false },
+    ];
+    const {
+      repositories,
+      auditEvents,
+      auditCalls,
+      agentControlCalls,
+      transactionClient,
+    } = createRecordingAgentRepositories({
+      ackAgentJob: async () => results.shift(),
+    });
+    const { agents } = createPostgresAgentServices(repositories, {
+      tokens: { consumeBootstrapToken: async () => ({}) },
+      now: () => FIXED_NOW,
+    });
+
+    assert.deepEqual(await agents.ackJob(agent, 'job_1'), acked);
+    assert.deepEqual(await agents.ackJob(agent, 'job_1'), acked);
+    assert.deepEqual(await agents.ackJob(agent, 'job_1'), observed);
+    assert.equal(auditEvents.filter((event) => event.action === 'agent.job_acked').length, 1);
+    assert.equal(agentControlCalls.length, 3);
+    assert.ok(agentControlCalls.every((call) => call.args[2].client === transactionClient));
+    assert.equal(auditCalls.length, 3);
+    assert.ok(auditCalls.every((call) => call[1].client === transactionClient));
+    assert.ok(auditCalls.every((call) =>
+      call[1].idempotency.resourceType === 'agent_job'
+        && call[1].idempotency.resourceId === 'job_1'));
+  });
+
+  it('ackJob repairs a missing ACK audit for an already observed row', async () => {
+    const observed = {
+      id: 'job_repair',
+      status: 'observed',
+      acked_at: FIXED_NOW.toISOString(),
+      observed_at: '2026-06-01T12:00:30.000Z',
+    };
+    const { repositories, auditEvents, auditCalls, transactionClient } =
+      createRecordingAgentRepositories({
+        ackAgentJob: async () => ({ job: observed, transitioned: false }),
+      });
+    const { agents } = createPostgresAgentServices(repositories, {
+      tokens: { consumeBootstrapToken: async () => ({}) },
+      now: () => FIXED_NOW,
+    });
+
+    assert.deepEqual(await agents.ackJob(
+      { id: 'agent_1', tenant_id: 'ten_demo' },
+      observed.id,
+    ), observed);
+    assert.equal(auditEvents.length, 1);
+    assert.equal(auditEvents[0].action, 'agent.job_acked');
+    assert.equal(auditEvents[0].resource_id, observed.id);
+    assert.equal(auditCalls[0][1].client, transactionClient);
+
+    await agents.ackJob({ id: 'agent_1', tenant_id: 'ten_demo' }, observed.id);
+    assert.equal(auditEvents.length, 1, 'audit repair is idempotent on later replay');
+  });
+
+  it('ackJob rejects when its in-transaction audit append fails', async () => {
+    const agent = { id: 'agent_1', tenant_id: 'ten_demo' };
+    let transitionClient;
+    let auditClient;
+    const { repositories, transactionClient } = createRecordingAgentRepositories({
+      ackAgentJob: async (_scope, _ackedAt, options) => {
+        transitionClient = options.client;
+        return { job: { id: 'job_1', status: 'acked' }, transitioned: true };
+      },
+      appendAuditEvent: async (_entry, options) => {
+        auditClient = options.client;
+        throw new Error('audit write failed');
+      },
+    });
+    const { agents } = createPostgresAgentServices(repositories, {
+      tokens: { consumeBootstrapToken: async () => ({}) },
+      now: () => FIXED_NOW,
+    });
+
+    await assert.rejects(() => agents.ackJob(agent, 'job_1'), /audit write failed/);
+    assert.equal(transitionClient, transactionClient);
+    assert.equal(auditClient, transactionClient);
   });
 
   it('heartbeatAgent rejects probe_endpoint when declared_fqdn is not in target group', async () => {
@@ -915,30 +1068,121 @@ describe('postgres agent service adapters', () => {
 function createRecordingValidationRepositories(overrides = {}) {
   const validationCalls = [];
   const auditEvents = [];
+  const transactionClient = overrides.transactionClient
+    ?? { kind: 'validation-audit-test-client' };
+  const durable = {
+    runs: new Map(),
+    verdicts: new Map(),
+    events: [],
+    findings: [],
+  };
 
   const validationEvidence = {};
   for (const method of VALIDATION_EVIDENCE_REPOSITORY_METHODS) {
     validationEvidence[method] = async (...args) => {
       validationCalls.push({ method, args });
-      if (overrides[method]) return overrides[method](...args);
-      if (method === 'withRunMutationLock') {
-        return { acquired: true, result: await args[2]() };
+      const options = args.at(-1);
+      const lockedClient = options?.client;
+
+      let result;
+      if (overrides[method]) {
+        result = await overrides[method](...args);
+      } else if (method === 'withRunMutationLock') {
+        if (args[3]?.client) assert.equal(args[3].client, transactionClient);
+        return { acquired: true, result: await args[2](args[3]?.client ?? transactionClient) };
+      } else if (method === 'listTestRuns') {
+        result = [];
+      } else if (method === 'listRunEvents') {
+        result = durable.events.filter((event) => event.test_run_id === args[1]);
+      } else if (method === 'listFindings') {
+        const findingOptions = args[1] ?? {};
+        if (findingOptions.client) assert.equal(findingOptions.client, transactionClient);
+        result = durable.findings.filter((finding) =>
+          (findingOptions.target_group_id == null
+              || finding.target_group_id === findingOptions.target_group_id)
+            && (findingOptions.target_id == null || finding.target_id === findingOptions.target_id)
+            && (findingOptions.check_id == null || finding.check_id === findingOptions.check_id)
+            && (findingOptions.test_run_id == null
+              || finding.test_run_id === findingOptions.test_run_id));
       }
-      if (method === 'listTestRuns') return [];
-      if (method === 'listRunEvents') return [];
-      return undefined;
+
+      if (method === 'getTestRun' && lockedClient && result == null && durable.runs.has(args[1])) {
+        assert.equal(lockedClient, transactionClient);
+        result = { ...durable.runs.get(args[1]) };
+      }
+      if (method === 'getVerdictForRun' && lockedClient && result == null
+        && durable.verdicts.has(args[1])) {
+        assert.equal(lockedClient, transactionClient);
+        result = { ...durable.verdicts.get(args[1]) };
+      }
+
+      if (method === 'createTestRun' && result) {
+        durable.runs.set(result.id, { ...args[1], ...result });
+      } else if (method === 'getTestRun' && result) {
+        durable.runs.set(result.id, { ...result });
+      } else if (method === 'updateTestRun' && result) {
+        durable.runs.set(args[1], { ...(durable.runs.get(args[1]) ?? {}), ...result });
+      } else if (method === 'appendEvent' && result) {
+        const event = { ...args[1], ...result };
+        const index = durable.events.findIndex((item) => item.id === event.id);
+        if (index >= 0) durable.events[index] = event;
+        else durable.events.push(event);
+      } else if (method === 'createVerdictIfAbsent' && result) {
+        const verdict = { ...args[1], ...result };
+        durable.verdicts.set(verdict.test_run_id, verdict);
+        const run = durable.runs.get(verdict.test_run_id);
+        if (run) {
+          durable.runs.set(verdict.test_run_id, {
+            ...run,
+            status: 'verdicted',
+            completed_at: verdict.created_at,
+          });
+        }
+      } else if (method === 'getVerdictForRun' && result) {
+        durable.verdicts.set(args[1], { ...result });
+      } else if (method === 'upsertOpenFindingFromVerdict' && result) {
+        const finding = { ...args[1], ...result };
+        const index = durable.findings.findIndex((item) => item.id === finding.id);
+        if (index >= 0) durable.findings[index] = finding;
+        else durable.findings.push(finding);
+      }
+      return result;
     };
   }
 
   const audit = {
-    appendAuditEvent: async (entry, options) => {
+    appendAuditEvent: async (entry, options = {}) => {
+      if (overrides.appendAuditEvent) {
+        const overrideResult = await overrides.appendAuditEvent(entry, options);
+        if (overrideResult !== undefined) return overrideResult;
+      }
+      const idempotency = options.idempotency;
+      if (idempotency) {
+        const actions = idempotency.actions ?? [entry.action];
+        const requiredMetadata = idempotency.metadata ?? {};
+        const existing = auditEvents.find(({ entry: persisted }) =>
+          actions.includes(persisted.action)
+            && persisted.resource_type === idempotency.resourceType
+            && persisted.resource_id === idempotency.resourceId
+            && Object.entries(requiredMetadata).every(
+              ([key, value]) => persisted.metadata?.[key] === value,
+            ));
+        if (existing) return existing.entry;
+      }
       auditEvents.push({ entry, options });
       return entry;
+    },
+    withTenantAuditLock: async (_tenantId, callback) => {
+      validationCalls.push({ method: 'audit.withTenantAuditLock', args: [_tenantId] });
+      return callback({ client: transactionClient, prior: null });
     },
   };
 
   const coreCatalog = {
-    getTargetGroup: async (...args) => overrides.getTargetGroup?.(...args),
+    getTargetGroup: async (...args) => {
+      validationCalls.push({ method: 'coreCatalog.getTargetGroup', args });
+      return overrides.getTargetGroup?.(...args);
+    },
   };
   const agentControl = {};
   for (const method of VALIDATION_AGENT_CONTROL_REPOSITORY_METHODS) {
@@ -960,8 +1204,10 @@ function createRecordingValidationRepositories(overrides = {}) {
     },
   };
   const killSwitch = {
-    isKillSwitchActiveForTenant: async (...args) =>
-      overrides.isKillSwitchActiveForTenant?.(...args) ?? false,
+    isKillSwitchActiveForTenant: async (...args) => {
+      validationCalls.push({ method: 'killSwitch.isKillSwitchActiveForTenant', args });
+      return overrides.isKillSwitchActiveForTenant?.(...args) ?? false;
+    },
   };
 
   const repositories = {
@@ -990,7 +1236,7 @@ function createRecordingValidationRepositories(overrides = {}) {
     };
   }
 
-  return { repositories, validationCalls, auditEvents };
+  return { repositories, validationCalls, auditEvents, transactionClient };
 }
 
 function assertNoRunProbeOrAgentSideEffects(validationCalls) {
@@ -1037,7 +1283,10 @@ function customerRunnableRunsLastHour(tenantId, count, nowIso = FIXED_NOW.toISOS
 
 describe('postgres validation service adapters', () => {
   it('exposes stable validation repository and service method lists', () => {
-    assert.deepEqual(VALIDATION_AUDIT_REPOSITORY_METHODS, ['appendAuditEvent']);
+    assert.deepEqual(VALIDATION_AUDIT_REPOSITORY_METHODS, [
+      'appendAuditEvent',
+      'withTenantAuditLock',
+    ]);
     assert.equal(VALIDATION_EVIDENCE_REPOSITORY_METHODS.length, 20);
     assert.ok(VALIDATION_EVIDENCE_REPOSITORY_METHODS.includes('findEventByTenantEventId'));
     assert.ok(VALIDATION_EVIDENCE_REPOSITORY_METHODS.includes('appendEventIdempotent'));
@@ -1168,7 +1417,7 @@ describe('postgres validation service adapters', () => {
     };
   }
 
-  it('ingestObservation before external probe returns verdict null without publishing', async () => {
+  it('ingestObservation before external probe commits job, event, and audit through one client', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
     const run = collectingRun({
       status: 'running',
@@ -1186,14 +1435,50 @@ describe('postgres validation service adapters', () => {
       nonce_hash: 'nh_1',
       status: 'acked',
     };
+    const transactionClient = { id: 'observation-transaction-client' };
     let verdictWrites = 0;
+    let transactionalRunRead = false;
+    let transactionalJobRead = false;
     const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
+      transactionClient,
+      isKillSwitchActiveForTenant: async (_ctx, options) => {
+        assert.equal(options.client, transactionClient);
+        return false;
+      },
       getAgentById: async () => agent,
-      getTestRun: async () => run,
-      getAgentJobById: async () => job,
-      listRunEvents: async () => [],
-      appendEvent: async (c, e) => e,
-      markAgentJobObserved: async () => job,
+      getTestRun: async (_ctx, _id, options) => {
+        if (options?.client) {
+          assert.equal(options.client, transactionClient);
+          transactionalRunRead = true;
+        }
+        return run;
+      },
+      getAgentJobById: async (_key, options) => {
+        if (options?.client) {
+          assert.equal(options.client, transactionClient);
+          transactionalJobRead = true;
+        }
+        return job;
+      },
+      listRunEvents: async (_ctx, _id, options) => {
+        assert.equal(options.client, transactionClient);
+        return [];
+      },
+      appendEvent: async (_ctx, event, options) => {
+        assert.equal(options.client, transactionClient);
+        return event;
+      },
+      markAgentJobObserved: async (_key, _observedAt, options) => {
+        assert.equal(options.client, transactionClient);
+        return { ...job, status: 'observed' };
+      },
+      withRunMutationLock: async (_ctx, _runId, callback, options) => {
+        assert.equal(options.client, transactionClient);
+        return {
+          acquired: true,
+          result: await callback(transactionClient),
+        };
+      },
     });
     repositories.validationEvidence.createVerdictIfAbsent = async () => {
       verdictWrites += 1;
@@ -1208,7 +1493,20 @@ describe('postgres validation service adapters', () => {
     });
     assert.equal(result.run.verdict, null);
     assert.equal(verdictWrites, 0);
-    assert.ok(auditEvents.some((a) => a.entry.action === 'observation.ingested'));
+    assert.equal(transactionalRunRead, true);
+    assert.equal(transactionalJobRead, true);
+    const observationAudit = auditEvents.find((event) => event.entry.action === 'observation.ingested');
+    assert.equal(observationAudit.options.client, transactionClient);
+    const auditLockIdx = validationCalls.findIndex(
+      (call) => call.method === 'audit.withTenantAuditLock',
+    );
+    const runLockIdx = validationCalls.findIndex(
+      (call) => call.method === 'withRunMutationLock',
+    );
+    const killSwitchIdx = validationCalls.findIndex(
+      (call) => call.method === 'killSwitch.isKillSwitchActiveForTenant',
+    );
+    assert.ok(auditLockIdx >= 0 && auditLockIdx < runLockIdx && runLockIdx < killSwitchIdx);
     const markIdx = validationCalls.findIndex((c) => c.method === 'agentControl.markAgentJobObserved');
     const appendIdx = validationCalls.findIndex((c) => c.method === 'appendEvent');
     assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
@@ -1224,11 +1522,20 @@ describe('postgres validation service adapters', () => {
     };
     let eventWrites = 0;
     let verdictWrites = 0;
-    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
+    let killSwitchClient;
+    const {
+      repositories,
+      auditEvents,
+      validationCalls,
+      transactionClient,
+    } = createRecordingValidationRepositories({
       getAgentById: async () => agent,
       getTestRun: async () => ({ ...run }),
       getAgentJobById: async () => job,
-      isKillSwitchActiveForTenant: async () => true,
+      isKillSwitchActiveForTenant: async (_ctx, options) => {
+        killSwitchClient = options.client;
+        return true;
+      },
       appendEvent: async () => { eventWrites += 1; return {}; },
       createVerdictIfAbsent: async () => { verdictWrites += 1; return {}; },
     });
@@ -1241,6 +1548,7 @@ describe('postgres validation service adapters', () => {
     assert.deepEqual(result, { error: 'kill_switch_active', status: 423 });
     assert.equal(eventWrites, 0);
     assert.equal(verdictWrites, 0);
+    assert.equal(killSwitchClient, transactionClient);
     assert.equal(validationCalls.some((call) => call.method === 'agentControl.markAgentJobObserved'), false);
     assert.ok(auditEvents.some(
       (event) => event.entry.action === 'observation.rejected' && event.entry.metadata.reason === 'kill_switch_active',
@@ -1319,7 +1627,352 @@ describe('postgres validation service adapters', () => {
     assert.ok(markIdx >= 0 && appendIdx >= 0 && markIdx < appendIdx);
   });
 
-  it('external_only run auto-finalizes to edge_exposed finding after probe ingest without an agent', async () => {
+  it('same confirmed observation retry resumes finalization without duplicate event or audit', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const run = collectingRun();
+    const agent = baseOnlineAgent({ id: 'ag_1' });
+    const job = {
+      id: 'job_1',
+      tenant_id: 'ten_demo',
+      agent_id: 'ag_1',
+      test_run_id: 'run_1',
+      check_id: run.check_id,
+      target_id: 'tgt_1',
+      nonce_hash: 'nh_1',
+      status: 'acked',
+    };
+    const probeEvent = {
+      id: 'evt_probe',
+      test_run_id: 'run_1',
+      target_id: 'tgt_1',
+      check_id: run.check_id,
+      signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
+      nonce_hash: 'nh_1',
+      timestamp: FIXED_NOW.toISOString(),
+      metadata: { external_result: 'connected' },
+    };
+    const target = {
+      id: 'tgt_1',
+      value: '203.0.113.1',
+      expected_behavior: 'must_block_before_origin',
+    };
+    let jobStatus = 'acked';
+    let eventWrites = 0;
+    let markWrites = 0;
+    let verdictAttempts = 0;
+    let storedVerdict = null;
+    const persistedEvents = [probeEvent];
+    const { repositories, auditEvents } = createRecordingValidationRepositories({
+      getAgentById: async () => agent,
+      getTestRun: async () => ({ ...run }),
+      getAgentJobById: async () => ({ ...job, status: jobStatus }),
+      listRunEvents: async () => persistedEvents.map((event) => ({ ...event })),
+      appendEvent: async (_scope, event) => {
+        eventWrites += 1;
+        const stored = { ...event, id: 'evt_obs' };
+        persistedEvents.push(stored);
+        return stored;
+      },
+      markAgentJobObserved: async () => {
+        markWrites += 1;
+        jobStatus = 'observed';
+        return { ...job, status: jobStatus };
+      },
+      getTargetGroup: async () => ({ id: 'tg_1', targets: [target] }),
+      listAgents: async () => [agent],
+      getVerdictForRun: async () => storedVerdict,
+      createVerdictIfAbsent: async (_scope, record) => {
+        verdictAttempts += 1;
+        if (verdictAttempts === 1) throw new Error('injected finalization failure');
+        storedVerdict = { ...record, id: 'ver_1' };
+        return storedVerdict;
+      },
+      findOpenFinding: async () => null,
+      upsertOpenFindingFromVerdict: async () => ({ id: 'find_1' }),
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+    const body = {
+      test_run_id: 'run_1',
+      agent_job_id: 'job_1',
+      nonce_hash: 'nh_1',
+      metadata: { mode: 'canary' },
+    };
+
+    await assert.rejects(
+      () => testRuns.ingestObservation(ctx, 'ag_1', body),
+      /injected finalization failure/,
+    );
+    assert.equal(jobStatus, 'observed', 'the confirmed observation transaction committed');
+    assert.equal(eventWrites, 1);
+    assert.equal(markWrites, 1);
+    assert.equal(
+      auditEvents.filter((event) => event.entry.action === 'observation.ingested').length,
+      1,
+    );
+
+    const retried = await testRuns.ingestObservation(ctx, 'ag_1', body);
+    assert.equal(retried.run.verdict.verdict, 'bypassable');
+    assert.equal(verdictAttempts, 2);
+    assert.equal(eventWrites, 1, 'retry reuses the durable observation event');
+    assert.equal(markWrites, 1, 'retry does not transition the observed job again');
+    assert.equal(
+      auditEvents.filter((event) => event.entry.action === 'observation.ingested').length,
+      1,
+      'retry does not duplicate the ingestion audit',
+    );
+    assert.equal(
+      auditEvents.some((event) => event.entry.action === 'observation.rejected'),
+      false,
+    );
+  });
+
+  it('repairs a missing audit for a durable observed-job replay after run finalization exactly once', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const run = collectingRun({
+      status: 'verdicted',
+      completed_at: FIXED_NOW.toISOString(),
+      awaiting_external_probe: false,
+      probe_external_result: null,
+    });
+    const agent = baseOnlineAgent({ id: 'ag_1' });
+    const job = {
+      id: 'job_observed',
+      tenant_id: run.tenant_id,
+      agent_id: agent.id,
+      test_run_id: run.id,
+      check_id: run.check_id,
+      target_id: run.target_id,
+      nonce_hash: run.correlation.nonce_hash,
+      status: 'observed',
+      observed_at: FIXED_NOW.toISOString(),
+    };
+    const observation = {
+      id: 'evt_observed',
+      test_run_id: run.id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      agent_id: agent.id,
+      signal_type: 'agent_observation',
+      producer_kind: 'authenticated_agent',
+      nonce_hash: run.correlation.nonce_hash,
+      timestamp: FIXED_NOW.toISOString(),
+      metadata: { agent_job_id: job.id },
+    };
+    let eventWrites = 0;
+    let markWrites = 0;
+    const {
+      repositories,
+      auditEvents,
+      transactionClient,
+      validationCalls,
+    } = createRecordingValidationRepositories({
+      getAgentById: async () => agent,
+      getTestRun: async () => ({ ...run }),
+      getAgentJobById: async () => ({ ...job }),
+      listRunEvents: async () => [{ ...observation }],
+      getVerdictForRun: async () => ({
+        id: 'verdict_terminal',
+        tenant_id: run.tenant_id,
+        test_run_id: run.id,
+        target_id: run.target_id,
+        check_id: run.check_id,
+        verdict: 'protected',
+        confidence: 'high',
+        placement_confidence: { level: 'high', status: 'confirmed' },
+        explanation: 'Immutable terminal verdict.',
+        evidence_ids: [observation.id],
+      }),
+      appendEvent: async () => { eventWrites += 1; },
+      markAgentJobObserved: async () => { markWrites += 1; },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+    const body = {
+      test_run_id: run.id,
+      agent_job_id: job.id,
+      nonce_hash: job.nonce_hash,
+      target_id: job.target_id,
+    };
+
+    const first = await testRuns.ingestObservation(ctx, agent.id, body);
+    const second = await testRuns.ingestObservation(ctx, agent.id, body);
+
+    assert.equal(first.observation.id, observation.id);
+    assert.equal(second.observation.id, observation.id);
+    assert.equal(eventWrites, 0);
+    assert.equal(markWrites, 0);
+    assert.equal(
+      validationCalls.some(({ method }) => method === 'agentControl.listAgents'),
+      true,
+      'terminal replay must enter incumbent-verdict side-effect repair',
+    );
+    assert.equal(
+      validationCalls.some(({ method }) => [
+        'createVerdictIfAbsent',
+        'upsertOpenFindingFromVerdict',
+      ].includes(method)),
+      false,
+    );
+    assert.equal(
+      auditEvents.filter(({ entry }) => entry.action === 'verdict.published').length,
+      1,
+      'terminal replay repairs the immutable verdict audit exactly once',
+    );
+    const repaired = auditEvents.filter(
+      ({ entry }) => entry.action === 'observation.ingested',
+    );
+    assert.equal(repaired.length, 1);
+    assert.equal(repaired[0].options.client, transactionClient);
+    assert.deepEqual(repaired[0].options.idempotency.metadata, {
+      agent_job_id: job.id,
+    });
+  });
+
+  it('sweeper recovers a durable observation after an injected finalization failure', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'system', role: 'system' };
+    const run = collectingRun({ collection_deadline_at: '2000-01-01T00:00:00.000Z' });
+    const agent = baseOnlineAgent({ id: 'ag_1' });
+    const probeEvent = {
+      id: 'evt_probe',
+      test_run_id: run.id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
+      nonce_hash: 'nh_1',
+      timestamp: FIXED_NOW.toISOString(),
+      metadata: { external_result: 'connected' },
+    };
+    const observation = {
+      id: 'evt_obs',
+      test_run_id: run.id,
+      target_id: run.target_id,
+      check_id: run.check_id,
+      agent_id: agent.id,
+      signal_type: 'agent_observation',
+      producer_kind: 'authenticated_agent',
+      nonce_hash: 'nh_1',
+      timestamp: FIXED_NOW.toISOString(),
+      metadata: { agent_job_id: 'job_1' },
+    };
+    let verdictAttempts = 0;
+    let storedVerdict = null;
+    let appendedEvents = 0;
+    const {
+      repositories,
+      auditEvents,
+      validationCalls,
+      transactionClient,
+    } = createRecordingValidationRepositories({
+      getTestRun: async () => ({ ...run }),
+      listRunEvents: async () => [probeEvent, observation],
+      updateTestRun: async (_scope, _id, patch) => ({ ...run, ...patch }),
+      appendEvent: async () => {
+        appendedEvents += 1;
+        throw new Error('matching observation recovery must not append no-observation evidence');
+      },
+      listAgents: async () => [agent],
+      getTargetGroup: async () => ({
+        id: run.target_group_id,
+        targets: [{
+          id: run.target_id,
+          value: '203.0.113.1',
+          expected_behavior: 'must_block_before_origin',
+        }],
+      }),
+      getVerdictForRun: async () => storedVerdict,
+      createVerdictIfAbsent: async (_scope, record) => {
+        verdictAttempts += 1;
+        if (verdictAttempts === 1) throw new Error('injected finalization failure');
+        storedVerdict = { ...record, id: 'ver_swept' };
+        return storedVerdict;
+      },
+      findOpenFinding: async () => null,
+      upsertOpenFindingFromVerdict: async () => ({ id: 'find_swept' }),
+    });
+    repositories.validationEvidence.listExpiredCollectingRuns = async () => [{ ...run }];
+    repositories.validationEvidence.withRunFinalizationLock = async (
+      _scope,
+      _id,
+      callback,
+      options = {},
+    ) => {
+      assert.equal(options.client, transactionClient);
+      validationCalls.push({
+        method: 'validationEvidence.withRunFinalizationLock',
+        args: [_scope, _id, options],
+      });
+      return {
+        acquired: true,
+        result: await callback(options.client),
+      };
+    };
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    await assert.rejects(
+      () => testRuns.maybeFinalizeRunAfterProbeIngest(ctx, run.id),
+      /injected finalization failure/,
+    );
+    const sweepCallStart = validationCalls.length;
+    const summary = await testRuns.sweepExpiredCollectingRuns(ctx);
+
+    assert.equal(summary.finalized, 1);
+    assert.deepEqual(summary.finalized_runs, [{ run_id: run.id, verdict: 'bypassable' }]);
+    assert.equal(verdictAttempts, 2);
+    assert.equal(appendedEvents, 0);
+    assert.equal(
+      auditEvents.filter((event) => event.entry.action === 'verdict.published').length,
+      1,
+    );
+    assert.equal(
+      auditEvents.some((event) => event.entry.action === 'verdict.finalized_no_observation'),
+      false,
+    );
+
+    const sweepCalls = validationCalls.slice(sweepCallStart);
+    assert.deepEqual(
+      sweepCalls
+        .filter(({ method }) => [
+          'audit.withTenantAuditLock',
+          'validationEvidence.withRunFinalizationLock',
+        ].includes(method))
+        .map(({ method }) => method),
+      ['audit.withTenantAuditLock', 'validationEvidence.withRunFinalizationLock'],
+      'tenant audit lock must be entered before the blocking run lock',
+    );
+    assert.equal(
+      sweepCalls.some(({ method }) => method === 'withRunMutationLock'),
+      false,
+      'publication must not reacquire the run lock inside the finalization callback',
+    );
+
+    const optionIndex = {
+      getTestRun: 2,
+      getVerdictForRun: 2,
+      listRunEvents: 2,
+      createVerdictIfAbsent: 2,
+      updateTestRun: 3,
+      listFindings: 1,
+      upsertOpenFindingFromVerdict: 2,
+      'coreCatalog.getTargetGroup': 2,
+    };
+    const nested = sweepCalls.filter(({ method }) => method in optionIndex);
+    assert.ok(nested.length > 0);
+    for (const call of nested) {
+      assert.equal(
+        call.args[optionIndex[call.method]]?.client,
+        transactionClient,
+        `${call.method} must receive the exact finalization client`,
+      );
+    }
+    const publicationAudits = auditEvents.filter(({ entry }) =>
+      ['verdict.published', 'finding.created', 'finding.updated'].includes(entry.action));
+    assert.ok(publicationAudits.length > 0);
+    assert.ok(publicationAudits.every(({ options }) =>
+      options.client === transactionClient && options.auditLockHeld === true));
+  });
+
+  it('external_only healthy DNS liveness finalizes inconclusive without a finding', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'probe_worker', role: 'probe_worker' };
     const run = collectingRun({
       check_id: 'dns.authoritative_response.safe',
@@ -1335,13 +1988,12 @@ describe('postgres validation service adapters', () => {
       source: 'probe_worker',
       metadata: {
         external_result: 'connected',
-        probe_kind: 'dns_resolve',
+        probe_kind: 'dns_wire_query',
         safety_attestation: { worker_version: '0.1.0' },
       },
     };
     const target = { id: 'tgt_1', kind: 'fqdn', value: 'astranull.site' };
     let upsertFinding = 0;
-    let findingVerdict = null;
     const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
       getTestRun: async () => ({ ...run }),
       listRunEvents: async () => [probeEvent],
@@ -1357,9 +2009,8 @@ describe('postgres validation service adapters', () => {
       getVerdictForRun: async () => null,
       createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
       findOpenFinding: async () => null,
-      upsertOpenFindingFromVerdict: async (c, verdict) => {
+      upsertOpenFindingFromVerdict: async () => {
         upsertFinding += 1;
-        findingVerdict = verdict;
         return { id: 'find_1' };
       },
     });
@@ -1367,13 +2018,10 @@ describe('postgres validation service adapters', () => {
 
     const verdict = await testRuns.maybeFinalizeRunAfterProbeIngest(ctx, 'run_1');
 
-    // Real external-only edge verdict + finding, backed by the real probe event.
-    assert.equal(verdict.verdict, 'edge_exposed');
+    // DNS reachability is transport metadata, not proof of protection or exposure.
+    assert.equal(verdict.verdict, 'inconclusive');
     assert.equal(verdict.confidence, 'external_only');
-    assert.equal(upsertFinding, 1);
-    assert.ok(String(findingVerdict.title).includes('edge_exposed'));
-    assert.equal(findingVerdict.severity, 'medium');
-    assert.equal(findingVerdict.status, 'open');
+    assert.equal(upsertFinding, 0);
     // Published as a real verdict, NOT a no-observation finalization.
     assert.ok(auditEvents.some((a) => a.entry.action === 'verdict.published'));
     assert.equal(
@@ -1572,11 +2220,11 @@ describe('postgres validation service adapters', () => {
         audit: 'observation.rejected',
       },
       {
-        name: 'already_observed',
+        name: 'observed_missing_timestamp',
         body: { test_run_id: 'run_1', agent_job_id: 'job_1', nonce_hash: 'nh_1' },
-        error: 'agent_job_already_observed',
+        error: 'legacy_observation_timestamp_missing',
         status: 409,
-        job: { ...ackedJob, status: 'observed' },
+        job: { ...ackedJob, status: 'observed', observed_at: null },
         audit: 'observation.rejected',
       },
       {
@@ -1639,6 +2287,164 @@ describe('postgres validation service adapters', () => {
     }
   });
 
+  it('repairs a legacy observed agent job that has no durable observation event', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const run = collectingRun({
+      status: 'collecting',
+      awaiting_external_probe: true,
+      correlation: { nonce_hash: 'nh_legacy', window_ms: 120000 },
+    });
+    const job = {
+      id: 'job_legacy_observed',
+      tenant_id: 'ten_demo',
+      agent_id: 'ag_1',
+      test_run_id: run.id,
+      check_id: run.check_id,
+      target_id: 'tgt_1',
+      nonce_hash: 'nh_legacy',
+      status: 'observed',
+      observed_at: '2026-06-01T11:57:00.000Z',
+    };
+    let markCalls = 0;
+    const { repositories, auditEvents, validationCalls } = createRecordingValidationRepositories({
+      getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
+      getTestRun: async () => run,
+      getAgentJobById: async () => job,
+      listRunEvents: async () => [],
+      markAgentJobObserved: async () => {
+        markCalls += 1;
+        return null;
+      },
+      appendEvent: async (_ctx, event) => ({ ...event, id: 'evt_recovered' }),
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
+      test_run_id: run.id,
+      agent_job_id: job.id,
+      nonce_hash: job.nonce_hash,
+      target_id: job.target_id,
+      metadata: { observation: 'healthy' },
+    });
+
+    assert.equal(result.error, undefined);
+    assert.equal(result.observation.id, 'evt_recovered');
+    assert.equal(result.observation.signal_type, 'agent_observation');
+    assert.equal(result.observation.producer_kind, 'authenticated_agent');
+    assert.equal(result.observation.agent_id, 'ag_1');
+    assert.equal(result.observation.timestamp, job.observed_at);
+    assert.equal(result.observation.metadata.agent_job_id, job.id);
+    assert.equal(result.observation.metadata.recovered_from_legacy_observed_job, true);
+    assert.equal(result.observation.metadata.observation, undefined);
+    assert.equal(markCalls, 0, 'already-observed legacy row must not transition again');
+    assert.ok(auditEvents.some((call) => call.entry.action === 'observation.recovered'));
+    assert.ok(validationCalls.some((call) => call.method === 'appendEvent'));
+  });
+
+  it('does not reconstruct a missing legacy observation after run finalization', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const run = collectingRun({
+      status: 'verdicted',
+      completed_at: FIXED_NOW.toISOString(),
+      awaiting_external_probe: false,
+      correlation: { nonce_hash: 'nh_legacy', window_ms: 120000 },
+    });
+    const job = {
+      id: 'job_legacy_observed',
+      tenant_id: run.tenant_id,
+      agent_id: 'ag_1',
+      test_run_id: run.id,
+      check_id: run.check_id,
+      target_id: run.target_id,
+      nonce_hash: run.correlation.nonce_hash,
+      status: 'observed',
+      observed_at: '2026-06-01T11:57:00.000Z',
+    };
+    let eventWrites = 0;
+    const { repositories, auditEvents, transactionClient } = createRecordingValidationRepositories({
+      getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
+      getTestRun: async () => ({ ...run }),
+      getAgentJobById: async () => ({ ...job }),
+      listRunEvents: async () => [],
+      appendEvent: async () => { eventWrites += 1; },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    const result = await testRuns.ingestObservation(ctx, 'ag_1', {
+      test_run_id: run.id,
+      agent_job_id: job.id,
+      nonce_hash: job.nonce_hash,
+      target_id: job.target_id,
+    });
+
+    assert.deepEqual(result, { error: 'run_not_collecting', status: 409 });
+    assert.equal(eventWrites, 0);
+    const rejection = auditEvents.find(
+      ({ entry }) => entry.action === 'observation.rejected_inactive_run',
+    );
+    assert.ok(rejection);
+    assert.equal(rejection.options.client, transactionClient);
+  });
+
+  it('rejects legacy observed repair when durable job fields do not match the fresh run', async () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'ag_1', role: 'agent' };
+    const baseRun = collectingRun({ status: 'collecting', awaiting_external_probe: true });
+    const baseJob = {
+      id: 'job_legacy_observed',
+      tenant_id: baseRun.tenant_id,
+      agent_id: 'ag_1',
+      test_run_id: baseRun.id,
+      check_id: baseRun.check_id,
+      target_id: baseRun.target_id,
+      nonce_hash: baseRun.correlation.nonce_hash,
+      status: 'observed',
+      observed_at: '2026-06-01T11:57:00.000Z',
+    };
+    const cases = [
+      {
+        name: 'nonce',
+        fresh: { correlation: { ...baseRun.correlation, nonce_hash: 'nh_fresh_other' } },
+      },
+      { name: 'target', fresh: { target_id: 'tgt_fresh_other' } },
+      { name: 'check', fresh: { check_id: 'origin.other_check.safe' } },
+    ];
+
+    for (const tc of cases) {
+      let runReads = 0;
+      let eventWrites = 0;
+      const freshRun = {
+        ...baseRun,
+        ...tc.fresh,
+        correlation: tc.fresh.correlation ?? { ...baseRun.correlation },
+      };
+      const { repositories, auditEvents } = createRecordingValidationRepositories({
+        getAgentById: async () => baseOnlineAgent({ id: 'ag_1' }),
+        getTestRun: async () => (++runReads === 1 ? { ...baseRun } : freshRun),
+        getAgentJobById: async () => ({ ...baseJob }),
+        listRunEvents: async () => [],
+        appendEvent: async () => { eventWrites += 1; },
+      });
+      const { testRuns } = createPostgresValidationServices(repositories, {
+        now: () => FIXED_NOW,
+      });
+
+      const result = await testRuns.ingestObservation(ctx, 'ag_1', {
+        test_run_id: baseRun.id,
+        agent_job_id: baseJob.id,
+        nonce_hash: baseJob.nonce_hash,
+        target_id: baseJob.target_id,
+      });
+
+      assert.equal(result.error, 'agent_job_mismatch', tc.name);
+      assert.equal(result.status, 403, tc.name);
+      assert.equal(eventWrites, 0, tc.name);
+      assert.ok(auditEvents.some(
+        ({ entry }) => entry.action === 'observation.rejected'
+          && entry.metadata.reason === 'agent_job_mismatch',
+      ), tc.name);
+    }
+  });
+
   it('finalizeTestRun enforces collecting/probe/window gates and forced no-observation verdict', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'usr_1', role: 'admin' };
     const run = collectingRun({ probe_external_result: 'blocked' });
@@ -1647,13 +2453,24 @@ describe('postgres validation service adapters', () => {
       id: 'evt_probe',
       test_run_id: 'run_1',
       signal_type: 'probe_result',
+      producer_kind: 'signed_probe',
       nonce_hash: 'nh_1',
       timestamp: FIXED_NOW.toISOString(),
-      metadata: { external_result: 'blocked' },
+      metadata: {
+        external_result: 'blocked',
+        safety_attestation: {
+          requests_sent: 1,
+          probe_requests_sent: 1,
+          destination_resolver_attempts: 0,
+          total_operations: 1,
+          duration_ms: 50,
+        },
+      },
     };
+    let runEvents = [probeEvent];
     const { repositories, auditEvents } = createRecordingValidationRepositories({
       getTestRun: async (c, id) => (id === 'run_1' ? { ...run } : null),
-      listRunEvents: async () => [probeEvent],
+      listRunEvents: async () => [...runEvents],
       listAgents: async () => [agent],
       getTargetGroup: async () => ({
         id: 'tg_1',
@@ -1662,7 +2479,10 @@ describe('postgres validation service adapters', () => {
       getVerdictForRun: async () => null,
       createVerdictIfAbsent: async (c, record) => ({ ...record, id: 'ver_1' }),
       updateTestRun: async (c, id, patch) => ({ ...run, ...patch }),
-      appendEvent: async (c, e) => e,
+      appendEvent: async (c, e) => {
+        runEvents.push(e);
+        return e;
+      },
     });
     const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
 
@@ -1687,7 +2507,8 @@ describe('postgres validation service adapters', () => {
 
     repositories.validationEvidence.getTestRun = async () =>
       collectingRun({ probe_external_result: 'blocked' });
-    repositories.validationEvidence.listRunEvents = async () => [probeEvent];
+    runEvents = [probeEvent];
+    repositories.validationEvidence.listRunEvents = async () => [...runEvents];
     const forced = await testRuns.finalizeTestRun(ctx, 'run_1', { force: true });
     assert.equal(forced.verdict.verdict, 'protected');
     assert.ok(
@@ -1833,7 +2654,8 @@ describe('postgres validation service adapters', () => {
     assert.ok(recorded.validationCalls.some(
       (call) => call.method === 'updateTestRun'
         && call.args[2]?.status === 'cancelled'
-        && call.args[2]?.summary?.reason === 'inline_probe_persistence_failed',
+        && call.args[2]?.summary?.reason === 'inline_probe_persistence_failed'
+        && JSON.stringify(call.args[2]?.expected_statuses) === JSON.stringify(['running', 'collecting']),
     ));
   });
 
@@ -3293,15 +4115,22 @@ describe('postgres report service adapters', () => {
       assert.equal(opts.limit, 500);
       return [{ id: 'ev_1', tenant_id: 'ten_demo', test_run_id: 'run_1', created_at: recentTs }];
     };
-    repositories.validationEvidence.getVerdictForRun = async (_c, runId) =>
-      runId === 'run_1'
-        ? { id: 'ver_1', tenant_id: 'ten_demo', test_run_id: 'run_1', created_at: recentTs }
-        : null;
-    repositories.validationEvidence.listRunEvents = async (_c, runId, opts) => {
-      assert.equal(opts.limit, 1000);
-      return runId === 'run_1'
-        ? [{ id: 'evt_1', signal_type: 'agent_observation', timestamp: recentTs }]
-        : [];
+    repositories.validationEvidence.countOpenFindings = async () =>
+      findings.filter((finding) => finding.status === 'open').length;
+    repositories.validationEvidence.loadRunEvidenceBatch = async (_c, selection) => {
+      assert.deepEqual(selection, {
+        runIds: ['run_1'],
+        eventRunIds: ['run_1'],
+        eventLimitPerRun: 1000,
+      });
+      return {
+        verdicts: [
+          { id: 'ver_1', tenant_id: 'ten_demo', test_run_id: 'run_1', evidence_ids: ['ev_1'], created_at: recentTs },
+        ],
+        events: [
+          { id: 'evt_1', tenant_id: 'ten_demo', test_run_id: 'run_1', signal_type: 'agent_observation', timestamp: recentTs },
+        ],
+      };
     };
 
     const { reports } = createPostgresReportServices(repositories, {
@@ -4007,6 +4836,7 @@ describe('postgres probe job service adapters', () => {
           status: 'leased',
           leased_by: 'pw_1',
           nonce_hash: 'nh_1',
+          probe_profile: { kind: 'http_head', max_requests: 1, timeout_ms: 5000 },
           constraints: { max_requests: 1, timeout_ms: 5000 },
         };
       },
@@ -4033,8 +4863,10 @@ describe('postgres probe job service adapters', () => {
         return {
           id: 'run_1',
           tenant_id: 'ten_demo',
+          target_id: 'tgt_1',
+          check_id: 'origin.direct_bypass.safe',
           status: 'running',
-          correlation: {},
+          correlation: { nonce_hash: 'nh_1' },
         };
       },
       async listRunEvents() {
@@ -4065,6 +4897,10 @@ describe('postgres probe job service adapters', () => {
         auditEvents.push(entry);
         return entry;
       },
+      withTenantAuditLock: async (_tenantId, callback) => callback({
+        client: { kind: 'probe-audit-test-client' },
+        prior: null,
+      }),
     };
     const svc = createPostgresProbeJobServices(
       { probeJobs, validationEvidence, audit },
@@ -4084,7 +4920,8 @@ describe('postgres probe job service adapters', () => {
     assert.equal(ingested.run_id, 'run_1');
     assert.equal(ingested.probe_event.id, 'event_1');
     assert.equal(auditEvents[0].action, 'probe_job.result_ingested');
-    assert.equal(ingested.probe_event.metadata.probe_kind, 'http_head');
+    assert.equal(ingested.probe_event.metadata.profile_kind, 'http_head');
+    assert.equal(ingested.probe_event.metadata.probe_kind, undefined);
 
     const rejected = await svc.ingestProbeResult(ctx, 'pjob_1', {
       external_result: 'connected',
@@ -4145,15 +4982,22 @@ describe('postgres probe job service adapters', () => {
         return {
           id: 'run_dup',
           tenant_id: 'ten_demo',
+          target_id: 'tgt_1',
+          check_id: 'origin.direct_bypass.safe',
           status: 'running',
-          correlation: {},
+          correlation: { nonce_hash: 'nh_dup' },
         };
       },
       async listRunEvents() {
         return [
           {
             id: 'event_existing',
+            test_run_id: 'run_dup',
+            target_id: 'tgt_1',
+            check_id: 'origin.direct_bypass.safe',
             signal_type: 'probe_result',
+            producer_kind: 'signed_probe',
+            source: 'probe_worker',
             nonce_hash: 'nh_dup',
             metadata: { external_result: 'blocked' },
           },
@@ -4179,7 +5023,13 @@ describe('postgres probe job service adapters', () => {
     const svc = createPostgresProbeJobServices({
       probeJobs,
       validationEvidence,
-      audit: { appendAuditEvent: async (entry) => auditEvents.push(entry) },
+      audit: {
+        appendAuditEvent: async (entry) => auditEvents.push(entry),
+        withTenantAuditLock: async (_tenantId, callback) => callback({
+          client: { kind: 'probe-reconcile-audit-test-client' },
+          prior: null,
+        }),
+      },
     });
 
     const result = await svc.ingestProbeResult(ctx, 'pjob_dup', {
@@ -4196,9 +5046,9 @@ describe('postgres probe job service adapters', () => {
     assert.equal(result.run_id, 'run_dup');
     assert.equal(result.job_id, 'pjob_dup');
 
-    // Evidence is already durable, so nothing is written twice.
+    // The event is not duplicated, while the missing evidence row is restored.
     assert.equal(eventAppended, false);
-    assert.equal(evidenceAppended, false);
+    assert.equal(evidenceAppended, true);
 
     // The leased job is completed, and the reconciliation is audited.
     assert.equal(completed, true);
@@ -4248,21 +5098,27 @@ describe('postgres probe job service adapters', () => {
       appendProbeResultEventIdempotent: async () => null,
       appendEvidence: async () => null,
       updateTestRun: async () => null,
-      withRunMutationLock: async (_ctx, _id, callback) => ({
+      withRunMutationLock: async (_ctx, _id, callback, options = {}) => ({
         acquired: true,
-        result: await callback(),
+        result: await callback(options.client),
       }),
     };
     const svc = createPostgresProbeJobServices(
       {
         probeJobs,
         validationEvidence,
-        audit: { appendAuditEvent: async () => null },
+        audit: {
+          appendAuditEvent: async () => null,
+          withTenantAuditLock: async (_tenantId, callback) => callback({
+            client: { kind: 'ownership-probe-audit-test-client' },
+            prior: null,
+          }),
+        },
       },
       {
         ownershipVerification: {
-          async recordOwnershipSignalByNonce(signalCtx, payload) {
-            recordedSignal = { signalCtx, payload };
+          async recordOwnershipSignal(signalCtx, verificationId, payload, options) {
+            recordedSignal = { signalCtx, verificationId, payload, options };
             return { verification: { id: 'own_1', probe_observed: true } };
           },
         },
@@ -4276,10 +5132,18 @@ describe('postgres probe job service adapters', () => {
 
     assert.equal(result.ownership_verification_id, 'own_1');
     assert.equal(completed, true);
-    assert.deepEqual(recordedSignal, {
-      signalCtx: { tenantId: 'ten_demo' },
-      payload: { source: 'probe', nonce_hash: 'nonce_hash_1' },
+    assert.deepEqual(recordedSignal.signalCtx, {
+      tenantId: 'ten_demo',
+      userId: 'system',
+      role: 'system',
     });
+    assert.equal(recordedSignal.verificationId, 'own_1');
+    assert.deepEqual(recordedSignal.payload, {
+      source: 'probe',
+      nonce_hash: 'nonce_hash_1',
+      probe_job_id: 'pjob_ownership',
+    });
+    assert.equal(recordedSignal.options.client.kind, 'ownership-probe-audit-test-client');
   });
 });
 
@@ -9300,6 +10164,68 @@ describe('postgres ops-readiness inline probe uses injected repositories', () =>
       (c) => c.method === 'updateTestRun' && c.args[2]?.status === 'verdicted',
     );
     assert.equal(verdictedUpdate, undefined);
+  });
+
+  it('does not cancel an already-verdicted ops run when verdict audit publication fails', async () => {
+    let currentRun = null;
+    let incumbentVerdict = null;
+    let verdictAuditFailures = 1;
+    const probeEvents = [];
+    const cancellationPatches = [];
+    const { repositories } = opsRepositories([], {
+      createTestRun: async (_ctx, record) => {
+        currentRun = { ...record, awaiting_external_probe: false };
+        return { ...currentRun };
+      },
+      appendEvent: async (_ctx, event) => {
+        probeEvents.push(event);
+        return event;
+      },
+      listRunEvents: async () => [...probeEvents],
+      appendEvidence: async () => ({ id: 'ev_ops_fault' }),
+      updateTestRun: async (_ctx, _id, patch) => {
+        if (patch.status === 'cancelled') cancellationPatches.push({ ...patch });
+        if (
+          Array.isArray(patch.expected_statuses)
+          && !patch.expected_statuses.includes(currentRun.status)
+        ) {
+          return null;
+        }
+        const { expected_statuses: _expectedStatuses, ...persistedPatch } = patch;
+        Object.assign(currentRun, persistedPatch);
+        return { ...currentRun };
+      },
+      getTestRun: async () => ({ ...currentRun }),
+      getVerdictForRun: async () => incumbentVerdict,
+      createVerdictIfAbsent: async (_ctx, record) => {
+        incumbentVerdict = { ...record };
+        currentRun.status = 'verdicted';
+        currentRun.completed_at = FIXED_NOW.toISOString();
+        return incumbentVerdict;
+      },
+      appendAuditEvent: async (entry) => {
+        if (entry.action === 'verdict.published' && verdictAuditFailures > 0) {
+          verdictAuditFailures -= 1;
+          throw new Error('injected ops verdict audit failure');
+        }
+        return undefined;
+      },
+    });
+    const { testRuns } = createPostgresValidationServices(repositories, { now: () => FIXED_NOW });
+
+    await assert.rejects(
+      () => testRuns.startTestRun(ctx, {
+        check_id: 'ops.runbook_contact_validation.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      }),
+      /injected ops verdict audit failure/,
+    );
+
+    assert.equal(currentRun.status, 'verdicted');
+    assert.ok(incumbentVerdict);
+    assert.equal(cancellationPatches.length, 1);
+    assert.deepEqual(cancellationPatches[0].expected_statuses, ['running', 'collecting']);
   });
 
   it('finalizes ops-readiness to inconclusive verdicted when no evidence exists', async () => {

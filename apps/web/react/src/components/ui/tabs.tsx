@@ -13,7 +13,7 @@ type TabsProps<T extends string> = {
   onChange: (value: T) => void;
   className?: string;
   /** Accessible name when tab labels alone are insufficient. */
-  ariaLabel?: string;
+  ariaLabel: string;
   /** When provided, sets `aria-controls` on each tab for paired tab panels. */
   getPanelId?: (tabId: T) => string | undefined;
   getTabId?: (tabId: T) => string | undefined;
@@ -100,7 +100,7 @@ export function Tabs<T extends string>({
   }
 
   return (
-    <div className={cn('tabs', className)} role="tablist" aria-label={ariaLabel}>
+    <div className={cn('tabs', className)} role="tablist" aria-orientation="horizontal" aria-label={ariaLabel}>
       {options.map((option, index) => {
         const selected = option.id === value;
         const panelId = getPanelId?.(option.id);

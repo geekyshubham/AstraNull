@@ -199,6 +199,12 @@ export async function runWafClassMarkerProbe(options = {}) {
     return { error_class: 'no_transport', requests_sent: 0, phases: [] };
   }
 
+  const maxRequests = Math.min(
+    Number.isInteger(options.max_requests) && options.max_requests > 0
+      ? options.max_requests
+      : WAF_CLASS_PROBE_MAX_REQUESTS,
+    WAF_CLASS_PROBE_MAX_REQUESTS,
+  );
   const placements = [
     { phase: 'baseline', request: () => fetchGrade(fetchFn, url, { ...DEFAULT_HEADERS }, timeoutMs) },
     { phase: 'query_marker', request: () => fetchGrade(fetchFn, buildProbeUrl(url, markerClass, marker, 'query'), { ...DEFAULT_HEADERS }, timeoutMs) },
@@ -212,10 +218,11 @@ export async function runWafClassMarkerProbe(options = {}) {
   let baseline = null;
 
   for (const step of placements) {
-    if (requestsSent >= WAF_CLASS_PROBE_MAX_REQUESTS) break;
+    if (requestsSent >= maxRequests) break;
     requestsSent += 1;
     const snapshot = await step.request();
     phases.push({ phase: step.phase, status_code: snapshot.status_code });
+    if (snapshot.transport_error) break;
     if (step.phase === 'baseline') {
       baseline = snapshot;
       continue;
@@ -236,7 +243,7 @@ export async function runWafClassMarkerProbe(options = {}) {
     marker_class: markerClass,
     marker_inert: true,
     requests_sent: requestsSent,
-    max_requests: WAF_CLASS_PROBE_MAX_REQUESTS,
+    max_requests: maxRequests,
     posture,
     blocked_count: markerResults.filter((r) => r.blocked).length,
     allowed_count: markerResults.filter((r) => r.allowed).length,
@@ -257,7 +264,7 @@ async function fetchGrade(fetchFn, requestUrl, headers, timeoutMs) {
     });
     return snapshotFromResponse(res);
   } catch {
-    return snapshotFromResponse(null);
+    return { ...snapshotFromResponse(null), transport_error: true };
   } finally {
     clearTimeout(timer);
   }

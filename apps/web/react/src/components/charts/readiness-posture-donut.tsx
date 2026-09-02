@@ -13,18 +13,16 @@ const SEGMENT_COLORS: Record<string, string> = {
 function PostureLegendRow({ segment, total }: { segment: ReadinessPostureSegment; total: number }) {
   const swatch = SEGMENT_COLORS[segment.key];
   const title = `${segment.label} · ${segment.count} of ${countLabel(total, 'check')} · ${segment.pct}%`;
-  // Prototype simplification: the Review row surfaces the count/total form (e.g. "5/50");
-  // Pass and Gap keep the percentage form. All counts stay derived from the resolver.
-  const value = segment.key === 'review' ? `${segment.count}/${total}` : `${segment.pct}%`;
 
   return (
-    <div className="legend-row" title={title}>
+    <div className="legend-row" role="listitem" aria-label={title} title={title}>
       <span className="ld" style={{ background: swatch }} aria-hidden="true" />
       <span className="lg-label">{segment.label}</span>
-      <span className="lg-bar-wrap" style={{ background: 'color-mix(in oklab, var(--fg), transparent 92%)' }}>
+      <span className="lg-bar-wrap" aria-hidden="true">
         <span className="lg-bar" style={{ width: `${segment.pct}%`, background: swatch }} />
       </span>
-      <span className="lg-pct">{value}</span>
+      <span className="lg-pct">{segment.pct}%</span>
+      <b>{segment.count}/{total}</b>
     </div>
   );
 }
@@ -42,12 +40,19 @@ export function ReadinessPostureDonut({
   const correlatedCount = segments.reduce((sum, segment) => sum + segment.count, 0);
   const gradient = buildConicGradient(segments);
   const paintedSegments = segments.filter((segment) => segment.count > 0);
-  const ariaLabel = paintedSegments
+  const segmentSummary = paintedSegments
     .map((segment) => `${segment.label} ${countLabel(segment.count, 'check')} ${segment.pct} percent`)
     .join('. ');
-  const ringTitle = paintedSegments
-    .map((segment) => `${segment.label} · ${countLabel(segment.count, 'check')} · ${segment.pct}%`)
-    .join(' · ');
+  const scoreSummary = score === null ? 'Readiness score unavailable' : `Readiness score ${score} out of 100`;
+  const correlationSummary = correlatedCount === total
+    ? `${countLabel(correlatedCount, 'check')} correlated`
+    : `${correlatedCount} of ${countLabel(total, 'check')} correlated`;
+  const ariaLabel = [scoreSummary, correlationSummary, segmentSummary].filter(Boolean).join('. ');
+  const ringTitle = [
+    score === null ? null : `${score} / 100 readiness`,
+    `${correlatedCount} / ${total} checks correlated`,
+    ...paintedSegments.map((segment) => `${segment.label} · ${segment.count} checks · ${segment.pct}%`),
+  ].filter(Boolean).join(' · ');
 
   if (total <= 0 && score === null) {
     return (
@@ -64,24 +69,25 @@ export function ReadinessPostureDonut({
       <div
         className="gauge gauge--segmented"
         role="img"
-        aria-label={ariaLabel || 'Readiness posture donut'}
-        title={ringTitle || 'Posture segments from correlated check verdicts'}
+        aria-label={ariaLabel}
+        title={ringTitle}
         style={{ ['--gauge-gradient' as string]: gradient }}
       >
-        <div className="gauge-hole">
-          <div className="gauge-score">
+        <div className="gauge-hole" style={{ background: 'var(--surface)' }}>
+          <span className="gauge-score-cap" aria-hidden="true">Readiness</span>
+          <div className="gauge-score" aria-hidden="true">
             <span className="gauge-score-value">{score ?? '—'}</span>
             {score !== null ? <span className="gauge-score-scale">/100</span> : null}
           </div>
         </div>
       </div>
       <div className="gauge-side">
-        <div className="gauge-legend">
+        <div className="gauge-legend" role="list" aria-label="Readiness posture breakdown">
           {segments.map((segment) => (
             <PostureLegendRow key={segment.key} segment={segment} total={total} />
           ))}
         </div>
-        <p className="muted small">{countLabel(correlatedCount, 'check')} correlated · this cycle</p>
+        <p className="muted small">{correlationSummary} · this cycle</p>
       </div>
     </div>
   );

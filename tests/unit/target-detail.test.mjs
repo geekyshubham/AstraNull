@@ -115,6 +115,7 @@ describe('target-detail React contract', () => {
     assert.doesNotMatch(DETAIL_SOURCE, /!eligibility\.startsWith/);
     assert.match(DETAIL_SOURCE, /event\.stopPropagation\(\)/);
     assert.match(DETAIL_SOURCE, /uniqueRecentRuns/);
-    assert.match(DETAIL_SOURCE, /Recorded outcome \/ status/);
+    assert.match(DETAIL_SOURCE, /label: 'Lifecycle'/);
+    assert.match(DETAIL_SOURCE, /label: 'Verdict'/);
   });
 });

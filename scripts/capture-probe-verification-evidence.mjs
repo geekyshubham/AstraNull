@@ -3,8 +3,8 @@
  * Runs verification-plan steps 1–6 for P0/P1 capability probes and writes artifacts to SCRATCH.
  * Usage: node scripts/capture-probe-verification-evidence.mjs [--scratch /path/to/dir]
  *
- * Set ASTRANULL_SKIP_PUBLIC_DNS=1 only in sandboxed environments without outbound DNS;
- * supplemental public AXFR live I/O (post step 6) is skipped when set.
+ * Set ASTRANULL_RUN_PUBLIC_DNS=1 to opt in to supplemental public AXFR live I/O
+ * (post step 6). It is skipped by default because example.com is third-party infrastructure.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -169,12 +169,13 @@ if (workerDispatch.status !== 0) {
   throw new Error(`step 5 outcome validation failed; see step5-assert.log`);
 }
 
-// Supplemental public AXFR live I/O — after step 6; optional when ASTRANULL_SKIP_PUBLIC_DNS=1.
+// Supplemental public AXFR live I/O — after step 6; explicit opt-in for third-party DNS.
+const runPublicDns = process.env.ASTRANULL_RUN_PUBLIC_DNS === '1';
 let axfrSkipped = false;
-if (process.env.ASTRANULL_SKIP_PUBLIC_DNS === '1') {
+if (!runPublicDns) {
   writeFileSync(
     join(scratch, 'axfr-public-live.log'),
-    'SKIPPED: ASTRANULL_SKIP_PUBLIC_DNS=1 — public AXFR live I/O not captured in this environment.\n',
+    'SKIPPED: set ASTRANULL_RUN_PUBLIC_DNS=1 to capture public AXFR live I/O.\n',
   );
   axfrSkipped = true;
 } else {
@@ -199,7 +200,7 @@ const evidenceNotes = `# Probe verification evidence notes
 - **Step 6** \`catalog-kinds.log\`: P0/P1 catalog IDs map to live probe kinds.
 
 ## Live I/O (supplemental, post step 6)
-- **axfr-public-live.log**: \`npm run test:live-dns\` — real \`dns.resolveNs\` + \`net.connect\` to example.com NS; \`job_signature\` auth only. Skipped when \`ASTRANULL_SKIP_PUBLIC_DNS=1\`.
+- **axfr-public-live.log**: \`npm run test:live-dns\` — real \`dns.resolveNs\` + \`net.connect\` to example.com NS; \`job_signature\` auth only. Skipped unless \`ASTRANULL_RUN_PUBLIC_DNS=1\` is explicitly set.
 - **dns-tcp-wire.log**: \`accumulateDnsTcpResponse\` split-chunk framing (wire module; \`dnsTcpAxfrSession\` owns socket loop).
 
 ## Capture result

@@ -8,11 +8,11 @@ import {
   isProviderVerifiedDnsEvidence,
 } from '../../lib/connectorProviders/domainInventory.mjs';
 import { ownershipProofFromStates, ownershipSummaryFromTargetStates } from '../../lib/ownershipPolicy.mjs';
+import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
 import { normalizePrivacySettings } from '../../lib/privacySettings.mjs';
 import { normalizeSafetyPolicy } from '../../lib/safeTestGuards.mjs';
 import { runMetadataRetentionInTransaction } from './retentionRepository.mjs';
-import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
-import { withTenantContext } from './tenantContext.mjs';
+import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
 function toIso(value) {
   if (value == null) return value;
@@ -72,6 +72,13 @@ async function appendMutationAudit(auditRepository, client, ctx, event, now) {
   }, { client, now: new Date(now) });
 }
 
+async function withCatalogMutation(pool, ctx, callback) {
+  return withTenantContext(pool, ctx.tenantId, async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ctx.tenantId]);
+    return callback(client);
+  });
+}
+
 function mapTargetGroupRow(row) {
   if (!row) return null;
   const windows = row.safe_test_windows;
@@ -98,6 +105,30 @@ function mapTargetGroupRow(row) {
     ...(row.loa_state === undefined ? {} : { loa_state: row.loa_state ?? 'required' }),
   };
 }
+
+/**
+ * Current WAF/CDN edge detection for a target, shaped for `presentTargetEdgeDetection()`.
+ * Label-only evidence: the table stores no raw header, cookie, or block-page values.
+ */
+const TARGET_EDGE_DETECTION_JSON = `jsonb_build_object(
+  'status', ed.status,
+  'reason', ed.reason,
+  'waf_status', ed.waf_status,
+  'waf_vendor', ed.waf_vendor,
+  'waf_type', ed.waf_type,
+  'waf_providers', to_jsonb(ed.waf_providers),
+  'cdn_status', ed.cdn_status,
+  'cdn_provider', ed.cdn_provider,
+  'cdn_type', ed.cdn_type,
+  'cdn_providers', to_jsonb(ed.cdn_providers),
+  'confidence', ed.confidence,
+  'conflicting_vendor_signals', ed.conflicting_vendor_signals,
+  'corpus_version', ed.corpus_version,
+  'test_run_id', ed.test_run_id,
+  'evidence_json', ed.evidence_json,
+  'observed_at', ed.observed_at,
+  'updated_at', ed.updated_at
+)`;
 
 /** Detail-page cap on recent runs, matching the dev-json reference implementation. */
 const TARGET_GROUP_RUNS_RECENT_LIMIT = 6;
@@ -134,7 +165,6 @@ function mapTargetGroupDetail(row, targets) {
     check_count: run.check_count ?? run.check_id ?? null,
     verdict: run.verdict ?? run.status ?? 'pending',
     started_at: toIso(run.started_at),
-    agent_id: run.agent_id ?? null,
   }));
   const findingsOnGroup = asArray(row?.findings_on_group).map((finding) => ({
     id: finding.id,
@@ -216,30 +246,6 @@ function mapTargetRow(row) {
   return mapped;
 }
 
-/**
- * Current WAF/CDN edge detection for a target, shaped for `presentTargetEdgeDetection()`.
- * Label-only evidence: the table stores no raw header, cookie, or block-page values.
- */
-const TARGET_EDGE_DETECTION_JSON = `jsonb_build_object(
-  'status', ed.status,
-  'reason', ed.reason,
-  'waf_status', ed.waf_status,
-  'waf_vendor', ed.waf_vendor,
-  'waf_type', ed.waf_type,
-  'waf_providers', to_jsonb(ed.waf_providers),
-  'cdn_status', ed.cdn_status,
-  'cdn_provider', ed.cdn_provider,
-  'cdn_type', ed.cdn_type,
-  'cdn_providers', to_jsonb(ed.cdn_providers),
-  'confidence', ed.confidence,
-  'conflicting_vendor_signals', ed.conflicting_vendor_signals,
-  'corpus_version', ed.corpus_version,
-  'test_run_id', ed.test_run_id,
-  'evidence_json', ed.evidence_json,
-  'observed_at', ed.observed_at,
-  'updated_at', ed.updated_at
-)`;
-
 function mapDetailTargetRow(row) {
   const mapped = mapTargetRow(row);
   if (!mapped) return null;
@@ -319,7 +325,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
     },
 
     async patchCurrentTenant(ctx, body, options = {}) {
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const existing = await client.query(
           `SELECT id, name, plan, data_region, status, privacy_settings, created_at
            FROM tenants
@@ -362,6 +368,12 @@ export function createCoreCatalogRepository(pool, options = {}) {
         );
         const tenantRow = rows[0] ?? null;
         if (!tenantRow) return null;
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'tenant.updated',
+          resource_type: 'tenant',
+          resource_id: tenantRow.id,
+          metadata: { fields: Object.keys(body) },
+        }, options.now ?? new Date().toISOString());
         if (body.privacy_settings) {
           await runMetadataRetentionInTransaction(
             client,
@@ -399,21 +411,28 @@ export function createCoreCatalogRepository(pool, options = {}) {
         created_by: ctx.userId,
       };
 
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO environments (id, tenant_id, name, status, privacy_settings, settings_json, created_at)
            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::timestamptz)
            RETURNING id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at`,
           [id, ctx.tenantId, name, 'active', JSON.stringify(privacySettings), JSON.stringify(settingsJson), now],
         );
-        return mapEnvironmentRow(rows[0]);
+        const environmentRow = rows[0] ?? null;
+        if (!environmentRow) return null;
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'environment.created',
+          resource_type: 'environment',
+          resource_id: environmentRow.id,
+        }, now);
+        return mapEnvironmentRow(environmentRow);
       });
     },
 
     async patchEnvironment(ctx, id, body, options = {}) {
       const now = options.now ?? new Date().toISOString();
 
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const existing = await client.query(
           `SELECT id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at
            FROM environments
@@ -463,7 +482,14 @@ export function createCoreCatalogRepository(pool, options = {}) {
            RETURNING id, tenant_id, name, status, timezone, privacy_settings, settings_json, created_at`,
           params,
         );
-        return mapEnvironmentRow(rows[0]);
+        const environmentRow = rows[0] ?? null;
+        if (!environmentRow) return null;
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: body.status === 'archived' ? 'environment.archived' : 'environment.updated',
+          resource_type: 'environment',
+          resource_id: environmentRow.id,
+        }, now);
+        return mapEnvironmentRow(environmentRow);
       });
     },
 
@@ -538,7 +564,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
      */
     async getTargetGroup(ctx, id, options = {}) {
       if (options.enriched === false) {
-        return withTenantContext(pool, ctx.tenantId, async (client) => {
+        return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
           const { rows } = await client.query(
             `SELECT tg.id, tg.tenant_id, tg.environment_id, tg.name, tg.description,
                     tg.expected_behavior_default, tg.timezone, tg.safe_test_windows,
@@ -646,6 +672,8 @@ export function createCoreCatalogRepository(pool, options = {}) {
         const group = mapTargetGroupRow(row);
         if (!group) return null;
 
+        // The edge detection rides the targets read as a LATERAL, keeping the detail page at two
+        // round trips. `uniq_target_edge_detection_target` guarantees at most one row per target.
         const targets = await client.query(
           `SELECT t.id, t.tenant_id, t.target_group_id, t.kind, t.value, t.normalized_value,
                   t.expected_behavior, t.metadata_json, t.created_at,
@@ -654,8 +682,6 @@ export function createCoreCatalogRepository(pool, options = {}) {
            FROM targets t
            LEFT JOIN target_verification_current verification
              ON verification.tenant_id = t.tenant_id AND verification.target_id = t.id
-           -- The edge detection rides the targets read as a LATERAL, keeping the detail page at
-           -- two round trips. The unique index guarantees at most one row per target.
            LEFT JOIN LATERAL (
              SELECT ${TARGET_EDGE_DETECTION_JSON} AS detection
              FROM target_edge_detections ed
@@ -691,7 +717,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         validation_mode: body.validation_mode === 'agent_assisted' ? 'agent_assisted' : 'external_only',
       };
 
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const envCheck = await client.query(
           `SELECT id FROM environments WHERE tenant_id = $1 AND id = $2`,
           [ctx.tenantId, record.environment_id],
@@ -754,7 +780,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         return targetValidationResponse(error);
       }
 
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
           `SELECT id FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
@@ -808,7 +834,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
     async patchTargetGroup(ctx, id, body = {}, options = {}) {
       const now = options.now ?? new Date().toISOString();
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const existing = await client.query(
           `SELECT id, tenant_id, environment_id, name, description, expected_behavior_default,
                   timezone, safe_test_windows, safety_policy, archived_at, deleted_at, validation_mode,
@@ -886,7 +912,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
     async archiveTargetGroup(ctx, id, options = {}) {
       const now = options.now ?? new Date().toISOString();
       const deletedBy = options.deletedBy ?? ctx.userId ?? 'system';
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const existing = await client.query(
           `SELECT id
            FROM target_groups
@@ -940,7 +966,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
     async patchTarget(ctx, groupId, targetId, body = {}, options = {}) {
       const now = options.now ?? new Date().toISOString();
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
           `SELECT id FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
@@ -1036,7 +1062,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
 
     async restoreTargetGroup(ctx, groupId, options = {}) {
       const now = options.now ?? new Date().toISOString();
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const { rows } = await client.query(
           `SELECT id, environment_id, name
            FROM target_groups
@@ -1083,7 +1109,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
         return { error: 'connector_inventory_not_verified', status: 400 };
       }
 
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
           `SELECT id FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
@@ -1342,7 +1368,7 @@ export function createCoreCatalogRepository(pool, options = {}) {
     async deleteTarget(ctx, groupId, targetId, options = {}) {
       const now = options.now ?? new Date().toISOString();
       const deletedBy = options.deletedBy ?? ctx.userId ?? 'system';
-      return withTenantContext(pool, ctx.tenantId, async (client) => {
+      return withCatalogMutation(pool, ctx, async (client) => {
         const groupResult = await client.query(
           `SELECT id FROM target_groups
            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,

@@ -12,6 +12,7 @@ import {
   verifyProbeJobSignature,
 } from '../../src/services/probeCoordinator.mjs';
 import { createOwnershipChallenge } from '../../src/services/ownershipVerification.mjs';
+import { computeReadiness } from '../../src/services/readiness.mjs';
 import {
   cancelTestRun,
   finalizeTestRun,
@@ -89,10 +90,18 @@ function runtimeSignedWorker() {
 }
 
 function compliantSafetyAttestation(job) {
-  const maxRequests = job?.constraints?.max_requests ?? 1;
+  const maxProbeRequests = job?.constraints?.max_probe_requests
+    ?? job?.constraints?.max_requests
+    ?? 1;
   const timeoutMs = job?.constraints?.timeout_ms ?? 5000;
+  const probeRequestsSent = Math.min(1, maxProbeRequests);
+  const destinationResolverAttempts = job?.constraints?.min_destination_resolver_attempts ?? 0;
+  const totalOperations = probeRequestsSent + destinationResolverAttempts;
   return {
-    requests_sent: Math.min(1, maxRequests),
+    requests_sent: totalOperations,
+    probe_requests_sent: probeRequestsSent,
+    destination_resolver_attempts: destinationResolverAttempts,
+    total_operations: totalOperations,
     duration_ms: Math.min(100, timeoutMs),
   };
 }
@@ -714,9 +723,97 @@ describe('signed probe coordinator', () => {
     assert.equal(storedVerdict.placement_confidence.observation_mode, 'unknown');
   });
 
-  it('keeps run collecting when probe result arrives without observation and window is active', () => {
+  it('finalizes external_only runs immediately after valid probe evidence with tenant scoping', () => {
     freshStore();
     seedAgent();
+    const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
+    group.validation_mode = 'external_only';
+    const started = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const run = getStore().testRuns.find((r) => r.id === started.run.id);
+    run.collection_deadline_at = new Date(Date.now() + 60_000).toISOString();
+
+    const job = getStore().probeJobs[0];
+    const out = ingestProbeResult(
+      { tenantId: 'ten_demo', workerId: 'worker-a' },
+      job.id,
+      probeResultBody(job, 'blocked'),
+      runtimeSignedWorker(),
+    );
+    assert.equal(
+      maybeFinalizeRunAfterProbeIngest({ ...ctx, tenantId: 'ten_other' }, out.run_id),
+      null,
+    );
+    assert.equal(run.status, 'collecting');
+
+    const verdict = maybeFinalizeRunAfterProbeIngest(ctx, out.run_id);
+    assert.ok(verdict);
+    assert.equal(verdict.confidence, 'external_only');
+    assert.equal(run.status, 'verdicted');
+    assert.equal(run.awaiting_external_probe, false);
+    assert.equal(
+      getStore().events.some((e) => e.test_run_id === run.id && e.signal_type === 'agent_no_observation'),
+      false,
+    );
+  });
+
+  it('keeps healthy DNS liveness inconclusive with no finding or readiness credit', () => {
+    freshStore();
+    seedAgent();
+    const store = getStore();
+    const group = store.targetGroups.find((g) => g.id === 'tg_1');
+    group.validation_mode = 'external_only';
+    const target = store.targets.find((row) => row.id === 'tgt_1');
+    target.kind = 'fqdn';
+    target.value = 'owned.example';
+    target.metadata = {};
+
+    const started = startTestRun(
+      ctx,
+      {
+        check_id: 'dns.authoritative_response.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    assert.equal(started.error, undefined);
+    const job = store.probeJobs.find((row) => row.test_run_id === started.run.id);
+    const ingested = ingestProbeResult(
+      { tenantId: 'ten_demo', workerId: 'worker-a' },
+      job.id,
+      probeResultBody(job, 'connected', {
+        metadata: { probe_kind: 'dns_axfr_leak', profile_kind: 'dns_axfr_leak' },
+      }),
+      runtimeSignedWorker(),
+    );
+    const probeEvent = store.events.find(
+      (event) => event.test_run_id === started.run.id && event.signal_type === 'probe_result',
+    );
+    assert.equal(probeEvent.metadata.profile_kind, 'dns_wire_query');
+    assert.equal(probeEvent.metadata.probe_kind, undefined);
+    const verdict = maybeFinalizeRunAfterProbeIngest(ctx, ingested.run_id);
+
+    assert.equal(verdict.verdict, 'inconclusive');
+    assert.equal(store.findings.some((finding) => finding.test_run_id === started.run.id), false);
+    const readiness = computeReadiness('ten_demo');
+    for (const key of ['coverage', 'verdicts', 'evidence_freshness']) {
+      assert.equal(readiness.factors.find((factor) => factor.key === key).score, 0, key);
+    }
+  });
+
+  it('keeps agent_assisted run collecting when probe result arrives without observation and window is active', () => {
+    freshStore();
+    seedAgent();
+    const group = getStore().targetGroups.find((g) => g.id === 'tg_1');
+    group.validation_mode = 'agent_assisted';
     const started = startTestRun(
       ctx,
       {
@@ -736,7 +833,7 @@ describe('signed probe coordinator', () => {
       probeResultBody(job, 'blocked'),
       runtimeSignedWorker(),
     );
-    maybeFinalizeRunAfterProbeIngest(out.run_id);
+    maybeFinalizeRunAfterProbeIngest(ctx, out.run_id);
 
     assert.equal(run.status, 'collecting');
     assert.equal(run.awaiting_external_probe, false);
@@ -853,7 +950,13 @@ describe('signed probe coordinator', () => {
       job.id,
       {
         external_result: 'blocked',
-        safety_attestation: { requests_sent: 2, duration_ms: 50 },
+        safety_attestation: {
+          ...compliantSafetyAttestation(job),
+          requests_sent: 2,
+          probe_requests_sent: 2,
+          total_operations: 2,
+          duration_ms: 50,
+        },
       },
       runtimeSignedWorker(),
     );
@@ -861,6 +964,195 @@ describe('signed probe coordinator', () => {
     assert.equal(out.error, 'safety_attestation_exceeded');
     assert.equal(job.status, 'pending');
     assert.equal(started.run.probe_external_result, undefined);
+  });
+
+  it('rejects zero-probe blocked/timeout claims even when metadata says destination gate', () => {
+    freshStore();
+    seedAgent();
+    const started = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const job = getStore().probeJobs[0];
+
+    for (const externalResult of ['blocked', 'timeout']) {
+      const out = ingestProbeResult(
+        { workerId: 'worker-a' },
+        job.id,
+        {
+          external_result: externalResult,
+          metadata: {
+            probe_kind: 'destination_gate',
+            error_class: 'destination_not_routable',
+          },
+          safety_attestation: {
+            requests_sent: 0,
+            probe_requests_sent: 0,
+            destination_resolver_attempts: 0,
+            total_operations: 0,
+            duration_ms: 50,
+          },
+        },
+        runtimeSignedWorker(),
+      );
+      assert.equal(out.status, 422, externalResult);
+      assert.equal(out.error, 'safety_attestation_exceeded', externalResult);
+      assert.equal(job.status, 'pending');
+      assert.equal(started.run.probe_external_result, undefined);
+    }
+  });
+
+  it('rejects a signed probe cap above the authoritative profile cap', () => {
+    freshStore();
+    seedAgent();
+    startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const job = getStore().probeJobs[0];
+    assert.equal(job.probe_profile.max_requests, 1);
+    Object.assign(job.constraints, {
+      max_requests: 2,
+      max_probe_requests: 2,
+      min_destination_resolver_attempts: 0,
+      max_destination_resolver_attempts: 0,
+      max_total_operations: 2,
+    });
+
+    const out = ingestProbeResult(
+      { workerId: 'worker-a' },
+      job.id,
+      {
+        external_result: 'error',
+        safety_attestation: {
+          requests_sent: 0,
+          probe_requests_sent: 0,
+          destination_resolver_attempts: 0,
+          total_operations: 0,
+          duration_ms: 1,
+        },
+      },
+      runtimeSignedWorker(),
+    );
+    assert.equal(out.status, 422);
+    assert.equal(out.error, 'invalid_signed_operation_caps');
+    assert.equal(job.status, 'pending');
+  });
+
+  it('accepts a truly legacy unsplit hostname result', () => {
+    freshStore();
+    seedAgent();
+    startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const job = getStore().probeJobs[0];
+    job.target = { ...job.target, kind: 'fqdn', value: 'legacy.example.test' };
+    job.constraints.max_requests = job.probe_profile.max_requests;
+    for (const field of [
+      'max_probe_requests',
+      'min_destination_resolver_attempts',
+      'max_destination_resolver_attempts',
+      'max_total_operations',
+    ]) delete job.constraints[field];
+
+    const out = ingestProbeResult(
+      { workerId: 'worker-a' },
+      job.id,
+      {
+        external_result: 'connected',
+        safety_attestation: { requests_sent: 1, duration_ms: 10 },
+      },
+      runtimeSignedWorker(),
+    );
+    assert.equal(out.error, undefined);
+    assert.equal(job.status, 'completed');
+  });
+
+  it('rejects forged or incomplete split operation accounting', () => {
+    freshStore();
+    seedAgent();
+    const started = startTestRun(
+      ctx,
+      {
+        check_id: 'origin.direct_bypass.safe',
+        target_group_id: 'tg_1',
+        target_id: 'tgt_1',
+      },
+      runtimeSignedWorker(),
+    );
+    const job = getStore().probeJobs[0];
+    assert.equal(job.constraints.max_probe_requests, 1);
+    assert.equal(job.constraints.max_destination_resolver_attempts, 0);
+    assert.equal(job.constraints.max_total_operations, 1);
+
+    for (const [attestation, expectedStatus, expectedError] of [
+      [
+        {
+          requests_sent: 1,
+          probe_requests_sent: 1,
+          destination_resolver_attempts: 0,
+          total_operations: 0,
+          duration_ms: 50,
+        },
+        400,
+        'invalid_safety_attestation',
+      ],
+      [
+        {
+          requests_sent: 2,
+          probe_requests_sent: 1,
+          destination_resolver_attempts: 1,
+          total_operations: 2,
+          duration_ms: 50,
+        },
+        422,
+        'safety_attestation_exceeded',
+      ],
+      [
+        {
+          requests_sent: 1,
+          probe_requests_sent: 1,
+          duration_ms: 50,
+        },
+        400,
+        'invalid_safety_attestation',
+      ],
+      [
+        {
+          requests_sent: 1,
+          duration_ms: 50,
+        },
+        400,
+        'invalid_safety_attestation',
+      ],
+    ]) {
+      const out = ingestProbeResult(
+        { workerId: 'worker-a' },
+        job.id,
+        { external_result: 'blocked', safety_attestation: attestation },
+        runtimeSignedWorker(),
+      );
+      assert.equal(out.status, expectedStatus);
+      assert.equal(out.error, expectedError);
+      assert.equal(job.status, 'pending');
+      assert.equal(started.run.probe_external_result, undefined);
+    }
   });
 
   it('rejects safety attestation when duration_ms exceeds timeout_ms', () => {
@@ -882,7 +1174,10 @@ describe('signed probe coordinator', () => {
       job.id,
       {
         external_result: 'blocked',
-        safety_attestation: { requests_sent: 1, duration_ms: 5001 },
+        safety_attestation: {
+          ...compliantSafetyAttestation(job),
+          duration_ms: 5001,
+        },
       },
       runtimeSignedWorker(),
     );
@@ -890,6 +1185,43 @@ describe('signed probe coordinator', () => {
     assert.equal(out.error, 'safety_attestation_exceeded');
     assert.equal(job.status, 'pending');
     assert.equal(started.run.probe_external_result, undefined);
+  });
+
+  it('accepts the bounded timeout ceiling and rejects ceiling+1ms at ingestion', () => {
+    for (const [durationMs, accepted] of [[5050, true], [5051, false]]) {
+      freshStore();
+      seedAgent();
+      startTestRun(
+        ctx,
+        {
+          check_id: 'origin.direct_bypass.safe',
+          target_group_id: 'tg_1',
+          target_id: 'tgt_1',
+        },
+        runtimeSignedWorker(),
+      );
+      const job = getStore().probeJobs[0];
+      const out = ingestProbeResult(
+        { workerId: 'worker-a' },
+        job.id,
+        {
+          external_result: 'timeout',
+          safety_attestation: {
+            ...compliantSafetyAttestation(job),
+            duration_ms: durationMs,
+          },
+        },
+        runtimeSignedWorker(),
+      );
+      if (accepted) {
+        assert.equal(out.error, undefined);
+        assert.equal(job.status, 'completed');
+      } else {
+        assert.equal(out.status, 422);
+        assert.equal(out.error, 'safety_attestation_exceeded');
+        assert.equal(job.status, 'pending');
+      }
+    }
   });
 
   it('stores safety_attestation on accepted probe event metadata', () => {
@@ -905,7 +1237,11 @@ describe('signed probe coordinator', () => {
       runtimeSignedWorker(),
     );
     const job = getStore().probeJobs[0];
-    const attestation = { requests_sent: 1, duration_ms: 250, worker_version: 'pw-1.0' };
+    const attestation = {
+      ...compliantSafetyAttestation(job),
+      duration_ms: 250,
+      worker_version: 'pw-1.0',
+    };
     const out = ingestProbeResult(
       { workerId: 'worker-a' },
       job.id,
@@ -916,11 +1252,7 @@ describe('signed probe coordinator', () => {
     const probeEvent = getStore().events.find(
       (e) => e.test_run_id === started.run.id && e.signal_type === 'probe_result',
     );
-    assert.deepEqual(probeEvent.metadata.safety_attestation, {
-      requests_sent: 1,
-      duration_ms: 250,
-      worker_version: 'pw-1.0',
-    });
+    assert.deepEqual(probeEvent.metadata.safety_attestation, attestation);
     const evidence = getStore().evidenceVault.find((e) => e.label === 'probe_worker_evidence');
     assert.deepEqual(evidence.metadata.safety_attestation, probeEvent.metadata.safety_attestation);
   });
@@ -946,6 +1278,10 @@ describe('signed probe coordinator', () => {
           external_result: 'connected',
           probe_worker_id: 'worker-evil',
           safety_attestation: { requests_sent: 999, duration_ms: 999 },
+          request_accounting: { total_operations: 999 },
+          probe_logical_attempts: 999,
+          destination_vetting_resolver_attempts: 999,
+          total_operations: 999,
           region: 'us-east',
         },
       }),
@@ -958,6 +1294,10 @@ describe('signed probe coordinator', () => {
     assert.equal(probeEvent.metadata.external_result, 'blocked');
     assert.equal(probeEvent.metadata.probe_worker_id, 'worker-trusted');
     assert.deepEqual(probeEvent.metadata.safety_attestation, compliantSafetyAttestation(job));
+    assert.equal(probeEvent.metadata.request_accounting, undefined);
+    assert.equal(probeEvent.metadata.probe_logical_attempts, undefined);
+    assert.equal(probeEvent.metadata.destination_vetting_resolver_attempts, undefined);
+    assert.equal(probeEvent.metadata.total_operations, undefined);
     assert.equal(probeEvent.metadata.region, 'us-east');
     const evidence = getStore().evidenceVault.find((e) => e.label === 'probe_worker_evidence');
     assert.deepEqual(evidence.metadata.safety_attestation, probeEvent.metadata.safety_attestation);

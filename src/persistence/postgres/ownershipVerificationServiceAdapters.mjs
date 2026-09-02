@@ -75,6 +75,14 @@ async function auditVerification(auditRepo, ctx, id, action) {
   });
 }
 
+async function withOwnershipAuditLock(auditRepo, ctx, options, callback) {
+  if (options?.client) return callback(options.client);
+  if (typeof auditRepo?.withTenantAuditLock !== 'function') {
+    throw new Error('Postgres ownership mutation requires audit.withTenantAuditLock().');
+  }
+  return auditRepo.withTenantAuditLock(ctx.tenantId, ({ client }) => callback(client));
+}
+
 async function auditTargetGroup(auditRepo, ctx, targetGroupId, action) {
   if (!auditRepo?.appendAuditEvent) return;
   await auditRepo.appendAuditEvent({
@@ -264,37 +272,42 @@ export function createPostgresOwnershipVerificationServices(deps) {
       return { verification, nonce };
     },
 
-    async recordOwnershipSignal(ctx, id, payload) {
-      return ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
-        verification_id: id,
-        source: payload.source,
-        nonce_hash: payload.nonce_hash,
-        target_verification_id: newId('tv'),
-        observed_at: new Date().toISOString(),
-        transitioned_by: ctx.userId ?? 'system',
-      }, audit);
+    async recordOwnershipSignal(ctx, id, payload, options = {}) {
+      return withOwnershipAuditLock(audit, ctx, options, (client) =>
+        ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
+          verification_id: id,
+          source: payload.source,
+          nonce_hash: payload.nonce_hash,
+          ...(payload.probe_job_id == null ? {} : { probe_job_id: payload.probe_job_id }),
+          target_verification_id: newId('tv'),
+          observed_at: new Date().toISOString(),
+          transitioned_by: ctx.userId ?? 'system',
+        }, audit, { client }));
     },
 
-    async recordOwnershipSignalByNonce({ tenantId }, payload) {
+    async recordOwnershipSignalByNonce({ tenantId }, payload, options = {}) {
       const ctx = { tenantId, userId: 'system', role: 'system' };
-      return ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
-        source: payload.source,
-        nonce_hash: payload.nonce_hash,
-        target_verification_id: newId('tv'),
-        observed_at: new Date().toISOString(),
-        transitioned_by: 'system',
-      }, audit);
+      return withOwnershipAuditLock(audit, ctx, options, (client) =>
+        ownershipVerifications.recordOwnershipSignalAtomic(ctx, {
+          source: payload.source,
+          nonce_hash: payload.nonce_hash,
+          ...(payload.probe_job_id == null ? {} : { probe_job_id: payload.probe_job_id }),
+          target_verification_id: newId('tv'),
+          observed_at: new Date().toISOString(),
+          transitioned_by: 'system',
+        }, audit, { client }));
     },
 
     async confirmOwnership(ctx, id) {
       const actorUserId = ctx.userId ?? 'system';
-      return ownershipVerifications.confirmOwnershipAtomic(ctx, {
-        verification_id: id,
-        target_verification_id: newId('tv'),
-        confirmed_by_user_id: actorUserId,
-        confirmed_at: new Date().toISOString(),
-        transitioned_by: actorUserId,
-      }, audit);
+      return withOwnershipAuditLock(audit, ctx, {}, (client) =>
+        ownershipVerifications.confirmOwnershipAtomic(ctx, {
+          verification_id: id,
+          target_verification_id: newId('tv'),
+          confirmed_by_user_id: actorUserId,
+          confirmed_at: new Date().toISOString(),
+          transitioned_by: actorUserId,
+        }, audit, { client }));
     },
 
     async listOwnershipVerifications(ctx) {

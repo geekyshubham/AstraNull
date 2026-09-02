@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import {
+  parseHttp3AltSvc,
   parseNetworkEndpoint,
   probeAlertWebhookPing,
   probeHttp2Settings,
@@ -131,38 +132,62 @@ describe('safe network probes', () => {
     assert.equal(socket.listenerCount('error'), 0);
   });
 
-  it('probeQuicReachability collects Alt-Svc and pinned UDP response metadata', async () => {
+  it('parses only a valid modern h3 Alt-Svc entry without a fallback port', () => {
+    assert.deepEqual(parseHttp3AltSvc('h3=":8443"; ma=86400'), {
+      alt_svc_present: true,
+      http3_advertised: true,
+      advertised_h3_port: 8443,
+      alt_svc_h3_valid: true,
+    });
+    assert.equal(parseHttp3AltSvc('h3=":0"').advertised_h3_port, null);
+    assert.equal(
+      parseHttp3AltSvc('h3=":0", h3=":9443"').advertised_h3_port,
+      9443,
+    );
+    assert.equal(parseHttp3AltSvc('quic=":443"; v="46"').http3_advertised, false);
+    assert.equal(parseHttp3AltSvc(null).alt_svc_present, false);
+  });
+
+  it('probeQuicReachability performs one HEAD Alt-Svc observation and no UDP I/O', async () => {
+    const methods = [];
+    const operations = [];
+    let socketCalls = 0;
     const outcome = await probeQuicReachability(
       baseJob({
-        probe_profile: { kind: 'quic_reachability', max_requests: 2, timeout_ms: 1000 },
+        constraints: { timeout_ms: 1000, max_requests: 1 },
+        probe_profile: { kind: 'quic_reachability', max_requests: 1, timeout_ms: 1000 },
         target: { kind: 'fqdn', value: 'edge.example.test' },
       }),
       {
-        fetchFn: async () => ({
-          status: 200,
-          headers: {
-            get(name) {
-              if (name === 'alt-svc') return 'h3=":443"; ma=86400, quic=":443"; v="46,43"';
-              return null;
+        fetchFn: async (_url, init) => {
+          methods.push(init.method);
+          return {
+            status: 200,
+            headers: {
+              get(name) {
+                if (name === 'alt-svc') return 'h3=":8443"; ma=86400';
+                return null;
+              },
             },
-          },
-        }),
+          };
+        },
+        recordProbeLogicalAttempt: (operation) => operations.push(operation),
         vettedHost: 'edge.example.test',
         vettedAddresses: ['203.0.113.21'],
         resolve4Fn: async () => { throw new Error('resolver must not run'); },
         resolve6Fn: async () => { throw new Error('resolver must not run'); },
-        createSocket: () => udpSocket({
-          responseBytes: 48,
-          onSend: ({ host }) => assert.equal(host, '203.0.113.21'),
-        }),
+        createSocket: () => { socketCalls += 1; throw new Error('must not create socket'); },
       },
     );
     assert.equal(outcome.external_result, 'connected');
-    assert.equal(outcome.metadata.alt_svc_present, true);
-    assert.equal(outcome.metadata.quic_port, 443);
-    assert.equal(outcome.metadata.udp_response_received, true);
-    assert.equal(outcome.metadata.udp_response_bytes, 48);
-    assert.equal(outcome.requests_sent, 2);
+    assert.deepEqual(methods, ['HEAD']);
+    assert.deepEqual(operations, ['http']);
+    assert.equal(socketCalls, 0);
+    assert.equal(outcome.metadata.capability_scope, 'http3_alt_svc_observation_only');
+    assert.equal(outcome.metadata.http3_advertised, true);
+    assert.equal(outcome.metadata.advertised_h3_port, 8443);
+    assert.equal('udp_response_received' in outcome.metadata, false);
+    assert.equal(outcome.requests_sent, 1);
   });
 
   it('probeAlertWebhookPing requires webhook URL', async () => {
@@ -571,5 +596,144 @@ describe('safe network probes', () => {
     assert.equal(outcome.external_result, 'blocked');
     assert.equal(outcome.metadata.error_class, 'ENOTFOUND');
     assert.equal(outcome.requests_sent, 1);
+  });
+});
+
+
+describe('safe network probe synchronous reservation boundaries', () => {
+  const reservationError = () => Object.assign(new Error('cap exhausted'), {
+    code: 'signed_probe_request_budget_exceeded',
+  });
+  const reservedWebhookJob = () => baseJob({
+    probe_profile: { kind: 'alert_webhook_ping', marker: 'test-marker' },
+    target: {
+      value: 'canary',
+      metadata: { alert_webhook_url: 'https://hooks.example.test/ping' },
+    },
+  });
+
+  it('orders TLS and HTTP/2 session initiation as [reserve, io]', async () => {
+    const tlsEvents = [];
+    const tlsOutcome = await probeTlsSession(baseJob({
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+      probe_profile: { kind: 'tls_session', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      vettedHost: 'edge.example.test',
+      vettedAddresses: ['203.0.113.10'],
+      beforeProbeIoAttempt: () => tlsEvents.push('reserve'),
+      connectFn: () => {
+        tlsEvents.push('io');
+        const socket = new EventEmitter();
+        socket.getProtocol = () => 'TLSv1.3';
+        socket.getCipher = () => ({ name: 'TLS_AES_128_GCM_SHA256' });
+        socket.authorized = true;
+        socket.end = () => {};
+        socket.destroy = () => {};
+        queueMicrotask(() => socket.emit('secureConnect'));
+        return socket;
+      },
+    });
+    assert.deepEqual(tlsEvents, ['reserve', 'io']);
+    assert.equal(tlsOutcome.requests_sent, 1);
+
+    const h2Events = [];
+    const h2Outcome = await probeHttp2Settings(baseJob({
+      target: { kind: 'url', value: 'https://edge.example.test/' },
+      probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      vettedHost: 'edge.example.test',
+      vettedAddresses: ['203.0.113.10'],
+      beforeProbeIoAttempt: () => h2Events.push('reserve'),
+      connectFn: () => {
+        h2Events.push('io');
+        const session = new EventEmitter();
+        session.close = () => {};
+        session.destroy = () => {};
+        queueMicrotask(() => session.emit('remoteSettings', {
+          maxConcurrentStreams: 10,
+          enablePush: false,
+        }));
+        return session;
+      },
+    });
+    assert.deepEqual(h2Events, ['reserve', 'io']);
+    assert.equal(h2Outcome.requests_sent, 1);
+  });
+
+  it('orders webhook and WebSocket fetch initiation as [reserve, io]', async () => {
+    const webhookEvents = [];
+    const webhookOutcome = await probeAlertWebhookPing(reservedWebhookJob(), {
+      vettedHost: 'hooks.example.test',
+      vettedAddresses: ['203.0.113.20'],
+      beforeProbeIoAttempt: () => webhookEvents.push('reserve'),
+      fetchFn: async () => {
+        webhookEvents.push('io');
+        return { status: 204, headers: { get: () => null } };
+      },
+    });
+    assert.deepEqual(webhookEvents, ['reserve', 'io']);
+    assert.equal(webhookOutcome.requests_sent, 1);
+
+    const wsEvents = [];
+    const wsOutcome = await probeWebsocketUpgradePosture(baseJob({
+      target: { kind: 'url', value: 'https://ws.example.test/socket' },
+      probe_profile: { kind: 'websocket_upgrade_posture', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      beforeProbeIoAttempt: () => wsEvents.push('reserve'),
+      fetchFn: async () => {
+        wsEvents.push('io');
+        return { status: 403, headers: { get: () => null } };
+      },
+    });
+    assert.deepEqual(wsEvents, ['reserve', 'io']);
+    assert.equal(wsOutcome.requests_sent, 1);
+  });
+
+  it('performs no TLS/HTTP2/webhook/WebSocket I/O after reservation failure', async () => {
+    let ioCalls = 0;
+    const neverIo = () => {
+      ioCalls += 1;
+      throw new Error('transport must not start');
+    };
+    const beforeProbeIoAttempt = () => { throw reservationError(); };
+
+    const tls = await probeTlsSession(baseJob({
+      target: { kind: 'fqdn', value: 'edge.example.test' },
+      probe_profile: { kind: 'tls_session', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      vettedHost: 'edge.example.test',
+      vettedAddresses: ['203.0.113.10'],
+      beforeProbeIoAttempt,
+      connectFn: neverIo,
+    });
+    const h2 = await probeHttp2Settings(baseJob({
+      target: { kind: 'url', value: 'https://edge.example.test/' },
+      probe_profile: { kind: 'http2_settings', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      vettedHost: 'edge.example.test',
+      vettedAddresses: ['203.0.113.10'],
+      beforeProbeIoAttempt,
+      connectFn: neverIo,
+    });
+    const webhook = await probeAlertWebhookPing(reservedWebhookJob(), {
+      vettedHost: 'hooks.example.test',
+      vettedAddresses: ['203.0.113.20'],
+      beforeProbeIoAttempt,
+      fetchFn: neverIo,
+    });
+    const websocket = await probeWebsocketUpgradePosture(baseJob({
+      target: { kind: 'url', value: 'https://ws.example.test/socket' },
+      probe_profile: { kind: 'websocket_upgrade_posture', max_requests: 1, timeout_ms: 1000 },
+    }), {
+      beforeProbeIoAttempt,
+      fetchFn: neverIo,
+    });
+
+    assert.equal(ioCalls, 0);
+    for (const outcome of [tls, h2, webhook, websocket]) {
+      assert.equal(outcome.external_result, 'error');
+      assert.equal(outcome.metadata.error_class, 'signed_probe_request_budget_exceeded');
+      assert.equal(outcome.requests_sent, 0);
+    }
   });
 });

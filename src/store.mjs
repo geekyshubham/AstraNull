@@ -204,9 +204,14 @@ export function clearStoreCacheForTests() {
   store = null;
 }
 
+function devStorePersistenceDisabled(env = process.env) {
+  return env.ASTRANULL_NO_PERSIST === '1'
+    || String(env.ASTRANULL_PERSISTENCE_MODE ?? '').trim() === 'memory';
+}
+
 /** Writes dev store JSON without calling `getStore()` (safe during `loadStore`). */
 export function writeDevStoreToDisk(target) {
-  if (process.env.ASTRANULL_NO_PERSIST === '1') return;
+  if (devStorePersistenceDisabled()) return;
   const dataDir = resolveDataDir();
   const dataFile = resolveDataFile();
   mkdirSync(dataDir, { recursive: true });
@@ -216,7 +221,7 @@ export function writeDevStoreToDisk(target) {
 function loadStore() {
   const dataFile = resolveDataFile();
   let loaded = emptyStore();
-  if (existsSync(dataFile)) {
+  if (!devStorePersistenceDisabled() && existsSync(dataFile)) {
     try {
       const raw = readFileSync(dataFile, 'utf8');
       loaded = { ...emptyStore(), ...JSON.parse(raw) };
@@ -232,7 +237,7 @@ function loadStore() {
 }
 
 export function persistStore() {
-  if (process.env.ASTRANULL_NO_PERSIST === '1') return;
+  if (devStorePersistenceDisabled()) return;
   writeDevStoreToDisk(getStore());
 }
 

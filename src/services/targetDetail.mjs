@@ -159,7 +159,6 @@ function buildRunsRecent(targetId, limit = 5) {
       policy_id: run.policy_id ?? run.test_policy_id ?? null,
       verdict: run.verdict ?? run.status ?? 'unknown',
       started_at: toIso(run.started_at ?? run.created_at),
-      agent_id: run.agent_id ?? null,
     }));
 }
 

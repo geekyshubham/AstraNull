@@ -8,6 +8,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import tls from 'node:tls';
 import { pinnedFetch, pinnedWebSocketUpgrade, resolvePinnedDestination } from './pinnedHttpRequest.mjs';
+import { startProbeIoAttempt } from './probeAttempt.mjs';
 import { reflectorPayloadForProfile } from './reflectorPayloads.mjs';
 
 const SAFE_UDP_PAYLOAD_PREFIX = 'ASTRANULL:udp:';
@@ -176,7 +177,7 @@ function reflectionEndpoint(job, payloadProfile) {
   return port == null ? null : { host, port };
 }
 
-function sendTcpPayload(connectFn, payload, endpoint, timeoutMs) {
+function sendTcpPayload(connectFn, payload, endpoint, timeoutMs, deps, onReserved) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;
@@ -192,15 +193,20 @@ function sendTcpPayload(connectFn, payload, endpoint, timeoutMs) {
       if (error) reject(error);
       else resolve(value);
     };
-    const socket = connectFn({ host: endpoint.host, port: endpoint.port }, () => {
-      try {
-        socket.write(payload, (error) => {
-          if (error) settle(null, error);
-        });
-      } catch (error) {
-        settle(null, error);
-      }
-    });
+    const socket = startProbeIoAttempt(
+      deps,
+      'reflection_tcp',
+      () => connectFn({ host: endpoint.host, port: endpoint.port }, () => {
+        try {
+          socket.write(payload, (error) => {
+            if (error) settle(null, error);
+          });
+        } catch (error) {
+          settle(null, error);
+        }
+      }),
+      onReserved,
+    );
     socket.once('data', (chunk) => settle({
       response_received: true,
       response_bytes: Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk ?? ''),
@@ -269,13 +275,13 @@ export async function probeReflectionService(job, deps = {}) {
     const pinned = await resolvePinnedDestination(endpoint.host, deps);
     let response = { response_received: false, response_bytes: 0 };
     if (payloadProfile.transport === 'tcp') {
-      deps.recordProbeLogicalAttempt?.('reflection_tcp');
-      requestsSent = 1;
       response = await sendTcpPayload(
         deps.connectFn ?? net.connect,
         payload,
         { host: pinned.address, port: endpoint.port },
         timeoutMs,
+        deps,
+        () => { requestsSent = 1; },
       );
     } else {
       const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
@@ -284,8 +290,12 @@ export async function probeReflectionService(job, deps = {}) {
         if (remainingMs <= 0) break;
         const attemptsRemaining = maxRequests - attempt;
         const attemptTimeoutMs = Math.max(1, Math.floor(remainingMs / attemptsRemaining));
-        const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
-        requestsSent += 1;
+        const socket = startProbeIoAttempt(
+          deps,
+          'reflection_udp',
+          () => createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4'),
+          () => { requestsSent += 1; },
+        );
         response = await sendUdpDatagram(
           socket,
           payload,
@@ -362,9 +372,13 @@ export async function probeUdpDatagram(job, deps = {}) {
   let requestsSent = 0;
   try {
     const pinned = await resolvePinnedDestination(endpoint.host, deps);
-    const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
     const payload = safeUdpPayload(job);
-    requestsSent = 1;
+    const socket = startProbeIoAttempt(
+      deps,
+      'udp_datagram',
+      () => createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4'),
+      () => { requestsSent = 1; },
+    );
     const response = await sendUdpDatagram(
       socket,
       payload,
@@ -438,14 +452,33 @@ export async function probeUdpDatagram(job, deps = {}) {
   }
 }
 
-function parseAltSvcHint(headerValue) {
-  if (!headerValue || typeof headerValue !== 'string') {
-    return { alt_svc_present: false, quic_port: null };
+export function parseHttp3AltSvc(headerValue) {
+  if (typeof headerValue !== 'string' || headerValue.trim() === '') {
+    return {
+      alt_svc_present: false,
+      http3_advertised: false,
+      advertised_h3_port: null,
+      alt_svc_h3_valid: false,
+    };
   }
-  const match = headerValue.match(/quic="[^"]+":(\d+)/i);
+  for (const entry of headerValue.split(',')) {
+    const match = entry.match(/^\s*h3\s*=\s*"([^"]+)"(?:\s*;|\s*$)/i);
+    if (!match) continue;
+    const portMatch = match[1].match(/:(\d{1,5})$/);
+    const port = portMatch ? Number(portMatch[1]) : null;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue;
+    return {
+      alt_svc_present: true,
+      http3_advertised: true,
+      advertised_h3_port: port,
+      alt_svc_h3_valid: true,
+    };
+  }
   return {
     alt_svc_present: true,
-    quic_port: match ? Number(match[1]) : 443,
+    http3_advertised: false,
+    advertised_h3_port: null,
+    alt_svc_h3_valid: false,
   };
 }
 
@@ -502,17 +535,22 @@ function classifyNetworkProbeError(err, durationMs, job, probeKind, requestsSent
  * @param {{ host: string, port: number }} endpoint
  * @param {number} timeoutMs
  */
-function openTlsSession(connectFn, endpoint, timeoutMs) {
+function openTlsSession(connectFn, endpoint, timeoutMs, deps, onReserved) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const socket = connectFn({
-      host: endpoint.host,
-      port: endpoint.port,
-      ...(net.isIP(endpoint.servername ?? endpoint.host) === 0
-        ? { servername: endpoint.servername ?? endpoint.host }
-        : {}),
-      rejectUnauthorized: false,
-    });
+    const socket = startProbeIoAttempt(
+      deps,
+      'tls_connect',
+      () => connectFn({
+        host: endpoint.host,
+        port: endpoint.port,
+        ...(net.isIP(endpoint.servername ?? endpoint.host) === 0
+          ? { servername: endpoint.servername ?? endpoint.host }
+          : {}),
+        rejectUnauthorized: false,
+      }),
+      onReserved,
+    );
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -550,19 +588,24 @@ function openTlsSession(connectFn, endpoint, timeoutMs) {
  * @param {string} url
  * @param {number} timeoutMs
  */
-function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connectHost) {
+function readHttp2RemoteSettings(connectFn, tlsConnectFn, url, timeoutMs, connectHost, deps, onReserved) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const parsed = new URL(url);
     const logicalHost = parsed.hostname.replace(/^\[/, '').replace(/\]$/, '');
-    const session = connectFn(parsed.origin, {
-      createConnection: () => tlsConnectFn({
-        host: connectHost,
-        port: parsed.port ? Number(parsed.port) : 443,
-        ...(net.isIP(logicalHost) === 0 ? { servername: logicalHost } : {}),
-        rejectUnauthorized: false,
+    const session = startProbeIoAttempt(
+      deps,
+      'http2_settings',
+      () => connectFn(parsed.origin, {
+        createConnection: () => tlsConnectFn({
+          host: connectHost,
+          port: parsed.port ? Number(parsed.port) : 443,
+          ...(net.isIP(logicalHost) === 0 ? { servername: logicalHost } : {}),
+          rejectUnauthorized: false,
+        }),
       }),
-    });
+      onReserved,
+    );
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -628,12 +671,11 @@ export async function probeTlsSession(job, deps = {}) {
 
   try {
     const pinned = await resolvePinnedDestination(host, deps);
-    requestsSent = 1;
     const sessionInfo = await openTlsSession(connectFn, {
       host: pinned.address,
       ...(net.isIP(host) === 0 ? { servername: host } : {}),
       port,
-    }, timeoutMs);
+    }, timeoutMs, deps, () => { requestsSent = 1; });
     const durationMs = Date.now() - started;
     return {
       external_result: 'connected',
@@ -685,13 +727,14 @@ export async function probeHttp2Settings(job, deps = {}) {
 
   try {
     const pinned = await resolvePinnedDestination(host, deps);
-    requestsSent = 1;
     const settings = await readHttp2RemoteSettings(
       connectFn,
       tlsConnectFn,
       httpUrl,
       timeoutMs,
       pinned.address,
+      deps,
+      () => { requestsSent = 1; },
     );
     const durationMs = Date.now() - started;
     return {
@@ -717,20 +760,35 @@ export async function probeHttp2Settings(job, deps = {}) {
 }
 
 /**
+ * Legacy compatibility kind: one HEAD observes a modern h3 Alt-Svc advertisement only.
+ * It performs no UDP, QUIC handshake, control-stream, or SETTINGS validation.
  * @param {Record<string, unknown>} job
- * @param {{ fetchFn?: typeof fetch, createSocket?: typeof dgram.createSocket }} deps
+ * @param {{ fetchFn?: typeof fetch }} deps
  */
 export async function probeQuicReachability(job, deps = {}) {
-  const createSocket = deps.createSocket ?? dgram.createSocket.bind(dgram);
   const host = resolveHostForJob(job);
   const httpUrl = resolveHttpUrl(job);
-
   if (!host || !httpUrl) {
     return {
       external_result: 'error',
       metadata: withProfileKind(job, {
         probe_kind: 'quic_reachability',
         error_class: 'unsupported_target',
+        capability_scope: 'http3_alt_svc_observation_only',
+      }),
+      requests_sent: 0,
+      duration_ms: 0,
+    };
+  }
+
+  const signedBudget = Number(job.constraints?.max_requests ?? job.probe_profile?.max_requests ?? 1);
+  if (!Number.isSafeInteger(signedBudget) || signedBudget < 1) {
+    return {
+      external_result: 'error',
+      metadata: withProfileKind(job, {
+        probe_kind: 'quic_reachability',
+        error_class: 'zero_request_cap',
+        capability_scope: 'http3_alt_svc_observation_only',
       }),
       requests_sent: 0,
       duration_ms: 0,
@@ -740,8 +798,7 @@ export async function probeQuicReachability(job, deps = {}) {
   const timeoutMs = job.constraints?.timeout_ms ?? 5000;
   const started = Date.now();
   let requestsSent = 0;
-  let altSvc = { alt_svc_present: false, quic_port: null };
-
+  let altSvc = parseHttp3AltSvc(null);
   try {
     const pinned = await resolvePinnedDestination(host, deps);
     const pinnedDeps = {
@@ -753,112 +810,54 @@ export async function probeQuicReachability(job, deps = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      deps.recordProbeLogicalAttempt?.('http');
-      requestsSent += 1;
-      const res = await fetchFn(httpUrl, {
-        method: 'HEAD',
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-      altSvc = parseAltSvcHint(res.headers.get('alt-svc'));
+      const res = await startProbeIoAttempt(
+        deps,
+        'http',
+        () => fetchFn(httpUrl, {
+          method: 'HEAD',
+          redirect: 'manual',
+          signal: controller.signal,
+        }),
+        () => { requestsSent = 1; },
+      );
+      altSvc = parseHttp3AltSvc(res.headers.get('alt-svc'));
+      const durationMs = Date.now() - started;
+      return {
+        external_result: 'connected',
+        metadata: withProfileKind(job, {
+          probe_kind: 'quic_reachability',
+          capability_scope: 'http3_alt_svc_observation_only',
+          http_method: 'HEAD',
+          status_code: res.status,
+          ...altSvc,
+          duration_ms: durationMs,
+        }),
+        requests_sent: requestsSent,
+        duration_ms: durationMs,
+      };
     } finally {
       clearTimeout(timer);
     }
-
-    const quicPort = altSvc.quic_port ?? 443;
-    const remainingMs = timeoutMs - (Date.now() - started);
-    if (remainingMs <= 0) {
-      const durationMs = Date.now() - started;
-      return {
-        external_result: 'timeout',
-        metadata: withProfileKind(job, {
-          probe_kind: 'quic_reachability',
-          error_class: 'deadline_elapsed_before_udp',
-          duration_ms: durationMs,
-          alt_svc_present: altSvc.alt_svc_present,
-          quic_port: quicPort,
-          udp_response_received: false,
-          udp_response_bytes: 0,
-          udp_response_size_class: 'none',
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
-      };
-    }
-
-    const socket = createSocket(net.isIP(pinned.address) === 6 ? 'udp6' : 'udp4');
-    const payload = reflectorPayloadForProfile('quic_initial').build({
-      nonceHash: job.nonce_hash ?? job.nonce,
-    });
-    deps.recordProbeLogicalAttempt?.('udp_datagram');
-    requestsSent += 1;
-    const response = await sendUdpDatagram(
-      socket,
-      payload,
-      quicPort,
-      pinned.address,
-      remainingMs,
-    );
-
-    const durationMs = Date.now() - started;
-    return {
-      external_result: response.response_received ? 'connected' : 'timeout',
-      metadata: withProfileKind(job, {
-        probe_kind: 'quic_reachability',
-        ...(!response.response_received ? { error_class: 'no_udp_response' } : {}),
-        duration_ms: durationMs,
-        alt_svc_present: altSvc.alt_svc_present,
-        quic_port: quicPort,
-        udp_datagram_bytes: payload.length,
-        udp_response_received: response.response_received,
-        udp_response_bytes: response.response_bytes,
-        udp_response_size_class: response.response_size_class,
-      }),
-      requests_sent: requestsSent,
-      duration_ms: durationMs,
-    };
   } catch (err) {
     const durationMs = Date.now() - started;
-    const code = err?.name === 'AbortError' ? 'ETIMEOUT' : (err?.code ?? '');
-    if (code === 'ETIMEOUT') {
-      return {
-        external_result: requestsSent > 0 ? 'timeout' : 'error',
-        metadata: withProfileKind(job, {
-          probe_kind: 'quic_reachability',
-          error_class: 'timeout',
-          duration_ms: durationMs,
-          alt_svc_present: altSvc.alt_svc_present,
-          quic_port: altSvc.quic_port,
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
-      };
-    }
-    if (['ENOTFOUND', 'EDESTINATION', 'ECONNREFUSED', 'EHOSTUNREACH'].includes(code)) {
-      return {
-        external_result: requestsSent > 0 ? 'blocked' : 'error',
-        metadata: withProfileKind(job, {
-          probe_kind: 'quic_reachability',
-          error_class: code,
-          duration_ms: durationMs,
-          alt_svc_present: altSvc.alt_svc_present,
-          quic_port: altSvc.quic_port,
-        }),
-        requests_sent: requestsSent,
-        duration_ms: durationMs,
-      };
-    }
+    const normalized = err?.name === 'AbortError'
+      ? Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })
+      : err;
+    const outcome = classifyNetworkProbeError(
+      normalized,
+      durationMs,
+      job,
+      'quic_reachability',
+      requestsSent,
+    );
     return {
-      external_result: 'error',
-      metadata: withProfileKind(job, {
-        probe_kind: 'quic_reachability',
-        error_class: code || 'quic_probe_failed',
-        duration_ms: durationMs,
-        alt_svc_present: altSvc.alt_svc_present,
-        quic_port: altSvc.quic_port,
-      }),
-      requests_sent: requestsSent,
-      duration_ms: durationMs,
+      ...outcome,
+      metadata: {
+        ...outcome.metadata,
+        capability_scope: 'http3_alt_svc_observation_only',
+        http_method: 'HEAD',
+        ...altSvc,
+      },
     };
   }
 }
@@ -956,6 +955,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let requestsSent = 0;
 
   try {
     const marker = job.probe_profile?.marker ?? 'astranull-safe-marker';
@@ -966,17 +966,22 @@ export async function probeAlertWebhookPing(job, deps = {}) {
       check_id: job.check_id ?? null,
       test_run_id: job.test_run_id ?? null,
     };
-    const res = await fetchFn(parsedUrl.href, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-astranull-marker': String(marker),
-        ...(job.nonce ? { 'x-astranull-nonce': String(job.nonce) } : {}),
-      },
-      body: JSON.stringify(body),
-      redirect: 'manual',
-      signal: controller.signal,
-    });
+    const res = await startProbeIoAttempt(
+      deps,
+      'alert_webhook_post',
+      () => fetchFn(parsedUrl.href, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-astranull-marker': String(marker),
+          ...(job.nonce ? { 'x-astranull-nonce': String(job.nonce) } : {}),
+        },
+        body: JSON.stringify(body),
+        redirect: 'manual',
+        signal: controller.signal,
+      }),
+      () => { requestsSent = 1; },
+    );
     const durationMs = Date.now() - started;
 
     // A 3xx is terminal. Following it would re-resolve an attacker-chosen host and
@@ -1004,7 +1009,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
           response_status: res.status,
           alert_delivery_ok: false,
         }),
-        requests_sent: 1,
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -1020,7 +1025,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
         response_status: res.status,
         alert_delivery_ok: ok,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
@@ -1036,7 +1041,7 @@ export async function probeAlertWebhookPing(job, deps = {}) {
         webhook_host: webhookHostname,
         pinned_address: pinnedAddress,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } finally {
@@ -1124,6 +1129,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let requestsSent = 0;
 
   const headers = {
     Connection: 'Upgrade',
@@ -1136,13 +1142,18 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
   if (job.nonce) headers['x-astranull-nonce'] = String(job.nonce);
 
   try {
-    const res = await upgradeFn(httpUrl, {
-      method: 'GET',
-      headers,
-      redirect: 'manual',
-      signal: controller.signal,
-      timeoutMs,
-    });
+    const res = await startProbeIoAttempt(
+      deps,
+      'websocket_upgrade',
+      () => upgradeFn(httpUrl, {
+        method: 'GET',
+        headers,
+        redirect: 'manual',
+        signal: controller.signal,
+        timeoutMs,
+      }),
+      () => { requestsSent = 1; },
+    );
     const durationMs = Date.now() - started;
     const classification = classifyWebsocketUpgradeStatus(res.status);
     return {
@@ -1157,7 +1168,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
         response_connection_header: res.headers.get('connection'),
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } catch (err) {
@@ -1171,7 +1182,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
           error_class: 'timeout',
           duration_ms: durationMs,
         }),
-        requests_sent: 1,
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -1183,7 +1194,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
           error_class: code,
           duration_ms: durationMs,
         }),
-        requests_sent: 1,
+        requests_sent: requestsSent,
         duration_ms: durationMs,
       };
     }
@@ -1194,7 +1205,7 @@ export async function probeWebsocketUpgradePosture(job, deps = {}) {
         error_class: code || 'probe_failed',
         duration_ms: durationMs,
       }),
-      requests_sent: 1,
+      requests_sent: requestsSent,
       duration_ms: durationMs,
     };
   } finally {

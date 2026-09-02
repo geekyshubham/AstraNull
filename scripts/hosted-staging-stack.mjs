@@ -55,9 +55,9 @@ export function normalizeHostedBaseUrl(value) {
   return `https://${trimmed.replace(/\/$/, '')}`;
 }
 
-export function discoverRailwayBaseUrl() {
+export function discoverRailwayBaseUrl({ runner = shell } = {}) {
   try {
-    const raw = shell('railway domain --json 2>/dev/null || railway domain 2>/dev/null');
+    const raw = runner('railway domain --json 2>/dev/null || railway domain 2>/dev/null');
     if (raw.startsWith('{') || raw.startsWith('[')) {
       const parsed = JSON.parse(raw);
       const domain = parsed?.domain ?? parsed?.[0]?.domain ?? parsed?.[0];

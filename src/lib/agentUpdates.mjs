@@ -207,19 +207,9 @@ export function toPublicTrustKey(key) {
 }
 
 export function isSafeArtifactBasename(name) {
-  if (typeof name !== 'string' || name.length === 0) {
-    return false;
-  }
-  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
-    return false;
-  }
-  if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name)) {
-    return false;
-  }
-  if (!name.endsWith('.tar.gz')) {
-    return false;
-  }
-  return true;
+  return typeof name === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9._+-]*\.tar\.gz$/.test(name)
+    && !name.includes('..');
 }
 
 export function validateDetachedSignature(
@@ -315,11 +305,13 @@ export function isAgentInRollout(agent, release) {
 }
 
 export function toPublicRelease(release) {
+  const signingKey = parseManifestSigningKey(release.manifest);
   return {
     id: release.id,
     version: release.version,
     channel: release.channel,
     state: release.state,
+    signing_fingerprint_sha256: signingKey.error ? null : signingKey.fingerprint_sha256,
     manifest: release.manifest,
     signature: release.signature ?? null,
     distribution: release.distribution,

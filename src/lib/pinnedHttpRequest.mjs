@@ -12,13 +12,19 @@ const MAX_TRANSPORT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_REQUEST_BYTES = 64 * 1024;
+const AUTHORITATIVE_DNS_NEGATIVE_CODES = new Set(['ENODATA', 'ENOTFOUND']);
+
+function dnsResolverErrorCode(error) {
+  return String(error?.code ?? '').trim().toUpperCase();
+}
 
 async function resolveOrEmpty(fn, host) {
   try {
     const values = await fn(host);
     return Array.isArray(values) ? values.filter((value) => net.isIP(value) !== 0) : [];
-  } catch {
-    return [];
+  } catch (error) {
+    if (AUTHORITATIVE_DNS_NEGATIVE_CODES.has(dnsResolverErrorCode(error))) return [];
+    throw error;
   }
 }
 

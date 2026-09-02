@@ -239,6 +239,13 @@ describe('agent update releases', () => {
     });
     assert.equal(unsafeName.error, 'invalid_artifact_name');
 
+    const controlCharacterName = createAgentUpdateRelease(adminCtx, {
+      version: '2.0.0',
+      manifest: manifest('2.0.0', { name: 'astranull-agent-2.0.0\n.tar.gz' }),
+      signature: SIGNATURE,
+    });
+    assert.equal(controlCharacterName.error, 'invalid_artifact_name');
+
     const signedPrimary = trustedReleaseBody(adminCtx, { version: '2.0.0', rollback: null });
     const noRollbackSig = createAgentUpdateRelease(adminCtx, {
       ...signedPrimary,

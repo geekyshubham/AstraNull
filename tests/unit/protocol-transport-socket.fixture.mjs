@@ -99,7 +99,9 @@ async function preflightHttp1Fixture() {
     });
 
     assert.equal(result.external_result, 'connected');
-    assert.equal(result.requests_sent, 1);
+    assert.equal(result.requests_sent, 3);
+    assert.equal(result.probe_requests_sent, 1);
+    assert.equal(result.destination_resolver_attempts, 2);
     assert.equal(requests, 1);
     assert.equal(observedHost, `preflight.test:${port}`);
     assert.equal(resolve4Calls, 1);

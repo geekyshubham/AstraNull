@@ -2,6 +2,7 @@ import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { createKillSwitchRepository } from '../../src/persistence/postgres/killSwitchRepository.mjs';
 import {
   createProbeJobRepository,
   isProbeJobLeaseStale,
@@ -73,6 +74,120 @@ function sampleRow(overrides = {}) {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function createAdvisoryRacePool() {
+  const firstLockAcquired = deferred();
+  const releaseFirstLock = deferred();
+  const secondLockWaiting = deferred();
+  const waiters = [];
+  const state = { active: false, leased: [], log: [] };
+  let nextClientId = 1;
+  let lockOwner = null;
+  let pauseFirstOwner = true;
+
+  function releaseAdvisoryLock(client) {
+    if (lockOwner !== client) return;
+    lockOwner = null;
+    client.ownsAdvisoryLock = false;
+    waiters.shift()?.();
+  }
+
+  const pool = {
+    async connect() {
+      const client = {
+        id: `client_${nextClientId++}`,
+        stagedActive: undefined,
+        stagedLease: null,
+        ownsAdvisoryLock: false,
+        async query(text, params = []) {
+          const sql = text.trim();
+          if (sql === 'BEGIN') {
+            state.log.push({ client: this.id, operation: 'begin' });
+            return { rows: [] };
+          }
+          if (sql.startsWith("SELECT set_config('app.tenant_id'")) return { rows: [] };
+          if (sql.includes('pg_advisory_xact_lock')) {
+            assert.deepEqual(params, [`kill_switch_state:${CTX.tenantId}`]);
+            if (lockOwner && lockOwner !== this) {
+              state.log.push({ client: this.id, operation: 'lock_waiting' });
+              secondLockWaiting.resolve(this.id);
+              await new Promise((resolve) => waiters.push(resolve));
+            }
+            lockOwner = this;
+            this.ownsAdvisoryLock = true;
+            state.log.push({ client: this.id, operation: 'lock_acquired' });
+            if (pauseFirstOwner) {
+              pauseFirstOwner = false;
+              firstLockAcquired.resolve(this.id);
+              await releaseFirstLock.promise;
+            }
+            return { rows: [] };
+          }
+          if (sql.includes('SELECT active') && sql.includes('FROM soc_kill_switch')) {
+            assert.equal(this.ownsAdvisoryLock, true);
+            state.log.push({ client: this.id, operation: `read_active:${state.active}` });
+            return { rows: [{ active: state.active }] };
+          }
+          if (sql.includes('WITH picked AS')) {
+            assert.equal(this.ownsAdvisoryLock, true);
+            state.log.push({ client: this.id, operation: 'lease' });
+            if (state.leased.length > 0) return { rows: [] };
+            this.stagedLease = {
+              ...sampleRow({
+                status: 'leased',
+                leased_by: params[3],
+                leased_at: params[2],
+              }),
+              prior_status: 'pending',
+            };
+            return { rows: [this.stagedLease] };
+          }
+          if (sql.startsWith('INSERT INTO soc_kill_switch')) {
+            assert.equal(this.ownsAdvisoryLock, true);
+            this.stagedActive = Boolean(params[1]);
+            state.log.push({ client: this.id, operation: `write_active:${this.stagedActive}` });
+            return {
+              rows: [{
+                tenant_id: params[0],
+                active: this.stagedActive,
+                reason: params[2],
+                updated_at: params[3],
+                updated_by: params[4],
+              }],
+            };
+          }
+          if (sql === 'COMMIT') {
+            if (this.stagedLease) state.leased.push({ ...this.stagedLease });
+            if (this.stagedActive !== undefined) state.active = this.stagedActive;
+            state.log.push({ client: this.id, operation: 'commit' });
+            releaseAdvisoryLock(this);
+            return { rows: [] };
+          }
+          if (sql === 'ROLLBACK') {
+            this.stagedLease = null;
+            this.stagedActive = undefined;
+            state.log.push({ client: this.id, operation: 'rollback' });
+            releaseAdvisoryLock(this);
+            return { rows: [] };
+          }
+          throw new Error(`unexpected fake-pool query: ${sql}`);
+        },
+        release() {},
+      };
+      return client;
+    },
+  };
+
+  return { pool, state, firstLockAcquired, releaseFirstLock, secondLockWaiting };
+}
+
 describe('postgres probe job repository', () => {
   it('maps probe job JSON columns to worker-facing shape', () => {
     const job = mapProbeJobRow(sampleRow());
@@ -100,10 +215,42 @@ describe('postgres probe job repository', () => {
     assert.equal(jobs.length, 1);
     assert.equal(jobs[0].job_signature, 'sig_hex');
     assertTenantWrapped(pool.client, CTX.tenantId);
-    const lease = dataQueries(pool.client).find((q) => q.text.includes('WITH picked AS'));
+    const queries = dataQueries(pool.client);
+    assert.equal(queries.length, 3);
+    assert.match(queries[0].text, /pg_advisory_xact_lock\(hashtext\(\$1\)\)/);
+    assert.deepEqual(queries[0].params, [`kill_switch_state:${CTX.tenantId}`]);
+    assert.match(queries[1].text, /SELECT active[\s\S]*FROM soc_kill_switch/);
+    assert.deepEqual(queries[1].params, [CTX.tenantId]);
+    const lease = queries[2];
+    assert.match(lease.text, /WITH picked AS/);
     assert.match(lease.text, /FOR UPDATE SKIP LOCKED/);
     assert.match(lease.text, /LIMIT \$2/);
     assert.ok(!lease.text.includes('ten_demo'));
+  });
+
+  it('returns no jobs and never executes the lease CTE when the locked re-read is active', async () => {
+    let leaseQueries = 0;
+    const pool = createRecordingPool((sql) => {
+      if (sql.includes('FROM soc_kill_switch')) return { rows: [{ active: true }] };
+      if (sql.includes('WITH picked AS')) {
+        leaseQueries += 1;
+        throw new Error('lease query must not execute while kill switch is active');
+      }
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+
+    const jobs = await repo.leasePendingJobsForWorker(CTX, WORKER_ID, {
+      leasedAt: FIXED_NOW,
+    });
+
+    assert.deepEqual(jobs, []);
+    assert.equal(leaseQueries, 0);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+    const queries = dataQueries(pool.client);
+    assert.equal(queries.length, 2);
+    assert.match(queries[0].text, /pg_advisory_xact_lock/);
+    assert.match(queries[1].text, /FROM soc_kill_switch/);
   });
 
   it('lease predicate reclaims expired leases while keeping SKIP LOCKED and bound TTL params', async () => {
@@ -125,6 +272,11 @@ describe('postgres probe job repository', () => {
     assert.match(leaseSql, /candidate\.status = 'leased' AND candidate\.leased_at < now\(\) -/);
     assert.match(leaseSql, /tr\.status IN \('running', 'collecting'\)/);
     assert.match(leaseSql, /ov\.status = 'challenge_sent'/);
+    assert.match(leaseSql, /binding\.probe_job_id = candidate\.id/);
+    assert.match(leaseSql, /candidate\.test_run_id = binding\.id/);
+    assert.match(leaseSql, /candidate\.target_id = binding\.agent_id/);
+    assert.match(leaseSql, /candidate\.check_id = 'ownership\.challenge'/);
+    assert.match(leaseSql, /candidate\.nonce_hash = binding\.challenge_nonce_hash/);
     // Concurrency protection must survive the widened predicate.
     assert.match(leaseSql, /FOR UPDATE SKIP LOCKED/);
     // Every TTL tunable is a bound parameter, never interpolated.
@@ -221,7 +373,7 @@ describe('postgres probe job repository', () => {
 
   it('looks up and updates jobs with parameterized tenant-scoped SQL', async () => {
     const pool = createRecordingPool((sql, params) => {
-      if (sql.includes('FROM probe_jobs') && sql.includes('WHERE tenant_id = $1 AND id = $2')) {
+      if (sql.includes('FROM probe_jobs') && sql.includes('WHERE j.tenant_id = $1 AND j.id = $2')) {
         return { rows: [sampleRow()] };
       }
       if (sql.includes("status = 'leased'") && sql.includes("status = 'pending'")) {
@@ -238,10 +390,14 @@ describe('postgres probe job repository', () => {
         assert.match(sql, /snapshot\.resource_ref_hash =/);
         assert.match(sql, /snapshot\.poll_revision = connector\.last_success_revision/);
         assert.match(sql, /snapshot\.observed_at = connector\.last_success_at/);
+        assert.match(sql, /binding\.probe_job_id = j\.id/);
+        assert.match(sql, /j\.test_run_id = binding\.id/);
+        assert.match(sql, /j\.check_id = 'ownership\.challenge'/);
         return { rows: [sampleRow({ status: 'leased' })] };
       }
       if (sql.includes("status = 'completed'")) {
         assert.deepEqual(params, [CTX.tenantId, 'pjob_1', FIXED_NOW, WORKER_ID, FIXED_NOW]);
+        assert.match(sql, /binding\.probe_job_id = j\.id/);
         return { rows: [sampleRow({ status: 'completed' })] };
       }
       return { rows: [] };
@@ -294,7 +450,7 @@ describe('postgres probe job repository', () => {
 
   it('finds at most one durable probe job for a tenant-scoped test run', async () => {
     const pool = createRecordingPool((sql, params) => {
-      if (sql.includes('WHERE tenant_id = $1 AND test_run_id = $2')) {
+      if (sql.includes('WHERE j.tenant_id = $1 AND j.test_run_id = $2')) {
         assert.deepEqual(params, [CTX.tenantId, 'run_1']);
         assert.match(sql, /LIMIT 2/);
         return { rows: [sampleRow()] };
@@ -307,6 +463,32 @@ describe('postgres probe job repository', () => {
     assertTenantWrapped(pool.client, CTX.tenantId);
   });
 
+  it('filters malformed ownership jobs from run lookup using reciprocal identity without requiring open status', async () => {
+    const pool = createRecordingPool((sql) => {
+      if (sql.includes('WHERE j.tenant_id = $1 AND j.test_run_id = $2')) {
+        assert.match(sql, /j\.check_id <> 'ownership\.challenge'/);
+        assert.match(sql, /j\.ownership_verification_id IS NULL/);
+        assert.match(sql, /NOT EXISTS \([\s\S]*FROM ownership_verifications ordinary_binding[\s\S]*ordinary_binding\.probe_job_id = j\.id/);
+        assert.match(sql, /j\.check_id = 'ownership\.challenge'/);
+        assert.match(sql, /j\.ownership_verification_id IS NOT NULL/);
+        assert.match(sql, /binding\.probe_job_id = j\.id/);
+        assert.match(sql, /binding\.id = j\.ownership_verification_id/);
+        assert.match(sql, /j\.test_run_id = binding\.id/);
+        assert.match(sql, /j\.target_id = binding\.agent_id/);
+        assert.match(sql, /j\.nonce_hash = binding\.challenge_nonce_hash/);
+        assert.doesNotMatch(sql, /binding\.status = 'challenge_sent'/);
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    const repo = createProbeJobRepository(pool);
+
+    const job = await repo.getProbeJobByTestRun(CTX, 'ownership_1');
+
+    assert.equal(job, null);
+    assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
   it('serializes create by tenant/run and reuses a previously committed probe job', async () => {
     let insertCalls = 0;
     const pool = createRecordingPool((sql, params) => {
@@ -315,7 +497,7 @@ describe('postgres probe job repository', () => {
         return { rows: [{}] };
       }
       if (sql.includes('WHERE tenant_id = $1 AND test_run_id = $2')) {
-        return { rows: [sampleRow()] };
+        return { rows: [sampleRow({ ownership_binding_valid: true })] };
       }
       if (sql.includes('INSERT INTO probe_jobs')) insertCalls += 1;
       return { rows: [] };
@@ -361,5 +543,76 @@ describe('postgres probe job repository', () => {
     const insert = dataQueries(pool.client).find((q) => q.text.includes('INSERT INTO probe_jobs'));
     assert.ok(insert);
     assert.ok(!insert.text.includes('ten_demo'));
+  });
+});
+
+
+describe('postgres probe lease/activation advisory-lock races (no-file fake pool)', () => {
+  it('activation locks first, so lease waits and then observes active without leasing', async () => {
+    const race = createAdvisoryRacePool();
+    const killSwitch = createKillSwitchRepository(race.pool);
+    const probeJobs = createProbeJobRepository(race.pool);
+
+    const activationPromise = killSwitch.upsertKillSwitch(CTX, {
+      active: true,
+      reason: 'race test',
+      updated_by: CTX.userId,
+      updated_at: FIXED_NOW,
+    });
+    assert.equal(await race.firstLockAcquired.promise, 'client_1');
+
+    const leasePromise = probeJobs.leasePendingJobsForWorker(CTX, WORKER_ID, {
+      leasedAt: FIXED_NOW,
+    });
+    assert.equal(await race.secondLockWaiting.promise, 'client_2');
+    assert.equal(race.state.leased.length, 0);
+
+    race.releaseFirstLock.resolve();
+    const [activation, jobs] = await Promise.all([activationPromise, leasePromise]);
+
+    assert.equal(activation.active, true);
+    assert.deepEqual(jobs, []);
+    assert.equal(race.state.active, true);
+    assert.equal(race.state.leased.length, 0);
+    const operations = race.state.log.map(({ client, operation }) => `${client}:${operation}`);
+    assert.ok(
+      operations.indexOf('client_1:commit') < operations.indexOf('client_2:read_active:true'),
+      'lease may re-read active only after activation commits and releases the gate',
+    );
+    assert.equal(operations.some((entry) => entry.endsWith(':lease')), false);
+  });
+
+  it('lease locks first, so activation waits until that lease commits before setting active', async () => {
+    const race = createAdvisoryRacePool();
+    const probeJobs = createProbeJobRepository(race.pool);
+    const killSwitch = createKillSwitchRepository(race.pool);
+
+    const leasePromise = probeJobs.leasePendingJobsForWorker(CTX, WORKER_ID, {
+      leasedAt: FIXED_NOW,
+    });
+    assert.equal(await race.firstLockAcquired.promise, 'client_1');
+
+    const activationPromise = killSwitch.upsertKillSwitch(CTX, {
+      active: true,
+      reason: 'race test',
+      updated_by: CTX.userId,
+      updated_at: FIXED_NOW,
+    });
+    assert.equal(await race.secondLockWaiting.promise, 'client_2');
+    assert.equal(race.state.active, false);
+
+    race.releaseFirstLock.resolve();
+    const [jobs, activation] = await Promise.all([leasePromise, activationPromise]);
+
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].id, 'pjob_1');
+    assert.equal(activation.active, true);
+    assert.equal(race.state.active, true);
+    assert.equal(race.state.leased.length, 1);
+    const operations = race.state.log.map(({ client, operation }) => `${client}:${operation}`);
+    assert.ok(
+      operations.indexOf('client_1:commit') < operations.indexOf('client_2:write_active:true'),
+      'activation may set active only after the in-flight lease transaction releases the gate',
+    );
   });
 });

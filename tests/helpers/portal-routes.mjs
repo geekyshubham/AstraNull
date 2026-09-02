@@ -38,6 +38,11 @@ export const NAV_ROUTE_IDS = Object.freeze([
   'subscription',
 ]);
 
+/** Auditor-narrowed customer routes (`route-access.ts` ROUTE_CUSTOMER_ROLES). */
+export const AUDITOR_NAV_ROUTE_IDS = Object.freeze([
+  'release-evidence',
+]);
+
 /** Staff sidebar routes from `navigation.ts` NAV_ITEMS. */
 export const STAFF_NAV_ROUTE_IDS = Object.freeze([
   'admin',
@@ -66,12 +71,13 @@ export const PUBLIC_ROUTE_ENTRIES = Object.freeze([
   { routeId: 'login', pathname: '/login' },
   { routeId: 'signup', pathname: '/signup' },
   { routeId: 'signup-status', pathname: '/signup-status' },
+  { routeId: 'set-password', pathname: '/set-password' },
   { routeId: 'staff-login', pathname: '/internal/admin/login' },
 ]);
 
 /**
  * FT-A11Y-01 route matrix: all app routes (NAV_ITEMS + DETAIL_ROUTE_ITEMS) + public routes.
- * @typedef {'public' | 'customer' | 'staff-admin' | 'staff-soc'} PortalRouteSurface
+ * @typedef {'public' | 'customer' | 'customer-auditor' | 'staff-admin' | 'staff-soc'} PortalRouteSurface
  * @typedef {{ routeId: string, surface: PortalRouteSurface, pathname?: string }} PortalRouteScan
  */
 
@@ -85,6 +91,10 @@ export const ROUTES_TO_SCAN = Object.freeze([
   ...NAV_ROUTE_IDS.map((routeId) => ({
     routeId,
     surface: 'customer',
+  })),
+  ...AUDITOR_NAV_ROUTE_IDS.map((routeId) => ({
+    routeId,
+    surface: 'customer-auditor',
   })),
   ...STAFF_NAV_ROUTE_IDS.map((routeId) => ({
     routeId,

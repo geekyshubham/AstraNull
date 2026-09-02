@@ -135,8 +135,7 @@ describe('postgres acceptance scenario helpers', () => {
     const ctx = buildAcceptanceCtx(ids.tenantId);
     const now = '2026-07-03T12:00:00.000Z';
     const state = {
-      seeded: false,
-      cleaned: false,
+      transactions: [],
       archived: false,
       targets: new Set([ids.targetId]),
       name: 'acceptance target group',
@@ -155,7 +154,17 @@ describe('postgres acceptance scenario helpers', () => {
         return { id: options.id, value: body.value };
       },
       async patchTarget(callCtx, groupId, targetId, body) {
-        return { id: targetId, value: body.value };
+        assert.equal(callCtx.tenantId, ctx.tenantId);
+        assert.equal(groupId, ids.targetGroupId);
+        assert.equal(targetId, ids.secondaryTargetId);
+        if (body.value !== undefined) {
+          return { error: 'target_identity_immutable', status: 409 };
+        }
+        return {
+          id: targetId,
+          value: 'crud-secondary.example',
+          metadata: body.metadata,
+        };
       },
       async deleteTarget(callCtx, groupId, targetId) {
         state.targets.delete(targetId);
@@ -175,10 +184,11 @@ describe('postgres acceptance scenario helpers', () => {
 
     const pool = {
       async connect() {
+        const transaction = [];
+        state.transactions.push(transaction);
         return {
           async query(text) {
-            if (text.trim() === 'BEGIN') state.seeded = true;
-            if (text.trim() === 'COMMIT' && state.seeded && !state.cleaned) state.cleaned = true;
+            transaction.push(String(text).replace(/\s+/g, ' ').trim());
             return { rows: [] };
           },
           release() {},
@@ -189,13 +199,121 @@ describe('postgres acceptance scenario helpers', () => {
     await verifyTargetGroupCrudLifecycle(pool, {
       ids,
       now,
-      createCoreCatalogRepository: () => repo,
+      createCoreCatalogRepository: (receivedPool, repositoryOptions) => {
+        assert.equal(receivedPool, pool);
+        assert.equal(
+          typeof repositoryOptions?.auditRepository?.appendAuditEvent,
+          'function',
+        );
+        return repo;
+      },
     });
 
     assert.equal(state.name, 'patched acceptance group');
     assert.equal(state.archived, true);
-    assert.equal(state.cleaned, true);
     assert.ok(!state.targets.has(ids.secondaryTargetId));
+    assert.equal(state.transactions.length, 3);
+    assert.deepEqual(
+      state.transactions.map((transaction) => transaction.at(-1)),
+      ['COMMIT', 'COMMIT', 'COMMIT'],
+    );
+    assert.ok(
+      state.transactions[0].some((sql) => sql.startsWith('DELETE FROM audit_logs')),
+    );
+    assert.ok(!state.transactions[0].some((sql) => sql.startsWith('INSERT INTO')));
+    assert.ok(state.transactions[1].some((sql) => sql.startsWith('INSERT INTO tenants')));
+    assert.ok(!state.transactions[1].some((sql) => sql.startsWith('DELETE FROM')));
+    assert.ok(
+      state.transactions[2].some((sql) => sql.startsWith('DELETE FROM audit_logs')),
+    );
+  });
+
+  it('commits stale fixture cleanup before a failed seed rolls back', async () => {
+    const ids = buildAcceptanceTempIds('seed_rollback_mock');
+    const transactions = [];
+    const sequence = [];
+    const pool = {
+      async connect() {
+        const transaction = { queries: [], released: false };
+        const transactionNumber = transactions.push(transaction);
+        return {
+          async query(text) {
+            const sql = String(text).replace(/\s+/g, ' ').trim();
+            transaction.queries.push(sql);
+            sequence.push(`${transactionNumber}:${sql}`);
+            if (
+              transactionNumber === 2
+              && sql.startsWith('INSERT INTO environments')
+            ) {
+              throw new Error('injected seed failure');
+            }
+            return { rows: [] };
+          },
+          release() {
+            transaction.released = true;
+          },
+        };
+      },
+    };
+
+    await assert.rejects(
+      () =>
+        verifyTargetGroupCrudLifecycle(pool, {
+          ids,
+          createCoreCatalogRepository: () => ({}),
+        }),
+      /injected seed failure/,
+    );
+
+    assert.equal(transactions.length, 2, 'rolled-back seed must not trigger final cleanup');
+    assert.equal(transactions[0].queries.at(-1), 'COMMIT');
+    assert.equal(transactions[1].queries.at(-1), 'ROLLBACK');
+    assert.ok(
+      transactions[0].queries.some((sql) => sql.startsWith('DELETE FROM audit_logs')),
+    );
+    assert.ok(
+      transactions[0].queries.some((sql) => sql.startsWith('DELETE FROM tenants')),
+    );
+    assert.ok(!transactions[0].queries.some((sql) => sql.startsWith('INSERT INTO')));
+    assert.ok(transactions[1].queries.some((sql) => sql.startsWith('INSERT INTO tenants')));
+    assert.ok(!transactions[1].queries.some((sql) => sql.startsWith('DELETE FROM')));
+    assert.ok(sequence.indexOf('1:COMMIT') < sequence.indexOf('2:ROLLBACK'));
+    assert.ok(transactions.every((transaction) => transaction.released));
+  });
+
+  it('surfaces strict pre-cleanup failures before attempting a seed', async () => {
+    const ids = buildAcceptanceTempIds('cleanup_failure_mock');
+    const transactions = [];
+    const pool = {
+      async connect() {
+        const transaction = [];
+        transactions.push(transaction);
+        return {
+          async query(text) {
+            const sql = String(text).replace(/\s+/g, ' ').trim();
+            transaction.push(sql);
+            if (sql.startsWith('DELETE FROM target_groups')) {
+              throw new Error('injected cleanup failure');
+            }
+            return { rows: [] };
+          },
+          release() {},
+        };
+      },
+    };
+
+    await assert.rejects(
+      () =>
+        verifyTargetGroupCrudLifecycle(pool, {
+          ids,
+          createCoreCatalogRepository: () => ({}),
+        }),
+      /injected cleanup failure/,
+    );
+
+    assert.equal(transactions.length, 1);
+    assert.equal(transactions[0].at(-1), 'ROLLBACK');
+    assert.ok(!transactions[0].some((sql) => sql.startsWith('INSERT INTO')));
   });
 
   it('verifies supply chain phase authorization with injected repository', async () => {

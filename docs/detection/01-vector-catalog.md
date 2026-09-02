@@ -48,7 +48,7 @@ Tiers are derived at build time from the probe profile and are never hand-author
 | `safe` | Bounded customer-runnable validation. | Authorized customer user. |
 | `soc_gated` | Potentially disruptive, high-scale, or offensive validation. | AstraNull SOC after approval and scheduling. |
 
-The current check catalog contains 158 `safe` and 17 `soc_gated` checks.
+The current check catalog contains 232 `safe` and 17 `soc_gated` checks (249 total).
 
 ### Catalog-ID cross-reference
 
@@ -82,9 +82,9 @@ DDoS attacks are also classified by **what resource they exhaust** (bandwidth, p
 Catalog coverage and evidence coverage answer different questions:
 
 - **Catalog accounting: 721/721 rows (100%)** — 680 rows are claimed by a registry entry and 41 are explicitly out of outside-in scope; 0 are unclaimed and 0 are duplicated.
-- **Evidence coverage: 356/680 claimed rows (52.4%) have non-E0 evidence** — E1: 83, E2: 72, E3: 145, E4: 48, E5: 8. The other 324 claimed rows are honestly recorded as E0 / `pending`.
+- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104, E2: 79, E3: 271, E4: 218, and E5: 8. There are 0 claimed E0 / `pending` rows; the separately accounted 41 outside-in exclusions are monitor-only E5 annotations.
 
-Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the 2026-09-01 validator snapshot; see the [full vector coverage audit](22-vector-coverage-audit-2026-09-01.md) for methodology and gap analysis.
+Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the current 2026-09-01 post-remediation validator snapshot. The [coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; use the validator, not its historical totals, for release accounting.
 
 ## Completion criteria
 

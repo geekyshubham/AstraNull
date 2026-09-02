@@ -1,8 +1,7 @@
-import { Fragment } from 'react';
+import { findingStatus } from '../../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem } from '../../lib/types';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
-import { findingSlaDueAt, isFindingSlaBreach } from '../../lib/findings-helpers';
 import { Badge } from '../ui/badge';
 
 function getString(item: DataItem, keys: string[], fallback = '') {
@@ -13,55 +12,12 @@ function getString(item: DataItem, keys: string[], fallback = '') {
   return fallback;
 }
 
-function slaClass(finding: DataItem) {
-  const status = getString(finding, ['status', 'state'], 'open');
-  if (status !== 'open') return '';
-  if (isFindingSlaBreach(finding)) return 'is-danger';
-  const dueAt = findingSlaDueAt(finding);
-  if (!dueAt) return '';
-  const hoursLeft = (dueAt - Date.now()) / (60 * 60 * 1000);
-  return hoursLeft <= 24 ? 'is-warn' : '';
-}
-
-function slaLabel(finding: DataItem) {
-  const status = getString(finding, ['status', 'state'], 'open');
-  const remSla = getString(finding, ['rem_sla', 'remSla', 'sla'], '');
-  if (remSla) return remSla;
-  if (status !== 'open') {
-    const closedAt = finding.updated_at ?? finding.closed_at;
-    if (closedAt) return `closed ${formatDate(closedAt)}`;
-    return getString(finding, ['closed'], 'closed');
-  }
-  const dueAt = findingSlaDueAt(finding);
-  if (!dueAt) return 'SLA pending';
-  if (isFindingSlaBreach(finding)) return 'overdue';
-  const hoursLeft = Math.max(0, Math.round((dueAt - Date.now()) / (60 * 60 * 1000)));
-  return `${hoursLeft}h remaining`;
-}
-
-function severityTone(severity: string) {
-  const key = severity.toLowerCase();
-  if (key === 'critical' || key === 'high' || key === 's2' || key === 's1') return 'danger' as const;
-  if (key === 'medium' || key === 's3') return 'warn' as const;
-  return 'muted' as const;
-}
-
-function slaTextColor(slaState: string) {
-  if (slaState === 'is-danger') return 'var(--danger)';
-  if (slaState === 'is-warn') return 'var(--warn)';
-  return 'var(--meta)';
-}
-
-function Facet({ label, value }: { label: string; value: string }) {
-  return (
-    <span>
-      <span className="fc-key">{label}:</span> {value}
-    </span>
-  );
-}
-
-function FacetSep() {
-  return <span className="fc-sep" aria-hidden="true">·</span>;
+function verdictTone(verdict: string) {
+  const key = verdict.trim().toLowerCase();
+  if (['pass', 'passed', 'protected', 'resolved'].includes(key)) return 'success' as const;
+  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable'].includes(key)) return 'danger' as const;
+  if (['partial', 'review', 'inconclusive'].includes(key)) return 'warn' as const;
+  return 'info' as const;
 }
 
 export function FindingCard({
@@ -78,71 +34,42 @@ export function FindingCard({
   onOpen?: (id: string) => void;
 }) {
   const id = getString(finding, ['id'], '');
-  const title = getString(finding, ['title', 'summary'], id);
+  const title = getString(finding, ['title', 'summary'], id || 'Untitled finding');
   const severity = getString(finding, ['severity'], 'unknown');
+  const state = findingStatus(finding);
   const verdict = getString(finding, ['verdict'], '');
-  const state = getString(finding, ['status', 'state'], 'open');
-  const owner = getString(finding, ['assignee', 'owner', 'rem_owner', 'remOwner'], 'unassigned');
   const checkId = getString(finding, ['check_id', 'check'], '');
   const check = checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
   const checkLabel = checkId ? getString(check ?? {}, ['name', 'title'], checkId) : '';
   const groupId = getString(finding, ['target_group_id'], '');
   const group = targetGroups.find((entry) => getString(entry, ['id']) === groupId);
-  const groupLabel = getString(group ?? {}, ['name', 'id'], groupId || 'ungrouped');
+  const groupLabel = getString(group ?? {}, ['name', 'id'], groupId || 'Ungrouped');
   const openedAt = finding.created_at ?? finding.opened_at;
   const href = id ? buildDetailHref('finding-detail', id) : '#findings';
 
-  const slaState = slaClass(finding);
-  // The check facet is omitted rather than printing a placeholder when the finding
-  // carries no check reference (see docs/ux/14 §10 rule 2 — no static fallbacks).
-  const facets = [
-    { label: 'owner', value: owner },
-    ...(checkLabel ? [{ label: 'check', value: checkLabel }] : []),
-    { label: 'group', value: groupLabel },
-    { label: 'opened', value: formatDate(openedAt) }
-  ];
-
   return (
-    <article
-      className={`finding-card${active ? ' is-active' : ''}`}
-      role="link"
-      tabIndex={0}
-      aria-label={`${title}, severity ${severity}, ${state}`}
-      onClick={() => onOpen?.(id)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onOpen?.(id);
-        }
+    <a
+      className={`finding-card finding-row-primary${active ? ' is-active' : ''}`}
+      href={href}
+      aria-label={`Open finding ${title}, ${formatSeverityLabel(severity)}, ${state}`}
+      onClick={(event) => {
+        if (!id || !onOpen) return;
+        event.preventDefault();
+        onOpen(id);
       }}
     >
-      <div className="fc-top">
-        <Badge tone={severityTone(severity)} title={`Severity ${severity} from finding API`}>{formatSeverityLabel(severity)}</Badge>
-        {verdict ? <Badge tone="info" title={`Verdict ${verdict} from finding API`}>{verdict}</Badge> : null}
-        <span className="fc-meta mono" title={id}>{id}</span>
-      </div>
-      <div className="fc-body">
-        <div className="fc-headline">
-          <h4>{title}</h4>
-          <span className="fc-state" title={`State ${state} from finding API`}>{state}</span>
-        </div>
-        <div className="fc-facets">
-          {facets.map((facet, index) => (
-            <Fragment key={facet.label}>
-              {index > 0 ? <FacetSep /> : null}
-              <Facet label={facet.label} value={facet.value} />
-            </Fragment>
-          ))}
-        </div>
-        <div
-          className={`fc-sla mono text-xs${slaState ? ` ${slaState}` : ''}`}
-          style={{ color: slaTextColor(slaState) }}
-          title="SLA window derived from severity hours and opened timestamp"
-        >
-          {slaLabel(finding)}
-        </div>
-      </div>
-      <a className="sr-only" href={href}>Open finding {title}</a>
-    </article>
+      <span className="fc-headline">
+        <strong>{title}</strong>
+        {verdict ? <Badge tone={verdictTone(verdict)} title={`Correlated verdict: ${verdict}`}>{verdict.replaceAll('_', ' ')}</Badge> : null}
+      </span>
+      <span className="fc-meta mono" title={id}>{id || 'No finding ID'}</span>
+      <span className="fc-facets">
+        {checkLabel ? <span><span className="fc-key">Check:</span> {checkLabel}</span> : null}
+        {checkLabel ? <span className="fc-sep" aria-hidden="true">·</span> : null}
+        <span><span className="fc-key">Group:</span> {groupLabel}</span>
+        <span className="fc-sep" aria-hidden="true">·</span>
+        <span><span className="fc-key">Opened:</span> {formatDate(openedAt)}</span>
+      </span>
+    </a>
   );
 }

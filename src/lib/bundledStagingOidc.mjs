@@ -1,4 +1,9 @@
-import { createHash, createPrivateKey, createSign } from 'node:crypto';
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  createSign,
+} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +26,86 @@ const BURNED_KEY_MODULUS_SHA256 =
 
 /** Cache keyed by source, so a different env in the same process cannot read a stale key. */
 const fixtureCache = new Map();
+
+const PRIVATE_JWK_FIELDS = Object.freeze(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth']);
+const OIDC_KID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+function fixtureValidationError(source, reason) {
+  return new Error(`Bundled staging OIDC fixture at ${source} ${reason}.`);
+}
+
+function isPlainObject(value) {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function isCanonicalBase64UrlUInt(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) return false;
+  const bytes = Buffer.from(value, 'base64url');
+  return bytes.length > 0
+    && bytes[0] !== 0
+    && bytes.toString('base64url') === value;
+}
+
+function validateFixtureCryptography(fixture, source) {
+  if (!isPlainObject(fixture)) {
+    throw fixtureValidationError(source, 'must be a JSON object');
+  }
+  if (typeof fixture.private_key_pem !== 'string' || fixture.private_key_pem.trim() === '') {
+    throw fixtureValidationError(source, 'is missing private_key_pem');
+  }
+
+  let privateKey;
+  try {
+    privateKey = createPrivateKey(fixture.private_key_pem);
+  } catch {
+    throw fixtureValidationError(source, 'contains an invalid private signing key');
+  }
+  if (privateKey.type !== 'private' || privateKey.asymmetricKeyType !== 'rsa') {
+    throw fixtureValidationError(source, 'must contain an RSA private signing key');
+  }
+  const modulusLength = privateKey.asymmetricKeyDetails?.modulusLength;
+  if (!Number.isSafeInteger(modulusLength) || modulusLength < 2048) {
+    throw fixtureValidationError(source, 'must contain an RSA key of at least 2048 bits');
+  }
+
+  const publicJwk = fixture.public_jwk;
+  if (!isPlainObject(publicJwk)) {
+    throw fixtureValidationError(source, 'must contain public_jwk as an object');
+  }
+  if (PRIVATE_JWK_FIELDS.some((field) => Object.hasOwn(publicJwk, field))) {
+    throw fixtureValidationError(source, 'public_jwk must not contain private key fields');
+  }
+  if (publicJwk.kty !== 'RSA' || publicJwk.alg !== 'RS256' || publicJwk.use !== 'sig') {
+    throw fixtureValidationError(source, 'public_jwk must declare kty=RSA, alg=RS256, and use=sig');
+  }
+  if (!OIDC_KID_RE.test(String(fixture.kid ?? '')) || !OIDC_KID_RE.test(String(publicJwk.kid ?? ''))) {
+    throw fixtureValidationError(source, 'must contain a bounded public signing key id');
+  }
+  if (!isCanonicalBase64UrlUInt(publicJwk.n) || !isCanonicalBase64UrlUInt(publicJwk.e)) {
+    throw fixtureValidationError(source, 'public_jwk must contain canonical base64url n and e values');
+  }
+
+  // Keep the burned-key diagnostic ahead of private/public mismatch diagnostics so a stale
+  // published fixture cannot be disguised as an ordinary configuration mistake.
+  assertNotBurned(fixture, source);
+
+  if (fixture.kid !== publicJwk.kid) {
+    throw fixtureValidationError(source, 'kid does not match public_jwk.kid');
+  }
+  let derivedPublicJwk;
+  try {
+    derivedPublicJwk = createPublicKey(privateKey).export({ format: 'jwk' });
+  } catch {
+    throw fixtureValidationError(source, 'could not derive its RSA public signing key');
+  }
+  if (derivedPublicJwk.n !== publicJwk.n || derivedPublicJwk.e !== publicJwk.e) {
+    throw fixtureValidationError(source, 'public_jwk does not match private_key_pem');
+  }
+  return fixture;
+}
 
 function assertNotBurned(fixture, source) {
   const modulus = fixture?.public_jwk?.n;
@@ -47,7 +132,10 @@ function loadFixture(env = process.env) {
   const source = inline
     ? 'env:ASTRANULL_BUNDLED_STAGING_OIDC_FIXTURE_JSON'
     : (explicitPath || DEFAULT_FIXTURE_PATH);
-  const cached = fixtureCache.get(source);
+  const cacheKey = inline
+    ? `${source}:${createHash('sha256').update(inline).digest('hex')}`
+    : source;
+  const cached = fixtureCache.get(cacheKey);
   if (cached) return cached;
 
   let raw;
@@ -75,11 +163,8 @@ function loadFixture(env = process.env) {
   } catch {
     throw new Error(`Bundled staging OIDC fixture at ${source} is not valid JSON.`);
   }
-  if (typeof fixture?.private_key_pem !== 'string' || !fixture.private_key_pem.includes('PRIVATE KEY')) {
-    throw new Error(`Bundled staging OIDC fixture at ${source} is missing private_key_pem.`);
-  }
-  assertNotBurned(fixture, source);
-  fixtureCache.set(source, fixture);
+  validateFixtureCryptography(fixture, source);
+  fixtureCache.set(cacheKey, fixture);
   return fixture;
 }
 

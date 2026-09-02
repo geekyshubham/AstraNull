@@ -174,6 +174,29 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.requests_sent, 6);
   });
 
+  it('omits network hints and does not follow redirects unless both are explicitly enabled', async () => {
+    const calls = { fetch: 0, cname: 0, address: 0, tls: 0 };
+    const outcome = await runOutsideInWafScan({
+      url: 'https://shop.example.test/',
+      budget: 1,
+      timeoutMs: 1000,
+      resolveCname: async () => { calls.cname += 1; return ['edge.example.test']; },
+      resolve4: async () => { calls.address += 1; return ['198.51.100.10']; },
+      tlsConnect: () => { calls.tls += 1; throw new Error('must not connect'); },
+      fetchFn: async () => {
+        calls.fetch += 1;
+        return mockResponse(302, { location: 'https://redirect.example.test/' });
+      },
+    });
+
+    assert.deepEqual(calls, { fetch: 1, cname: 0, address: 0, tls: 0 });
+    assert.equal(outcome.network_hints_collected, false);
+    assert.equal(outcome.redirect_following_enabled, false);
+    assert.equal(Object.hasOwn(outcome, 'dns_chain_hint'), false);
+    assert.equal(Object.hasOwn(outcome, 'tls_protocol_hint'), false);
+    assert.equal(Object.hasOwn(outcome, 'vendor_chain_hints'), false);
+  });
+
   it('buildOutsideInScanPlan preserves class markers before evasion phases within budget', () => {
     const plan = buildOutsideInScanPlan(6, { hasDirectIp: false });
     assert.deepEqual(plan.map((entry) => entry.phase), [

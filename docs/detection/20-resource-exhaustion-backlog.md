@@ -9,11 +9,11 @@ Tracks implementation of the [resource-exhaustion taxonomy](19-resource-exhausti
 
 ## Task summary
 
-> **Status 2026-08-29:** DET-016–022 and DET-026 have code-level catalog implementations (175-check catalog; zero pending registry vectors). DET-024 has the evidence-bound dashboard matrix but remains open for report/drill-down, bundle, accessibility, and staging parity. DET-025 has local/CI gates but remains open for parent full validation and staging ATT-* evidence. DET-023 + SOC-011 carry the governed scenario contract and authorization-pack binding; live partner execution remains external. See `PROGRESS.md` §4.1 for full notes.
+> **Current post-remediation status:** DET-016–022 and DET-026 have code-level catalog implementations (249-check catalog; 232 safe, 17 SOC-gated; zero pending DDoS-scored registry vectors). DET-024 has the evidence-bound dashboard matrix but remains open for report/drill-down, bundle, accessibility, and staging parity. DET-025 has local/CI gates but remains open for parent full validation and staging ATT-* evidence. DET-023 + SOC-011 carry the governed scenario contract and authorization-pack binding; live partner execution remains external. See `PROGRESS.md` §4.1 for full notes.
 
 | ID | Status | Scope | Acceptance |
 |---|---|---|---|
-| DET-016 | `[x]` (code) | Add `exhausted_resource`, `attack_vector_ids[]`, and optional `delivery_patterns[]` to every `CHECK_CATALOG` entry; extend vector heatmap and API `GET /v1/checks` response | All 175 checks mapped via `applyResourceExhaustionMetadata`; validator requires the field; unit tests. **External:** staging catalog signoff |
+| DET-016 | `[x]` (code) | Add `exhausted_resource`, `attack_vector_ids[]`, and optional `delivery_patterns[]` to every `CHECK_CATALOG` entry; extend vector heatmap and API `GET /v1/checks` response | All 249 checks mapped via `applyResourceExhaustionMetadata`; validator requires the field; unit tests. **External:** staging catalog signoff |
 | DET-017 | `[x]` (code) | L3/L4: ICMP, ACK/SYN-ACK/RST/FIN floods, fragmentation, GRE/ESP, out-of-state TCP, SIP/VoIP | New `check_id` entries with bounded probe profiles or policy metadata per vector; registry rows upgraded. **External:** matrix staging evidence |
 | DET-018 | `[x]` (code) | Reflection/amplification: NTP, CLDAP, Memcached, SSDP, SNMP, WS-Discovery, TCP middlebox, etc. | Full exposure inventory — one bounded fingerprint per declared host; no reflection traffic generation. **External:** live-edge validation |
 | DET-019 | `[x]` (code) | Advanced DNS: laundering, garbage flood, phantom domain, lock-up, NXNSAttack, DNSBomb | Named checks + evidence model (bounded lookups + policy metadata). **External:** resolver staging evidence |
@@ -28,7 +28,7 @@ Tracks implementation of the [resource-exhaustion taxonomy](19-resource-exhausti
 
 ## Per-attack registry
 
-The full ATT-* registry (**149 attack/exposure classes** + **8 WAF WV-*** + **9 ND-***) lives in code. Filter by status:
+The current machine-readable inventory contains **254 ATT attack/exposure entries** (249 DDoS-scored + 5 non-DDoS-family entries), **42 WAF WV entries**, and **12 ND entries**. The source registries in code are authoritative. Filter ATT status with:
 
 ```bash
 npm run vector:taxonomy:validate
@@ -37,13 +37,13 @@ node -e "import { ATTACK_VECTOR_REGISTRY } from './src/contracts/resourceExhaust
 
 ## Completed foundation (not full taxonomy)
 
-These DET rows delivered the **65-check defensive catalog** but do **not** close the resource-exhaustion taxonomy:
+These DET rows initially delivered the **65-check defensive catalog**; that historical foundation did **not** by itself close the resource-exhaustion taxonomy:
 
 | ID | Delivers today | Taxonomy gap |
 |---|---|---|
 | DET-001–011 | Origin, L3/L4, DNS, L7, TLS, protocol readiness checks | Single-probe proxies; no volumetric floods |
 | DET-012 | High-scale telemetry model | Telemetry schema; not live flood execution |
-| DET-015 | Enterprise catalog expansion | ~40% partial coverage; ~50% pending per validator |
+| DET-015 | Enterprise catalog expansion | Current DDoS-scored distribution: 79 implemented, 92 partial, 78 SOC-only, 0 pending; higher-tier staging evidence remains separate |
 
 ## Definition of done (full taxonomy)
 

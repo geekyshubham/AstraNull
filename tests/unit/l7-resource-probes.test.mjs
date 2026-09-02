@@ -50,7 +50,7 @@ const RESOURCE_FAMILY_IDS = new Set(EXHAUSTED_RESOURCE_FAMILIES.map((f) => f.id)
 
 function authorizedJob(overrides = {}) {
   return {
-    target: { url: 'https://protected.example' },
+    target: { kind: 'url', value: 'https://protected.example' },
     probe_profile: { kind: L7_RESOURCE_POSTURE_PROBE_KIND, marker_class: 'declared_content_encoding', timeout_ms: 5000 },
     ...overrides,
   };
@@ -167,6 +167,10 @@ test('E4 reclassifications carry a valid resource family, valid-or-null governed
 test('buildL7ResourcePostureProfile is hard-bounded and validated', () => {
   const p = buildL7ResourcePostureProfile({ marker_class: 'declared_content_encoding', max_requests: 99, timeout_ms: 999999 });
   assert.equal(p.max_requests, L7_RESOURCE_POSTURE_MAX_REQUESTS);
+  assert.equal(
+    buildL7ResourcePostureProfile({ marker_class: 'declared_content_encoding', max_requests: 1 }).max_requests,
+    1,
+  );
   assert.equal(p.timeout_ms, MAX_PROBE_PROFILE_TIMEOUT_MS);
   assert.throws(() => buildL7ResourcePostureProfile({ marker_class: 'nope' }), /invalid l7 posture marker_class/);
   assert.equal(boundedPostureTimeoutMs(-5), 5000);
@@ -194,6 +198,49 @@ test('probe grades an accepting origin as connected (exposed posture)', async ()
   const requestFn = async () => ({ status: 200 });
   const res = await probeL7ResourcePosture(authorizedJob(), { signedJobVerified: true, requestFn });
   assert.equal(res.external_result, 'connected');
+});
+
+test('probe derives only from signed target.value, preserves its path/query, and honors cap one', async () => {
+  const calls = [];
+  const res = await probeL7ResourcePosture(authorizedJob({
+    target: {
+      kind: 'url',
+      value: 'https://protected.example/signed/path?keep=1',
+      url: 'https://attacker.invalid/legacy-url',
+      fqdn: 'attacker.invalid',
+    },
+    constraints: { max_requests: 99, max_probe_requests: 1 },
+    probe_profile: {
+      kind: L7_RESOURCE_POSTURE_PROBE_KIND,
+      marker_class: 'declared_content_encoding',
+      max_requests: 2,
+    },
+  }), {
+    signedJobVerified: true,
+    requestFn: async (url, options) => {
+      calls.push({ url, options });
+      return { status: 200 };
+    },
+  });
+  assert.equal(res.external_result, 'connected');
+  assert.equal(res.requests_sent, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://protected.example/signed/path?keep=1');
+  assert.doesNotMatch(calls[0].url, /attacker\.invalid/);
+});
+
+test('probe stops after the first transport failure', async () => {
+  let calls = 0;
+  const res = await probeL7ResourcePosture(authorizedJob(), {
+    signedJobVerified: true,
+    requestFn: async () => {
+      calls += 1;
+      throw Object.assign(new Error('temporary failure'), { code: 'ECONNRESET' });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(res.requests_sent, 1);
+  assert.equal(res.external_result, 'error');
 });
 
 test('probe fails closed when unauthorized', async () => {

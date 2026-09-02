@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createServer } from '../../src/server.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
+import { ackJob } from '../../src/services/agents.mjs';
 import { createTargetGroup } from '../../src/services/targetGroups.mjs';
 import { cancelTestRun, ingestObservation, startTestRun } from '../../src/services/testRuns.mjs';
 import { getStore } from '../../src/store.mjs';
@@ -46,6 +47,45 @@ function completeRunsForGroup() {
 }
 
 describe('safe-test guardrails', () => {
+  it('ACKs pending jobs once and treats acked or observed replays as read-only', () => {
+    freshStore();
+    seedAgent();
+    const store = getStore();
+    const agent = store.agents.find((candidate) => candidate.id === 'ag_guard');
+    const job = {
+      id: 'job_ack_idempotent',
+      tenant_id: 'ten_demo',
+      agent_id: agent.id,
+      status: 'pending',
+      created_at: '2026-09-01T00:00:00.000Z',
+    };
+    store.agentJobs.push(job);
+
+    assert.equal(ackJob(agent, job.id), job);
+    assert.equal(job.status, 'acked');
+    assert.ok(job.acked_at);
+    const ackedAt = job.acked_at;
+    assert.equal(store.auditLog.filter((entry) => entry.action === 'agent.job_acked').length, 1);
+
+    assert.equal(ackJob(agent, job.id), job);
+    assert.equal(job.acked_at, ackedAt);
+    assert.equal(store.auditLog.filter((entry) => entry.action === 'agent.job_acked').length, 1);
+
+    job.status = 'observed';
+    job.observed_at = '2026-09-01T00:01:00.000Z';
+    assert.equal(ackJob(agent, job.id), job);
+    assert.equal(job.status, 'observed');
+    assert.equal(job.acked_at, ackedAt);
+    assert.equal(job.observed_at, '2026-09-01T00:01:00.000Z');
+    assert.equal(store.auditLog.filter((entry) => entry.action === 'agent.job_acked').length, 1);
+
+    job.status = 'cancelled';
+    job.completed_at = '2026-09-01T00:02:00.000Z';
+    const invalidStateSnapshot = { ...job };
+    assert.equal(ackJob(agent, job.id), null);
+    assert.deepEqual(job, invalidStateSnapshot);
+    assert.equal(store.auditLog.filter((entry) => entry.action === 'agent.job_acked').length, 1);
+  });
   it('rejects runs outside configured safe_test_windows', () => {
     freshStore();
     seedAgent();

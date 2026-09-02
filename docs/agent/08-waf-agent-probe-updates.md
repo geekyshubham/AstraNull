@@ -8,7 +8,7 @@ Extend AstraNull probes and customer agents so WAF posture can be validated safe
 
 | Capability | Description |
 |---|---|
-| WAF fingerprint probe | Performs bounded DNS/TLS/HTTP metadata collection. |
+| WAF fingerprint probe | Runs a bounded, pre-reserved, destination-pinned HTTP plan; signed jobs do not follow redirects or run standalone DNS/TLS hint collectors. |
 | WAF marker probe | Sends customer-approved marker request with nonce. |
 | Block-page fingerprinting | Hashes safe block/challenge response metadata. |
 | Protected/direct path comparison | Compares WAF path vs direct origin path where approved. |
@@ -41,13 +41,22 @@ Extend AstraNull probes and customer agents so WAF posture can be validated safe
 
 ```json
 {
-  "kind": "waf_fingerprint",
-  "max_requests": 3,
+  "kind": "outside_in_waf_scan",
+  "max_requests": 13,
   "timeout_ms": 5000,
-  "methods": ["HEAD", "GET_METADATA"],
-  "collect": ["dns_chain", "tls_metadata", "http_header_names", "status_code", "safe_block_fingerprint"]
+  "follow_redirects": false,
+  "collect": [
+    "status_code",
+    "waf_product_hint",
+    "marker_probes",
+    "posture_status",
+    "posture_label"
+  ]
 }
 ```
+
+The signed worker hard-forces `followRedirects=false` and `collectNetworkHints=false` at execution.
+A/AAAA destination vetting is separately reserved and attested; it is not fingerprint evidence.
 
 ### Marker
 

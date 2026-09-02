@@ -27,6 +27,12 @@ function dnsResponse(query, options = {}) {
   const size = Math.max(12, options.size ?? 12);
   const response = Buffer.alloc(size, 0xa5);
   query.copy(response, 0, 0, 2);
+  if (options.transactionId != null) {
+    const transactionId = typeof options.transactionId === 'function'
+      ? options.transactionId(query.readUInt16BE(0))
+      : options.transactionId;
+    response.writeUInt16BE(Number(transactionId) & 0xffff, 0);
+  }
   response[2] = 0x80
     | (options.authoritative === false ? 0 : 0x04)
     | (options.truncated ? 0x02 : 0);
@@ -174,6 +180,78 @@ describe('probeDnsWireQuery', () => {
     assert.equal(Object.hasOwn(outcome.metadata, 'answers'), false);
     assert.equal(Object.hasOwn(outcome.metadata, 'records'), false);
     assert.equal(Object.hasOwn(outcome.metadata, 'response'), false);
+    assert.equal(Object.hasOwn(outcome.metadata, 'dns_message'), false);
+    assert.equal(Object.hasOwn(outcome.metadata, 'transaction_id'), false);
+  });
+
+  it('ignores a mismatched UDP transaction ID until timeout', async () => {
+    const outcome = await probeDnsWireQuery(baseJob({
+      constraints: { timeout_ms: 10, max_requests: 1 },
+      probe_profile: {
+        kind: 'dns_wire_query',
+        dns_qtype: 'A',
+        dns_transport: 'udp',
+      },
+    }), injectedResolutionDeps({
+      createSocket: () => udpSocket({
+        response: { transactionId: (id) => (id + 1) & 0xffff },
+      }),
+    }));
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'no_dns_response');
+    assert.equal(outcome.metadata.response_bytes, 0);
+  });
+
+  it('ignores a mismatched framed TCP transaction ID until timeout', async () => {
+    const outcome = await probeDnsWireQuery(baseJob({
+      constraints: { timeout_ms: 10, max_requests: 1 },
+      probe_profile: {
+        kind: 'dns_wire_query',
+        dns_qtype: 'A',
+        dns_transport: 'tcp',
+      },
+    }), injectedResolutionDeps({
+      connectFn: tcpConnector({ transactionId: (id) => (id + 1) & 0xffff }),
+    }));
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'no_dns_response');
+    assert.equal(outcome.metadata.response_bytes, 0);
+  });
+
+  it('returns error on transient NS lookup without opening a socket', async () => {
+    let sockets = 0;
+    const outcome = await probeDnsWireQuery(baseJob({
+      target: { kind: 'fqdn', value: 'example.test' },
+    }), {
+      resolveNsFn: async () => {
+        throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      },
+      createSocket: () => { sockets += 1; throw new Error('must not create socket'); },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(sockets, 0);
+  });
+
+  it('returns error when discovered NS AAAA is transient despite a public A answer', async () => {
+    let sockets = 0;
+    const outcome = await probeDnsWireQuery(baseJob({
+      target: { kind: 'fqdn', value: 'example.test' },
+    }), {
+      resolveNsFn: async () => ['ns.example.test'],
+      resolve4Fn: async () => ['203.0.113.53'],
+      resolve6Fn: async () => {
+        throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      },
+      createSocket: () => { sockets += 1; throw new Error('must not create socket'); },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(sockets, 0);
   });
 
   it('reports a null amplification ratio on timeout', async () => {
@@ -191,5 +269,107 @@ describe('probeDnsWireQuery', () => {
     assert.equal(outcome.external_result, 'timeout');
     assert.equal(outcome.metadata.amplification_ratio, null);
     assert.equal(outcome.metadata.response_bytes, 0);
+  });
+});
+
+
+describe('DNS wire synchronous reservation boundaries', () => {
+  it('orders UDP, TCP, and auto-fallback transport creation after reservation', async () => {
+    const udpEvents = [];
+    await probeDnsWireQuery(baseJob(), injectedResolutionDeps({
+      beforeProbeIoAttempt: () => udpEvents.push('reserve'),
+      createSocket: () => {
+        udpEvents.push('io');
+        return udpSocket();
+      },
+    }));
+    assert.deepEqual(udpEvents, ['reserve', 'io']);
+
+    const tcpEvents = [];
+    await probeDnsWireQuery(baseJob({
+      constraints: { timeout_ms: 100, max_requests: 1 },
+      probe_profile: {
+        kind: 'dns_wire_query', dns_qtype: 'A', dns_transport: 'tcp', max_requests: 1,
+      },
+    }), injectedResolutionDeps({
+      beforeProbeIoAttempt: () => tcpEvents.push('reserve'),
+      connectFn: tcpConnector({}, () => tcpEvents.push('io')),
+    }));
+    assert.deepEqual(tcpEvents, ['reserve', 'io']);
+
+    const fallbackEvents = [];
+    const fallback = await probeDnsWireQuery(baseJob({
+      probe_profile: {
+        kind: 'dns_wire_query', dns_qtype: 'A', dns_transport: 'auto', max_requests: 2,
+      },
+    }), injectedResolutionDeps({
+      beforeProbeIoAttempt: (operation) => fallbackEvents.push(`reserve:${operation}`),
+      createSocket: () => {
+        fallbackEvents.push('io:udp');
+        return udpSocket({ response: { truncated: true } });
+      },
+      connectFn: tcpConnector({}, () => fallbackEvents.push('io:tcp')),
+    }));
+    assert.deepEqual(fallbackEvents, [
+      'reserve:dns_udp',
+      'io:udp',
+      'reserve:dns_tcp_fallback',
+      'io:tcp',
+    ]);
+    assert.equal(fallback.requests_sent, 2);
+  });
+
+  it('opens no UDP or TCP transport when reservation fails', async () => {
+    for (const transport of ['udp', 'tcp']) {
+      let ioCalls = 0;
+      const probe = probeDnsWireQuery(baseJob({
+        constraints: { timeout_ms: 100, max_requests: 1 },
+        probe_profile: {
+          kind: 'dns_wire_query', dns_qtype: 'A', dns_transport: transport, max_requests: 1,
+        },
+      }), injectedResolutionDeps({
+        beforeProbeIoAttempt: () => {
+          throw Object.assign(new Error('cap exhausted'), {
+            code: 'signed_operation_budget_exceeded',
+          });
+        },
+        createSocket: () => { ioCalls += 1; return udpSocket(); },
+        connectFn: () => { ioCalls += 1; throw new Error('must not connect'); },
+      }));
+      await assert.rejects(probe, (error) => error?.code === 'signed_operation_budget_exceeded');
+      assert.equal(ioCalls, 0, transport);
+    }
+  });
+
+  it('does not open TCP when fallback reservation fails after one UDP attempt', async () => {
+    const events = [];
+    let reservations = 0;
+    await assert.rejects(
+      () => probeDnsWireQuery(baseJob({
+        probe_profile: {
+          kind: 'dns_wire_query', dns_qtype: 'A', dns_transport: 'auto', max_requests: 2,
+        },
+      }), injectedResolutionDeps({
+        beforeProbeIoAttempt: () => {
+          reservations += 1;
+          events.push('reserve');
+          if (reservations === 2) {
+            throw Object.assign(new Error('cap exhausted'), {
+              code: 'signed_operation_budget_exceeded',
+            });
+          }
+        },
+        createSocket: () => {
+          events.push('io:udp');
+          return udpSocket({ response: { truncated: true } });
+        },
+        connectFn: () => {
+          events.push('io:tcp');
+          throw new Error('must not connect');
+        },
+      })),
+      (error) => error?.code === 'signed_operation_budget_exceeded',
+    );
+    assert.deepEqual(events, ['reserve', 'io:udp', 'reserve']);
   });
 });

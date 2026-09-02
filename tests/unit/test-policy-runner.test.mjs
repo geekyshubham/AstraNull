@@ -1,9 +1,11 @@
 import '../helpers/dev-data-dir.mjs';
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
   buildTestPolicyRunnerSummary,
+  loadTestPolicyRuntimeConfig,
   parseTestPolicyRunnerArgs,
   parseTestPolicyTenantIds,
   resolveTestPolicyRunnerConfig,
@@ -13,6 +15,31 @@ import {
 } from '../../scripts/test-policy-runner.mjs';
 
 const RUNTIME_CONFIG = { probeMode: 'signed-worker', probeWorkerSecret: 'configured-secret' };
+
+describe('test policy signed-worker secret validation', () => {
+  it('rejects known, patterned, and repeated material but accepts generated material', () => {
+    for (const [secret, error] of [
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString('hex'), 'hmac_secret_known_public'],
+      [Buffer.from(Array.from({ length: 32 }, (_, index) => index + 32)).toString('hex'), 'hmac_secret_patterned'],
+      ['q'.repeat(48), 'hmac_secret_low_entropy'],
+    ]) {
+      assert.throws(
+        () => loadTestPolicyRuntimeConfig({
+          NODE_ENV: 'test',
+          ASTRANULL_PROBE_MODE: 'signed-worker',
+          ASTRANULL_PROBE_WORKER_SECRET: secret,
+        }),
+        new RegExp(error),
+      );
+    }
+    const generated = randomBytes(32).toString('base64url');
+    assert.equal(loadTestPolicyRuntimeConfig({
+      NODE_ENV: 'test',
+      ASTRANULL_PROBE_MODE: 'signed-worker',
+      ASTRANULL_PROBE_WORKER_SECRET: generated,
+    }).probeWorkerSecret, generated);
+  });
+});
 
 describe('test policy operator runner', () => {
   it('parses bounded arguments and tenant files', () => {

@@ -9,7 +9,6 @@ import {
   LockKeyhole,
   ShieldCheck,
   Siren,
-  TrendingUp,
   TriangleAlert,
   UserRound,
   type LucideIcon
@@ -21,12 +20,12 @@ import {
   saveSession,
   sessionFromLoginResponse
 } from '../lib/api';
+import { publicApiErrorCode, publicApiErrorMessage } from '../lib/error-messages';
 import { PLATFORM_PROMISE, STAFF_LINKS } from '../lib/navigation';
 import type { PortalConfig } from '../lib/types';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Progress } from '../components/ui/progress';
 import { Select } from '../components/ui/select';
 import { BrandMark } from '../components/layout/brand';
 
@@ -131,12 +130,14 @@ function PublicAccessActions({
   return (
     <div className="public-actions">
       {signupEnabled ? (
-        <AnchorButton href="/signup">
-          Request access
-          {showArrowOnPrimary ? <ArrowRight size={15} aria-hidden="true" /> : null}
-        </AnchorButton>
-      ) : null}
-      <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
+        <>
+          <AnchorButton href="/signup">
+            Request access
+            {showArrowOnPrimary ? <ArrowRight size={15} aria-hidden="true" /> : null}
+          </AnchorButton>
+          <AnchorButton href={loginUrl} variant="secondary">Log in</AnchorButton>
+        </>
+      ) : <AnchorButton href={loginUrl}>Log in</AnchorButton>}
     </div>
   );
 }
@@ -157,11 +158,7 @@ function staffRoleLabel(slug: string) {
 function AuthRedirectPanel({ lead, help }: { lead: string; help?: string }) {
   return (
     <div className="success-panel" role="status" aria-live="polite" aria-busy="true">
-      <Progress value={38} tone="accent" size="sm" />
-      <div className="stack-tight" aria-hidden="true">
-        <span className="skeleton skeleton-text" />
-        <span className="skeleton skeleton-text" />
-      </div>
+      <span className="spinner" aria-hidden="true" />
       <p className="success-panel-lead">{lead}</p>
       {help ? <p className="auth-field-help">{help}</p> : null}
     </div>
@@ -232,6 +229,7 @@ function PublicShell({
   activeNav,
   loginHref = '/login',
   signupEnabled = true,
+  showAccountNav = true,
   showEyebrow = true
 }: {
   children: React.ReactNode;
@@ -239,23 +237,42 @@ function PublicShell({
   activeNav?: 'login' | 'signup';
   loginHref?: string;
   signupEnabled?: boolean;
+  showAccountNav?: boolean;
   showEyebrow?: boolean;
 }) {
+  const loginVariant = activeNav === 'login' || !signupEnabled ? 'default' : 'ghost';
   return (
     <div className="public-app">
+      <a className="skip-link" href="#public-main">Skip to main content</a>
       <header className="public-topnav">
         <div className="public-topnav-inner">
-          <a href="/" className="brand">
+          <a href="/" className="brand" aria-label="AstraNull home">
             <BrandMark />
             <span>AstraNull</span>
           </a>
           {showEyebrow && eyebrow ? <span className="public-topnav-eyebrow eyebrow">{eyebrow}</span> : null}
-          <nav className="public-topnav-actions" aria-label="Account access">
-            <AnchorButton href={loginHref} variant={activeNav === 'login' ? 'default' : 'ghost'} size="sm">Log in</AnchorButton>
-            {signupEnabled ? (
-              <AnchorButton href="/signup" variant={activeNav === 'login' ? 'secondary' : 'default'} size="sm">Request access</AnchorButton>
-            ) : null}
-          </nav>
+          {showAccountNav ? (
+            <nav className="public-topnav-actions" aria-label="Account access">
+              <AnchorButton
+                href={loginHref}
+                variant={loginVariant}
+                size="sm"
+                aria-current={activeNav === 'login' ? 'page' : undefined}
+              >
+                Log in
+              </AnchorButton>
+              {signupEnabled ? (
+                <AnchorButton
+                  href="/signup"
+                  variant={activeNav === 'login' ? 'secondary' : 'default'}
+                  size="sm"
+                  aria-current={activeNav === 'signup' ? 'page' : undefined}
+                >
+                  Request access
+                </AnchorButton>
+              ) : null}
+            </nav>
+          ) : <span className="public-topnav-actions" aria-hidden="true" />}
         </div>
       </header>
       {children}
@@ -275,7 +292,7 @@ function AuthPageLayout({
   wide?: boolean;
 }) {
   return (
-    <main className={`auth-page${wide ? ' auth-page--wide' : ''}`}>
+    <main id="public-main" className={`auth-page${wide ? ' auth-page--wide' : ''}`}>
       <aside className="auth-aside">{aside}</aside>
       <section className="auth-panel">
         {children}
@@ -305,194 +322,136 @@ function AuthCardHeader({
   );
 }
 
-const LANDING_PRINCIPLES = [
+type LandingEvidenceItem = {
+  label: string;
+  title: string;
+  body: string;
+  icon: LucideIcon;
+};
+
+const LANDING_BOUNDARIES: readonly LandingEvidenceItem[] = [
   {
-    title: 'No-access-first',
-    body: 'You declare the target groups you want validated. AstraNull never defaults to cloud access and never auto-discovers your IP inventory. Validation uses outside probes and inside agents you place. Nothing more.'
+    label: 'Scope',
+    title: 'Customer-declared targets.',
+    body: 'You choose the exact FQDNs, DNS zones, and TCP surfaces in scope. The core product does not perform automatic IP inventory discovery.',
+    icon: FileCheck2
   },
   {
-    title: 'Evidence over assumptions',
-    body: 'Every verdict is backed by correlated probe results and agent observations, written to an evidence vault you control. Readiness is a number you can defend in an incident review, not a green checkmark.'
+    label: 'Access',
+    title: 'No infrastructure keys by default.',
+    body: 'The no-access-first path requires no customer cloud credentials. Optional agents connect outbound and add corroborating origin evidence.',
+    icon: LockKeyhole
   },
   {
-    title: 'SOC-gated high-scale',
-    body: 'High-scale assessments are reviewed and executed by the AstraNull SOC after approval. Customers submit requests, never run floods themselves.'
+    label: 'Execution',
+    title: 'Bounded checks with an ownership gate.',
+    body: 'Safe validation is constrained to proven targets and bounded probe jobs. Missing evidence remains visible instead of being inferred.',
+    icon: ShieldCheck
+  },
+  {
+    label: 'Escalation',
+    title: 'High-scale remains governed.',
+    body: 'Customers request high-scale work. The SOC validates authorization, schedules execution, and retains the stop controls and audit trail.',
+    icon: Siren
   }
 ];
 
-const LANDING_FLOW = [
+const LANDING_PROOF: readonly LandingEvidenceItem[] = [
   {
-    step: '01',
-    title: 'Scope your target groups',
-    body: 'Register environments and target groups: the FQDNs, DNS zones, and TCP surfaces you want validated. Declare expected behavior so verdicts map to your real edge topology.'
+    label: '01 · Declaration',
+    title: 'Record the expected path.',
+    body: 'The target, environment, ownership state, and expected protected behavior establish what the validation is allowed to test.',
+    icon: FileCheck2
   },
   {
-    step: '02',
-    title: 'Place agents, run checks',
-    body: 'Install outbound-only agents and run the check catalog: origin-bypass, L3/L4, DNS, L7/API, and volumetric scenarios.'
+    label: '02 · Bounded probe',
+    title: 'Observe from outside.',
+    body: 'A signed, rate-bounded job records reachability and path metadata against the approved target instead of inventing a posture from configuration.',
+    icon: ShieldCheck
   },
   {
-    step: '03',
-    title: 'Correlate probe + agent',
-    body: 'Verdicts combine external probe reachability with internal agent path observation. Every result lands in the evidence vault, exportable for audits and incident reviews.'
+    label: '03 · Corroboration',
+    title: 'Add origin evidence when available.',
+    body: 'An optional outbound-only agent can report what the protected environment observed. If no agent is present, that absence stays explicit.',
+    icon: UserRound
   },
   {
-    step: '04',
-    title: 'Escalate through the SOC',
-    body: 'When you need high-scale validation, submit a request. The SOC reviews, schedules, and executes under a kill switch, with full custody and audit trail.'
+    label: '04 · Verdict and custody',
+    title: 'Explain the conclusion.',
+    body: 'The verdict points back to its evidence references and reason codes. Exports preserve custody metadata for review and audit.',
+    icon: CheckCircle2
   }
 ];
 
 const LANDING_COMPARE = [
-  ['Requires cloud credentials', 'No. Declared scope only.', 'Often', 'Yes, read/write'],
-  ['Default probe posture', 'Full validation spectrum', 'High-volume by default', 'Passive metrics only'],
-  ['Inside + outside correlation', 'Probes + placed agents', 'Outside only', 'Inside only'],
-  ['High-scale execution', 'SOC-gated after approval', 'Self-service', 'Not available'],
-  ['Exportable evidence trail', 'Evidence vault + custody', 'Run logs', 'Metric exports']
+  ['Scope source', 'Customer-declared targets', 'Operator-defined test target', 'Provider resource inventory'],
+  ['Cloud credentials', 'Not required by default', 'Depends on the test setup', 'Required for the provider account'],
+  ['Internal corroboration', 'Optional outbound-only agent', 'Not inherent', 'Provider telemetry'],
+  ['High-scale control', 'SOC approval and governed execution', 'Operator-owned', 'Provider-specific'],
+  ['Evidence model', 'Correlated evidence and custody references', 'Tool-specific run output', 'Provider metrics and logs']
 ];
 
 const LANDING_TRUST_ITEMS = [
-  { icon: Check, text: 'No cloud credentials required' },
-  { icon: Check, text: 'Volumetric and application-layer checks' },
-  { icon: Check, text: 'SOC-governed high-scale' },
-  { icon: Check, text: 'Evidence-backed verdicts' }
+  { icon: Check, text: 'Customer-declared scope' },
+  { icon: Check, text: 'No cloud credentials by default' },
+  { icon: Check, text: 'Ownership-gated safe checks' },
+  { icon: Check, text: 'SOC-gated high-scale' }
 ] as const;
 
-const LANDING_USE_CASES = [
-  {
-    quote: 'Regulated fintech that needs a defensible readiness number for audit, without granting a tool cloud credentials or letting it inventory production IPs.',
-    attr: 'Platform & security leads. Declared-scope validation and evidence they can hand to an auditor.'
-  },
-  {
-    quote: 'High-traffic media & CDN teams that want real high-scale assurance, but only under governance. No self-service floods pointed at production.',
-    attr: 'SRE & edge owners. SOC-governed high-scale plus customer-runnable validation across the catalog.'
-  }
-];
-
-function ReadinessConsolePreview() {
-  const verdicts: { id: string; kind: string; state: string; tone: BadgeTone }[] = [
-    { id: 'chk_origin_bypass', kind: 'Origin-bypass', state: 'Pass', tone: 'success' },
-    { id: 'chk_dns_shadow', kind: 'DNS', state: 'Review', tone: 'warn' },
-    { id: 'chk_l7_rate', kind: 'L7 / API', state: 'Gap', tone: 'danger' },
-    { id: 'chk_l3_l4', kind: 'L3 / L4', state: 'Pass', tone: 'success' }
-  ];
-  const readiness = 82;
-  const circumference = 2 * Math.PI * 53;
-  const dashOffset = circumference * (1 - readiness / 100);
+function PublicEvidenceList({ items }: { items: readonly LandingEvidenceItem[] }) {
   return (
-    <aside className="public-card" aria-label="AstraNull readiness console preview" style={{ gap: 'var(--space-4)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-        <span aria-hidden="true" style={{ display: 'inline-flex', gap: '6px' }}>
-          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
-          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
-          <i style={{ width: '9px', height: '9px', borderRadius: 'var(--radius-pill)', background: 'var(--border-strong)' }} />
-        </span>
-        <span className="muted" style={{ fontSize: 'var(--text-xs)' }}>
-          tenant · <b style={{ color: 'var(--fg)' }}>acme-prod</b>
-        </span>
-      </div>
-      <div className="public-preview-body" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 'var(--space-5)', alignItems: 'center' }}>
-        <div style={{ position: 'relative', width: '120px', height: '120px', display: 'grid', placeItems: 'center' }}>
-          <svg viewBox="0 0 120 120" width="120" height="120" aria-hidden="true" style={{ transform: 'rotate(-90deg)' }}>
-            <circle cx="60" cy="60" r="53" fill="none" stroke="var(--border)" strokeWidth="8" />
-            <circle
-              cx="60"
-              cy="60"
-              r="53"
-              fill="none"
-              stroke="var(--accent)"
-              strokeWidth="8"
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              strokeDashoffset={dashOffset}
-            />
-          </svg>
-            <div className="public-preview-gauge-center">
-            <div className="public-preview-score">{readiness}</div>
-            <div className="public-preview-label muted">Readiness</div>
-            <div className="public-preview-delta">
-              <TrendingUp size={12} aria-hidden="true" />
-              <span>+6</span>
-              <span className="public-preview-delta-sub">vs last cycle</span>
-            </div>
+    <ol className="auth-points">
+      {items.map(({ label, title, body, icon: Icon }) => (
+        <li key={label}>
+          <Icon size={16} aria-hidden="true" />
+          <span>
+            <span className="check-fact-label">{label}</span>
+            <strong>{title}</strong> {body}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function ValidationContractPreview() {
+  return (
+    <aside id="boundaries" aria-labelledby="validation-contract-title">
+      <Card className="auth-card">
+        <CardHeader className="auth-card-header">
+          <Badge tone="muted">No-access-first</Badge>
+          <div className="auth-card-heading">
+            <CardTitle id="validation-contract-title">Validation contract</CardTitle>
+            <CardDescription>What AstraNull requires, observes, and refuses to assume.</CardDescription>
           </div>
-        </div>
-        <div className="public-preview-verdicts" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {verdicts.map((verdict) => (
-            <div className="public-preview-row" key={verdict.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--fg)' }}>{verdict.id}</span>
-              <span className="muted" style={{ fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>{verdict.kind}</span>
-              <Badge tone={verdict.tone}>{verdict.state}</Badge>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)', borderTop: '1px solid var(--border)', paddingTop: 'var(--space-3)' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--fg-2)' }}>
-          <ShieldCheck size={12} aria-hidden="true" style={{ color: 'var(--success)' }} />
-          custody · json-key-sorted-v1
-        </span>
-        <span className="mono muted">sha256:9f2a…c41e</span>
-        <span className="muted" style={{ marginLeft: 'auto' }}>evidence vault · 1,284 artifacts</span>
-      </div>
+        </CardHeader>
+        <CardContent className="stack">
+          <PublicEvidenceList items={LANDING_BOUNDARIES} />
+          <div className="callout info">
+            <ShieldCheck size={18} aria-hidden="true" />
+            <p>Default validation is bounded and defensive. It does not expose self-service attack tooling or unmanaged traffic generation.</p>
+          </div>
+        </CardContent>
+      </Card>
     </aside>
   );
 }
 
 function ProofChainSection() {
-  const nodes: { label: string; title: string; body: string; src: string[] }[] = [
-    {
-      label: 'Outside probe',
-      title: 'Origin reached directly under load.',
-      body: 'A 12k RPS origin-bypass request reached the origin at 47 ms; the scrubber tier was bypassed at the second hop.',
-      src: ['probe · probe-eu-west-2', '12k RPS · origin-bypass']
-    },
-    {
-      label: 'Inside agent',
-      title: 'Agent saw the direct-to-origin path.',
-      body: 'The outbound-only agent agt_edge_01 observed a direct TCP handshake to the origin, bypassing the declared WAF pool. The agent path agrees with the probe.',
-      src: ['agent · agt_edge_01', 'heartbeat · healthy · v1.4.2']
-    },
-    {
-      label: 'Correlated verdict',
-      title: 'Origin exposed under load → Gap.',
-      body: 'Probe and agent agree the origin is reachable behind the declared edge. Verdict: Gap, severity S2, owner edge-sre. Retest opens automatically on the next scheduled window.',
-      src: ['custody · json-key-sorted-v1', 'sha256 4c1b…e7a9 · signed']
-    }
-  ];
   return (
-    <section className="public-section" id="proof">
-      <h2>Every verdict traces back to observed data.</h2>
-      <p className="public-section-lead">A readiness verdict in AstraNull is never a green checkmark. It is an outside probe correlated with an inside agent observation, sealed with a custody digest you can hand to an auditor.</p>
-      <div className="public-card" style={{ gap: 'var(--space-5)' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
-          <span className="mono" style={{ color: 'var(--fg)' }}>chk_l7_rate</span>
-          <Badge tone="danger">Gap · Severity S2</Badge>
-          <span className="muted" style={{ marginLeft: 'auto' }}>run run_8f3c… · sealed with custody digest</span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 'var(--space-4)' }}>
-          {nodes.map((node) => (
-            <article
-              key={node.label}
-              style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--proof-surface)', padding: 'var(--space-4)' }}
-            >
-              <span className="eyebrow" style={{ color: 'var(--accent)' }}>{node.label}</span>
-              <h3 style={{ margin: 0, fontSize: 'var(--text-base)', color: 'var(--fg)' }}>{node.title}</h3>
-              <p className="muted" style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{node.body}</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: 'auto', paddingTop: 'var(--space-2)' }}>
-                {node.src.map((line) => (
-                  <span key={line} className="mono muted" style={{ fontSize: 'var(--text-xs)' }}>{line}</span>
-                ))}
-              </div>
-            </article>
-          ))}
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)', borderTop: '1px solid var(--border)', paddingTop: 'var(--space-3)' }}>
-          <Badge tone="muted">Evidence bundle</Badge>
-          <span className="muted">3 artifacts · probe-result.json · agent-observation.json · verdict.json</span>
-          <span className="muted" style={{ marginLeft: 'auto' }}>Exportable to the evidence vault for audit</span>
-        </div>
-      </div>
+    <section className="public-section public-section--spaced" id="proof" aria-labelledby="proof-heading">
+      <p className="eyebrow">Evidence before verdict</p>
+      <h2 id="proof-heading">A conclusion should show its chain of proof.</h2>
+      <p className="public-section-lead">AstraNull starts with declared scope, records bounded observations, and keeps uncertainty explicit. A verdict is the end of that chain, not a substitute for it.</p>
+      <Card className="auth-card">
+        <CardContent className="stack">
+          <PublicEvidenceList items={LANDING_PROOF} />
+          <div className="callout info">
+            <FileCheck2 size={18} aria-hidden="true" />
+            <p>Evidence references, reason codes, and custody metadata travel with the result so reviewers can inspect what supports it.</p>
+          </div>
+        </CardContent>
+      </Card>
     </section>
   );
 }
@@ -509,17 +468,12 @@ export function PublicLandingPage({ config }: PublicPageProps) {
 
   return (
     <PublicShell loginHref={loginUrl} signupEnabled={signupEnabled}>
-      <main className="public-wrap">
-        <a className="skip-link" href="#how">Skip to how it works</a>
-        <section className="public-hero">
+      <main id="public-main" className="public-wrap">
+        <section className="public-section">
           <div className="public-hero-grid">
             <div>
-              <p className="eyebrow">DDoS readiness validation</p>
-              <h1>
-                Prove DDoS readiness{' '}
-                <span style={{ color: 'var(--accent)' }}>without handing over</span>{' '}
-                your cloud keys.
-              </h1>
+              <p className="eyebrow">No-access-first DDoS readiness validation</p>
+              <h1 className="auth-title">Prove DDoS readiness without handing over your cloud keys.</h1>
               <p className="public-hero-lead">{promise}</p>
               <div className="public-actions">
                 {signupEnabled ? (
@@ -530,7 +484,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 ) : (
                   <AnchorButton href={loginUrl}>Log in</AnchorButton>
                 )}
-                <AnchorButton href="#how" variant="ghost">See how it works</AnchorButton>
+                <AnchorButton href="#proof" variant="ghost">See the proof chain</AnchorButton>
               </div>
               <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
                 {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
@@ -541,42 +495,15 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 ))}
               </div>
             </div>
-            <ReadinessConsolePreview />
-          </div>
-        </section>
-
-        <section className="public-section" id="principles">
-          <h2>A defensive readiness platform, not self-service attack tooling.</h2>
-          <p className="public-section-lead">Three commitments shape every screen, every probe, every verdict in AstraNull.</p>
-          <div className="public-pillars">
-            {LANDING_PRINCIPLES.map((pillar) => (
-              <article className="public-pillar" key={pillar.title}>
-                <h3>{pillar.title}</h3>
-                <p>{pillar.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="public-section public-section--spaced" id="how">
-          <p className="eyebrow">How it works</p>
-          <h2>Declare. Validate. Evidence. Govern.</h2>
-          <p className="public-section-lead">Four stages that turn a declared scope into a defensible readiness posture.</p>
-          <div className="public-flow">
-            {LANDING_FLOW.map((item) => (
-              <article className="public-flow-step" key={item.step}>
-                <p className="public-flow-tag">{item.step}</p>
-                <h3>{item.title}</h3>
-                <p>{item.body}</p>
-              </article>
-            ))}
+            <ValidationContractPreview />
           </div>
         </section>
 
         <ProofChainSection />
 
         <section className="public-section public-section--compare" id="compare">
-          <h2>Built for teams that can&apos;t hand over the keys.</h2>
+          <h2>Compare the operating model, not a marketing score.</h2>
+          <p className="public-section-lead">The distinction is where scope comes from, what access is required, who controls high-scale work, and what evidence remains after the run.</p>
           <div
             className="public-compare table-wrap"
             tabIndex={0}
@@ -586,7 +513,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
             <table>
               <thead>
                 <tr>
-                  <th scope="col" />
+                  <th scope="col"><span className="sr-only">Capability</span></th>
                   <th scope="col">AstraNull</th>
                   <th scope="col">Self-run load tests</th>
                   <th scope="col">Provider DDoS dashboards</th>
@@ -606,34 +533,20 @@ export function PublicLandingPage({ config }: PublicPageProps) {
           </div>
         </section>
 
-        <section className="public-section">
-          <h2>Where the no-access model matters most.</h2>
-          <p className="public-section-lead">Two profiles that keep hitting the wall between &ldquo;prove the edge holds&rdquo; and &ldquo;don&apos;t hand a validation tool our cloud keys.&rdquo;</p>
-          <div className="public-quotes">
-            {LANDING_USE_CASES.map((item) => (
-              <article className="public-quote" key={item.attr}>
-                <blockquote>{item.quote}</blockquote>
-                <p>{item.attr}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
         <section className="public-cta-final">
-          <h2>Prove your edge holds. Before an attacker does it for you.</h2>
-          <p>Request access. We&apos;ll review your account and stand up a tenant with the full customer portal.</p>
+          <h2>Start with the scope you need to prove.</h2>
+          <p>Request reviewed access, or return to an existing customer workspace.</p>
           <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} />
         </section>
 
         <footer className="public-footer">
-          <span>© {productName} · DDoS readiness validation. Defensive platform only.</span>
+          <span>© {productName} · Defensive DDoS readiness validation.</span>
           <nav aria-label="Public footer">
             <a href={loginUrl}>Log in</a>
             {signupEnabled ? <a href="/signup">Request access</a> : null}
             <a href="/signup-status">Request status</a>
-            <a href={config.staffLoginPath}>Staff sign-in</a>
-            <a href="#principles">Principles</a>
-            <a href="#how">How it works</a>
+            <a href="#boundaries">Boundaries</a>
+            <a href="#proof">Proof chain</a>
             <a href="#compare">Compare</a>
           </nav>
         </footer>
@@ -656,7 +569,7 @@ function retryAfterLabel(json: Record<string, unknown>, response: Response) {
 /**
  * Human copy for the credential lane's documented failures (see docs/api.md).
  *
- * `invalid_credentials` stays deliberately vague — the server returns the same
+ * `invalid_credentials` stays deliberately vague: the server returns the same
  * response for an unknown email and a wrong password so the form cannot be used
  * to enumerate accounts, and saying more here would undo that.
  */
@@ -675,14 +588,14 @@ function passwordLoginErrorMessage(response: Response, code: string, json: Recor
     case 'account_disabled':
       return 'This account is disabled. Contact your AstraNull administrator.';
     case 'account_locked':
-      return `Too many failed attempts. This account is temporarily locked — try again ${retryAfterLabel(json, response)}.`;
+      return `Too many failed attempts. This account is temporarily locked; try again ${retryAfterLabel(json, response)}.`;
     case 'rate_limited':
       return `Too many sign-in attempts. Try again ${retryAfterLabel(json, response)}.`;
     case 'password_login_disabled':
     case 'password_login_unavailable':
       return 'Password sign-in is not available on this deployment. Contact your administrator for a login link.';
     default:
-      return String(json.message ?? code ?? 'Login failed.');
+      return publicApiErrorMessage(response.status, json, 'Login failed. Check your details and try again.');
   }
 }
 
@@ -701,15 +614,20 @@ function passwordPolicyMessages(failures: unknown): string[] {
   return failures.map((code) => PASSWORD_POLICY_LABELS[String(code)] ?? String(code));
 }
 
-function passwordResetFlowRequested() {
-  if (typeof window === 'undefined') return false;
-  return new URLSearchParams(window.location.search).get('flow') === 'password-reset';
+type LoginFlow = 'sign-in' | 'request-password-reset' | 'password-reset';
+
+function resolveLoginFlow(): LoginFlow {
+  if (typeof window === 'undefined') return 'sign-in';
+  const flow = new URLSearchParams(window.location.search).get('flow');
+  if (flow === 'request-password-reset' || flow === 'password-reset') return flow;
+  return 'sign-in';
 }
 
 export function LoginPage(props: PublicPageProps) {
-  return passwordResetFlowRequested()
-    ? <ResetPasswordPage {...props} />
-    : <CredentialLoginPage {...props} />;
+  const flow = resolveLoginFlow();
+  if (flow === 'request-password-reset') return <RequestPasswordResetPage {...props} />;
+  if (flow === 'password-reset') return <ResetPasswordPage {...props} />;
+  return <CredentialLoginPage {...props} />;
 }
 
 function CredentialLoginPage({ config }: PublicPageProps) {
@@ -740,6 +658,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   const stagingLane = isDevHeaders || (config.bundledLoginEnabled && !idpRedirect);
   const showStagingRolePicker = stagingLane && (!passwordLane || stagingBypass);
   const loginDisabled = isOidc && !passwordLane && !config.bundledLoginEnabled && !idpRedirect;
+  const signupEnabled = config.siteConfig.signup_enabled !== false;
 
   useEffect(() => {
     const existing = loadSession();
@@ -792,7 +711,13 @@ function CredentialLoginPage({ config }: PublicPageProps) {
       })
     });
     const json = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(String(json.message ?? json.error ?? 'Login failed.'));
+    if (!response.ok) {
+      throw new Error(publicApiErrorMessage(
+        response.status,
+        json,
+        'Login failed. Check the selected staging identity and try again.'
+      ));
+    }
     saveSession(sessionFromLoginResponse(json as Record<string, unknown>));
     window.location.href = config.portalPath;
   }
@@ -812,7 +737,7 @@ function CredentialLoginPage({ config }: PublicPageProps) {
     const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 
     if (!response.ok) {
-      const code = String(json.error ?? '');
+      const code = publicApiErrorCode(response.status, json);
       setErrorCode(code);
       if (code === 'tenant_required') setTenantRequired(true);
       if (code === 'mfa_required' || code === 'mfa_invalid') {
@@ -860,20 +785,20 @@ function CredentialLoginPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false}>
+    <PublicShell activeNav="login" showEyebrow={false} signupEnabled={signupEnabled}>
       <AuthPageLayout
         aside={(
           <>
-            <h1 className="auth-title">Log in to your readiness console.</h1>
+            <h1 className="auth-title">Sign in to your readiness workspace.</h1>
             <p className="auth-lead">
               {isDevHeaders
                 ? 'Local developer validation uses tenant headers to preview RBAC without a password.'
-                : 'Review declared targets, agent heartbeats, validation runs, and SOC-governed high-scale intake from one tenant-scoped surface.'}
+                : 'Return to declared targets, agent observations, validation evidence, and governed high-scale requests in one tenant-scoped workspace.'}
             </p>
             <AuthAsidePoints
               items={[
                 { icon: ShieldCheck, text: 'Evidence-backed verdicts tied to observed probe data' },
-                { icon: LockKeyhole, text: 'No default cloud credentials required' },
+                { icon: LockKeyhole, text: 'No cloud credentials required in the default path' },
                 { icon: FileCheck2, text: 'Audit-ready exports and custody references' }
               ]}
             />
@@ -881,16 +806,16 @@ function CredentialLoginPage({ config }: PublicPageProps) {
         )}
         footer={(
           <p>
-            Need an account? <a href="/signup">Request access</a>
-            {' · '}
+            {signupEnabled ? <>Need an account? <a href="/signup">Request access</a>{' · '}</> : null}
             <a href="/signup-status">Check request status</a>
+            {passwordLane ? <>{' · '}<a href="/login?flow=request-password-reset">Forgot password?</a></> : null}
           </p>
         )}
       >
         <Card className="auth-card">
           <AuthCardHeader
             badge={<Badge tone="info">Customer portal</Badge>}
-            title="Log in to AstraNull"
+            title="Customer sign-in"
             description={cardDescription}
           />
           <CardContent>
@@ -936,15 +861,17 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                           maxLength={200}
                           disabled={loginDisabled}
                         />
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           className="auth-password-toggle"
                           onClick={() => setShowPassword((current) => !current)}
                           aria-pressed={showPassword}
                         >
                           {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                           <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
-                        </button>
+                        </Button>
                       </span>
                     </label>
                     {tenantRequired ? (
@@ -1026,9 +953,11 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                   <Button type="submit" loading={loading} disabled={loginDisabled}>
                     {mfaRequired ? 'Verify and continue' : 'Continue to portal'}
                   </Button>
-                  <Button type="button" variant="secondary" disabled={loginDisabled} onClick={() => enterDemoPortal(config.portalPath)}>
-                    Try demo
-                  </Button>
+                  {config.authMode === 'dev-headers' ? (
+                    <Button type="button" variant="secondary" disabled={loginDisabled} onClick={() => enterDemoPortal(config.portalPath)}>
+                      Try demo
+                    </Button>
+                  ) : null}
                 </div>
                 {passwordLane && stagingLane ? (
                   <details
@@ -1045,6 +974,121 @@ function CredentialLoginPage({ config }: PublicPageProps) {
                     </p>
                   </details>
                 ) : null}
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </AuthPageLayout>
+    </PublicShell>
+  );
+}
+
+/** Initiate password recovery without revealing account or delivery state. */
+function RequestPasswordResetPage({ config }: PublicPageProps) {
+  usePageMeta({ title: 'Request password recovery · AstraNull', robots: 'noindex, nofollow' });
+
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError('');
+    setSubmitted(false);
+    setLoading(true);
+    try {
+      const response = await fetch('/v1/auth/request-password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ email: email.trim() })
+      });
+      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        const code = publicApiErrorCode(response.status, json);
+        if (code === 'password_login_disabled' || code === 'password_login_unavailable') {
+          throw new Error('Password recovery is not available on this deployment. Contact your administrator for the configured sign-in path.');
+        }
+        if (code === 'validation_failed') throw new Error('Enter a valid work email.');
+        if (code === 'rate_limited') throw new Error(`Too many recovery requests. Try again ${retryAfterLabel(json, response)}.`);
+        throw new Error(publicApiErrorMessage(
+          response.status,
+          json,
+          'The recovery request could not be submitted. Try again.'
+        ));
+      }
+      setEmail('');
+      setSubmitted(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The recovery request could not be submitted. Try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
+      <AuthPageLayout
+        aside={(
+          <>
+            <h1 className="auth-title">Request password recovery.</h1>
+            <p className="auth-lead">Enter your work email. The response remains the same whether an eligible account exists or recovery delivery is available.</p>
+            <AuthAsidePoints
+              items={[
+                { icon: LockKeyhole, text: 'Account existence is never disclosed' },
+                { icon: ShieldCheck, text: 'Issued recovery tokens are one-time and time-limited' },
+                { icon: FileCheck2, text: 'A successful reset revokes prior password sessions' }
+              ]}
+            />
+          </>
+        )}
+        footer={(
+          <p>
+            <a href={config.loginUrl}>Back to log in</a>
+            {' · '}
+            <a href="/login?flow=password-reset">Already have a recovery token?</a>
+          </p>
+        )}
+      >
+        <Card className="auth-card">
+          <AuthCardHeader
+            badge={<Badge tone="info">Password recovery</Badge>}
+            title="Request recovery instructions"
+            description="Submit a work email without revealing account or delivery state."
+          />
+          <CardContent>
+            {submitted ? (
+              <div className="success-panel" role="status" aria-live="polite">
+                <div className="callout info">
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                  <p className="success-panel-lead">If an account is eligible and recovery delivery is configured and succeeds, instructions may arrive. This response confirms neither condition.</p>
+                </div>
+                <div className="auth-form-actions row-actions">
+                  <Button type="button" variant="secondary" onClick={() => setSubmitted(false)}>Submit another email</Button>
+                  <AnchorButton href={config.loginUrl}>Back to log in</AnchorButton>
+                </div>
+              </div>
+            ) : (
+              <form className="auth-form" onSubmit={submit} aria-busy={loading}>
+                <label htmlFor="password-reset-email">
+                  <span>Work email</span>
+                  <input
+                    id="password-reset-email"
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    required
+                    disabled={loading}
+                  />
+                </label>
+                {error ? <div className="form-error" role="alert"><p>{error}</p></div> : null}
+                <div className="auth-form-actions row-actions">
+                  <Button type="submit" loading={loading}>Request recovery instructions</Button>
+                  <AnchorButton href={config.loginUrl} variant="secondary">Back to log in</AnchorButton>
+                </div>
               </form>
             )}
           </CardContent>
@@ -1108,7 +1152,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
       });
       const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) {
-        const code = String(json.error ?? '');
+        const code = publicApiErrorCode(response.status, json);
         if (code === 'weak_password') {
           setPolicyFailures(passwordPolicyMessages(json.failures));
           throw new Error('That password does not meet the password policy.');
@@ -1121,15 +1165,19 @@ function ResetPasswordPage({ config }: PublicPageProps) {
             : 'That authenticator code could not be verified. Enter the current 6-digit code.');
         }
         if (code === 'invalid_reset_token') {
-          throw new Error('This password recovery link is invalid or has already been used. Request a new link.');
+          throw new Error('This password recovery token is invalid or has already been used. Request password recovery again.');
         }
         if (code === 'reset_token_expired') {
-          throw new Error('This password recovery link has expired. Request a new link.');
+          throw new Error('This password recovery token has expired. Request password recovery again.');
         }
         if (code === 'rate_limited') {
           throw new Error(`Too many attempts. Try again ${retryAfterLabel(json, response)}.`);
         }
-        throw new Error(String(json.message ?? code ?? 'Could not reset the password.'));
+        throw new Error(publicApiErrorMessage(
+          response.status,
+          json,
+          'Could not reset the password. Check the recovery details and try again.'
+        ));
       }
       setPassword('');
       setConfirm('');
@@ -1145,14 +1193,14 @@ function ResetPasswordPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl}>
+    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthPageLayout
         aside={(
           <>
-            <h1 className="auth-title">Recover your account securely.</h1>
+            <h1 className="auth-title">Choose a new account password.</h1>
             <p className="auth-lead">
-              Use the one-time recovery link sent to your work email. A completed reset revokes
-              outstanding recovery links, invitations, and existing password sessions.
+              Use a valid one-time recovery token. A completed reset revokes outstanding recovery
+              tokens, invitations, and existing password sessions.
             </p>
             <AuthAsidePoints
               items={[
@@ -1163,7 +1211,13 @@ function ResetPasswordPage({ config }: PublicPageProps) {
             />
           </>
         )}
-        footer={<p><a href={config.loginUrl}>Back to log in</a></p>}
+        footer={(
+          <p>
+            <a href={config.loginUrl}>Back to log in</a>
+            {' · '}
+            <a href="/login?flow=request-password-reset">Request password recovery</a>
+          </p>
+        )}
       >
         <Card className="auth-card">
           <AuthCardHeader
@@ -1171,7 +1225,7 @@ function ResetPasswordPage({ config }: PublicPageProps) {
             title={done ? 'Password reset' : 'Choose a new password'}
             description={done
               ? 'Your password has been changed and prior password sessions have been revoked.'
-              : 'Enter the recovery token from your email and choose a password of at least 12 characters.'}
+              : 'Enter the recovery token issued for this request and choose a password of at least 12 characters.'}
           />
           <CardContent>
             {done ? (
@@ -1219,15 +1273,17 @@ function ResetPasswordPage({ config }: PublicPageProps) {
                       disabled={loading}
                       aria-describedby="reset-password-policy"
                     />
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       className="auth-password-toggle"
                       onClick={() => setShowPassword((current) => !current)}
                       aria-pressed={showPassword}
                     >
                       {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                       <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
-                    </button>
+                    </Button>
                   </span>
                   <span className="auth-field-help" id="reset-password-policy">
                     At least 12 characters, mixing at least three of: lowercase, uppercase, digits, symbols.
@@ -1341,7 +1397,7 @@ export function SetPasswordPage({ config }: PublicPageProps) {
       });
       const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) {
-        const code = String(json.error ?? '');
+        const code = publicApiErrorCode(response.status, json);
         if (code === 'weak_password') {
           setPolicyFailures(passwordPolicyMessages(json.failures));
           throw new Error('That password does not meet the password policy.');
@@ -1355,7 +1411,11 @@ export function SetPasswordPage({ config }: PublicPageProps) {
         if (code === 'rate_limited') {
           throw new Error(`Too many attempts. Try again ${retryAfterLabel(json, response)}.`);
         }
-        throw new Error(String(json.message ?? code ?? 'Could not set the password.'));
+        throw new Error(publicApiErrorMessage(
+          response.status,
+          json,
+          'Could not set the password. Check the invitation details and try again.'
+        ));
       }
       setPassword('');
       setConfirm('');
@@ -1369,14 +1429,14 @@ export function SetPasswordPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl}>
+    <PublicShell activeNav="login" showEyebrow={false} loginHref={config.loginUrl} signupEnabled={config.siteConfig.signup_enabled !== false}>
       <AuthPageLayout
         aside={(
           <>
             <h1 className="auth-title">Set your account password.</h1>
             <p className="auth-lead">
-              Your administrator issued a one-time invitation for this account. Setting a password
-              activates it and closes the invitation — it cannot be reused.
+              A one-time invitation authorizes password setup for this account. Setting a password
+              activates the account and closes the invitation; it cannot be reused.
             </p>
             <AuthAsidePoints
               items={[
@@ -1395,7 +1455,7 @@ export function SetPasswordPage({ config }: PublicPageProps) {
             title={done ? 'Password set' : 'Set your password'}
             description={done
               ? 'The account is active. Sign in with your work email and the password you just chose.'
-              : 'Paste the invitation token you were given, then choose a password of at least 12 characters.'}
+              : 'Enter the invitation token provided to you, then choose a password of at least 12 characters.'}
           />
           <CardContent>
             {done ? (
@@ -1441,15 +1501,17 @@ export function SetPasswordPage({ config }: PublicPageProps) {
                       disabled={loading}
                       aria-describedby="set-password-policy"
                     />
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       className="auth-password-toggle"
                       onClick={() => setShowPassword((current) => !current)}
                       aria-pressed={showPassword}
                     >
                       {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                       <span className="sr-only">{showPassword ? 'Hide password' : 'Show password'}</span>
-                    </button>
+                    </Button>
                   </span>
                   <span className="auth-field-help" id="set-password-policy">
                     At least 12 characters, mixing at least three of: lowercase, uppercase, digits, symbols.
@@ -1561,7 +1623,7 @@ const STAFF_STAGING_ROLES = [
 ] as const;
 
 function signupSubmitErrorMessage(status: number, json: Record<string, unknown>) {
-  const code = String(json.error ?? '');
+  const code = publicApiErrorCode(status, json);
   if (status === 429 || code === 'rate_limited') {
     return 'Too many sign-up attempts. Please try again later.';
   }
@@ -1574,7 +1636,7 @@ function signupSubmitErrorMessage(status: number, json: Record<string, unknown>)
   if (code === 'validation_failed') {
     return 'Could not submit request. Check required fields and try again.';
   }
-  return String(json.message ?? json.error ?? 'Could not submit request.');
+  return publicApiErrorMessage(status, json, 'Could not submit request. Try again.');
 }
 
 export function SignupPage({ config }: PublicPageProps) {
@@ -1660,7 +1722,7 @@ export function SignupPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell activeNav="signup" showEyebrow={false}>
+    <PublicShell activeNav="signup" showEyebrow={false} signupEnabled={signupEnabled}>
       <AuthPageLayout
         wide
         aside={(
@@ -1669,7 +1731,7 @@ export function SignupPage({ config }: PublicPageProps) {
             <p className="auth-lead">Provisioning is review-gated. Operations validates organization details, intended use, and plan fit before creating a tenant workspace.</p>
             <AuthAsidePoints
               items={[
-                { icon: ShieldCheck, text: 'Validation is available immediately after approval' },
+                { icon: ShieldCheck, text: 'Approved requests move to provisioning before access begins' },
                 { icon: Siren, text: 'High-scale programs stay SOC-scheduled and pack-gated' },
                 { icon: UserRound, text: 'Track request status any time with your request ID' }
               ]}
@@ -1688,7 +1750,7 @@ export function SignupPage({ config }: PublicPageProps) {
           <AuthCardHeader
             badge={<Badge tone="info">Reviewed access</Badge>}
             title={submitted ? 'Request submitted' : 'Request an AstraNull account'}
-            description="Account creation is reviewed before provisioning a tenant. Save your request ID to check status any time."
+            description="Account creation is reviewed before tenant provisioning. Save the request ID shown after submission."
           />
           <CardContent>
             {!signupEnabled ? (
@@ -1715,20 +1777,17 @@ export function SignupPage({ config }: PublicPageProps) {
                 </div>
                 <SignupRequestSummary record={submitted} organizationFallback="Recorded" showPlanBadgeWhenMissing statusFallback="submitted" />
                 <div className="auth-form-actions row-actions">
-                  <AnchorButton
-                    href={`/signup-status?id=${encodeURIComponent(String(submitted.id ?? ''))}`}
-                    variant="secondary"
-                  >
+                  <AnchorButton href={`/signup-status?id=${encodeURIComponent(String(submitted.id ?? ''))}`}>
                     Check status
                   </AnchorButton>
-                  <AnchorButton href="/">Back to landing</AnchorButton>
+                  <AnchorButton href="/" variant="secondary">Back to landing</AnchorButton>
                 </div>
               </div>
             ) : (
               <form className="auth-form auth-form--grid" onSubmit={submit} aria-busy={loading}>
-                <label htmlFor="signup-organization"><span>Organization</span><input id="signup-organization" name="organization_name" required placeholder="Acme Corp" autoComplete="organization" disabled={loading} /></label>
-                <label htmlFor="signup-contact"><span>Contact name</span><input id="signup-contact" name="contact_name" required placeholder="Jordan Lee" autoComplete="name" disabled={loading} /></label>
-                <label className="auth-field-full" htmlFor="signup-email"><span>Contact email</span><input id="signup-email" name="contact_email" type="email" required placeholder="you@company.com" autoComplete="email" disabled={loading} /></label>
+                <label htmlFor="signup-organization"><span>Organization</span><input id="signup-organization" name="organization_name" required placeholder="Organization name" autoComplete="organization" disabled={loading} /></label>
+                <label htmlFor="signup-contact"><span>Contact name</span><input id="signup-contact" name="contact_name" required placeholder="Full name" autoComplete="name" disabled={loading} /></label>
+                <label className="auth-field-full" htmlFor="signup-email"><span>Contact email</span><input id="signup-email" name="contact_email" type="email" required placeholder="name@company.com" autoComplete="email" disabled={loading} /></label>
                 <Select
                   label="Requested plan"
                   name="requested_plan"
@@ -1746,11 +1805,13 @@ export function SignupPage({ config }: PublicPageProps) {
                   disabled={loading}
                 />
                 <label className="auth-field-full" htmlFor="signup-intended-use"><span>Intended use</span><textarea id="signup-intended-use" name="intended_use" required rows={4} placeholder="Defensive readiness for declared production origins." disabled={loading} /></label>
-                <label className="auth-field-full auth-check-row" htmlFor="signup-high-scale"><input id="signup-high-scale" name="high_scale_interest" type="checkbox" disabled={loading} /><span>Interested in governed high-scale rehearsal programs.</span></label>
+                <label className="auth-field-full auth-check-row" htmlFor="signup-high-scale"><input id="signup-high-scale" name="high_scale_interest" type="checkbox" disabled={loading} /><span>Request a conversation about governed high-scale rehearsal programs. Approval and execution remain separate.</span></label>
                 {error ? <p className="form-error auth-field-full" role="alert">{error}</p> : null}
                 <div className="auth-form-actions auth-field-full row-actions">
                   <Button type="submit" loading={loading}>Submit request</Button>
-                  <Button type="button" variant="secondary" onClick={() => enterDemoPortal(config.portalPath)}>Try demo</Button>
+                  {config.authMode === 'dev-headers' ? (
+                    <Button type="button" variant="secondary" onClick={() => enterDemoPortal(config.portalPath)}>Try demo</Button>
+                  ) : null}
                 </div>
               </form>
             )}
@@ -1785,8 +1846,18 @@ export function SignupStatusPage() {
       const response = await fetch(`/v1/signup-requests/${encodeURIComponent(trimmed)}`, {
         headers: { accept: 'application/json' }
       });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(String(json.message ?? json.error ?? 'Request status was not found.'));
+      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!response.ok) {
+        const code = publicApiErrorCode(response.status, json);
+        if (response.status === 429 || code === 'rate_limited') {
+          throw new Error(`Too many status lookups. Try again ${retryAfterLabel(json, response)}.`);
+        }
+        throw new Error(publicApiErrorMessage(
+          response.status,
+          json,
+          'Request status was not found. Check the request ID and try again.'
+        ));
+      }
       setResult((json.request ?? json) as Record<string, unknown>);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request status was not found.');
@@ -1808,18 +1879,17 @@ export function SignupStatusPage() {
   }
 
   return (
-    <PublicShell eyebrow="Request status lookup">
+    <PublicShell showEyebrow={false} signupEnabled={false}>
       <AuthPageLayout
         aside={(
           <>
-            <h1 className="auth-title">Check your access request.</h1>
-            <p className="auth-lead">Track your account request. You&apos;ll find the request ID in the confirmation panel shown after you submit the intake form, or in the email we sent to the work address you registered.</p>
+            <h1 className="auth-title">Track an access request.</h1>
+            <p className="auth-lead">Use the request ID shown in the confirmation panel after intake submission. Status lookup does not require an account session.</p>
           </>
         )}
         footer={(
           <p>
-            Lost your request ID?{' '}
-            <a href="mailto:support@astranull.example?subject=Sign-up%20request%20ID%20recovery">Contact support</a>
+            If you no longer have the request ID, contact your deployment administrator or the support channel provided during onboarding.
             {' · '}
             <a href="/login">Log in</a>
           </p>
@@ -1829,7 +1899,7 @@ export function SignupStatusPage() {
           <AuthCardHeader
             badge={<Badge tone="info">Status lookup</Badge>}
             title="Check request status"
-            description="Account provisioning remains review-gated and every status change is reviewed by operations."
+            description="Enter the case-sensitive request ID shown after intake submission."
           />
           <CardContent>
             <form className="auth-form" onSubmit={submit} aria-busy={loading}>
@@ -1946,7 +2016,13 @@ export function StaffLoginPage({ config }: PublicPageProps) {
         })
       });
       const json = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(String(json.message ?? json.error ?? 'Staff login failed.'));
+      if (!response.ok) {
+        throw new Error(publicApiErrorMessage(
+          response.status,
+          json,
+          'Staff login failed. Check the selected staging identity and try again.'
+        ));
+      }
       saveSession({
         ...sessionFromLoginResponse(json as Record<string, unknown>),
         staff_login_path: staffLoginPath
@@ -1959,22 +2035,22 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   }
 
   return (
-    <PublicShell eyebrow="Internal staff access">
+    <PublicShell eyebrow="Internal staff access" showAccountNav={false}>
       <AuthPageLayout
         aside={(
           <>
-            <h1 className="auth-title">Sign in to internal management.</h1>
+            <h1 className="auth-title">Staff sign-in.</h1>
             <p className="auth-lead">
               {isDevHeaders
                 ? 'Local developer validation uses staff headers to preview internal RBAC without a password.'
-                : 'Review signup intake, tenant lifecycle, entitlement grants, approval queues, and internal audit from a separate staff surface.'}
+                : 'Review signup intake, tenant lifecycle, entitlement grants, approval queues, and internal audit from the staff-only control plane.'}
             </p>
             <p className="auth-field-help" role="note">
-              Provisioning and approval actions on this surface are written to the internal audit log.
+              Customer accounts do not grant access to this surface. Provisioning and approval actions are written to the internal audit log.
             </p>
           </>
         )}
-        footer={<p><a href="/">Back to site</a> · <a href="/login">Customer login</a></p>}
+        footer={<p><a href="/">Back to public site</a></p>}
       >
         <Card className="auth-card">
           <AuthCardHeader
@@ -2029,53 +2105,6 @@ export function StaffLoginPage({ config }: PublicPageProps) {
           </CardContent>
         </Card>
       </AuthPageLayout>
-    </PublicShell>
-  );
-}
-
-export function InternalAdminPage({ config }: PublicPageProps) {
-  void config;
-  return (
-    <PublicShell eyebrow="Staff management">
-      <main className="public-wrap">
-        <section className="page-head staff-head">
-          <div>
-            <Badge tone="warn">Staff plane</Badge>
-            <h2>Internal Admin</h2>
-            <p className="muted">Tenant lifecycle, sign-up review, subscriptions, support actions, approvals, and audit, separate from the customer portal.</p>
-          </div>
-          <AnchorButton href="/app" variant="secondary">Customer portal</AnchorButton>
-        </section>
-        <Card density="compact">
-          <CardHeader>
-            <CardTitle>Staff destinations</CardTitle>
-            <CardDescription>Jump to governed staff surfaces. Tenant detail opens from the admin tenant directory after sign-in.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="dashboard-link-list">
-              {STAFF_LINKS.map((link) => (
-                  <li key={link.label}>
-                    <div>
-                      <strong>{link.label}</strong>
-                      <span>{link.description}</span>
-                    </div>
-                    <AnchorButton href={link.href} size="sm" variant="secondary">
-                      Open
-                      <ArrowRight size={13} aria-hidden="true" />
-                    </AnchorButton>
-                  </li>
-              ))}
-              <li>
-                <div>
-                  <strong>Tenant detail</strong>
-                  <span>Lifecycle state, entitlements, owner users, support notes, and audit activity.</span>
-                </div>
-                <Badge tone="muted">From admin queue</Badge>
-              </li>
-            </ul>
-          </CardContent>
-        </Card>
-      </main>
     </PublicShell>
   );
 }

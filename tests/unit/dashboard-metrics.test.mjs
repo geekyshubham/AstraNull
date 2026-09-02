@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   countActiveTargetGroups,
@@ -8,6 +9,7 @@ import {
   resolveDashboardMetrics,
   resolveRecentRuns
 } from '../../apps/web/react/src/lib/dashboard-metrics.ts';
+import { formatNumber } from '../../apps/web/react/src/lib/utils.ts';
 
 describe('dashboard-metrics', () => {
   it('derives list-backed counts with the same semantics as GET /v1/state', () => {
@@ -20,8 +22,8 @@ describe('dashboard-metrics', () => {
       { id: 'a2', status: 'offline' }
     ];
     const findings = [
-      { id: 'f1', status: 'open' },
-      { id: 'f2', status: 'closed' }
+      { id: 'f1', state: ' Open ' },
+      { id: 'f2', state: ' closed ' }
     ];
     const highScale = [{ id: 'hs1' }, { id: 'hs2' }];
 
@@ -68,6 +70,56 @@ describe('dashboard-metrics', () => {
       openFindings: 2,
       highScaleRequests: 1
     });
+  });
+
+  it('keeps 10k groups, 5k targets, and 33,334 findings distinct at scale', () => {
+    const metrics = resolveDashboardMetrics({
+      state: {
+        target_groups: 10_000,
+        agents_online: 0,
+        open_findings: 33_334,
+        high_scale_requests: 0
+      },
+      targetGroups: [],
+      targets: Array.from({ length: 5_000 }, (_, index) => ({ id: `tgt_${index}` })),
+      agents: [],
+      findings: [],
+      highScale: [],
+      runs: []
+    });
+
+    assert.equal(metrics.targetGroups, 10_000);
+    assert.equal(metrics.openFindings, 33_334);
+    assert.equal(formatNumber(metrics.targetGroups), '10,000');
+    assert.equal(formatNumber(5_000), '5,000');
+    assert.equal(formatNumber(metrics.openFindings), '33,334');
+    assert.equal(Object.hasOwn(metrics, 'targets'), false, 'state has no target count to expose');
+    assert.equal(Object.hasOwn(metrics, 'targetCount'), false, 'dashboard must not invent a target count');
+  });
+
+  it('pins source labels and shared formatting on every scale-count surface', () => {
+    const dashboard = readFileSync('apps/web/react/src/pages/page-components.tsx', 'utf8');
+    const targets = readFileSync('apps/web/react/src/pages/targets-page.tsx', 'utf8');
+    const governance = readFileSync('apps/web/react/src/pages/governance-pages.tsx', 'utf8');
+
+    assert.match(
+      dashboard,
+      /delta=\{data\.loadErrors\.targetGroups \? 'Target group data unavailable' : `\${formatNumber\(metrics\.targetGroups\)} \${pluralize\(metrics\.targetGroups, 'target group'\)}`\}/,
+    );
+    assert.doesNotMatch(dashboard, /pluralize\(metrics\.targetGroups, 'target'\)/);
+    assert.doesNotMatch(dashboard, /data\.state\?\.(?:targets|target_count)/);
+    assert.match(
+      dashboard,
+      /label="Open findings"[\s\S]*?value=\{data\.loadErrors\.findings \? '—' : formatNumber\(metrics\.openFindings\)\}/,
+    );
+    assert.match(
+      targets,
+      /Declared targets<\/span><strong>{formatNumber\(targets\.length\)}/,
+    );
+    assert.match(
+      governance,
+      /{formatNumber\(openFindingsCount\)}<\/span> open findings/,
+    );
   });
 
   it('prefers state recent_runs over the full runs list', () => {

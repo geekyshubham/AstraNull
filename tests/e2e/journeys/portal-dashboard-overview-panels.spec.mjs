@@ -2,6 +2,10 @@ import { expect, test } from '@playwright/test';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
 import {
+  isPortalScaleEnabled,
+  PORTAL_SCALE_PROFILE,
+} from '../../fixtures/portal-scale/seed.mjs';
+import {
   getPortalPlaywrightBaseUrl,
   portalOwnerHeaders,
   restartPortalPlaywrightServer,
@@ -23,6 +27,7 @@ import {
 const KILL_SWITCH_REASON = 'Provider escalation in progress; validation paused.';
 const KILL_SWITCH_UPDATED_AT = '2026-08-02T11:30:00.000Z';
 const KILL_SWITCH_HEADLINE = 'SOC kill switch is armed';
+const SCALE_OPEN_FINDINGS = Math.ceil(PORTAL_SCALE_PROFILE.findings / 3);
 
 /** Baseline store plus an armed SOC kill switch (shape matches src/store.mjs socKillSwitch). */
 function applyArmedKillSwitch(store) {
@@ -32,6 +37,41 @@ function applyArmedKillSwitch(store) {
     tenant_id: PORTAL_BASELINE_IDS.tenantId,
     reason: KILL_SWITCH_REASON,
     updated_at: KILL_SWITCH_UPDATED_AT,
+  };
+}
+
+function applyPortalScaleCounts(store) {
+  const tenantId = PORTAL_BASELINE_IDS.tenantId;
+  const firstGroup = store.targetGroups.find((group) => group.tenant_id === tenantId) ?? {};
+  const environmentId = firstGroup.environment_id ?? PORTAL_BASELINE_IDS.environmentId;
+  const frozenAt = PORTAL_BASELINE_IDS.frozenAt;
+  const groups = Array.from({ length: PORTAL_SCALE_PROFILE.targetGroups }, (_, index) => ({
+    ...(index === 0 ? firstGroup : {}),
+    id: index === 0 ? PORTAL_BASELINE_IDS.targetGroupId : `tg_dom_scale_${index}`,
+    tenant_id: tenantId,
+    environment_id: environmentId,
+    name: `DOM scale group ${index}`,
+    criticality: index % 10 === 0 ? 'critical' : 'medium',
+    created_at: frozenAt,
+  }));
+  store.targetGroups = groups;
+  store.targets = Array.from({ length: PORTAL_SCALE_PROFILE.targets }, (_, index) => ({
+    id: `tgt_dom_scale_${index}`,
+    tenant_id: tenantId,
+    target_group_id: groups[index].id,
+    kind: 'fqdn',
+    value: `host-${index}.dom-scale.test`,
+    normalized_value: `host-${index}.dom-scale.test`,
+    expected_behavior: 'cloud_baseline',
+    created_at: frozenAt,
+  }));
+  store.stateRollups = {
+    ...(store.stateRollups ?? {}),
+    [tenantId]: {
+      ...(store.stateRollups?.[tenantId] ?? {}),
+      target_groups: PORTAL_SCALE_PROFILE.targetGroups,
+      open_findings: SCALE_OPEN_FINDINGS,
+    },
   };
 }
 
@@ -95,5 +135,40 @@ test.describe('portal dashboard overview panels', () => {
     await expect(alert).toHaveCount(1);
     await expect(alert).toContainText(KILL_SWITCH_REASON);
     await expect(alert.getByTitle(/kill_switch\.updated_at/)).toBeVisible();
+  });
+  test('FT-DASH-04 served bundle keeps scale target groups, targets, and findings distinct', async ({ page }) => {
+    test.skip(!isPortalScaleEnabled(), 'Set ASTRANULL_PORTAL_SCALE=1 for the full served-DOM scale assertion.');
+    expect(PORTAL_SCALE_PROFILE.targetGroups).toBe(10_000);
+    expect(PORTAL_SCALE_PROFILE.targets).toBe(5_000);
+    expect(SCALE_OPEN_FINDINGS).toBe(33_334);
+
+    await restartPortalPlaywrightServer({ mutate: applyPortalScaleCounts });
+    const baseUrl = getPortalPlaywrightBaseUrl();
+    const state = await fetchPortalState(baseUrl);
+    expect(state.target_groups).toBe(10_000);
+    expect(state.open_findings).toBe(33_334);
+    expect(state).not.toHaveProperty('targets');
+    expect(state).not.toHaveProperty('target_count');
+
+    const inventoryResponse = await fetch(`${baseUrl}/v1/targets`, { headers: portalOwnerHeaders() });
+    expect(inventoryResponse.ok).toBe(true);
+    const inventory = await inventoryResponse.json();
+    expect(inventory.items).toHaveLength(5_000);
+
+    await injectPortalDevHeadersSession(page);
+    await gotoPortalRoute(page, 'dashboard', baseUrl);
+
+    const coverage = page.locator('.kpi-cell').filter({ hasText: 'Coverage' });
+    await expect(coverage.locator('.kpi-delta')).toHaveText('10,000 target groups');
+    const findings = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
+    await expect(findings.locator('.kpi-value')).toHaveText('33,334');
+    await expect(page.getByText('10,000 targets', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('5,000 targets', { exact: true })).toHaveCount(0);
+
+    await gotoPortalRoute(page, 'targets', baseUrl);
+    const targetSummary = page.getByLabel('Target inventory summary');
+    await expect(
+      targetSummary.locator('.targets-summary-cell').filter({ hasText: 'Declared targets' }).locator('strong'),
+    ).toHaveText('5,000');
   });
 });

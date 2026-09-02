@@ -16,7 +16,7 @@ Layer 7 readiness includes HTTP, HTTPS, APIs, WAF behavior, rate limits, bot con
 | GraphQL deep/nested query class | Safe customer-provided marker query | SOC-approved only | Execution limits, response behavior. |
 | Batch API abuse | Low-count batch-limit check | SOC-approved only | Limit response, latency. |
 | WAF marker rule | Benign marker header/path | Not high-scale | WAF block/challenge + agent not observed. |
-| HTTP method abuse | TRACE/unusual methods safe check | Not high-scale | Response code, agent/log observation. |
+| HTTP method posture | HEAD/OPTIONS-only advertised-policy observation; no TRACE or state-changing methods | Not high-scale | Status and `Allow` metadata only; unsafe-method rejection is not proven. |
 | Oversized headers/body | Strictly bounded size checks | SOC-approved if scale | Rejection/timeout behavior. |
 | WebSocket/SSE connection hoarding | Low-count timeout check | SOC-approved scale | Connection limits, server health. |
 

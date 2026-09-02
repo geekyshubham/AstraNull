@@ -34,6 +34,7 @@ import {
   POSTGRES_PROBE_JOB_SERVICE_METHODS,
   PROBE_JOB_REPOSITORY_METHODS,
   POSTGRES_STATE_SERVICE_METHODS,
+  STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS,
   POSTGRES_HIGH_SCALE_SERVICE_METHODS,
   HIGH_SCALE_REPOSITORY_METHODS,
   PRODUCTION_RELEASE_EVIDENCE_REPOSITORY_METHODS,
@@ -133,6 +134,10 @@ function createHarness(overrides = {}) {
         for (const method of [...REPORT_AUDIT_REPOSITORY_METHODS, 'listAuditEntries']) {
           repo[method] = async () => null;
         }
+        repo.withTenantAuditLock = async (_tenantId, callback) => callback({
+          client: null,
+          prior: null,
+        });
         return repo;
       }
       if (key === 'reports') {
@@ -156,9 +161,15 @@ function createHarness(overrides = {}) {
       }
       if (key === 'validationEvidence') {
         const repo = {};
-        for (const method of VALIDATION_EVIDENCE_REPOSITORY_METHODS) {
+        for (const method of [
+          ...new Set([
+            ...VALIDATION_EVIDENCE_REPOSITORY_METHODS,
+            ...STATE_VALIDATION_EVIDENCE_REPOSITORY_METHODS,
+          ]),
+        ]) {
           repo[method] = async () => null;
         }
+        repo.countOpenFindings = async () => 0;
         repo.appendProbeResultEventIdempotent = async () => null;
         repo.withRunMutationLock = async (_ctx, _runId, fn) => fn();
         return repo;

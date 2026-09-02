@@ -6,8 +6,8 @@
   <title>AstraNull</title>
   <meta name="description" content="AstraNull — no-access-first DDoS readiness validation. React + TypeScript + Vite readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
 
   <!-- Early theme init (light/dark) so there is no flash before React boots. -->
   <script>
@@ -20,11 +20,10 @@
     })();
   </script>
 
-  <!-- Geist · JetBrains Mono — the AstraNull "Observatory" typefaces (display+body = Geist; identity/mono = JetBrains Mono) -->
-  <!-- impeccable-disable overused-font -- Geist and JetBrains Mono are the committed AstraNull "Observatory" brand typefaces. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
+  <!-- AstraNull typography: Space Grotesk display, Inter body, JetBrains Mono identifiers. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 
   <!--
     Boot styles. A minimal token subset (values identical to src/styles.css) paints
@@ -34,27 +33,31 @@
   -->
   <style>
     :root {
-      --boot-bg: oklch(15.5% 0.005 255);
-      --boot-fg: oklch(96% 0.003 250);
-      --boot-muted: oklch(70% 0.012 250);
-      --boot-border: oklch(96% 0.003 250 / .10);
-      --boot-accent: oklch(65% 0.20 28);
-      --boot-font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+      --boot-bg: #000000;
+      --boot-surface: #000000;
+      --boot-fg: #f0f0f0;
+      --boot-muted: #a1a4a5;
+      --boot-border: rgba(214, 235, 253, 0.19);
+      --boot-accent: #ff801f;
+      --boot-font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+      --boot-font-body: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       --boot-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+      --boot-motion-slow: 300ms;
     }
     [data-theme="light"] {
-      --boot-bg: oklch(97.5% 0.003 250);
-      --boot-fg: oklch(26% 0.015 260);
-      --boot-muted: oklch(48% 0.016 260);
-      --boot-border: oklch(26% 0.03 260 / .14);
-      --boot-accent: oklch(55% 0.21 28);
+      --boot-bg: #f7f7f5;
+      --boot-surface: #ffffff;
+      --boot-fg: #16181c;
+      --boot-muted: #565b63;
+      --boot-border: rgba(19, 22, 28, 0.13);
+      --boot-accent: #ff801f;
     }
     html, body {
       margin: 0;
       min-height: 100%;
       background: var(--boot-bg);
       color: var(--boot-fg);
-      font-family: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-family: var(--boot-font-body);
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }
@@ -71,8 +74,8 @@
     .boot-loader { position: relative; width: 72px; height: 72px; display: grid; place-items: center; }
     .boot-loader .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; }
     .boot-loader .brand-mark .ring { fill: none; stroke: var(--boot-fg); stroke-width: 1.6px; }
-    .boot-loader .brand-mark .core { fill: var(--boot-fg); }
-    .boot-spin { position: absolute; inset: 0; width: 72px; height: 72px; animation: boot-rotate 1.05s linear infinite; }
+    .boot-loader .brand-mark .core { fill: var(--boot-accent); }
+    .boot-spin { position: absolute; inset: 0; width: 72px; height: 72px; animation: boot-rotate var(--boot-motion-slow) linear infinite; }
     .boot-spin-track { fill: none; stroke: var(--boot-border); stroke-width: 2; }
     .boot-spin-arc {
       fill: none;

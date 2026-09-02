@@ -1,3 +1,4 @@
+import { findingStatus as normalizeFindingStatus, isFindingOpen as lifecycleIsFindingOpen } from './finding-lifecycle.mjs';
 import type { DataItem } from './types';
 
 export type FindingTabId = 'open' | 'target-group' | 'vector' | 'accepted-risk' | 'closed' | 'sla';
@@ -31,6 +32,10 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+export function findingStatus(finding: DataItem) {
+  return normalizeFindingStatus(finding);
+}
+
 export function formatVectorFamilyLabel(family: string) {
   return VECTOR_FAMILY_LABELS[family] ?? family.replace(/_/g, ' ');
 }
@@ -46,7 +51,7 @@ export function findingSlaHours(severity: string) {
 }
 
 export function isFindingOpen(finding: DataItem) {
-  return getString(finding, ['status']) === 'open';
+  return lifecycleIsFindingOpen(finding);
 }
 
 export function findingSlaDueAt(finding: DataItem) {
@@ -62,7 +67,7 @@ export function isFindingSlaBreach(finding: DataItem, now = Date.now()) {
 }
 
 export function isFindingClosedWithin30Days(finding: DataItem, now = Date.now()) {
-  if (getString(finding, ['status']) !== 'closed') return false;
+  if (!['closed', 'resolved'].includes(findingStatus(finding))) return false;
   const updated = parseFindingTimestamp(finding.updated_at ?? finding.created_at);
   if (updated === null) return false;
   return now - updated <= 30 * 24 * 60 * 60 * 1000;
@@ -95,7 +100,7 @@ export function computeFindingKpis(findings: DataItem[], now = Date.now()) {
   return {
     openCount: open.length,
     openSeverityBreakdown: openSeverityBreakdown || 'No open severities',
-    acceptedRiskCount: findings.filter((finding) => getString(finding, ['status']) === 'accepted_risk').length,
+    acceptedRiskCount: findings.filter((finding) => ['accepted', 'accepted_risk'].includes(findingStatus(finding))).length,
     closed30dCount: findings.filter((finding) => isFindingClosedWithin30Days(finding, now)).length,
     slaBreachCount: findings.filter((finding) => isFindingSlaBreach(finding, now)).length,
   };
@@ -124,9 +129,9 @@ export function filterFindingsByTab(
     case 'open':
       return findings.filter(isFindingOpen);
     case 'accepted-risk':
-      return findings.filter((finding) => getString(finding, ['status']) === 'accepted_risk');
+      return findings.filter((finding) => ['accepted', 'accepted_risk'].includes(findingStatus(finding)));
     case 'closed':
-      return findings.filter((finding) => getString(finding, ['status']) === 'closed');
+      return findings.filter((finding) => ['closed', 'resolved'].includes(findingStatus(finding)));
     case 'sla':
       return findings.filter((finding) => isFindingSlaBreach(finding, now));
     case 'target-group':

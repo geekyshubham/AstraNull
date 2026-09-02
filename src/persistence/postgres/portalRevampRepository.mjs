@@ -884,98 +884,99 @@ export function createPortalRevampRepository(pool) {
              ORDER BY created_at DESC, id DESC
              LIMIT $${findingsParams.length}`;
 
+        // node-postgres transaction clients are single-query streams. Await each read before
+        // issuing the next one so tenant-local RLS context stays on this client without queued,
+        // overlapping client.query() calls.
         bump();
-        const [
-          verifications,
-          loa,
-          findings,
-          findingCounts,
-          runs,
-          wafAsset,
-          agentBinding,
-          wafSnapshot,
-          edgeDetection,
-        ] = await Promise.all([
+        const verifications = await client.query(
           // Capped, but ordered DESC and reversed below so the newest rows survive the
           // cap. An ASC order with a LIMIT would keep the OLDEST rows and make the
           // "latest verification" (last element) stale once history exceeds the cap.
-          client.query(
-            `SELECT * FROM target_verifications
-             WHERE tenant_id = $1 AND target_id = $2
-             ORDER BY transitioned_at DESC, id DESC
-             LIMIT $3`,
-            [ctx.tenantId, targetId, VERIFICATION_HISTORY_CAP],
-          ),
-          client.query(
-            `SELECT * FROM loa_signatures
-             WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
-             ORDER BY signed_at DESC LIMIT 1`,
-            [ctx.tenantId, target.target_group_id],
-          ),
-          client.query(findingsSql, findingsParams),
-          // counts.findings_open/closed used to be derived from the fully materialized
-          // findings array. Now that the page is LIMITed, the totals must come from an
-          // aggregate or they would silently collapse to "counts within this page".
-          // COUNT(*) FILTER keeps the emitted numbers identical to the old behaviour
-          // while staying index-only on findings_by_target_state(target_id, status).
-          client.query(
-            `SELECT
-               COUNT(*) FILTER (WHERE status = 'open')::int AS open_count,
-               COUNT(*) FILTER (WHERE status IN ('closed', 'accepted'))::int AS closed_count
-             FROM findings
-             WHERE tenant_id = $1 AND target_id = $2`,
-            [ctx.tenantId, targetId],
-          ),
-          client.query(
-            `SELECT id, policy_id, check_id, status, started_at, created_at
-             FROM test_runs WHERE tenant_id = $1 AND target_id = $2
-             ORDER BY COALESCE(started_at, created_at) DESC LIMIT $3`,
-            [ctx.tenantId, targetId, Number(query.runs_limit) || 5],
-          ),
-          client.query(
-            `SELECT * FROM waf_assets WHERE tenant_id = $1 AND target_id = $2 LIMIT 1`,
-            [ctx.tenantId, targetId],
-          ),
-          client.query(
-            `SELECT id, created_at, metadata_json
-             FROM agents
-             WHERE tenant_id = $1 AND target_group_id = $2
-               AND (
-                 ($3::text IS NOT NULL AND $3 <> '' AND id = $3)
-                 OR COALESCE(metadata_json->>'bound_target_id', '') = $4
-               )
-             ORDER BY created_at DESC LIMIT 1`,
-            [
-              ctx.tenantId,
-              target.target_group_id,
-              targetMeta.agent_id ?? null,
-              targetId,
-            ],
-          ),
-          client.query(
-            `SELECT ps.status, ps.reason_codes, ps.created_at
-             FROM waf_posture_snapshots ps
-             JOIN waf_assets wa ON wa.id = ps.waf_asset_id AND wa.tenant_id = ps.tenant_id
-             WHERE wa.tenant_id = $1 AND wa.target_id = $2 AND ps.is_current = TRUE
-             ORDER BY ps.created_at DESC LIMIT 1`,
-            [ctx.tenantId, targetId],
-          ),
-          client.query(
-            `SELECT ${TARGET_EDGE_DETECTION_COLUMNS}
-             FROM target_edge_detections
-             WHERE tenant_id = $1 AND target_id = $2
-             LIMIT 1`,
-            [ctx.tenantId, targetId],
-          ),
-        ]);
+          `SELECT * FROM target_verifications
+           WHERE tenant_id = $1 AND target_id = $2
+           ORDER BY transitioned_at DESC, id DESC
+           LIMIT $3`,
+          [ctx.tenantId, targetId, VERIFICATION_HISTORY_CAP],
+        );
+        bump();
+        const loa = await client.query(
+          `SELECT * FROM loa_signatures
+           WHERE tenant_id = $1 AND target_group_id = $2 AND state = 'signed'
+           ORDER BY signed_at DESC LIMIT 1`,
+          [ctx.tenantId, target.target_group_id],
+        );
+        bump();
+        const findings = await client.query(findingsSql, findingsParams);
+        // counts.findings_open/closed used to be derived from the fully materialized
+        // findings array. Now that the page is LIMITed, the totals must come from an
+        // aggregate or they would silently collapse to "counts within this page".
+        // COUNT(*) FILTER keeps the emitted numbers identical to the old behaviour
+        // while staying index-only on findings_by_target_state(target_id, status).
+        bump();
+        const findingCounts = await client.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE status = 'open')::int AS open_count,
+             COUNT(*) FILTER (WHERE status IN ('closed', 'accepted'))::int AS closed_count
+           FROM findings
+           WHERE tenant_id = $1 AND target_id = $2`,
+          [ctx.tenantId, targetId],
+        );
+        bump();
+        const runs = await client.query(
+          `SELECT id, policy_id, check_id, status, started_at, created_at
+           FROM test_runs WHERE tenant_id = $1 AND target_id = $2
+           ORDER BY COALESCE(started_at, created_at) DESC LIMIT $3`,
+          [ctx.tenantId, targetId, Number(query.runs_limit) || 5],
+        );
+        bump();
+        const wafAsset = await client.query(
+          `SELECT * FROM waf_assets WHERE tenant_id = $1 AND target_id = $2 LIMIT 1`,
+          [ctx.tenantId, targetId],
+        );
+        bump();
+        const agentBinding = await client.query(
+          `SELECT id, created_at, metadata_json
+           FROM agents
+           WHERE tenant_id = $1 AND target_group_id = $2
+             AND (
+               ($3::text IS NOT NULL AND $3 <> '' AND id = $3)
+               OR COALESCE(metadata_json->>'bound_target_id', '') = $4
+             )
+           ORDER BY created_at DESC LIMIT 1`,
+          [
+            ctx.tenantId,
+            target.target_group_id,
+            targetMeta.agent_id ?? null,
+            targetId,
+          ],
+        );
+        bump();
+        const wafSnapshot = await client.query(
+          `SELECT ps.status, ps.reason_codes, ps.created_at
+           FROM waf_posture_snapshots ps
+           JOIN waf_assets wa ON wa.id = ps.waf_asset_id AND wa.tenant_id = ps.tenant_id
+           WHERE wa.tenant_id = $1 AND wa.target_id = $2 AND ps.is_current = TRUE
+           ORDER BY ps.created_at DESC LIMIT 1`,
+          [ctx.tenantId, targetId],
+        );
+        bump();
+        const edgeDetection = await client.query(
+          `SELECT ${TARGET_EDGE_DETECTION_COLUMNS}
+           FROM target_edge_detections
+           WHERE tenant_id = $1 AND target_id = $2
+           LIMIT 1`,
+          [ctx.tenantId, targetId],
+        );
 
-        const wafConnector = wafAsset.rows[0]?.connector_id
-          ? await client.query(
-              `SELECT id, status, last_success_at
-               FROM waf_connectors WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
-              [ctx.tenantId, wafAsset.rows[0].connector_id],
-            )
-          : { rows: [] };
+        let wafConnector = { rows: [] };
+        if (wafAsset.rows[0]?.connector_id) {
+          bump();
+          wafConnector = await client.query(
+            `SELECT id, status, last_success_at
+             FROM waf_connectors WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+            [ctx.tenantId, wafAsset.rows[0].connector_id],
+          );
+        }
 
         // Re-reverse the DESC-capped verification rows back into ASC order so both the
         // history array and `latest` (the final element) keep their original semantics.
@@ -1015,7 +1016,6 @@ export function createPortalRevampRepository(pool) {
           policy_id: run.policy_id ?? null,
           verdict: run.status ?? 'unknown',
           started_at: toIso(run.started_at ?? run.created_at),
-          agent_id: null,
         }));
         const wafPosture = assetRow
           ? {

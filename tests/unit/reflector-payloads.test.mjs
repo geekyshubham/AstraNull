@@ -86,10 +86,6 @@ const PAYLOAD_CASES = [
     assert.equal(payload[0], 0x01);
     assert.equal(payload[1], 0x01);
   }],
-  ['quic_initial', (payload) => {
-    assert.equal(payload[0] & 0xc0, 0xc0);
-    assert.equal(payload.readUInt32BE(1), 1);
-  }],
   ['generic_probe', (payload) => {
     assert.equal(payload.subarray(0, 14).toString('ascii'), 'ASTRANULL:udp:');
   }],

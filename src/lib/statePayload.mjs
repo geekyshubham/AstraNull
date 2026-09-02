@@ -98,7 +98,6 @@ export function buildGetStatePayload({
   highScaleWired = false,
   highScaleRequests = [],
 }) {
-  const hasRollupReadiness = rollup?.readiness && typeof rollup.readiness === 'object';
   const requestCount = Number(rollup?.high_scale_requests ?? computed.high_scale_requests);
   const highScaleStatus = computeHighScaleStatus({
     highScaleWired,
@@ -109,7 +108,8 @@ export function buildGetStatePayload({
   });
   return {
     tenant_id: tenantId,
-    readiness: hasRollupReadiness ? rollup.readiness : computed.readiness,
+    // Readiness rollups have no scoring/input version; current recomputation is authoritative.
+    readiness: computed.readiness,
     target_groups: Number(rollup?.target_groups ?? computed.target_groups),
     agents_online: Number(rollup?.agents_online ?? computed.agents_online),
     recent_runs: Array.isArray(rollup?.recent_runs) ? rollup.recent_runs : computed.recent_runs,

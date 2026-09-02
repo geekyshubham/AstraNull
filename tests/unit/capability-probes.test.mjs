@@ -35,6 +35,8 @@ import {
   probeTlsAudit,
   probeWafEnforcement,
   probeOutsideInWafScan,
+  probeWafClassMarker,
+  probeDelegatedL7ResourcePosture,
   executeCapabilityProbe,
 } from '../../src/lib/capabilityProbes.mjs';
 import { getCheckById } from '../../src/contracts/checks.mjs';
@@ -101,6 +103,78 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.requests_sent, 0);
   });
 
+  for (const family of ['A', 'AAAA']) {
+    it(`origin leak normalizes transient apex ${family} resolver failure to error`, async () => {
+      let fetchCalls = 0;
+      const failure = Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      const outcome = await probeOriginLeakScan(job(), {
+        resolve4Fn: async () => {
+          if (family === 'A') throw failure;
+          return [];
+        },
+        resolve6Fn: async () => {
+          if (family === 'AAAA') throw failure;
+          return [];
+        },
+        fetchFn: async () => { fetchCalls += 1; return httpResponse(200); },
+      });
+
+      assert.equal(outcome.external_result, 'error');
+      assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+      assert.equal(outcome.requests_sent, family === 'A' ? 1 : 2);
+      assert.equal(fetchCalls, 0);
+    });
+  }
+
+  it('origin leak normalizes a transient subdomain resolver failure instead of grading posture', async () => {
+    const outcome = await probeOriginLeakScan(job({
+      constraints: { max_requests: 4, timeout_ms: 1000 },
+    }), {
+      resolve4Fn: async (host) => {
+        if (host === 'www.shop.example.test') {
+          throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+        }
+        return [];
+      },
+      resolve6Fn: async () => [],
+      fetchFn: async () => httpResponse(200),
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(outcome.requests_sent, 4);
+    assert.ok(outcome.metadata.subdomains_scanned.includes('www.shop.example.test'));
+  });
+
+  it('origin leak preserves operation-budget and deadline resolver semantics', async () => {
+    await assert.rejects(
+      () => probeOriginLeakScan(job(), {
+        resolve4Fn: async () => {
+          throw Object.assign(new Error('budget exhausted'), {
+            code: 'signed_operation_budget_exceeded',
+          });
+        },
+        resolve6Fn: async () => [],
+        fetchFn: async () => httpResponse(200),
+      }),
+      (error) => error?.code === 'signed_operation_budget_exceeded',
+    );
+
+    const deadline = await probeOriginLeakScan(job(), {
+      resolve4Fn: async () => {
+        throw Object.assign(new Error('deadline'), {
+          name: 'AbortError',
+          code: 'probe_job_deadline_exceeded',
+        });
+      },
+      resolve6Fn: async () => [],
+      fetchFn: async () => httpResponse(200),
+    });
+    assert.equal(deadline.external_result, 'timeout');
+    assert.equal(deadline.metadata.error_class, 'probe_job_deadline_exceeded');
+    assert.equal(deadline.requests_sent, 1);
+  });
+
   it('origin leak scan reports leak signals from subdomain divergence', async () => {
     const outcome = await probeOriginLeakScan(job(), {
       resolve4Fn: async (host) => {
@@ -152,6 +226,61 @@ describe('capability probes P0/P1', () => {
     });
     assert.equal(outcome.requests_sent, 15);
     assert.equal(outcome.metadata.subdomains_scanned.length, BOUNDED_SUBDOMAIN_PREFIXES.length);
+  });
+
+  it('delegated transport refuses retargeting and unsafe HTTP shapes before egress', async () => {
+    let reservations = 0;
+    let networkCalls = 0;
+    const base = job({
+      target: { kind: 'url', value: 'https://edge.example.test/signed/path' },
+      constraints: { max_requests: 1, timeout_ms: 1000 },
+    });
+
+    const retargeted = await probeWafClassMarker({
+      ...base,
+      probe_profile: { kind: 'waf_class_marker_probe', marker_class: 'ssrf', max_requests: 1 },
+    }, {
+      signedJobVerified: true,
+      recordProbeLogicalAttempt: () => { reservations += 1; },
+      fetchFn: async () => { networkCalls += 1; return httpResponse(200); },
+      wafClassProbeFn: async ({ fetchFn }) => {
+        try { await fetchFn('https://attacker.invalid/'); } catch {}
+        return { posture: 'inconclusive', marker_results: [], requests_sent: 99 };
+      },
+    });
+    assert.equal(retargeted.external_result, 'error');
+    assert.equal(retargeted.metadata.error_class, 'delegated_target_mismatch');
+    assert.equal(retargeted.requests_sent, 0);
+
+    for (const unsafeInit of [
+      { method: 'POST', headers: { connection: 'close' }, body: 'inert' },
+      { method: 'GET', body: '' },
+      { method: 'POST', body: 'x'.repeat(4097) },
+    ]) {
+      const refused = await probeDelegatedL7ResourcePosture({
+        ...base,
+        probe_profile: {
+          kind: 'l7_resource_posture_probe',
+          marker_class: 'declared_content_encoding',
+          max_requests: 1,
+        },
+      }, {
+        signedJobVerified: true,
+        recordProbeLogicalAttempt: () => { reservations += 1; },
+        fetchFn: async () => { networkCalls += 1; return httpResponse(200); },
+        l7ResourceProbeFn: async (_job, { requestFn }) => {
+          try {
+            await requestFn('https://edge.example.test/signed/path', unsafeInit);
+          } catch {}
+          return { external_result: 'connected', metadata: {}, requests_sent: 99 };
+        },
+      });
+      assert.equal(refused.external_result, 'error');
+      assert.equal(refused.metadata.error_class, 'unsafe_delegated_http_request');
+      assert.equal(refused.requests_sent, 0);
+    }
+    assert.equal(reservations, 0);
+    assert.equal(networkCalls, 0);
   });
 
   it('host/SNI bypass derives direct IP and URL from declared http target', async () => {
@@ -459,6 +588,26 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.metadata.error_class, 'unsafe_post_profile');
   });
 
+  it('rejects a forged DELETE rate-limit profile before fetch', async () => {
+    let attempts = 0;
+    const outcome = await probeRateLimitSequence(job({
+      target: { kind: 'url', value: 'https://app.example.test/' },
+      probe_profile: {
+        kind: 'rate_limit_sequence',
+        max_requests: 1,
+        probe_path: '/account',
+        http_method: 'DELETE',
+      },
+    }), {
+      fetchFn: async () => { attempts += 1; return httpResponse(200); },
+    });
+
+    assert.equal(attempts, 0);
+    assert.equal(outcome.requests_sent, 0);
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'unsafe_http_method');
+  });
+
   it('HTTP method posture sends only HEAD/OPTIONS and reports advertised unsafe methods', async () => {
     const calls = [];
     const outcome = await probeHttpMethodMatrix(job({
@@ -611,7 +760,9 @@ describe('capability probes P0/P1', () => {
     const outcome = await outcomePromise;
 
     assert.equal(resetCount, 1);
-    assert.equal(outcome.requests_sent, 4);
+    // Three real initializers: connect, ping, single reset stream. Reading the already-received
+    // SETTINGS header bound is not a network operation and must not be attested as one.
+    assert.equal(outcome.requests_sent, 3);
     assert.equal(outcome.metadata.reset_accepted, true);
     assert.equal(outcome.metadata.continuation_bound_advertised, true);
   });
@@ -639,43 +790,33 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.requests_sent, 1);
   });
 
-  it('HTTP/3 control probe truthfully reuses exactly one HEAD and one bounded QUIC datagram', async () => {
+  it('HTTP/3 control probe truthfully performs one HEAD Alt-Svc observation only', async () => {
     const operations = [];
     const methods = [];
-    const socketTypes = [];
+    let socketCalls = 0;
     const outcome = await probeHttp3ControlStream(job({
-      constraints: { max_requests: 2, timeout_ms: 1000 },
+      constraints: { max_requests: 1, timeout_ms: 1000 },
       target: { kind: 'url', value: 'https://203.0.113.25/h3' },
-      probe_profile: { kind: 'http3_control_probe', max_requests: 2 },
+      probe_profile: { kind: 'http3_control_probe', max_requests: 1 },
     }), {
       recordProbeLogicalAttempt: (operation) => operations.push(operation),
       fetchFn: async (_url, init) => {
         methods.push(init.method);
-        return httpResponse(200, { 'alt-svc': 'h3=":443"' });
+        return httpResponse(200, { 'alt-svc': 'h3=":8443"' });
       },
-      createSocket: (type) => {
-        socketTypes.push(type);
-        const socket = new EventEmitter();
-        socket.send = (_payload, port, host, callback) => {
-          callback?.();
-          setImmediate(() => socket.emit('message', Buffer.from('quic'), {
-            address: host,
-            port,
-          }));
-        };
-        socket.close = () => {};
-        return socket;
-      },
+      createSocket: () => { socketCalls += 1; throw new Error('must not create socket'); },
     });
 
     assert.deepEqual(methods, ['HEAD']);
-    assert.deepEqual(socketTypes, ['udp4']);
-    assert.deepEqual(operations, ['http', 'udp_datagram']);
-    assert.equal(outcome.requests_sent, 2);
+    assert.deepEqual(operations, ['http']);
+    assert.equal(socketCalls, 0);
+    assert.equal(outcome.requests_sent, 1);
     assert.equal(outcome.metadata.probe_kind, 'http3_control_probe');
-    assert.equal(outcome.metadata.capability_scope, 'quic_reachability_only');
-    assert.equal(outcome.metadata.control_stream_observed, false);
-    assert.equal(outcome.metadata.settings_observed, false);
+    assert.equal(outcome.metadata.capability_scope, 'http3_alt_svc_observation_only');
+    assert.equal(outcome.metadata.advertised_h3_port, 8443);
+    assert.equal('control_stream_observed' in outcome.metadata, false);
+    assert.equal('settings_observed' in outcome.metadata, false);
+    assert.equal('udp_response_received' in outcome.metadata, false);
   });
 
   it('WAF inspection-limit variants reuse only the benign SQLi marker and detect fail-open', async () => {
@@ -838,9 +979,52 @@ describe('capability probes P0/P1', () => {
     );
   });
 
+  it('AXFR returns error for a transient NS lookup without destination resolution or connect', async () => {
+    let destinationLookups = 0;
+    let connectCalls = 0;
+    const outcome = await probeAxfrLeak(job({
+      target: { kind: 'fqdn', value: 'example.test' },
+      probe_profile: { kind: 'dns_axfr_leak', max_requests: 2 },
+    }), {
+      resolveNsFn: async () => {
+        throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      },
+      resolve4Fn: async () => { destinationLookups += 1; return ['203.0.113.53']; },
+      resolve6Fn: async () => { destinationLookups += 1; return []; },
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(destinationLookups, 0);
+    assert.equal(connectCalls, 0);
+  });
+
+  it('AXFR returns error when discovered NS AAAA lookup is transient despite a public A answer', async () => {
+    let connectCalls = 0;
+    const outcome = await probeAxfrLeak(job({
+      target: { kind: 'fqdn', value: 'example.test' },
+      probe_profile: { kind: 'dns_axfr_leak', max_requests: 2 },
+    }), {
+      resolveNsFn: async () => ['ns.example.test'],
+      resolve4Fn: async () => ['203.0.113.53'],
+      resolve6Fn: async () => {
+        throw Object.assign(new Error('temporary resolver failure'), { code: 'EAI_AGAIN' });
+      },
+      connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
+    });
+
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EAI_AGAIN');
+    assert.equal(outcome.requests_sent, 1);
+    assert.equal(connectCalls, 0);
+  });
+
   it('probeAxfrLeak accumulates split TCP response chunks before parsing', async () => {
     const refusedDns = Buffer.alloc(12);
-    refusedDns[3] = 0x05;
+    refusedDns.writeUInt16BE(0x4242, 0);
+    refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
     const chunk1 = refusedFramed.subarray(0, 4);
     const chunk2 = refusedFramed.subarray(4);
@@ -866,6 +1050,7 @@ describe('capability probes P0/P1', () => {
         target: { kind: 'fqdn', value: 'example.test' },
       }), {
         signedJobVerified: true,
+        axfrTransactionId: 0x4242,
         // Local harness nameserver: loopback is opt-in for the destination guard, so this
         // fixture states that intent explicitly rather than relying on a default.
         destinationPolicy: { allowLoopback: true },
@@ -888,7 +1073,8 @@ describe('capability probes P0/P1', () => {
     const touched = [];
     let written = null;
     const refusedDns = Buffer.alloc(12);
-    refusedDns[3] = 0x05;
+    refusedDns.writeUInt16BE(0x4242, 0);
+    refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
 
     const outcome = await probeAxfrLeak(job({
@@ -896,6 +1082,7 @@ describe('capability probes P0/P1', () => {
       probe_profile: { kind: 'dns_axfr_leak', zone: victim },
     }), {
       signedJobVerified: true,
+      axfrTransactionId: 0x4242,
       resolveNsFn: async (zone) => {
         touched.push(['resolveNs', zone]);
         assert.equal(zone, 'verified.example');
@@ -972,13 +1159,15 @@ describe('capability probes P0/P1', () => {
   it('axfr leak probe sends TCP-framed query and treats REFUSED rcode as blocked', async () => {
     let written = null;
     const refusedDns = Buffer.alloc(12);
-    refusedDns[3] = 0x05;
+    refusedDns.writeUInt16BE(0x4242, 0);
+    refusedDns.writeUInt16BE(0x8005, 2);
     const refusedFramed = frameDnsTcpMessage(refusedDns);
 
     const outcome = await probeAxfrLeak(job({
       probe_profile: { kind: 'dns_axfr_leak', zone: 'example.test' },
         target: { kind: 'fqdn', value: 'example.test' },
     }), {
+      axfrTransactionId: 0x4242,
       resolveNsFn: async () => ['ns1.example.test'],
       resolve4Fn: async () => ['203.0.113.53'],
       resolve6Fn: async () => [],
@@ -1018,8 +1207,8 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => [],
       connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
-    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EDESTINATION');
     assert.equal(outcome.metadata.blocked_address, '10.0.0.53');
     assert.equal(connectCalls, 0);
   });
@@ -1034,8 +1223,8 @@ describe('capability probes P0/P1', () => {
       resolveNsFn: async () => ['169.254.169.254'],
       connectFn: () => { connectCalls += 1; throw new Error('must not connect'); },
     });
-    assert.equal(outcome.external_result, 'blocked');
-    assert.equal(outcome.metadata.error_class, 'resolver_not_routable');
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'EDESTINATION');
     assert.equal(connectCalls, 0);
   });
 
@@ -1392,5 +1581,45 @@ describe('capability probes P0/P1', () => {
     assert.equal(getCheckById('tls.profile_exposure.safe').probe_profile.kind, 'tls_audit');
     assert.equal(getCheckById('l7.api_quota_exhaustion.safe').probe_profile.kind, 'rate_limit_sequence');
     assert.equal(getCheckById('protocol.http2_readiness.safe').probe_profile.kind, 'http2_settings');
+  });
+});
+
+
+describe('origin edge transport failure safety', () => {
+  it('returns a bounded error without subdomain scans or leak inference on ECONNRESET', async () => {
+    const resolutions = [];
+    let headCalls = 0;
+    const outcome = await probeOriginLeakScan(job({
+      constraints: { max_requests: 15, max_probe_requests: 15, timeout_ms: 1000 },
+      probe_profile: { kind: 'origin_leak_scan', max_requests: 15, timeout_ms: 1000 },
+    }), {
+      resolve4Fn: async (host) => {
+        resolutions.push(['A', host]);
+        return host === 'shop.example.test' ? ['203.0.113.10'] : [];
+      },
+      resolve6Fn: async (host) => {
+        resolutions.push(['AAAA', host]);
+        return [];
+      },
+      fetchFn: async () => {
+        headCalls += 1;
+        throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+      },
+    });
+
+    assert.deepEqual(resolutions, [
+      ['A', 'shop.example.test'],
+      ['AAAA', 'shop.example.test'],
+    ]);
+    assert.equal(headCalls, 1);
+    assert.equal(outcome.external_result, 'error');
+    assert.equal(outcome.metadata.error_class, 'ECONNRESET');
+    assert.equal(outcome.requests_sent, 3);
+    assert.equal(outcome.metadata.resolver_attempts, 2);
+    assert.equal(outcome.metadata.http_attempts, 1);
+    assert.deepEqual(outcome.metadata.subdomains_scanned, []);
+    assert.deepEqual(outcome.metadata.leak_signals, []);
+    assert.equal(outcome.metadata.leak_count, 0);
+    assert.equal(outcome.metadata.leak_signals.includes('dns_only_no_edge_http'), false);
   });
 });

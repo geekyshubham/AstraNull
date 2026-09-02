@@ -62,7 +62,7 @@ This matrix defines what AstraNull should validate. It intentionally describes d
 | Search/checkout/API | Low-rate synthetic call | Approved business-flow scenario | latency/status/quota | Critical path protected |
 | Oversized headers/body | Safe boundary-size request | SOC only for larger boundary | response code, WAF action | Size limits enforced |
 | Slowloris/slow body | Tiny bounded timeout test | SOC-controlled slow scenario | timeout behavior/logs | Slow clients do not exhaust app |
-| Unusual methods | TRACE/OPTIONS/etc. as configured | Not high-scale | response code | Disallowed methods blocked |
+| Unusual methods | HEAD/OPTIONS only; inspect advertised `Allow` policy | Not high-scale | response code and `Allow` metadata | Observation only; use authorized staging evidence to prove unsafe methods are blocked |
 | Bot/reputation/challenge | Benign marker from probe fleet | Approved bot scenario | challenge/block/log | Bot controls observable |
 | API quota exhaustion | Safe token/user quota test | SOC/customer approved quota scenario | quota headers/status/logs | Quota controls are visible and bounded |
 | GraphQL complexity | Low-complexity declared test | Approved complexity scenario | response/error/latency | Complexity/depth limits exist |
@@ -85,7 +85,7 @@ This matrix defines what AstraNull should validate. It intentionally describes d
 |---|---|---|---|---|
 | HTTP/2 rapid reset readiness | Config/low-rate protocol behavior check only | SOC-approved/provider-approved scenario | server/proxy metrics, errors, availability | Controls/patches/limits visible |
 | HTTP/2 stream concurrency | Low-rate settings check | Approved stream scenario | stream errors/latency | Limits are enforced |
-| HTTP/3/QUIC flood readiness | Low-rate QUIC path check | Approved UDP/QUIC simulation | UDP/443 metrics, health | Intentional QUIC exposure and mitigation |
+| HTTP/3/QUIC flood readiness | One bounded HTTPS HEAD (Alt-Svc observation only) | Approved UDP/QUIC simulation | Modern `h3` Alt-Svc advertisement metadata | Safe probe does not test UDP reachability, QUIC handshakes, control streams, or SETTINGS; those require governed evidence |
 | SNI/Host mismatch bypass | Declared Host/SNI mismatch test | Approved TLS scenario if needed | TLS/HTTP metadata + agent/log | Origin rejects unauthorized host path |
 | Certificate/SAN origin leakage | Passive/public check for declared target only | Not high-scale | certificate metadata | Origin leakage is understood or remediated |
 

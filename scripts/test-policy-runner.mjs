@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveProbeMode } from '../src/config.mjs';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
+import { validateHmacSecretEntropy } from '../src/lib/evidenceSigning.mjs';
 import { createPostgresRuntime } from '../src/persistence/postgres/runtime.mjs';
 
 
@@ -114,11 +115,15 @@ export function parseTestPolicyTenantIds(raw) {
 
 export function loadTestPolicyRuntimeConfig(env) {
   const probeMode = resolveProbeMode(env);
-  const probeWorkerSecret = String(env.ASTRANULL_PROBE_WORKER_SECRET ?? '');
-  if (probeMode === 'signed-worker' && probeWorkerSecret.length < 32) {
-    throw new Error(
-      'ASTRANULL_PROBE_WORKER_SECRET must be at least 32 characters when probe mode is signed-worker.',
-    );
+  let probeWorkerSecret = String(env.ASTRANULL_PROBE_WORKER_SECRET ?? '');
+  if (probeMode === 'signed-worker') {
+    const validatedSecret = validateHmacSecretEntropy(probeWorkerSecret);
+    if (!validatedSecret.ok) {
+      throw new Error(
+        `ASTRANULL_PROBE_WORKER_SECRET failed entropy validation (${validatedSecret.error}).`,
+      );
+    }
+    probeWorkerSecret = validatedSecret.secret;
   }
   return { probeMode, probeWorkerSecret };
 }

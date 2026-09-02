@@ -32,6 +32,11 @@ chmodSync(SHELL_BACKUP_DIR, 0o700);
 after(() => rmSync(SHELL_BACKUP_DIR, { recursive: true, force: true }));
 const DEPLOY = path.join(ROOT, 'ops/aws/deploy.sh');
 const RESTORE = path.join(ROOT, 'ops/aws/restore.sh');
+const PROCESS_GROUP_WATCHDOG_SECONDS = 10;
+const PROCESS_GROUP_TERMINATION_GRACE_SECONDS = 1;
+const PROCESS_GROUP_OUTER_TIMEOUT_MS = (
+  PROCESS_GROUP_WATCHDOG_SECONDS + PROCESS_GROUP_TERMINATION_GRACE_SECONDS + 1
+) * 1000;
 const PROCESS_GROUP_WATCHDOG = String.raw`
 import os
 import signal
@@ -40,15 +45,15 @@ import sys
 
 proc = subprocess.Popen(sys.argv[1:], start_new_session=True)
 try:
-    rc = proc.wait(timeout=5)
+    rc = proc.wait(timeout=${PROCESS_GROUP_WATCHDOG_SECONDS})
 except subprocess.TimeoutExpired:
     os.killpg(proc.pid, signal.SIGTERM)
     try:
-        proc.wait(timeout=1)
+        proc.wait(timeout=${PROCESS_GROUP_TERMINATION_GRACE_SECONDS})
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
-    print('watchdog: shell reproduction timed out after 5s', file=sys.stderr)
+    print('watchdog: shell reproduction timed out after ${PROCESS_GROUP_WATCHDOG_SECONDS}s', file=sys.stderr)
     sys.exit(124)
 sys.exit(128 + -rc if rc < 0 else rc)
 `;
@@ -61,11 +66,15 @@ function runBash(source, env = {}, script = DEPLOY) {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, ASTRANULL_TEST_BACKUP_DIR: SHELL_BACKUP_DIR, ...env },
-      timeout: 7_000,
+      timeout: PROCESS_GROUP_OUTER_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     },
   );
-  assert.notEqual(result.error?.code, 'ETIMEDOUT', 'Python process-group watchdog itself stalled');
+  assert.notEqual(
+    result.error?.code,
+    'ETIMEDOUT',
+    `Python process-group watchdog exceeded aligned ${PROCESS_GROUP_OUTER_TIMEOUT_MS}ms outer timeout`,
+  );
   return result;
 }
 

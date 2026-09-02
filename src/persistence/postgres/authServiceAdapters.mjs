@@ -135,6 +135,16 @@ export function createPostgresAuthServices(repositories, options = {}) {
         revoked_at: null,
         created_at: createdAt,
         created_by: ctx.userId,
+        prebind_fqdn:
+          typeof body.prebind_fqdn === 'string' && body.prebind_fqdn.trim() !== ''
+            ? body.prebind_fqdn.trim().toLowerCase()
+            : null,
+        deployment_packaging:
+          body.deployment_packaging === 'image'
+          || body.deployment_packaging === 'standalone'
+          || body.deployment_packaging === 'helm'
+            ? body.deployment_packaging
+            : null,
       };
       const token = await authTokens.createBootstrapToken(ctx, record);
       await appendAudit({

@@ -6,12 +6,16 @@ export const DEFAULT_PROBE_REQUEST_BUDGET = 15;
  * Prefers signed job constraints, then probe profile, then a positive default.
  */
 export function resolveProbeRequestBudget(job) {
+  const signedProbeCap = job?.constraints?.max_probe_requests;
+  if (Number.isInteger(signedProbeCap) && signedProbeCap >= 0) {
+    return signedProbeCap;
+  }
   const fromConstraints = job?.constraints?.max_requests;
-  if (Number.isInteger(fromConstraints) && fromConstraints > 0) {
+  if (Number.isInteger(fromConstraints) && fromConstraints >= 0) {
     return fromConstraints;
   }
   const fromProfile = job?.probe_profile?.max_requests;
-  if (Number.isInteger(fromProfile) && fromProfile > 0) {
+  if (Number.isInteger(fromProfile) && fromProfile >= 0) {
     return fromProfile;
   }
   return DEFAULT_PROBE_REQUEST_BUDGET;

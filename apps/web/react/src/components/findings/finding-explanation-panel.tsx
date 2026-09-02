@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button } from '../ui/button';
+import { AnchorButton, Button } from '../ui/button';
 import { ExplanationField, VerdictExplanationPanel } from '../runs/run-proof-panels';
 import { requestJson } from '../../lib/api';
+import { buildDetailHref } from '../../lib/route-params';
 import { resolveRemediationTemplate } from '../../lib/verdict-explanation';
 import type { DataItem, PortalConfig, Session } from '../../lib/types';
 
@@ -14,7 +15,27 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function isDataItem(value: unknown): value is DataItem {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 const SKELETON_FIELD_COUNT = 4;
+
+type LinkedRunEvidenceState = {
+  runId: string;
+  status: 'idle' | 'loading' | 'loaded' | 'error';
+  detail: DataItem | null;
+  events: DataItem[];
+  error: string;
+};
+
+const EMPTY_RUN_EVIDENCE: LinkedRunEvidenceState = {
+  runId: '',
+  status: 'idle',
+  detail: null,
+  events: [],
+  error: '',
+};
 
 function DetailLoadingPlaceholder({ label = 'Loading linked run evidence…' }: { label?: string }) {
   return (
@@ -57,52 +78,84 @@ export function FindingExplanationPanel({
   config: PortalConfig;
   session: Session;
 }) {
-  const [runDetail, setRunDetail] = useState<DataItem | null>(null);
-  const [runEvents, setRunEvents] = useState<DataItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [fetchError, setFetchError] = useState('');
+  const [runEvidence, setRunEvidence] = useState<LinkedRunEvidenceState>(EMPTY_RUN_EVIDENCE);
   const [fetchGeneration, setFetchGeneration] = useState(0);
 
   const testRunId = getString(finding, ['test_run_id'], '');
+  const visibleRunEvidence = runEvidence.runId === testRunId
+    ? runEvidence
+    : {
+        ...EMPTY_RUN_EVIDENCE,
+        runId: testRunId,
+        status: testRunId ? 'loading' as const : 'idle' as const,
+      };
 
   const loadRunEvidence = useCallback(() => {
     if (!testRunId) return;
+    setRunEvidence({
+      ...EMPTY_RUN_EVIDENCE,
+      runId: testRunId,
+      status: 'loading',
+    });
     setFetchGeneration((value) => value + 1);
   }, [testRunId]);
 
   useEffect(() => {
     if (!testRunId) {
-      setRunDetail(null);
-      setRunEvents([]);
-      setLoading(false);
-      setFetchError('');
+      setRunEvidence(EMPTY_RUN_EVIDENCE);
       return;
     }
 
+    const requestedRunId = testRunId;
     let cancelled = false;
-    setLoading(true);
-    setFetchError('');
+    setRunEvidence({
+      ...EMPTY_RUN_EVIDENCE,
+      runId: requestedRunId,
+      status: 'loading',
+    });
     Promise.all([
-      requestJson(config, session, `/v1/test-runs/${testRunId}`),
-      requestJson(config, session, `/v1/test-runs/${testRunId}/events`),
+      requestJson(config, session, `/v1/test-runs/${encodeURIComponent(requestedRunId)}`),
+      requestJson(config, session, `/v1/test-runs/${encodeURIComponent(requestedRunId)}/events`),
     ])
-      .then(([detail, eventsPayload]) => {
+      .then(([detailPayload, eventsPayload]) => {
         if (cancelled) return;
-        setRunDetail(detail as DataItem);
-        const items = Array.isArray((eventsPayload as { items?: unknown }).items)
-          ? (eventsPayload as { items: DataItem[] }).items
-          : [];
-        setRunEvents(items);
+        if (!isDataItem(detailPayload)) {
+          throw new Error('The linked run returned an invalid detail record.');
+        }
+        const returnedRunId = getString(detailPayload, ['id', 'test_run_id'], '');
+        if (returnedRunId !== requestedRunId) {
+          throw new Error('The linked run response did not match this finding.');
+        }
+        if (!isDataItem(eventsPayload) || !Array.isArray(eventsPayload.items)) {
+          throw new Error('The linked run returned an invalid event log.');
+        }
+        if (!eventsPayload.items.every(isDataItem)) {
+          throw new Error('The linked run event log contained invalid records.');
+        }
+        const events = eventsPayload.items as DataItem[];
+        if (events.some((event) => {
+          const eventRunId = getString(event, ['test_run_id'], '');
+          return eventRunId !== '' && eventRunId !== requestedRunId;
+        })) {
+          throw new Error('The linked run event log contained records from another run.');
+        }
+        setRunEvidence({
+          runId: requestedRunId,
+          status: 'loaded',
+          detail: detailPayload,
+          events,
+          error: '',
+        });
       })
       .catch((err) => {
         if (!cancelled) {
-          setRunDetail(null);
-          setRunEvents([]);
-          setFetchError(err instanceof Error ? err.message : 'Could not load linked run evidence.');
+          setRunEvidence({
+            ...EMPTY_RUN_EVIDENCE,
+            runId: requestedRunId,
+            status: 'error',
+            error: err instanceof Error ? err.message : 'Could not load linked run evidence.',
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
 
     return () => {
@@ -111,8 +164,8 @@ export function FindingExplanationPanel({
   }, [testRunId, config, session, fetchGeneration]);
 
   const explanationDetail = useMemo(
-    () => buildFindingRunDetail(finding, runDetail),
-    [finding, runDetail]
+    () => buildFindingRunDetail(finding, visibleRunEvidence.detail),
+    [finding, visibleRunEvidence.detail]
   );
 
   if (!finding) {
@@ -122,17 +175,17 @@ export function FindingExplanationPanel({
   if (!testRunId) {
     return (
       <section className="verdict-explanation verdict-explanation--pending">
-        <h4>Why this finding?</h4>
-        <p className="muted">This finding has no linked test run; probe and agent evidence cannot be loaded.</p>
+        <h3>Linked evidence unavailable</h3>
+        <p className="muted">This finding does not identify an originating test run, so probe and agent evidence cannot be attributed.</p>
         {getString(finding, ['notes'], '') ? (
           <div className="verdict-explanation-grid">
-            <ExplanationField label="Conclusion" value={getString(finding, ['notes'])} fullWidth />
+            <ExplanationField label="Finding note — not linked run evidence" value={getString(finding, ['notes'])} fullWidth />
           </div>
         ) : null}
         {getString(finding, ['remediation_template'], '') ? (
           <div className="verdict-explanation-grid">
             <ExplanationField
-              label="Remediation"
+              label="Recorded remediation"
               value={resolveRemediationTemplate(getString(finding, ['remediation_template']), { finding })}
               fullWidth
             />
@@ -142,37 +195,55 @@ export function FindingExplanationPanel({
     );
   }
 
-  if (fetchError) {
+  if (visibleRunEvidence.status === 'error') {
     return (
       <div className="finding-explanation-panel">
-        <div className="form-banner error stack-tight">
-          <p>{fetchError}</p>
+        <div className="form-banner error stack-tight" role="alert">
+          <strong>Linked run evidence could not be loaded.</strong>
+          <p>{visibleRunEvidence.error}</p>
+          <p className="muted">The run and its event log remain unavailable; no empty evidence set is being treated as trusted.</p>
           <div className="row-actions">
-            <Button size="sm" variant="secondary" onClick={() => loadRunEvidence()}>Retry</Button>
+            <Button size="sm" variant="secondary" onClick={loadRunEvidence}>Retry evidence load</Button>
           </div>
         </div>
-        {getString(finding, ['notes'], '') ? (
-          <p className="muted">Finding notes: {getString(finding, ['notes'])}</p>
-        ) : null}
+        <div className="verdict-explanation-grid" aria-label="Unverified finding provenance">
+          <ExplanationField label="Originating run requested by finding" value={testRunId} />
+          {getString(finding, ['notes'], '') ? (
+            <ExplanationField label="Finding note — not linked run evidence" value={getString(finding, ['notes'])} />
+          ) : null}
+        </div>
       </div>
     );
   }
 
-  if (loading && !explanationDetail) {
-    return <DetailLoadingPlaceholder label="Loading linked run evidence for this finding…" />;
+  if (visibleRunEvidence.status === 'loading' || !explanationDetail) {
+    return <DetailLoadingPlaceholder label={`Loading linked run ${testRunId} and its event evidence…`} />;
   }
 
-  const runCheckLabel = getString(runDetail ?? {}, ['check_id'], '—');
+  const findingId = getString(finding, ['id'], '');
+  const linkedRunId = getString(visibleRunEvidence.detail, ['id', 'test_run_id'], testRunId);
+  const runCheckId = getString(visibleRunEvidence.detail, ['check_id'], '');
+  const eventCount = visibleRunEvidence.events.length;
 
   return (
     <div className="finding-explanation-panel">
-      <p className="muted">
-        Linked run {runDetail ? getString(runDetail, ['check_id'], testRunId) : testRunId}
-        {runDetail ? ` · Check ${runCheckLabel}` : ''}
-      </p>
+      <section className="verdict-explanation" aria-label="Finding evidence provenance">
+        <h3>Evidence provenance</h3>
+        <div className="verdict-explanation-grid">
+          <ExplanationField label="Finding record" value={findingId || 'Not returned by finding'} />
+          <ExplanationField label="Originating run" value={linkedRunId} />
+          <ExplanationField label="Run check" value={runCheckId || 'Not returned by linked run'} />
+          <ExplanationField label="Run event records" value={`${eventCount} loaded from linked run`} />
+        </div>
+        <div className="row-actions">
+          <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', linkedRunId)}>
+            Open linked run
+          </AnchorButton>
+        </div>
+      </section>
       <VerdictExplanationPanel
         detail={explanationDetail}
-        events={runEvents}
+        events={visibleRunEvidence.events}
         finding={finding}
         heading="Why this finding?"
       />

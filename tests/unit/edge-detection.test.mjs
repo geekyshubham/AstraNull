@@ -14,6 +14,8 @@ const RUNTIME_CONFIG = {
   featureFlags: { wafPostureEnabled: true },
 };
 
+const EDGE_NONCE = 'sha256:edge-detection-test';
+
 function edgeRun(overrides = {}) {
   return {
     id: 'run_edge_1',
@@ -22,6 +24,24 @@ function edgeRun(overrides = {}) {
     target_id: 'tgt_1',
     check_id: WAF_EDGE_DETECTION_CHECK_ID,
     status: 'running',
+    correlation: { nonce_hash: EDGE_NONCE },
+    ...overrides,
+  };
+}
+
+function trustedEdgeEvent(runId = 'run_edge_1', overrides = {}) {
+  return {
+    id: 'event_signed',
+    test_run_id: runId,
+    signal_type: 'probe_result',
+    producer_kind: 'signed_probe',
+    source: 'probe_worker',
+    check_id: WAF_EDGE_DETECTION_CHECK_ID,
+    nonce_hash: EDGE_NONCE,
+    metadata: {
+      external_result: 'blocked',
+      edge_signature: { waf_present: true, cdn_detected: false },
+    },
     ...overrides,
   };
 }
@@ -185,6 +205,46 @@ describe('edge-detection service delegation', () => {
     assert.equal(cancelled.status, 'error');
     assert.equal(cancelled.reason, 'test_run_failed');
     assert.equal(cancelled.detection, null);
+  });
+
+  it('rejects missing and wrong event run IDs even when every other provenance field matches', async () => {
+    const run = edgeRun({ status: 'verdicted' });
+    for (const decoy of [
+      trustedEdgeEvent(undefined, { test_run_id: undefined }),
+      trustedEdgeEvent('run_edge_decoy'),
+    ]) {
+      const result = await getEdgeDetection(
+        { tenantId: 'ten_demo' },
+        run.id,
+        {
+          runtimeConfig: RUNTIME_CONFIG,
+          testRuns: {
+            getTestRun: async () => run,
+            getRunEvents: async () => [decoy],
+          },
+        },
+      );
+      assert.equal(result.status, 'inconclusive');
+      assert.equal(result.reason, 'worker_result_not_observed');
+      assert.equal(result.detection, null);
+    }
+
+    const exact = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      {
+        runtimeConfig: RUNTIME_CONFIG,
+        testRuns: {
+          getTestRun: async () => run,
+          getRunEvents: async () => [
+            trustedEdgeEvent('run_edge_decoy'),
+            trustedEdgeEvent(run.id),
+          ],
+        },
+      },
+    );
+    assert.equal(exact.status, 'detected');
+    assert.equal(exact.detection.waf.status, 'detected');
   });
 
   it('rejects raw host/private-IP input before startTestRun can run', async () => {

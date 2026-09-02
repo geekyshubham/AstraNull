@@ -61,9 +61,9 @@ describe('state payload builder (dev-json ↔ Postgres parity)', () => {
     );
   });
 
-  it('buildGetStatePayload returns identical keys for rollup-backed fixtures', () => {
+  it('buildGetStatePayload keeps rollup aggregates but authoritative readiness wins', () => {
     const rollup = {
-      readiness: { score: 57, factors: [], persistence: 'rollup' },
+      readiness: { score: 97, factors: [], persistence: 'stale-unversioned-rollup' },
       target_groups: 42,
       agents_online: 3,
       recent_runs: [{ id: 'run_1' }],
@@ -72,7 +72,7 @@ describe('state payload builder (dev-json ↔ Postgres parity)', () => {
       high_scale_status: 'pending',
     };
     const computed = {
-      readiness: { score: 99, factors: [], persistence: 'computed' },
+      readiness: { score: 0, factors: [], persistence: 'computed' },
       target_groups: 1,
       agents_online: 0,
       recent_runs: [],
@@ -90,7 +90,8 @@ describe('state payload builder (dev-json ↔ Postgres parity)', () => {
     });
 
     assert.equal(payload.tenant_id, 'ten_demo');
-    assert.equal(payload.readiness.score, 57);
+    assert.equal(rollup.readiness.score, 97);
+    assert.equal(payload.readiness.score, 0);
     assert.equal(payload.target_groups, 42);
     assert.equal(payload.agents_online, 3);
     assert.deepEqual(payload.recent_runs, [{ id: 'run_1' }]);
@@ -108,7 +109,7 @@ describe('state payload builder (dev-json ↔ Postgres parity)', () => {
       highScaleRequests: [],
     });
     assert.equal(unwired.high_scale_status, 'postgres_high_scale_not_wired');
-    assert.equal(unwired.readiness.score, 99);
+    assert.equal(unwired.readiness.score, 0);
 
     assert.equal(
       resolveHighScaleStatus({

@@ -402,9 +402,14 @@ describe('postgres agent control repository', () => {
     assert.doesNotMatch(q.text, /\bjob_type\b/);
   });
 
-  it('ackAgentJob only updates pending jobs', async () => {
+  it('ackAgentJob row-locks a pending job and reports the transition', async () => {
     const ackedAt = '2026-06-03T09:00:00.000Z';
     const pool = createRecordingPool((text, params) => {
+      if (text.includes('FROM agent_jobs') && text.includes('FOR UPDATE')) {
+        assert.match(text, /WHERE tenant_id = \$1 AND agent_id = \$2 AND id = \$3/);
+        assert.deepEqual(params, [CTX.tenantId, AGENT_ID, JOB_ID]);
+        return { rows: [{ ...agentJobRecord, payload_json: {} }] };
+      }
       if (text.startsWith('UPDATE agent_jobs')) {
         assert.match(text, /status = 'acked'/);
         assert.match(text, /AND status = 'pending'/);
@@ -426,13 +431,48 @@ describe('postgres agent control repository', () => {
       return { rows: [] };
     });
     const repo = createAgentControlRepository(pool);
-    const row = await repo.ackAgentJob(
+    const result = await repo.ackAgentJob(
       { tenantId: CTX.tenantId, agentId: AGENT_ID, jobId: JOB_ID },
       ackedAt,
     );
-    assert.equal(row.status, 'acked');
-    assert.equal(row.acked_at, ackedAt);
+    assert.equal(result.transitioned, true);
+    assert.equal(result.job.status, 'acked');
+    assert.equal(result.job.acked_at, ackedAt);
     assertTenantWrapped(pool.client, CTX.tenantId);
+  });
+
+  it('ackAgentJob returns existing acked or observed rows without updating them', async () => {
+    const originalAckedAt = '2026-06-03T09:00:00.000Z';
+    const retryAt = '2026-06-03T09:05:00.000Z';
+    for (const status of ['acked', 'observed']) {
+      const existing = {
+        ...agentJobRecord,
+        status,
+        acked_at: originalAckedAt,
+        observed_at: status === 'observed' ? '2026-06-03T09:01:00.000Z' : null,
+        payload_json: {},
+      };
+      const pool = createRecordingPool((text) => {
+        if (text.includes('FROM agent_jobs') && text.includes('FOR UPDATE')) {
+          return { rows: [existing] };
+        }
+        if (text.startsWith('UPDATE agent_jobs')) {
+          throw new Error(`ACK replay must not update an ${status} job`);
+        }
+        return { rows: [] };
+      });
+      const repo = createAgentControlRepository(pool);
+      const result = await repo.ackAgentJob(
+        { tenantId: CTX.tenantId, agentId: AGENT_ID, jobId: JOB_ID },
+        retryAt,
+      );
+
+      assert.equal(result.transitioned, false);
+      assert.equal(result.job.status, status);
+      assert.equal(result.job.acked_at, originalAckedAt);
+      assert.equal(dataQueries(pool.client).length, 1);
+      assertTenantWrapped(pool.client, CTX.tenantId);
+    }
   });
 
   it('markAgentJobObserved only updates acked jobs', async () => {

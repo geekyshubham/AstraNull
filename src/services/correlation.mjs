@@ -1,6 +1,37 @@
+import {
+  OBSERVATION_ONLY_PROBE_KINDS,
+  verdictSupportsReadiness,
+} from '../lib/readinessVerdicts.mjs';
+
+export { OBSERVATION_ONLY_PROBE_KINDS, verdictSupportsReadiness };
+
 /**
  * Correlation truth table — evidence-backed verdicts (metadata-only developer validation).
  */
+
+const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
+export function isObservationOnlyProbeKind(probeKind) {
+  return OBSERVATION_ONLY_PROBE_KIND_SET.has(probeKind);
+}
+
+export function probeEventHasProbeIo(probeEvent) {
+  const metadata = probeEvent?.metadata ?? probeEvent?.metadata_json;
+  const probeRequestsSent = metadata?.safety_attestation?.probe_requests_sent;
+  return Number.isSafeInteger(probeRequestsSent) && probeRequestsSent > 0;
+}
+
+function correlateObservationOnlyVerdict(probeKind, { externalOnly = false } = {}) {
+  const noIo = probeKind === 'metadata_marker';
+  return {
+    verdict: 'inconclusive',
+    confidence: externalOnly ? 'external_only' : 'low',
+    ...(externalOnly ? { placement: 'unverified', strengthen_hint: 'deploy_agent' } : {}),
+    explanation: noIo
+      ? 'Metadata-only check performed no network I/O and cannot establish readiness or exposure.'
+      : `${probeKind} recorded transport or liveness metadata only; it did not establish this check's verdict logic.`,
+    createsFinding: false,
+  };
+}
 
 export function correlateVerdict({
   externalResult,
@@ -8,7 +39,13 @@ export function correlateVerdict({
   expectedBehavior,
   agentOnline,
   agentBound,
+  probeKind,
+  probeIoObserved = false,
 }) {
+  if (isObservationOnlyProbeKind(probeKind)) {
+    return correlateObservationOnlyVerdict(probeKind);
+  }
+
   if (!agentOnline || !agentBound) {
     return {
       verdict: 'inconclusive',
@@ -21,6 +58,15 @@ export function correlateVerdict({
 
   const blocked = externalResult === 'blocked' || externalResult === 'timeout';
   const connected = externalResult === 'connected' || externalResult === 'allowed';
+
+  if (blocked && probeIoObserved !== true) {
+    return {
+      verdict: 'inconclusive',
+      confidence: 'low',
+      explanation: 'Blocked/timeout metadata had no attested probe I/O and cannot establish protection.',
+      createsFinding: false,
+    };
+  }
 
   if (expectedBehavior === 'must_block_before_origin') {
     if (blocked && !agentObserved) {
@@ -90,9 +136,29 @@ export function correlateVerdict({
   };
 }
 
-export function correlateExternalOnlyVerdict({ externalResult, expectedBehavior }) {
+export function correlateExternalOnlyVerdict({
+  externalResult,
+  expectedBehavior,
+  probeKind,
+  probeIoObserved = false,
+}) {
+  if (isObservationOnlyProbeKind(probeKind)) {
+    return correlateObservationOnlyVerdict(probeKind, { externalOnly: true });
+  }
+
   const blocked = externalResult === 'blocked' || externalResult === 'timeout';
   const connected = externalResult === 'connected' || externalResult === 'allowed';
+
+  if (blocked && probeIoObserved !== true) {
+    return {
+      verdict: 'inconclusive',
+      confidence: 'external_only',
+      placement: 'unverified',
+      explanation: 'Blocked/timeout metadata had no attested probe I/O and cannot establish edge protection.',
+      createsFinding: false,
+      strengthen_hint: 'deploy_agent',
+    };
+  }
 
   if (expectedBehavior === 'must_block_before_origin') {
     if (blocked) {

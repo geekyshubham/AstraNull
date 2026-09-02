@@ -141,9 +141,9 @@ Failure states:
 - Probe workers are AstraNull-owned and authenticated (HMAC request headers + per-job `job_signature` over canonical job fields).
 - Reference worker CLI: `workers/probe-worker.mjs` — polls jobs, verifies signatures, runs metadata-only probes (no response bodies or raw packets), posts `safety_attestation`. Does not accept arbitrary targets on the command line.
 - Control plane routes: `GET /internal/probe/jobs`, `POST /internal/probe/jobs/:id/result` when `ASTRANULL_PROBE_MODE=signed-worker`.
-- Probe jobs are signed and scoped; `job.constraints` includes `max_requests`, `timeout_ms`, and existing duration/event/concurrency caps.
+- Probe jobs are signed and scoped; `job.constraints` includes `max_probe_requests`, `min_destination_resolver_attempts`, `max_destination_resolver_attempts`, `max_total_operations`, compatibility `max_requests` (equal to `max_total_operations`), `timeout_ms`, and existing duration/event/concurrency caps.
 - Probe workers cannot choose arbitrary targets outside assigned job.
-- Probe workers enforce per-check caps locally; control plane **rejects** results without `safety_attestation` (or `execution_summary`) or when `requests_sent` / `duration_ms` exceed signed caps (`missing_safety_attestation`, `invalid_safety_attestation`, `safety_attestation_exceeded`).
+- Probe workers enforce per-check caps locally; the control plane **rejects** results without `safety_attestation` (or `execution_summary`), with incomplete/incoherent split accounting, or when exact `probe_requests_sent`, `destination_resolver_attempts`, `total_operations`, or `duration_ms` violate signed probe/resolver/total/time caps (`missing_safety_attestation`, `invalid_safety_attestation`, `invalid_signed_operation_caps`, `safety_attestation_exceeded`).
 - Accepted probe events and evidence store a sanitized attestation summary (metadata-only optional fields such as `worker_version`, `region`, `completed_at`).
 - Probe workers upload result metadata, not packet payloads by default.
 - Probe fleet must support region selection, retries, jitter, and safe abort.

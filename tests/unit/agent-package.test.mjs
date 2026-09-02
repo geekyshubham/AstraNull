@@ -326,6 +326,8 @@ describe('agent package builder', () => {
     assert.ok(fs.existsSync(rpm.buildroot));
     const specText = fs.readFileSync(rpm.specPath, 'utf8');
     assert.match(specText, /^Name:\s+astranull-agent/m);
+    assert.match(specText, /^Version:\s+9\.9\.9\.rpm$/m);
+    assert.match(specText, /cp -a "%\{_astranull_stage_dir\}\/\." "%\{buildroot\}\/"/);
     assert.match(specText, /Requires:\s+nodejs >= 20/);
     assert.match(specText, /\/usr\/local\/bin\/astranull-agent\.mjs/);
     assert.match(specText, /\/etc\/astranull\/agent\.env\.example/);
@@ -373,6 +375,7 @@ describe('agent package builder', () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].cmd, 'rpmbuild');
     assert.ok(calls[0].args.includes('-bb'));
+    assert.ok(calls[0].args.some((arg) => String(arg).startsWith('_astranull_stage_dir ')));
     assert.ok(rpm.rpmPath);
     assert.equal(rpm.rpmPath, rpm.expectedRpmPath);
     assert.ok(fs.existsSync(rpm.rpmPath));

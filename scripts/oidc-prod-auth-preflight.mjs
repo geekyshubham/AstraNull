@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +10,10 @@ import { redactObject } from '../src/lib/redact.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_OUT = 'output/oidc-prod-auth-preflight.json';
 
-const DEV_SESSION_SECRET = 'preflight-negative-session-secret-32-chars!!';
-const PROBE_SECRET = 'preflight-probe-worker-secret-32-chars!!';
-const ENC_KEY_PLACEHOLDER = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+const DEV_SESSION_SECRET = randomBytes(32).toString('base64url');
+const PROBE_SECRET = randomBytes(32).toString('base64url');
+const ENC_KEY_PLACEHOLDER = randomBytes(32).toString('base64');
+const DATABASE_URL = `postgresql://preflight:${randomBytes(24).toString('base64url')}@db.example:5432/astranull`;
 
 export function parseArgs(argv = []) {
   const opts = {
@@ -83,19 +85,22 @@ function productionProbeEnv(overrides = {}) {
     ASTRANULL_OIDC_AUDIENCE: 'astranull-api',
     ASTRANULL_OIDC_JWKS_URL: 'https://idp.example/oauth2/default/v1/keys',
     ASTRANULL_SECRET_ENCRYPTION_KEY: ENC_KEY_PLACEHOLDER,
-    ASTRANULL_DATABASE_URL: 'postgresql://preflight:secret@db.example:5432/astranull',
+    ASTRANULL_DATABASE_URL: DATABASE_URL,
     ASTRANULL_PROBE_WORKER_SECRET: PROBE_SECRET,
     ...overrides,
   };
 }
 
-function probeStartupRefused(env) {
+function probeStartupRefused(env, expectedReason) {
   try {
     loadRuntimeConfig(env);
     return { ok: false, detail: 'Expected startup refusal but loadRuntimeConfig succeeded.' };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { ok: true, detail: redactDatabaseUrlInMessage(message, env) };
+    const redacted = redactDatabaseUrlInMessage(message, env);
+    return message.includes(expectedReason)
+      ? { ok: true, detail: redacted }
+      : { ok: false, detail: `Startup refused for an unexpected reason: ${redacted}` };
   }
 }
 
@@ -200,6 +205,7 @@ export function evaluateOidcProdAuthPreflight(env = process.env, options = {}) {
 
   const negativeDevHeaders = probeStartupRefused(
     productionProbeEnv({ ASTRANULL_AUTH_MODE: 'dev-headers' }),
+    'ASTRANULL_AUTH_MODE must be oidc-jwt',
   );
   pushCheck(checks, env, {
     id: 'negative_dev_headers_refused',
@@ -212,6 +218,7 @@ export function evaluateOidcProdAuthPreflight(env = process.env, options = {}) {
       ASTRANULL_AUTH_MODE: 'signed-session',
       ASTRANULL_SESSION_SECRET: DEV_SESSION_SECRET,
     }),
+    'ASTRANULL_AUTH_MODE must be oidc-jwt',
   );
   pushCheck(checks, env, {
     id: 'negative_signed_session_refused',
@@ -221,6 +228,7 @@ export function evaluateOidcProdAuthPreflight(env = process.env, options = {}) {
 
   const negativeHttpJwks = probeStartupRefused(
     productionProbeEnv({ ASTRANULL_OIDC_JWKS_URL: 'http://idp.example/jwks' }),
+    'ASTRANULL_OIDC_JWKS_URL must use HTTPS',
   );
   pushCheck(checks, env, {
     id: 'negative_http_jwks_refused',

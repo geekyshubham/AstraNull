@@ -18,6 +18,7 @@ import { evidenceTierForCheck } from '../../src/lib/readinessVerdicts.mjs';
 import { evidenceTierForTaxonomyCheckId } from '../../src/lib/probeEvidenceTiers.mjs';
 import {
   WORKER_EXECUTED_KIND_BY_DECLARED_KIND,
+  readExternalCatalogIds,
   validateDeclaredProbeKinds,
   validateResourceExhaustionTaxonomy,
 } from '../../scripts/validate-resource-exhaustion-taxonomy.mjs';
@@ -67,6 +68,22 @@ describe('resource-exhaustion taxonomy', () => {
     assert.ok(result.taxonomy.attack_vectors >= 140);
     assert.equal(result.catalog_unclaimed_count, 0, result.catalog_unclaimed_ids.join(', '));
     assert.deepEqual(result.catalog_unclaimed_ids, []);
+    assert.deepEqual(result.catalog_partition, {
+      external_rows: 721,
+      external_unique_ids: 721,
+      claim_occurrences: 680,
+      claimed_ids: 680,
+      out_of_scope_occurrences: 41,
+      out_of_scope_ids: 41,
+      disposition_ids: 721,
+      duplicate_external_ids: [],
+      duplicate_claim_ids: [],
+      duplicate_out_of_scope_ids: [],
+      unknown_claim_ids: [],
+      unknown_out_of_scope_ids: [],
+      claim_out_of_scope_overlap_ids: [],
+      unclaimed_ids: [],
+    });
     const duplicateClaimErrors = result.errors.filter((error) => error.includes('duplicate registry claims'));
     assert.equal(duplicateClaimErrors.length, 0, duplicateClaimErrors.join('; '));
     assert.equal(
@@ -92,16 +109,20 @@ describe('resource-exhaustion taxonomy', () => {
     }
   });
 
-  it('reports the full honest mixed-coverage distribution, including legitimate pending entries', (t) => {
+  it('reports the exact post-remediation mixed-coverage distribution', (t) => {
     const summary = summarizeCoverage();
-    assert.ok(summary.implemented > 0, 'dedicated semantic probe families remain implemented');
-    assert.ok(summary.partial > summary.implemented, 'metadata/liveness/posture coverage remains partial');
-    assert.ok(summary.soc_only > 0, 'governed-only vectors remain SOC-only');
-    assert.ok(Number.isInteger(summary.pending) && summary.pending >= 0);
-    assert.equal(
-      summary.implemented + summary.partial + summary.soc_only + summary.pending,
-      summary.total,
+    assert.deepEqual(
+      {
+        implemented: summary.implemented,
+        partial: summary.partial,
+        soc_only: summary.soc_only,
+        pending: summary.pending,
+        total: summary.total,
+      },
+      { implemented: 79, partial: 92, soc_only: 78, pending: 0, total: 249 },
     );
+    const validation = validateResourceExhaustionTaxonomy();
+    assert.equal(validation.taxonomy.coverage.implemented_or_partial_pct, 68.7);
     t.diagnostic(`coverage distribution: ${JSON.stringify(summary)}`);
   });
 
@@ -191,6 +212,58 @@ describe('resource-exhaustion taxonomy', () => {
         seen.set(catalogId, entry.id);
       }
     }
+  });
+
+  it('fails closed unless claims and exclusions exactly partition canonical catalog IDs', () => {
+    const externalCatalogIds = readExternalCatalogIds();
+    const registryEntries = [
+      ...ATTACK_VECTOR_REGISTRY,
+      ...WAF_VULNERABILITY_REGISTRY,
+      ...NON_DDOS_AVAILABILITY_THREATS,
+    ];
+    const expectError = (result, fragment) => {
+      assert.equal(result.ok, false, fragment);
+      assert.ok(result.errors.some((error) => error.includes(fragment)), result.errors.join('; '));
+    };
+
+    const duplicateExternalIds = [...externalCatalogIds];
+    duplicateExternalIds[duplicateExternalIds.length - 1] = duplicateExternalIds[0];
+    expectError(
+      validateResourceExhaustionTaxonomy({ externalCatalogIds: duplicateExternalIds }),
+      'external catalog duplicate ids',
+    );
+
+    const withClaim = (catalogId) => registryEntries.map((entry, index) => (
+      index === 0
+        ? { ...entry, catalog_vector_ids: [...entry.catalog_vector_ids, catalogId] }
+        : entry
+    ));
+    expectError(
+      validateResourceExhaustionTaxonomy({ registryEntries: withClaim('NET-999') }),
+      'registry claims unknown catalog ids',
+    );
+    expectError(
+      validateResourceExhaustionTaxonomy({
+        registryEntries: withClaim(OUT_OF_SCOPE_VECTORS[0].catalog_vector_ids[0]),
+      }),
+      'catalog ids both claimed and out-of-scope',
+    );
+
+    const withOutOfScopeId = (catalogId) => OUT_OF_SCOPE_VECTORS.map((entry, index) => (
+      index === 0
+        ? { ...entry, catalog_vector_ids: [...entry.catalog_vector_ids, catalogId] }
+        : entry
+    ));
+    expectError(
+      validateResourceExhaustionTaxonomy({
+        outOfScopeVectors: withOutOfScopeId(OUT_OF_SCOPE_VECTORS[0].catalog_vector_ids[0]),
+      }),
+      'out-of-scope duplicate catalog ids',
+    );
+    expectError(
+      validateResourceExhaustionTaxonomy({ outOfScopeVectors: withOutOfScopeId('NET-998') }),
+      'out-of-scope unknown catalog ids',
+    );
   });
 
   it('declares exactly 41 outside-in exclusions with auditable reason codes', () => {

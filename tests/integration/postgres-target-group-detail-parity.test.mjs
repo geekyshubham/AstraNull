@@ -157,7 +157,6 @@ describe('postgres getTargetGroup detail parity', () => {
         check_count: 'chk_1',
         verdict: 'running',
         started_at: detail.runs_recent[0].started_at,
-        agent_id: null,
       });
       assert.match(detail.runs_recent[0].started_at, /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
 

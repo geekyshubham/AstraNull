@@ -7,7 +7,10 @@ import {
   resolveExpectedBehaviorForCheck,
 } from '../../contracts/checks.mjs';
 import { newId } from '../../lib/ids.mjs';
-import { verdictWasInserted } from './validationEvidenceRepository.mjs';
+import {
+  VERDICT_INSERTED,
+  verdictWasInserted,
+} from './validationEvidenceRepository.mjs';
 import { incMetric } from '../../lib/metrics.mjs';
 import {
   buildSignedProbeJobRecord,
@@ -29,6 +32,7 @@ import {
   correlateExternalOnlyVerdict,
   correlateOpsReadinessVerdict,
   correlateVerdict,
+  probeEventHasProbeIo,
   withinCorrelationWindow,
 } from '../../services/correlation.mjs';
 import {
@@ -86,7 +90,10 @@ export const VALIDATION_KILL_SWITCH_REPOSITORY_METHODS = Object.freeze([
 ]);
 
 /** @type {readonly string[]} */
-export const VALIDATION_AUDIT_REPOSITORY_METHODS = Object.freeze(['appendAuditEvent']);
+export const VALIDATION_AUDIT_REPOSITORY_METHODS = Object.freeze([
+  'appendAuditEvent',
+  'withTenantAuditLock',
+]);
 
 const ACTIVE_RUN_STATUSES = Object.freeze(['planned', 'running', 'collecting']);
 const CANCELLABLE_STATUSES = new Set(['planned', 'running', 'collecting']);
@@ -254,6 +261,22 @@ function hasMatchingObservation(run, events) {
   return Boolean(findMatchingObservation(run, events));
 }
 
+function findObservationForAgentJob(run, events, job, agentId) {
+  const candidates = events.filter(
+    (event) => event.test_run_id === run.id
+      && event.signal_type === 'agent_observation'
+      && isTrustedProducerEvent(event)
+      && event.agent_id === agentId
+      && event.nonce_hash === job.nonce_hash
+      && event.target_id === job.target_id
+      && event.check_id === job.check_id,
+  );
+  const exact = candidates.find((event) => event.metadata?.agent_job_id === job.id);
+  if (exact) return exact;
+  const legacy = candidates.filter((event) => event.metadata?.agent_job_id == null);
+  return legacy.length === 1 ? legacy[0] : null;
+}
+
 function boundOnlineAgentForRun(agents, run) {
   return (
     agents.find(
@@ -396,7 +419,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
     });
   }
 
-  async function appendAudit(ctx, action, resourceType, resourceId, metadata) {
+  async function appendAudit(ctx, action, resourceType, resourceId, metadata, options = {}) {
     await audit.appendAuditEvent(
       {
         tenant_id: ctx.tenantId,
@@ -407,12 +430,43 @@ export function createPostgresValidationServices(repositories, options = {}) {
         resource_id: resourceId,
         metadata: metadata == null ? undefined : redactObject(metadata),
       },
-      { now: nowFn() },
+      {
+        now: nowFn(),
+        client: options.client,
+        auditLockHeld: options.auditLockHeld,
+        idempotency: options.idempotency,
+      },
     );
   }
 
-  async function denySafeStart(ctx, action, resourceId, metadata, error, status = 429) {
-    await appendAudit(ctx, action, 'test_run', resourceId, metadata);
+  async function appendObservationAuditOnce(
+    ctx,
+    action,
+    runId,
+    agentId,
+    agentJobId,
+    options = {},
+  ) {
+    return appendAudit(
+      ctx,
+      action,
+      'test_run',
+      runId,
+      { agent_id: agentId, agent_job_id: agentJobId },
+      {
+        client: options.client,
+        idempotency: {
+          actions: ['observation.ingested', 'observation.recovered'],
+          resourceType: 'test_run',
+          resourceId: runId,
+          metadata: { agent_job_id: agentJobId },
+        },
+      },
+    );
+  }
+
+  async function denySafeStart(ctx, action, resourceId, metadata, error, status = 429, options = {}) {
+    await appendAudit(ctx, action, 'test_run', resourceId, metadata, options);
     return { error, status };
   }
 
@@ -508,18 +562,19 @@ export function createPostgresValidationServices(repositories, options = {}) {
     return { group, target, policy: binding.policy };
   }
 
-  async function rejectObservation(ctx, tenantId, agentId, reason, error, status, resourceId, extra = {}) {
+  async function rejectObservation(ctx, tenantId, agentId, reason, error, status, resourceId, extra = {}, options = {}) {
     await appendAudit(
       { tenantId, userId: ctx?.userId ?? 'agent', role: ctx?.role ?? 'agent' },
       'observation.rejected',
       'test_run',
       resourceId ?? null,
       { agent_id: agentId, reason, ...extra },
+      options,
     );
     return { error, status };
   }
 
-  async function denyEventCapForRun(ctx, run, metadata = {}) {
+  async function denyEventCapForRun(ctx, run, metadata = {}, options = {}) {
     return denySafeStart(
       { tenantId: run.tenant_id, userId: ctx?.userId ?? 'agent', role: ctx?.role ?? 'agent' },
       'test_run.event_cap_denied',
@@ -527,51 +582,261 @@ export function createPostgresValidationServices(repositories, options = {}) {
       { check_id: run.check_id, ...metadata },
       'event_cap_exceeded',
       429,
+      options,
     );
   }
 
-  async function upsertFindingForVerdict(ctx, verdict, run, target, agents) {
-    if (!target) return null;
-    const findingCtx = { tenantId: run.tenant_id, userId: 'system', role: 'system' };
-    const existing = await validationEvidence.findOpenFinding(findingCtx, {
+  const FINDING_VERDICT_SEVERITY = Object.freeze({
+    bypassable: 'high',
+    penetrated: 'high',
+    edge_exposed: 'medium',
+  });
+  const VERDICT_PUBLICATION_AUDIT_ACTIONS = Object.freeze([
+    'verdict.published',
+    'verdict.finalized_no_observation',
+  ]);
+  const FINDING_PUBLICATION_AUDIT_ACTIONS = Object.freeze([
+    'finding.created',
+    'finding.updated',
+  ]);
+
+  function assertDurableVerdictRunBinding(verdict, run) {
+    const invalid = !verdict
+      || !run
+      || verdict.test_run_id !== run.id
+      || verdict.target_id !== run.target_id
+      || verdict.check_id !== run.check_id
+      || (verdict.tenant_id != null && verdict.tenant_id !== run.tenant_id)
+      || typeof run.target_group_id !== 'string'
+      || run.target_group_id === ''
+      || typeof run.target_id !== 'string'
+      || run.target_id === ''
+      || typeof run.check_id !== 'string'
+      || run.check_id === '';
+    if (invalid) {
+      throw new Error(`verdict_run_binding_mismatch:${run?.id ?? 'missing'}:${verdict?.id ?? 'missing'}`);
+    }
+  }
+
+  function exactFindingForVerdict(findings, verdictId) {
+    return findings.find(
+      (finding) => finding.verdict_id === verdictId || finding.last_verdict_id === verdictId,
+    ) ?? null;
+  }
+
+  async function lockedFindingPublication(ctx, verdict, run, client) {
+    const severity = FINDING_VERDICT_SEVERITY[verdict.verdict];
+    if (!severity) return null;
+    assertDurableVerdictRunBinding(verdict, run);
+
+    const binding = {
       target_group_id: run.target_group_id,
-      target_id: target.id,
+      target_id: run.target_id,
       check_id: run.check_id,
+    };
+    const existingRows = await validationEvidence.listFindings(ctx, {
+      ...binding,
+      forUpdate: true,
+      client,
     });
+    const findings = Array.isArray(existingRows) ? existingRows : [];
+    const exact = exactFindingForVerdict(findings, verdict.id);
+    if (exact) {
+      return {
+        finding: exact,
+        disposition: 'already_published',
+        auditAction: exact.verdict_id === verdict.id ? 'finding.created' : 'finding.updated',
+      };
+    }
+
+    const priorOpen = findings.find((finding) => finding.status === 'open') ?? null;
     const nowIso = nowFn().toISOString();
-    const findingId = existing?.id ?? newId('finding');
-    const findingRow = await validationEvidence.upsertOpenFindingFromVerdict(findingCtx, {
-      id: findingId,
-      target_group_id: run.target_group_id,
-      target_id: target.id,
-      test_run_id: run.id,
-      check_id: run.check_id,
-      title: `Finding: ${verdict.verdict} on ${target.value}`,
-      severity: verdict.severity ?? 'medium',
-      status: 'open',
-      notes: verdict.explanation,
-      evidence_ids: verdict.evidence_ids,
-      remediation_template: run.remediation_template,
-      verdict_id: existing ? existing.verdict_id : verdict.id,
-      last_verdict_id: verdict.id,
-      assignee: null,
-      created_at: existing?.created_at ?? nowIso,
-      updated_at: nowIso,
-    });
-    await appendAudit(
-      findingCtx,
-      existing ? 'finding.updated' : 'finding.created',
-      'finding',
-      findingRow?.id ?? findingId,
+    const findingId = priorOpen?.id ?? newId('finding');
+    const finding = await validationEvidence.upsertOpenFindingFromVerdict(
+      ctx,
+      {
+        id: findingId,
+        target_group_id: run.target_group_id,
+        target_id: run.target_id,
+        test_run_id: run.id,
+        check_id: run.check_id,
+        // The target may have been archived after the immutable verdict committed. Use the
+        // durable run binding rather than replay input or another currently-active target.
+        title: `Finding: ${verdict.verdict} on ${run.target_id}`,
+        severity,
+        status: 'open',
+        notes: verdict.explanation,
+        evidence_ids: verdict.evidence_ids,
+        remediation_template: run.remediation_template,
+        verdict_id: priorOpen?.verdict_id ?? verdict.id,
+        last_verdict_id: verdict.id,
+        assignee: priorOpen?.assignee ?? null,
+        created_at: priorOpen?.created_at ?? nowIso,
+        updated_at: nowIso,
+      },
+      { client },
     );
-    return findingRow;
+    if (!finding) {
+      // The SQL chronology guard refused an older/equal publication (including a newer closed
+      // finding). Re-read while still holding the transaction locks so a concurrently-created
+      // exact row is recognized, but never reopen or duplicate a newer publication.
+      const refreshedRows = await validationEvidence.listFindings(ctx, {
+        ...binding,
+        forUpdate: true,
+        client,
+      });
+      const refreshed = Array.isArray(refreshedRows) ? refreshedRows : [];
+      const exactAfterGuard = exactFindingForVerdict(refreshed, verdict.id);
+      if (exactAfterGuard) {
+        return {
+          finding: exactAfterGuard,
+          disposition: 'already_published',
+          auditAction: exactAfterGuard.verdict_id === verdict.id
+            ? 'finding.created'
+            : 'finding.updated',
+        };
+      }
+      return { finding: null, disposition: 'superseded', auditAction: null };
+    }
+
+    return {
+      finding,
+      disposition: priorOpen ? 'advanced' : 'created',
+      auditAction: priorOpen ? 'finding.updated' : 'finding.created',
+    };
   }
 
-  async function finalizeOpsReadinessVerdict(ctx, run, probe) {
-    const existingVerdict = await validationEvidence.getVerdictForRun(ctx, run.id);
-    if (existingVerdict) return existingVerdict;
+  async function repairVerdictPublication(ctx, replayVerdict, replayRun, options = {}) {
+    const tenantId = replayRun?.tenant_id ?? ctx.tenantId;
+    const publicationCtx = { tenantId, userId: 'system', role: 'system' };
 
-    const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
+    const publishOnLockedClient = async (client) => {
+      let run = await validationEvidence.getTestRun(publicationCtx, replayRun.id, { client });
+      const verdict = await validationEvidence.getVerdictForRun(
+        publicationCtx,
+        replayRun.id,
+        { client },
+      );
+      if (!run || !verdict) {
+        throw new Error(`verdict_publication_snapshot_missing:${replayRun.id}`);
+      }
+      assertDurableVerdictRunBinding(verdict, run);
+
+      if (run.status !== 'verdicted') {
+        const repairedRun = await validationEvidence.updateTestRun(
+          publicationCtx,
+          run.id,
+          {
+            status: 'verdicted',
+            completed_at: run.completed_at ?? verdict.created_at,
+            expected_statuses: ['running', 'collecting'],
+          },
+          { client },
+        );
+        if (repairedRun) run = repairedRun;
+      }
+
+      const events = await validationEvidence.listRunEvents(publicationCtx, run.id, {
+        limit: 1000,
+        client,
+      });
+      const opsReadiness = isOpsReadinessProbeKind(getCheckById(run.check_id));
+      const findingPublication = opsReadiness
+        ? null
+        : await lockedFindingPublication(publicationCtx, verdict, run, client);
+      const placement = verdict.placement_confidence ?? {};
+      const finalizedWithoutObservation = !opsReadiness
+        && !FINDING_VERDICT_SEVERITY[verdict.verdict]
+        && events.some((event) => event.signal_type === 'agent_no_observation');
+
+      await appendAudit(
+        publicationCtx,
+        finalizedWithoutObservation
+          ? 'verdict.finalized_no_observation'
+          : 'verdict.published',
+        'test_run',
+        run.id,
+        {
+          verdict_id: verdict.id,
+          verdict: verdict.verdict,
+          confidence: verdict.confidence,
+          placement_confidence_level: placement.level,
+          placement_confidence_status: placement.status,
+          ...(opsReadiness ? { ops_readiness: true } : {}),
+        },
+        {
+          client,
+          auditLockHeld: true,
+          // Historical publication audits did not carry verdict_id. Resource/action
+          // identity therefore remains the safe no-duplicate key for this one-verdict run.
+          idempotency: {
+            actions: [...VERDICT_PUBLICATION_AUDIT_ACTIONS],
+            resourceType: 'test_run',
+            resourceId: run.id,
+          },
+        },
+      );
+
+      if (findingPublication?.finding && findingPublication.auditAction) {
+        await appendAudit(
+          publicationCtx,
+          findingPublication.auditAction,
+          'finding',
+          findingPublication.finding.id,
+          {
+            verdict_id: verdict.id,
+            test_run_id: run.id,
+            verdict: verdict.verdict,
+          },
+          {
+            client,
+            auditLockHeld: true,
+            idempotency: {
+              actions: [...FINDING_PUBLICATION_AUDIT_ACTIONS],
+              resourceType: 'finding',
+              resourceId: findingPublication.finding.id,
+              metadata: { verdict_id: verdict.id },
+            },
+          },
+        );
+      }
+      return verdict;
+    };
+
+    const locked = options.client
+      ? { acquired: true, result: await publishOnLockedClient(options.client) }
+      : await audit.withTenantAuditLock(
+        tenantId,
+        async ({ client: auditClient }) => validationEvidence.withRunMutationLock(
+          publicationCtx,
+          replayRun.id,
+          publishOnLockedClient,
+          { client: auditClient, wait: true },
+        ),
+      );
+
+    if (!locked?.acquired) return replayVerdict;
+    if (replayVerdict?.[VERDICT_INSERTED] === false) {
+      return { ...locked.result, [VERDICT_INSERTED]: false };
+    }
+    return locked.result;
+  }
+
+  async function finalizeOpsReadinessVerdict(ctx, run, probe, options = {}) {
+    const repositoryOptions = options.client ? { client: options.client } : {};
+    const events = await validationEvidence.listRunEvents(ctx, run.id, {
+      limit: 1000,
+      ...repositoryOptions,
+    });
+    const existingVerdict = await validationEvidence.getVerdictForRun(
+      ctx,
+      run.id,
+      repositoryOptions,
+    );
+    if (existingVerdict) {
+      return repairVerdictPublication(ctx, existingVerdict, run, options);
+    }
+
     const result = correlateOpsReadinessVerdict({
       externalResult: probe.external_result,
       opsValidationOk: probe.metadata?.ops_validation_ok,
@@ -596,42 +861,45 @@ export function createPostgresValidationServices(repositories, options = {}) {
       placement_confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
-      severity: result.severity,
       created_at: nowIso,
     };
-    const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+    const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord, {
+      ...repositoryOptions,
+      mutationLocksHeld: options.mutationLocksHeld === true,
+    });
     if (!verdict) return null;
-    if (!verdictWasInserted(verdict)) return verdict;
+    if (verdictWasInserted(verdict)) {
+      run.status = 'verdicted';
+      run.completed_at = nowIso;
+    }
 
-    run.status = 'verdicted';
-    run.completed_at = nowIso;
-
-    await appendAudit(
-      { tenantId: run.tenant_id, userId: 'system', role: 'system' },
-      'verdict.published',
-      'test_run',
-      run.id,
-      {
-        verdict: verdict.verdict,
-        confidence: verdict.confidence,
-        placement_confidence_level: placement_confidence.level,
-        placement_confidence_status: placement_confidence.status,
-        ops_readiness: true,
-      },
-    );
-
-    return verdict;
+    return repairVerdictPublication(ctx, verdict, run, options);
   }
 
   async function finalizeVerdictIfReady(ctx, run, agents, options = {}) {
-    const existingVerdict = await validationEvidence.getVerdictForRun(ctx, run.id);
-    if (existingVerdict) return existingVerdict;
-
-    const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
+    const repositoryOptions = options.client ? { client: options.client } : {};
+    const events = await validationEvidence.listRunEvents(ctx, run.id, {
+      limit: 1000,
+      ...repositoryOptions,
+    });
+    const existingVerdict = await validationEvidence.getVerdictForRun(
+      ctx,
+      run.id,
+      repositoryOptions,
+    );
+    const check = getCheckById(run.check_id);
+    if (existingVerdict && isOpsReadinessProbeKind(check)) {
+      return repairVerdictPublication(ctx, existingVerdict, run, options);
+    }
+    if (existingVerdict) {
+      return repairVerdictPublication(ctx, existingVerdict, run, options);
+    }
     if (!hasExternalProbeEvidence(run, events)) return null;
 
-    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
-    const target = group?.targets?.find((t) => t.id === run.target_id) ?? null;
+    const group = await coreCatalog.getTargetGroup(ctx, run.target_group_id, {
+      ...LEAN_GROUP_LOOKUP,
+      ...repositoryOptions,
+    });
     const externalOnly = group?.validation_mode === 'external_only';
 
     const probeEvent = findProbeEvent(run, events);
@@ -640,25 +908,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
       options.agentObserved !== undefined ? options.agentObserved : Boolean(matchingObs);
 
     if (
-      !externalOnly &&
-      !options.finalizedWithoutObservation &&
-      !matchingObs &&
-      !isCollectionWindowExpired(run, nowFn().getTime())
+      !externalOnly
+      && !options.finalizedWithoutObservation
+      && !matchingObs
+      && !isCollectionWindowExpired(run, nowFn().getTime())
     ) {
       return null;
     }
 
     const agent =
-      options.agent ??
-      boundOnlineAgentForRun(agents, run) ??
-      (matchingObs?.agent_id
-        ? agents.find((a) => a.id === matchingObs.agent_id) ?? null
+      options.agent
+      ?? boundOnlineAgentForRun(agents, run)
+      ?? (matchingObs?.agent_id
+        ? agents.find((candidate) => candidate.id === matchingObs.agent_id) ?? null
         : null);
 
     const externalResult = run.probe_external_result ?? probeEvent?.metadata?.external_result;
     const expectedBehavior = resolveExpectedBehaviorForCheck(run.check_id);
+    const probeKind = check?.probe_profile?.kind ?? null;
+    const probeIoObserved = probeEventHasProbeIo(probeEvent);
     const result = externalOnly
-      ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior })
+      ? correlateExternalOnlyVerdict({ externalResult, expectedBehavior, probeKind, probeIoObserved })
       : correlateVerdict({
         externalResult,
         agentObserved,
@@ -667,9 +937,11 @@ export function createPostgresValidationServices(repositories, options = {}) {
         agentBound: Boolean(
           agent && (agent.target_group_id === run.target_group_id || !agent.target_group_id),
         ),
+        probeKind,
+        probeIoObserved,
       });
 
-    const evidenceIds = events.map((e) => e.id);
+    const evidenceIds = events.map((event) => event.id);
     const placementStore = { agents, testRuns: [run] };
     const placement_confidence = computePlacementConfidence(placementStore, run, {
       matchingObservation: matchingObs ?? null,
@@ -689,48 +961,27 @@ export function createPostgresValidationServices(repositories, options = {}) {
       placement_confidence,
       explanation: result.explanation,
       evidence_ids: evidenceIds,
-      severity: result.severity,
       created_at: nowIso,
     };
-    const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord);
+    const verdict = await validationEvidence.createVerdictIfAbsent(ctx, verdictRecord, {
+      ...repositoryOptions,
+      mutationLocksHeld: options.mutationLocksHeld === true,
+    });
     if (!verdict) return null;
-
-    // Lost the finalization race: a verdict was already published for this run and
-    // DO NOTHING left it untouched. Return the incumbent without running any of the
-    // side effects that belong to the winner, so the run status, the audit trail and
-    // the finding severity all describe the verdict that was actually stored.
-    if (!verdictWasInserted(verdict)) {
-      return verdict;
+    if (verdictWasInserted(verdict)) {
+      run.status = 'verdicted';
+      run.completed_at = nowIso;
     }
 
-    run.status = 'verdicted';
-    run.completed_at = nowIso;
-
-    await appendAudit(
-      { tenantId: run.tenant_id, userId: 'system', role: 'system' },
-      options.finalizedWithoutObservation && !externalOnly
-        ? 'verdict.finalized_no_observation'
-        : 'verdict.published',
-      'test_run',
-      run.id,
-      {
-        verdict: verdict.verdict,
-        confidence: verdict.confidence,
-        placement_confidence_level: placement_confidence.level,
-        placement_confidence_status: placement_confidence.status,
-      },
-    );
-
-    if (result.createsFinding) {
-      const fullVerdict = { ...verdict, severity: result.severity ?? verdict.severity };
-      await upsertFindingForVerdict(ctx, fullVerdict, run, target, agents);
-    }
-
-    return verdict;
+    return repairVerdictPublication(ctx, verdict, run, options);
   }
 
-  async function finalizeNoObservation(ctx, run, agents) {
-    const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
+  async function finalizeNoObservation(ctx, run, agents, options = {}) {
+    const repositoryOptions = options.client ? { client: options.client } : {};
+    const events = await validationEvidence.listRunEvents(ctx, run.id, {
+      limit: 1000,
+      ...repositoryOptions,
+    });
     if (wouldExceedEventCap(run, events.length, 1)) {
       await appendAudit(
         { tenantId: run.tenant_id, userId: 'system', role: 'system' },
@@ -738,6 +989,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
         'test_run',
         run.id,
         { phase: 'agent_no_observation' },
+        {
+          ...repositoryOptions,
+          auditLockHeld: options.auditLockHeld === true,
+        },
       );
       return null;
     }
@@ -756,28 +1011,73 @@ export function createPostgresValidationServices(repositories, options = {}) {
         reason: 'bounded_observation_window_elapsed',
         collection_deadline_at: run.collection_deadline_at,
       },
-    });
+    }, repositoryOptions);
     const boundAgent = boundOnlineAgentForRun(agents, run);
     return finalizeVerdictIfReady(ctx, run, agents, {
+      ...options,
       agentObserved: false,
       finalizedWithoutObservation: true,
       agent: boundAgent,
     });
   }
 
-  async function maybeFinalizeCollectingRun(ctx, run, agents, { force = false } = {}) {
+  async function maybeFinalizeCollectingRun(ctx, run, agents, options = {}) {
+    const force = options.force === true;
+    const repositoryOptions = options.client ? { client: options.client } : {};
     if (!run || run.status !== 'collecting') return null;
-    const existingVerdict = await validationEvidence.getVerdictForRun(ctx, run.id);
-    if (existingVerdict) return null;
-    const events = await validationEvidence.listRunEvents(ctx, run.id, { limit: 1000 });
+    const existingVerdict = await validationEvidence.getVerdictForRun(
+      ctx,
+      run.id,
+      repositoryOptions,
+    );
+    if (existingVerdict) {
+      return finalizeVerdictIfReady(ctx, run, agents, options);
+    }
+    const events = await validationEvidence.listRunEvents(ctx, run.id, {
+      limit: 1000,
+      ...repositoryOptions,
+    });
     if (!hasExternalProbeEvidence(run, events)) return null;
-    if (hasMatchingObservation(run, events)) return null;
-    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
+    if (hasMatchingObservation(run, events)) {
+      return finalizeVerdictIfReady(ctx, run, agents, { ...options, agentObserved: true });
+    }
+    const collectingGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, {
+      ...LEAN_GROUP_LOOKUP,
+      ...repositoryOptions,
+    });
     if (collectingGroup?.validation_mode === 'external_only') {
-      return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
+      return finalizeVerdictIfReady(ctx, run, agents, { ...options, agentObserved: false });
     }
     if (!force && !isCollectionWindowExpired(run, nowFn().getTime())) return null;
-    return finalizeNoObservation(ctx, run, agents);
+    return finalizeNoObservation(ctx, run, agents, options);
+  }
+
+  async function completeObservationIngest(runCtx, run, agent, obsEvent, runEvents) {
+    const eventsAfter = runEvents.some((event) => event.id === obsEvent.id)
+      ? runEvents
+      : [...runEvents, obsEvent];
+    if (!['running', 'collecting'].includes(run.status)) {
+      const agents = await agentControl.listAgents(runCtx);
+      const verdict = await finalizeVerdictIfReady(runCtx, run, agents, { agent });
+      const updatedRun = await validationEvidence.getTestRun(runCtx, run.id);
+      return {
+        observation: obsEvent,
+        run: { ...(updatedRun ?? run), verdict: verdict ?? null },
+      };
+    }
+    if (run.awaiting_external_probe && !hasExternalProbeEvidence(run, eventsAfter)) {
+      return { observation: obsEvent, run: { ...run, verdict: null } };
+    }
+
+    const agents = await agentControl.listAgents(runCtx);
+    const verdict =
+      (await finalizeVerdictIfReady(runCtx, run, agents, { agent }))
+      ?? (await validationEvidence.getVerdictForRun(runCtx, run.id));
+    const updatedRun = await validationEvidence.getTestRun(runCtx, run.id);
+    return {
+      observation: obsEvent,
+      run: { ...(updatedRun ?? run), verdict: verdict ?? null },
+    };
   }
 
   const testRuns = {
@@ -835,16 +1135,29 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
       for (const staleRun of runs) {
         try {
-          const { acquired, result } = await validationEvidence.withRunFinalizationLock(
-            ctx,
-            staleRun.id,
-            async () => {
-              // Re-read inside the lock: another sweeper or an observation ingest may
-              // have finalized this run between the listing query and the lock.
-              const fresh = await validationEvidence.getTestRun(ctx, staleRun.id);
-              if (!fresh) return null;
-              return maybeFinalizeCollectingRun(ctx, fresh, agents, { force: true });
-            },
+          const { acquired, result } = await audit.withTenantAuditLock(
+            ctx.tenantId,
+            async ({ client: auditClient }) => validationEvidence.withRunFinalizationLock(
+              ctx,
+              staleRun.id,
+              async (client) => {
+                // Re-read under both locks: another sweeper or observation ingest may have
+                // finalized this run between the listing query and this transaction.
+                const fresh = await validationEvidence.getTestRun(
+                  ctx,
+                  staleRun.id,
+                  { client },
+                );
+                if (!fresh) return null;
+                return maybeFinalizeCollectingRun(ctx, fresh, agents, {
+                  force: true,
+                  client,
+                  auditLockHeld: true,
+                  mutationLocksHeld: true,
+                });
+              },
+              { client: auditClient },
+            ),
           );
 
           if (!acquired) {
@@ -1309,6 +1622,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
               status: 'cancelled',
               completed_at: nowFn().toISOString(),
               summary: { dispatch_failed: true, reason: 'inline_probe_persistence_failed' },
+              expected_statuses: ['running', 'collecting'],
             });
           } catch (cancellationError) {
             cancellationError.cause = error;
@@ -1410,14 +1724,6 @@ export function createPostgresValidationServices(repositories, options = {}) {
         return { error: 'cross_tenant_injection', status: 403 };
       }
 
-      if (!['running', 'collecting'].includes(run.status)) {
-        await appendAudit(runCtx, 'observation.rejected_inactive_run', 'test_run', run.id, {
-          status: run.status,
-          agent_id: agentId,
-        });
-        return { error: 'run_not_collecting', status: 409 };
-      }
-
       if (observationBodyContainsRawFields(body)) {
         return rejectObservation(
           ctx,
@@ -1483,6 +1789,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
+      if (!['running', 'collecting'].includes(run.status) && job.status !== 'observed') {
+        await appendAudit(runCtx, 'observation.rejected_inactive_run', 'test_run', run.id, {
+          status: run.status,
+          agent_id: agentId,
+        });
+        return { error: 'run_not_collecting', status: 409 };
+      }
+
       if (job.status === 'pending') {
         return rejectObservation(
           ctx,
@@ -1496,20 +1810,10 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      if (job.status === 'observed') {
-        return rejectObservation(
-          ctx,
-          run.tenant_id,
-          agentId,
-          'agent_job_already_observed',
-          'agent_job_already_observed',
-          409,
-          run.id,
-          { agent_job_id: agentJobId },
-        );
-      }
+      // Observed rows also enter the audit-first transaction below: a historical crash may
+      // have persisted the observation event without its audit record.
 
-      if (job.status !== 'acked') {
+      if (!['acked', 'observed'].includes(job.status)) {
         return rejectObservation(
           ctx,
           run.tenant_id,
@@ -1522,89 +1826,213 @@ export function createPostgresValidationServices(repositories, options = {}) {
         );
       }
 
-      const mutation = await validationEvidence.withRunMutationLock(runCtx, run.id, async () => {
-        if (await killSwitch.isKillSwitchActiveForTenant(runCtx)) {
-          return rejectObservation(
-            ctx,
-            run.tenant_id,
-            agentId,
-            'kill_switch_active',
-            'kill_switch_active',
-            423,
-            run.id,
-            { agent_job_id: agentJobId },
-          );
-        }
-        const freshRun = await validationEvidence.getTestRun(runCtx, run.id);
-        if (!freshRun || !['running', 'collecting'].includes(freshRun.status)) {
-          return { error: 'run_not_collecting', status: 409 };
-        }
-        const freshJob = await agentControl.getAgentJobById({
-          tenantId: freshRun.tenant_id,
-          agentId,
-          jobId: agentJobId,
-        });
-        if (!freshJob || freshJob.status !== 'acked') {
-          return { error: 'agent_job_not_open', status: 409 };
-        }
-        const priorEvents = await validationEvidence.listRunEvents(runCtx, freshRun.id, { limit: 1000 });
-        if (wouldExceedEventCap(freshRun, priorEvents.length, 1)) {
-          return denyEventCapForRun(ctx, freshRun, { agent_id: agentId, phase: 'agent_observation' });
-        }
+      const mutation = await audit.withTenantAuditLock(
+        run.tenant_id,
+        async ({ client: auditClient }) => validationEvidence.withRunMutationLock(
+          runCtx,
+          run.id,
+          async (client) => {
+            if (await killSwitch.isKillSwitchActiveForTenant(runCtx, { client })) {
+              return rejectObservation(
+                ctx,
+                run.tenant_id,
+                agentId,
+                'kill_switch_active',
+                'kill_switch_active',
+                423,
+                run.id,
+                { agent_job_id: agentJobId },
+                { client },
+              );
+            }
+            const freshRun = await validationEvidence.getTestRun(runCtx, run.id, { client });
+            if (!freshRun) {
+              return { error: 'run_not_found', status: 404 };
+            }
+            const freshJob = await agentControl.getAgentJobById(
+              {
+                tenantId: freshRun.tenant_id,
+                agentId,
+                jobId: agentJobId,
+              },
+              { client },
+            );
+            const freshJobMismatch = !freshJob
+              || freshJob.agent_id !== agentId
+              || freshJob.tenant_id !== freshRun.tenant_id
+              || freshJob.test_run_id !== freshRun.id
+              || freshJob.nonce_hash !== body.nonce_hash
+              || freshJob.nonce_hash !== freshRun.correlation?.nonce_hash
+              || freshJob.target_id !== targetId
+              || freshJob.target_id !== freshRun.target_id
+              || freshJob.check_id !== freshRun.check_id;
+            if (freshJobMismatch) {
+              return rejectObservation(
+                ctx,
+                freshRun.tenant_id,
+                agentId,
+                'agent_job_mismatch',
+                'agent_job_mismatch',
+                403,
+                freshRun.id,
+                { agent_job_id: agentJobId },
+                { client },
+              );
+            }
+            if (!['acked', 'observed'].includes(freshJob.status)) {
+              return rejectObservation(
+                ctx,
+                freshRun.tenant_id,
+                agentId,
+                'agent_job_not_open',
+                'agent_job_not_open',
+                409,
+                freshRun.id,
+                { agent_job_id: agentJobId, status: freshJob.status },
+                { client },
+              );
+            }
 
-        const nowIso = nowFn().toISOString();
-        const observedJob = await agentControl.markAgentJobObserved(
-          { tenantId: freshRun.tenant_id, agentId, jobId: agentJobId },
-          nowIso,
-        );
-        if (!observedJob) {
-          return rejectObservation(
-            ctx,
-            freshRun.tenant_id,
-            agentId,
-            'agent_job_not_open',
-            'agent_job_not_open',
-            409,
-            freshRun.id,
-            { agent_job_id: agentJobId, status: freshJob.status },
-          );
-        }
+            const priorEvents = await validationEvidence.listRunEvents(
+              runCtx,
+              freshRun.id,
+              { limit: 1000, client },
+            );
+            const persistedObservation = findObservationForAgentJob(
+              freshRun,
+              priorEvents,
+              freshJob,
+              agentId,
+            );
+            if (persistedObservation) {
+              const recovered = persistedObservation.metadata?.recovered_from_legacy_observed_job
+                === true;
+              await appendObservationAuditOnce(
+                runCtx,
+                recovered ? 'observation.recovered' : 'observation.ingested',
+                freshRun.id,
+                agentId,
+                agentJobId,
+                { client },
+              );
+              return {
+                freshRun,
+                obsEvent: persistedObservation,
+                completionEvents: priorEvents,
+              };
+            }
+            if (!['running', 'collecting'].includes(freshRun.status)) {
+              await appendAudit(
+                runCtx,
+                'observation.rejected_inactive_run',
+                'test_run',
+                freshRun.id,
+                { status: freshRun.status, agent_id: agentId },
+                { client },
+              );
+              return { error: 'run_not_collecting', status: 409 };
+            }
+            if (wouldExceedEventCap(freshRun, priorEvents.length, 1)) {
+              return denyEventCapForRun(
+                ctx,
+                freshRun,
+                { agent_id: agentId, phase: 'agent_observation' },
+                { client },
+              );
+            }
 
-        const obsEvent = await validationEvidence.appendEvent(runCtx, {
-          id: newId('event'),
-          tenant_id: freshRun.tenant_id,
-          test_run_id: freshRun.id,
-          target_id: targetId,
-          check_id: freshRun.check_id,
-          agent_id: agentId,
-          source: 'agent',
-          signal_type: 'agent_observation',
-          producer_kind: 'authenticated_agent',
-          timestamp: nowIso,
-          nonce_hash: body.nonce_hash,
-          metadata: redactObject(body.metadata ?? {}),
-        });
+            const nowIso = nowFn().toISOString();
+            const recoveringLegacyJob = freshJob.status === 'observed';
+            let observationTimestamp = nowIso;
+            if (recoveringLegacyJob) {
+              const observedAtMs = new Date(freshJob.observed_at ?? '').getTime();
+              if (!Number.isFinite(observedAtMs)) {
+                return rejectObservation(
+                  ctx,
+                  freshRun.tenant_id,
+                  agentId,
+                  'legacy_observation_timestamp_missing',
+                  'legacy_observation_timestamp_missing',
+                  409,
+                  freshRun.id,
+                  { agent_job_id: agentJobId },
+                  { client },
+                );
+              }
+              observationTimestamp = new Date(observedAtMs).toISOString();
+            }
+            if (!recoveringLegacyJob) {
+              const observedJob = await agentControl.markAgentJobObserved(
+                { tenantId: freshRun.tenant_id, agentId, jobId: agentJobId },
+                nowIso,
+                { client },
+              );
+              if (!observedJob) {
+                return rejectObservation(
+                  ctx,
+                  freshRun.tenant_id,
+                  agentId,
+                  'agent_job_not_open',
+                  'agent_job_not_open',
+                  409,
+                  freshRun.id,
+                  { agent_job_id: agentJobId, status: freshJob.status },
+                  { client },
+                );
+              }
+            }
 
-        await appendAudit(runCtx, 'observation.ingested', 'test_run', freshRun.id, { agent_id: agentId });
-        return { freshRun, priorEvents, obsEvent };
-      });
+            const obsEvent = await validationEvidence.appendEvent(runCtx, {
+              id: newId('event'),
+              tenant_id: freshRun.tenant_id,
+              test_run_id: freshRun.id,
+              target_id: targetId,
+              check_id: freshRun.check_id,
+              agent_id: agentId,
+              source: 'agent',
+              signal_type: 'agent_observation',
+              producer_kind: 'authenticated_agent',
+              timestamp: observationTimestamp,
+              nonce_hash: body.nonce_hash,
+              metadata: redactObject(recoveringLegacyJob
+                ? {
+                    agent_job_id: agentJobId,
+                    recovered_from_legacy_observed_job: true,
+                  }
+                : {
+                    ...(body.metadata && typeof body.metadata === 'object'
+                      && !Array.isArray(body.metadata) ? body.metadata : {}),
+                    agent_job_id: agentJobId,
+                  }),
+            }, { client });
+
+            await appendObservationAuditOnce(
+              runCtx,
+              recoveringLegacyJob ? 'observation.recovered' : 'observation.ingested',
+              freshRun.id,
+              agentId,
+              agentJobId,
+              { client },
+            );
+            return {
+              freshRun,
+              obsEvent,
+              completionEvents: [...priorEvents, obsEvent],
+            };
+          },
+          { client: auditClient },
+        ),
+      );
       if (!mutation.acquired) return { error: 'run_mutation_in_progress', status: 409 };
       if (mutation.result?.error) return mutation.result;
-      const { freshRun, priorEvents, obsEvent } = mutation.result;
-      const eventsAfter = [...priorEvents, obsEvent];
-      if (freshRun.awaiting_external_probe && !hasExternalProbeEvidence(freshRun, eventsAfter)) {
-        return { observation: obsEvent, run: { ...freshRun, verdict: null } };
-      }
-
-      const agents = await agentControl.listAgents(runCtx);
-      const verdict =
-        (await finalizeVerdictIfReady(runCtx, freshRun, agents, { agent })) ??
-        (await validationEvidence.getVerdictForRun(runCtx, freshRun.id));
-      const updatedRun = await validationEvidence.getTestRun(runCtx, freshRun.id);
-      return {
-        observation: obsEvent,
-        run: { ...updatedRun, verdict: verdict ?? null },
-      };
+      const { freshRun, obsEvent, completionEvents } = mutation.result;
+      return completeObservationIngest(
+        runCtx,
+        freshRun,
+        agent,
+        obsEvent,
+        completionEvents,
+      );
     },
     async maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
       let ctx;

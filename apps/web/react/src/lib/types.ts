@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 export type SurfaceKind = 'overview' | 'scope' | 'validation' | 'governance' | 'staff';
 
 export type RouteId =
+  | 'not-found'
   | 'dashboard'
   | 'environments'
   | 'environment-detail'
@@ -39,6 +40,7 @@ export type PortalDataset =
   | 'state'
   | 'tenant'
   | 'deploymentFeatures'
+  | 'environments'
   | 'targetGroups'
   | 'targets'
   | 'agents'
@@ -87,15 +89,16 @@ export const CORE_PORTAL_DATASETS = [
 ] as const satisfies readonly PortalDataset[];
 
 export const PORTAL_ROUTE_DATASETS = {
-  dashboard: ['targetGroups', 'agents', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
-  environments: ['targetGroups', 'agents', 'runs', 'findings'],
-  'environment-detail': ['targetGroups', 'agents', 'checks', 'runs', 'findings'],
-  'target-groups': ['targetGroups', 'runs'],
+  'not-found': [],
+  dashboard: ['environments', 'targetGroups', 'agents', 'checks', 'testPolicies', 'runs', 'findings', 'evidence', 'wafCoverageSummary'],
+  environments: ['environments', 'targetGroups', 'agents', 'runs', 'findings', 'evidence'],
+  'environment-detail': ['environments', 'targetGroups', 'agents', 'checks', 'runs', 'findings', 'evidence'],
+  'target-groups': ['targetGroups', 'agents', 'runs', 'findings', 'evidence'],
   targets: ['targets', 'targetGroups'],
   'target-group-detail': ['targetGroups', 'agents', 'checks', 'testPolicies', 'connectors'],
   'target-detail': [],
   agents: ['targetGroups', 'agents', 'releaseEvidence'],
-  'agent-detail': ['agents', 'audit', 'checks', 'runs'],
+  'agent-detail': ['agents', 'audit', 'checks', 'runs', 'evidence'],
   checks: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
   'check-detail': ['checks', 'runs'],
   'test-policies': ['targetGroups', 'checks', 'testPolicies'],
@@ -116,7 +119,7 @@ export const PORTAL_ROUTE_DATASETS = {
   subscription: ['subscriptionSummary'],
   admin: ['internalOverview', 'internalSignupRequests', 'internalTenants', 'internalApprovalRequests', 'internalAudit'],
   'tenant-detail': ['agents', 'internalTenants', 'internalApprovalRequests'],
-  'internal-soc': ['findings', 'highScale', 'internalTenants', 'internalApprovalRequests'],
+  'internal-soc': ['findings', 'highScale', 'internalApprovalRequests'],
   'queue-detail': ['targetGroups', 'highScale']
 } as const satisfies Record<RouteId, readonly PortalDataset[]>;
 
@@ -203,6 +206,7 @@ export type DataItem = Record<string, unknown>;
 export type PortalData = {
   state: StatePayload | null;
   tenant: DataItem | null;
+  environments: DataItem[];
   targetGroups: DataItem[];
   targetGroupsMeta: DataItem | null;
   targets: DataItem[];

@@ -65,7 +65,7 @@ function HeatmapLegend() {
 }
 
 export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, evidence }: VectorHeatmapProps) {
-  const groups = targetGroups.slice(0, 5);
+  const groups = targetGroups;
 
   if (groups.length === 0) {
     return (
@@ -80,37 +80,42 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
   const gridStyle = { '--heatmap-cols': VECTOR_FAMILIES.length } as CSSProperties;
 
   return (
-    <div
-      className="heatmap"
-      tabIndex={0}
-      role="region"
-      aria-label="Vector coverage matrix, scrollable"
-    >
-      <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
-        <span className="heatmap-head">Target group</span>
-        {VECTOR_FAMILIES.map((family) => (
-          <span className="heatmap-head" key={family.label}>
-            {family.label}
-          </span>
-        ))}
-        {groups.map((group, groupIndex) => (
-          <Fragment key={String(group.id ?? groupIndex)}>
-            <strong className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</strong>
-            {VECTOR_FAMILIES.map((family) => {
-              const groupId = String(group.id ?? '');
-              const coverage = familyCoverage({
-                checkIds: familyCheckIds(checks, family),
-                groupId,
-                testPolicies,
-                runs,
-                evidence,
-              });
-              return <HeatmapCell key={`${groupIndex}-${family.label}`} coverage={coverage} />;
-            })}
-          </Fragment>
-        ))}
+    <div className="stack-tight">
+      <p className="muted small">
+        Summary across five broad vector families. The resource-exhaustion matrix covers the complete taxonomy separately.
+      </p>
+      <div
+        className="heatmap"
+        tabIndex={0}
+        role="region"
+        aria-label="Vector coverage summary matrix, scrollable"
+      >
+        <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
+          <span className="heatmap-head">Target group</span>
+          {VECTOR_FAMILIES.map((family) => (
+            <span className="heatmap-head" key={family.label}>
+              {family.label}
+            </span>
+          ))}
+          {groups.map((group, groupIndex) => (
+            <Fragment key={String(group.id ?? groupIndex)}>
+              <strong className="heatmap-name">{String(group.name ?? group.id ?? 'Declared group')}</strong>
+              {VECTOR_FAMILIES.map((family) => {
+                const groupId = String(group.id ?? '');
+                const coverage = familyCoverage({
+                  checkIds: familyCheckIds(checks, family),
+                  groupId,
+                  testPolicies,
+                  runs,
+                  evidence,
+                });
+                return <HeatmapCell key={`${groupIndex}-${family.label}`} coverage={coverage} />;
+              })}
+            </Fragment>
+          ))}
+        </div>
+        <HeatmapLegend />
       </div>
-      <HeatmapLegend />
     </div>
   );
 }

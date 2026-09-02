@@ -14,6 +14,7 @@ export const PORTAL_SCALE_PROFILE = Object.freeze({
   findings: 100_000,
   targets: 5_000,
   agents: 500,
+  runs: 500,
 });
 
 export const PORTAL_SCALE_FAST_PROFILE = Object.freeze({
@@ -21,6 +22,7 @@ export const PORTAL_SCALE_FAST_PROFILE = Object.freeze({
   findings: 2_000,
   targets: 500,
   agents: 50,
+  runs: 500,
 });
 
 export function isPortalScaleEnabled(env = process.env) {
@@ -135,7 +137,7 @@ export function seedPortalScale(env = process.env) {
     });
   }
 
-  for (let r = 0; r < Math.min(500, profile.findings / 20); r += 1) {
+  for (let r = 0; r < profile.runs; r += 1) {
     testRuns.push({
       id: `run_scale_${r}`,
       tenant_id: ids.tenantId,
@@ -271,7 +273,7 @@ export async function seedPortalScalePostgres(pool, options = {}) {
   const frozenAt = PORTAL_BASELINE_IDS.frozenAt;
 
   await withTenantContext(pool, ids.tenantId, async (client) => {
-    const openFindings = Math.floor(profile.findings / 3);
+    const openFindings = Math.ceil(profile.findings / 3);
     const dashboardRollup = {
       readiness: {
         score: 58,
@@ -378,7 +380,7 @@ export async function seedPortalScalePostgres(pool, options = {}) {
       findingRows,
     );
 
-    const runCount = Math.min(500, Math.floor(profile.findings / 20));
+    const runCount = profile.runs;
     const testRunRows = [];
     for (let r = 0; r < runCount; r += 1) {
       testRunRows.push([
@@ -386,8 +388,8 @@ export async function seedPortalScalePostgres(pool, options = {}) {
         ids.tenantId,
         ids.targetGroupId,
         ids.targetId,
-        'chk_l7_rate',
-        'finalized',
+        'origin.direct_reachability.safe',
+        'verdicted',
         frozenAt,
         frozenAt,
       ]);
@@ -408,10 +410,70 @@ export async function seedPortalScalePostgres(pool, options = {}) {
       testRunRows,
     );
 
+    const eventRows = testRunRows.map((run, index) => [
+      `evt_scale_${index}`,
+      ids.tenantId,
+      run[0],
+      ids.targetId,
+      'origin.direct_reachability.safe',
+      'probe_worker',
+      'probe_result',
+      'signed_probe',
+      `nonce_scale_${index}`,
+      frozenAt,
+      JSON.stringify({ external_result: 'blocked' }),
+    ]);
+    await insertRows(
+      client,
+      'events',
+      [
+        'id',
+        'tenant_id',
+        'test_run_id',
+        'target_id',
+        'check_id',
+        'source',
+        'signal_type',
+        'producer_kind',
+        'nonce_hash',
+        'timestamp',
+        'metadata_json',
+      ],
+      eventRows,
+    );
+
+    const verdictRows = testRunRows.map((run, index) => [
+      `verdict_scale_${index}`,
+      ids.tenantId,
+      run[0],
+      ids.targetId,
+      'origin.direct_reachability.safe',
+      'protected',
+      [`evt_scale_${index}`],
+      frozenAt,
+    ]);
+    await insertRows(
+      client,
+      'verdicts',
+      [
+        'id',
+        'tenant_id',
+        'test_run_id',
+        'target_id',
+        'check_id',
+        'verdict',
+        'evidence_ids',
+        'created_at',
+      ],
+      verdictRows,
+    );
+
     await client.query('ANALYZE target_groups');
     await client.query('ANALYZE targets');
     await client.query('ANALYZE findings');
     await client.query('ANALYZE test_runs');
+    await client.query('ANALYZE events');
+    await client.query('ANALYZE verdicts');
   });
 
   return { ids, profile };

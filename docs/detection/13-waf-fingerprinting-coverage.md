@@ -24,6 +24,11 @@ Detect whether an approved web asset is behind a WAF/CDN, identify the vendor/pr
 
 ## Fingerprint signal types
 
+The table below is the platform-wide catalog of possible evidence, including connector snapshots and
+future separately governed collectors. It is not the `waf.fingerprint.safe` signed-job operation
+list. That job emits HTTP-derived fingerprint evidence only; its A/AAAA destination preflight is
+reserved and attested as routing safety work, not stored as a DNS hint.
+
 | Signal | Examples | Store |
 |---|---|---|
 | HTTP header names | CDN/WAF-specific safe header names. | Header names and hashed selected values only. |
@@ -36,17 +41,19 @@ Detect whether an approved web asset is behind a WAF/CDN, identify the vendor/pr
 | Redirect/challenge behavior | JS challenge, bot challenge, CAPTCHA. | Behavior label only. |
 | Connector mapping | Provider resource says asset is attached to WAF policy. | Connector snapshot id + normalized fields. |
 
-## Detection algorithm
+## Signed safe fingerprint algorithm
 
-1. Resolve FQDN from approved target.
-2. Capture DNS chain metadata.
-3. Run safe HTTP HEAD/GET metadata probe.
-4. Capture TLS handshake metadata if HTTPS.
-5. Compare signals against WAF product catalog.
-6. Score each vendor/product candidate.
-7. If connector snapshots exist, reconcile external candidate with connector resource mapping.
-8. Store best candidate, alternatives, confidence, evidence summary.
-9. Classify initial coverage.
+1. Load the exact customer-approved target from the signed job.
+2. Reserve and attest the bounded A/AAAA destination-classification attempts, reject any unsafe
+   address, and pin the accepted address set for HTTP. These routing checks emit no fingerprint hint.
+3. Execute the static, pre-reserved HTTP GET/POST/HEAD plan against that pinned destination with
+   `followRedirects=false` and `collectNetworkHints=false`.
+4. Compare HTTP status, safe header/cookie names, and authorized block-page fingerprints against the
+   WAF product catalog; do not run standalone CNAME/A/AAAA or TLS collectors.
+5. Score each vendor/product candidate from those HTTP signals.
+6. If connector snapshots or separately governed evidence exist, reconcile them outside the signed
+   fingerprint job.
+7. Store the best candidate, alternatives, confidence, evidence summary, and initial coverage.
 
 ## Confidence scoring
 
@@ -161,9 +168,11 @@ Beyond the versioned product catalog, AstraNull vendors a generated edge signatu
   header/cookie signatures decidable from one ordinary GET; 330 block-page signatures evaluated
   only against block evidence an authorized bounded check already captured).
 - **Address + CNAME:** cdncheck CDN/WAF provider CIDR ranges (IPv4 + IPv6) and shared edge CNAME
-  suffixes, matched metadata-only against the resolved DNS chain. The signed `waf.fingerprint.safe`
-  probe carries the `dns_chain_hint` capability so its bounded CNAME/A/AAAA lookups feed this layer;
-  without that capability the CDN half of the corpus never evaluates.
+  suffixes remain available to isolated helper tests and future separately governed collectors.
+  Signed `waf.fingerprint.safe` jobs do **not** run standalone CNAME/A/AAAA or TLS hint collectors:
+  those operations are not independently signed, pre-reserved, counted, deadline-bounded, and
+  destination-pinned. Signed results therefore make no DNS/TLS-hint claim and use only evidence
+  captured by the pre-reserved pinned HTTP fingerprint requests; CDN posture can remain inconclusive.
 - **Module:** `src/lib/edgeFingerprint.mjs` over the generated `src/lib/data/edgeSignatureData.mjs`;
   scanner results carry `edge_signature` and `edge_signature_corpus_version`, and signed
   `waf.fingerprint.safe` probe jobs carry corpus version metadata.

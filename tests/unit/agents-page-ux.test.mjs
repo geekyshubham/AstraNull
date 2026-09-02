@@ -86,7 +86,10 @@ describe('Agents page UX contract', () => {
     assert.doesNotMatch(agentsSource, /\['channel'\], 'stable'/);
     assert.doesNotMatch(agentsSource, /\['state'\], 'active'/);
     assert.doesNotMatch(agentsSource, /\['rollout', 'percentage'\], 100/);
-    assert.match(agentsSource, /Signed agent release metadata is incomplete\./);
+    assert.match(agentsSource, /updateReleases=\{updateReleases\}/);
+    assert.match(agentsSource, /trustKeys=\{trustKeys\}/);
+    assert.match(agentsSource, /metadataLoading=\{auxLoading\}/);
+    assert.doesNotMatch(agentsSource, /installReleaseMetadataComplete|resolveAgentReleaseMetadata/);
     assert.match(agentsSource, /tokenSecret=\{tokenRevoked \? '' : tokenSecret\}/);
     assert.match(agentsSource, /Scoped to <strong>\{tokenScope\.label\}<\/strong>/);
   });

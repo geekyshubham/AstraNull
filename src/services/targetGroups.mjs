@@ -240,7 +240,6 @@ export function getTargetGroup(ctx, id) {
       check_count: run.check_count ?? run.check_id ?? null,
       verdict: run.verdict ?? run.status ?? 'pending',
       started_at: run.started_at ?? run.created_at,
-      agent_id: run.agent_id ?? null,
     }));
   const groupFindings = (getStore().findings ?? []).filter(
     (finding) => finding.tenant_id === ctx.tenantId && finding.target_group_id === id,

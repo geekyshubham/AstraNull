@@ -9,6 +9,7 @@ import {
   resourceMatrixGroups,
 } from '../../apps/web/react/src/lib/resource-matrix.mjs';
 import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
+import { EXHAUSTED_RESOURCE_FAMILIES } from '../../src/contracts/resourceExhaustionTaxonomy.mjs';
 
 const NOW = Date.parse('2026-07-15T12:00:00.000Z');
 const DAY = 24 * 60 * 60 * 1000;
@@ -50,36 +51,86 @@ function state({ checkIds = new Set([CHECK_A]), runs = [], evidence = [], groupI
 }
 
 describe('resource-exhaustion matrix (DET-024)', () => {
-  it('declares the twelve exhausted-resource families in display order', () => {
-    assert.equal(RESOURCE_FAMILIES.length, 12);
+  it('projects every authoritative exhausted-resource family in contract order', () => {
+    assert.equal(RESOURCE_FAMILIES.length, 17);
+    assert.deepEqual(
+      RESOURCE_FAMILIES.map((family) => ({
+        id: family.id,
+        label: family.label,
+        metric: family.metric,
+        layer: family.layer,
+        scored_for_ddos_readiness: family.scoredForDdosReadiness,
+      })),
+      EXHAUSTED_RESOURCE_FAMILIES.map((family) => ({
+        id: family.id,
+        label: family.label,
+        metric: family.metric,
+        layer: family.layer,
+        scored_for_ddos_readiness: family.scored_for_ddos_readiness,
+      })),
+    );
     assert.equal(RESOURCE_FAMILIES[0].id, 'volumetric');
-    assert.equal(RESOURCE_FAMILIES[11].id, 'delivery_pattern');
+    assert.equal(RESOURCE_FAMILIES.at(-1).id, 'ai_agentic');
     for (const family of RESOURCE_FAMILIES) {
-      assert.ok(family.label.length > 0, family.id);
-      assert.ok(family.metric.length > 0, family.id);
+      assert.ok(family.description.length > 0, family.id);
+      assert.equal(
+        family.visualization,
+        family.scoredForDdosReadiness ? 'readiness_posture' : 'validation_coverage',
+        family.id,
+      );
     }
   });
 
-  it('classifies shipped catalog checks only by their declared exhausted_resource', () => {
+  it('classifies every shipped catalog check in every declared exhausted-resource family', () => {
     const apiRows = CHECK_CATALOG.map((check) => ({
       check_id: check.check_id,
       exhausted_resource: check.exhausted_resource,
+      exhausted_resources: check.exhausted_resources,
     }));
-    const volumetric = resourceFamilyCheckIds(apiRows, { id: 'volumetric' });
-    assert.ok(volumetric.has(CHECK_A));
-    assert.ok(volumetric.has(CHECK_B));
+    assert.ok(resourceFamilyCheckIds(apiRows, { id: 'volumetric' }).has(CHECK_A));
+    assert.ok(resourceFamilyCheckIds(apiRows, { id: 'volumetric' }).has(CHECK_B));
     assert.ok(resourceFamilyCheckIds(apiRows, { id: 'reflection' }).has('reflect.ssdp_exposure.safe'));
+    assert.ok(resourceFamilyCheckIds(apiRows, { id: 'backend_exhaustion' }).has('l7.graphql_complexity.safe'));
 
     const declaredFamilies = new Set(RESOURCE_FAMILIES.map((family) => family.id));
-    for (const row of apiRows) {
-      if (row.exhausted_resource == null) {
-        for (const family of RESOURCE_FAMILIES) {
-          assert.equal(resourceFamilyCheckIds(apiRows, family).has(row.check_id), false, row.check_id);
-        }
-      } else {
-        assert.ok(declaredFamilies.has(row.exhausted_resource), row.check_id);
-      }
+    const shippedFamilies = new Set(apiRows.flatMap((row) => row.exhausted_resources));
+    assert.deepEqual(shippedFamilies, declaredFamilies, 'the matrix must not truncate shipped families');
+
+    for (const family of RESOURCE_FAMILIES) {
+      assert.ok(resourceFamilyCheckIds(apiRows, family).size > 0, `no shipped checks represented for ${family.id}`);
     }
+    for (const row of apiRows) {
+      const expected = new Set(row.exhausted_resources.length > 0
+        ? row.exhausted_resources
+        : row.exhausted_resource ? [row.exhausted_resource] : []);
+      const represented = new Set(
+        RESOURCE_FAMILIES
+          .filter((family) => resourceFamilyCheckIds(apiRows, family).has(row.check_id))
+          .map((family) => family.id),
+      );
+      assert.deepEqual(represented, expected, `${row.check_id} family membership drift`);
+    }
+  });
+
+  it('matches every plural exhausted-resource family, with plural precedence and singular fallback', () => {
+    const checks = [
+      {
+        check_id: 'multi',
+        exhausted_resources: ['volumetric', 'delivery_pattern'],
+        exhausted_resource: 'dns_exhaustion',
+        supported_targets: ['fqdn'],
+      },
+      { check_id: 'legacy', exhausted_resource: 'dns_exhaustion', supported_targets: ['fqdn'] },
+    ];
+    assert.ok(resourceFamilyCheckIds(checks, { id: 'volumetric' }).has('multi'));
+    assert.ok(resourceFamilyCheckIds(checks, { id: 'delivery_pattern' }).has('multi'));
+    assert.equal(resourceFamilyCheckIds(checks, { id: 'dns_exhaustion' }).has('multi'), false);
+    assert.ok(resourceFamilyCheckIds(checks, { id: 'dns_exhaustion' }).has('legacy'));
+
+    const targets = [{ target_group_id: 'tg_1', kind: 'fqdn' }];
+    assert.ok(applicableResourceFamilyCheckIds({
+      checks, family: { id: 'delivery_pattern' }, groupId: 'tg_1', targets,
+    }).has('multi'));
   });
 
   it('renders every active target group without a five-column cap', () => {

@@ -24,7 +24,8 @@ export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugePro
 
   return (
     <div className="readiness-gauge">
-      <svg viewBox="0 0 140 140" role="img" aria-label={gaugeLabel}>
+      <svg viewBox="0 0 140 140" role="img" aria-label={gaugeLabel} focusable="false">
+        <title>{gaugeLabel}</title>
         <circle className="gauge-track" cx="70" cy="70" r="52" stroke={GAUGE_TRACK_STROKE} />
         <circle
           className={`gauge-fill gauge-fill-animate gauge-fill-${tone}`}
@@ -35,10 +36,11 @@ export function ReadinessGauge({ score, label = 'Readiness' }: ReadinessGaugePro
           strokeDasharray={dash}
           strokeDashoffset={offset}
         />
-        <text className="gauge-score" x="70" y="68" textAnchor="middle" fill="var(--fg)" aria-hidden="true">
+        <text className="gauge-score" x="70" y="66" textAnchor="middle" fill="var(--fg)" aria-hidden="true">
           {rounded}
+          <tspan className="gauge-label" dx="4">/ 100</tspan>
         </text>
-        <text className="gauge-label" x="70" y="90" textAnchor="middle" fill="var(--muted)" aria-hidden="true">
+        <text className="gauge-label" x="70" y="91" textAnchor="middle" fill="var(--muted)" aria-hidden="true">
           {label}
         </text>
       </svg>

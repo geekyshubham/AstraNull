@@ -59,16 +59,16 @@ Run `npm run vector:taxonomy:validate` for the current counts. In the current re
 | `soc_only` | SOC request marker only; no customer flood |
 | `pending` | Documented in taxonomy; no catalog check yet |
 
-The DDoS-scored registry currently contains 249 entries: 58 E3 / `implemented`, 82 E1–E2 / `partial`, 9 E4 / `soc_only`, and 100 E0 / `pending`. Five additional ATT entries use non-DDoS exhausted-resource families and are excluded from that scoring summary.
+The DDoS-scored registry currently contains 249 entries: 79 E3 / `implemented`, 92 E1–E2 / `partial`, 78 E4 / `soc_only`, and 0 E0 / `pending`. Five additional ATT entries use non-DDoS exhausted-resource families and are excluded from that scoring summary.
 
 ## How to read coverage numbers
 
 Catalog coverage and evidence coverage are separate measurements:
 
 - **Catalog accounting: 721/721 rows (100%)** — 680 are claimed by registry entries and 41 carry explicit outside-in exclusion reasons. There are 0 unclaimed rows and 0 duplicate claims.
-- **Evidence coverage: 356/680 claimed rows (52.4%) have non-E0 evidence** — E1: 83 catalog rows, E2: 72, E3: 145, E4: 48, and E5: 8. The remaining 324 claimed rows are E0 / `pending`.
+- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104 catalog rows, E2: 79, E3: 271, E4: 218, and E5: 8. There are 0 claimed E0 / `pending` rows; the separately accounted 41 outside-in exclusions are monitor-only E5 annotations.
 
-The first number proves every catalog row has an accountable disposition. The second describes what evidence AstraNull can actually produce today; it must not be inferred from the first. Figures are from the 2026-09-01 validation snapshot. See the [vector coverage audit](22-vector-coverage-audit-2026-09-01.md) for the source catalog, methodology, and detailed gap register.
+The first number proves every catalog row has an accountable disposition. The second describes what evidence AstraNull can actually produce today; it must not be inferred from the first. Figures are from the current 2026-09-01 post-remediation validation snapshot. The [vector coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; its historical totals are not release accounting.
 
 ## Monitor-only detection tier (the 41 outside-in exclusions)
 

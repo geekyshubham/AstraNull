@@ -94,7 +94,7 @@
 <body>
   <header class="page">
     <h1>AstraNull Check Library</h1>
-    <p>Reference for every check in <code>CHECK_CATALOG</code> (175 entries).
+    <p>Reference for every check in <code>CHECK_CATALOG</code> (249 entries).
     Safe checks are customer-runnable with bounded probes. SOC-gated checks require authorization and SOC execution.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
@@ -142,7 +142,7 @@
       <table class="probe-table">
         <thead><tr><th>Kind</th><th>What it does</th></tr></thead>
         <tbody>
-          <tr><td><code>http_head</code></td><td>Single bounded HTTP HEAD with optional harmless marker header.</td></tr><tr><td><code>tcp_connect</code></td><td>One TCP connect attempt to declared host:port.</td></tr><tr><td><code>dns_resolve</code></td><td>Single DNS lookup for declared name.</td></tr><tr><td><code>metadata_marker</code></td><td>No live network I/O — records declared intent only (deferred checks).</td></tr><tr><td><code>udp_probe</code></td><td>One labeled UDP datagram (no amplification).</td></tr><tr><td><code>quic_reachability</code></td><td>HTTPS Alt-Svc read plus one UDP/443 datagram.</td></tr><tr><td><code>alert_webhook_ping</code></td><td>One POST to declared alert webhook; expects HTTP 2xx.</td></tr><tr><td><code>ops_readiness</code></td><td>Validates runbook/kill-switch evidence metadata (no traffic to customer edge).</td></tr><tr><td><code>ownership_challenge</code></td><td>Bounded HEAD with challenge nonce for ownership verification.</td></tr><tr><td><code>tls_session</code></td><td>One TLS handshake; collects protocol/cipher/cert metadata.</td></tr><tr><td><code>http2_settings</code></td><td>Reads HTTP/2 SETTINGS frame limits (no reset flood).</td></tr><tr><td><code>origin_leak_scan</code></td><td>Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide).</td></tr><tr><td><code>host_sni_bypass</code></td><td>HEAD to declared direct IP using protected hostname as Host/SNI.</td></tr><tr><td><code>port_scan_bounded</code></td><td>TCP connect to capped port list on declared host.</td></tr><tr><td><code>rate_limit_sequence</code></td><td>Up to 5 spaced HEAD requests to observe 429/challenge.</td></tr><tr><td><code>waf_enforcement_probe</code></td><td>Harmless marker request; blocked/challenged = WAF enforcing.</td></tr><tr><td><code>dnssec_posture</code></td><td>DNSKEY/DS lookups for DNSSEC signals.</td></tr><tr><td><code>dns_open_recursion</code></td><td>Single recursion test via declared resolver.</td></tr><tr><td><code>dns_failover_posture</code></td><td>NS count and secondary NS reachability.</td></tr><tr><td><code>dns_axfr_leak</code></td><td>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized.</td></tr><tr><td><code>tls_audit</code></td><td>Full TLS handshake audit (version, cipher, cert expiry).</td></tr><tr><td><code>cache_abuse_probe</code></td><td>Bounded cache-bust HEAD sequence.</td></tr><tr><td><code>api_surface_scan</code></td><td>HEAD on declared/common API doc paths.</td></tr><tr><td><code>cors_posture_probe</code></td><td>OPTIONS with foreign Origin; weak ACAO = finding.</td></tr><tr><td><code>bot_challenge_probe</code></td><td>Cookie-less client; expects bot challenge or block.</td></tr><tr><td><code>graphql_posture_probe</code></td><td>Bounded GraphQL endpoint posture (no deep queries).</td></tr><tr><td><code>websocket_upgrade_posture</code></td><td>Single WebSocket upgrade request; classifies 101/403/426.</td></tr><tr><td><code>outside_in_waf_scan</code></td><td>Up to 10 bounded probes: WAF fingerprint, benign markers, evasion variants, origin bypass.</td></tr>
+          <tr><td><code>http_head</code></td><td>Single bounded HTTP HEAD with optional harmless marker header.</td></tr><tr><td><code>tcp_connect</code></td><td>One TCP connect attempt to declared host:port.</td></tr><tr><td><code>dns_resolve</code></td><td>Single DNS lookup for declared name.</td></tr><tr><td><code>metadata_marker</code></td><td>No live network I/O — records declared intent only (deferred checks).</td></tr><tr><td><code>udp_probe</code></td><td>One labeled UDP datagram (no amplification).</td></tr><tr><td><code>quic_reachability</code></td><td>HTTPS Alt-Svc read plus one UDP/443 datagram.</td></tr><tr><td><code>alert_webhook_ping</code></td><td>One POST to declared alert webhook; expects HTTP 2xx.</td></tr><tr><td><code>ops_readiness</code></td><td>Validates runbook/kill-switch evidence metadata (no traffic to customer edge).</td></tr><tr><td><code>ownership_challenge</code></td><td>Bounded HEAD with challenge nonce for ownership verification.</td></tr><tr><td><code>tls_session</code></td><td>One TLS handshake; collects protocol/cipher/cert metadata.</td></tr><tr><td><code>http2_settings</code></td><td>Reads HTTP/2 SETTINGS frame limits (no reset flood).</td></tr><tr><td><code>origin_leak_scan</code></td><td>Bounded prefix DNS scan on declared apex (fixed label list, not internet-wide).</td></tr><tr><td><code>host_sni_bypass</code></td><td>HEAD to declared direct IP using protected hostname as Host/SNI.</td></tr><tr><td><code>port_scan_bounded</code></td><td>TCP connect to capped port list on declared host.</td></tr><tr><td><code>rate_limit_sequence</code></td><td>Up to 5 spaced HEAD requests to observe 429/challenge.</td></tr><tr><td><code>waf_enforcement_probe</code></td><td>Harmless marker request; blocked/challenged = WAF enforcing.</td></tr><tr><td><code>dnssec_posture</code></td><td>DNSKEY/DS lookups for DNSSEC signals.</td></tr><tr><td><code>dns_open_recursion</code></td><td>Single recursion test via declared resolver.</td></tr><tr><td><code>dns_failover_posture</code></td><td>NS count and secondary NS reachability.</td></tr><tr><td><code>dns_axfr_leak</code></td><td>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized.</td></tr><tr><td><code>tls_audit</code></td><td>Full TLS handshake audit (version, cipher, cert expiry).</td></tr><tr><td><code>cache_abuse_probe</code></td><td>Bounded cache-bust HEAD sequence.</td></tr><tr><td><code>api_surface_scan</code></td><td>HEAD on declared/common API doc paths.</td></tr><tr><td><code>cors_posture_probe</code></td><td>OPTIONS with foreign Origin; weak ACAO = finding.</td></tr><tr><td><code>bot_challenge_probe</code></td><td>Cookie-less client; expects bot challenge or block.</td></tr><tr><td><code>graphql_posture_probe</code></td><td>Bounded GraphQL endpoint posture (no deep queries).</td></tr><tr><td><code>websocket_upgrade_posture</code></td><td>Single WebSocket upgrade request; classifies 101/403/426.</td></tr><tr><td><code>grpc_reflection_probe</code></td><td>One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only.</td></tr><tr><td><code>outside_in_waf_scan</code></td><td>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.</td></tr>
         </tbody>
       </table>
     </section>
@@ -517,7 +517,7 @@
         <dt>Probe kind</dt>
         <dd><code>metadata_marker</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>volumetric <span class="muted">(registry: ATT-013, ATT-014)</span></dd>
+        <dd>volumetric, packet_processing <span class="muted">(registry: ATT-013, ATT-014)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -1059,7 +1059,7 @@
     </article></div>
     </section>
     <section id="family-dns">
-      <h2>DNS <span style="color:var(--muted);font-weight:400">(17)</span></h2>
+      <h2>DNS <span style="color:var(--muted);font-weight:400">(18)</span></h2>
       <div class="checks">
     <article class="check" id="dns.authoritative_response.safe">
       <header>
@@ -1072,9 +1072,9 @@
         <dt>What we detect</dt>
         <dd>Single DNS lookup must return healthy authoritative response metadata for declared name.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: dns_wire_query Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>dns_exhaustion <span class="muted">(registry: ATT-041)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1101,9 +1101,9 @@
         <dt>What we detect</dt>
         <dd>One labeled random-prefix lookup observes NXDOMAIN or mitigation behavior without high QPS.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: dns_wire_query Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>dns_exhaustion <span class="muted">(registry: ATT-043, ATT-044)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1159,11 +1159,11 @@
         <dt>What we detect</dt>
         <dd>Bounded DNS resolve collects response-size/class metadata; verdict when target is not usable as an unintended amplifier.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: dns_wire_query Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>amplification <span class="muted">(registry: ATT-016, ATT-042, ATT-092, ATT-115)</span></dd>
+        <dd>amplification, delivery_pattern <span class="muted">(registry: ATT-016, ATT-042, ATT-092, ATT-115)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -1241,12 +1241,12 @@
         <code class="check-id">dns.zone_transfer_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Safe AXFR exposure metadata where customer authorizes a single bounded lookup (no zone scraping).</p>
+      <p class="desc">Safe AXFR exposure metadata using one NS resolution plus one bounded TCP AXFR attempt (no zone scraping).</p>
       <dl>
         <dt>What we detect</dt>
         <dd>Unauthorized AXFR (full zone download) on declared zone.</dd>
         <dt>How we detect</dt>
-        <dd>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>One TCP-53 AXFR attempt; leak if zone transfers when unauthorized. Max 2 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
         <dd><code>dns_axfr_leak</code></dd>
         <dt>Exhausted resource</dt>
@@ -1304,9 +1304,9 @@
         <dt>What we detect</dt>
         <dd>Fast authoritative NXDOMAIN handling and declared query caps must be present; absence raises a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 3 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: dns_wire_query Max 3 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>dns_exhaustion <span class="muted">(registry: ATT-046)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1391,9 +1391,9 @@
         <dt>What we detect</dt>
         <dd>Additional-section delegation pruning / bounded referral handling must be declared; absence raises a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: dns_wire_query Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>dns_exhaustion <span class="muted">(registry: ATT-049)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1507,9 +1507,9 @@
         <dt>What we detect</dt>
         <dd>Declared TCP-fallback limits and truncation handling must be present; absence raises a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: dns_wire_query Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>dns_exhaustion <span class="muted">(registry: ATT-160)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1553,10 +1553,39 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>declared_dns_zone</li><li>dnssec_declaration</li></ul></details>
+    </article>
+    <article class="check" id="dns.multi_question_oversized.safe">
+      <header>
+        <h3>DNS Multi-Question / Oversized Parser Posture (Safe)</h3>
+        <code class="check-id">dns.multi_question_oversized.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded direct DNS wire query on the declared zone documents multi-question/oversized-message parser handling; a single query, never a query flood.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>One labeled bounded DNS wire query observes how the resolver handles an unusual (multi-question/oversized) message; permissive handling raises a readiness finding.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: dns_wire_query Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>dns_wire_query</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>dns_exhaustion <span class="muted">(registry: ATT-187)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, dns</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_zone_for_parser_posture</li></ul></details>
     </article></div>
     </section>
     <section id="family-waf">
-      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(5)</span></h2>
+      <h2>WAF posture <span style="color:var(--muted);font-weight:400">(71)</span></h2>
       <div class="checks">
     <article class="check" id="waf.fingerprint.safe">
       <header>
@@ -1564,12 +1593,12 @@
         <code class="check-id">waf.fingerprint.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded outside-in scan: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.</p>
+      <p class="desc">Bounded outside-in scan using pre-reserved, destination-pinned HTTP only: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.</p>
       <dl>
         <dt>What we detect</dt>
         <dd>WAF vendor fingerprint, benign SQLi/XSS/path markers blocked or not, evasion bypass, posture label.</dd>
         <dt>How we detect</dt>
-        <dd>Up to 10 bounded probes: WAF fingerprint, benign markers, evasion variants, origin bypass. Max 10 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints. Max 13 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
         <dd><code>outside_in_waf_scan</code></dd>
         <dt>Exhausted resource</dt>
@@ -1702,10 +1731,1924 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_waf_marker_rule</li></ul></details>
+    </article>
+    <article class="check" id="waf.http_method_policy_marker.safe">
+      <header>
+        <h3>WAF HTTP Method/Protocol Policy Marker (Safe)</h3>
+        <code class="check-id">waf.http_method_policy_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign method/header-policy marker to confirm the WAF flags malformed-request and protocol-policy signatures.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus method/protocol-policy markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.request_smuggling_marker.safe">
+      <header>
+        <h3>WAF Request-Smuggling Marker (Safe)</h3>
+        <code class="check-id">waf.request_smuggling_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert request-smuggling signature marker (no conflicting CL/TE constructed) to confirm smuggling WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus smuggling-signature markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.crlf_injection_marker.safe">
+      <header>
+        <h3>WAF CRLF/Response-Splitting Marker (Safe)</h3>
+        <code class="check-id">waf.crlf_injection_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Encoded CRLF marker injecting a benign header token to confirm CRLF/response-splitting WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus CRLF markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.open_redirect_marker.safe">
+      <header>
+        <h3>WAF Open-Redirect / Parameter-Policy Marker (Safe)</h3>
+        <code class="check-id">waf.open_redirect_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign off-host (.invalid) redirect and parameter/path-policy marker to confirm redirect and duplicate-input WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus redirect/parameter markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.nosql_injection_marker.safe">
+      <header>
+        <h3>WAF NoSQL Injection Marker (Safe)</h3>
+        <code class="check-id">waf.nosql_injection_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert NoSQL operator marker (matches nothing) to confirm NoSQL-operator WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus NoSQL-operator markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.xpath_injection_marker.safe">
+      <header>
+        <h3>WAF XPath/XML Injection Marker (Safe)</h3>
+        <code class="check-id">waf.xpath_injection_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign always-false XPath marker to confirm XPath/XML-injection WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus XPath markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.jndi_ldap_marker.safe">
+      <header>
+        <h3>WAF JNDI/LDAP (Log4Shell) Marker (Safe)</h3>
+        <code class="check-id">waf.jndi_ldap_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert JNDI/LDAP marker pointing at a .invalid sink to confirm Log4Shell/JNDI WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus JNDI markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.csv_formula_marker.safe">
+      <header>
+        <h3>WAF CSV/Formula &amp; Data-Channel Injection Marker (Safe)</h3>
+        <code class="check-id">waf.csv_formula_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert leading-equals formula marker (no function call) to confirm CSV/formula and data-channel WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus formula markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.prototype_pollution_marker.safe">
+      <header>
+        <h3>WAF Prototype-Pollution Marker (Safe)</h3>
+        <code class="check-id">waf.prototype_pollution_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert __proto__ token string (no nested object assignment) to confirm prototype-pollution WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus __proto__ markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.deserialization_marker.safe">
+      <header>
+        <h3>WAF Unsafe-Deserialization Marker (Safe)</h3>
+        <code class="check-id">waf.deserialization_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert serialized-stream signature marker (not a functional gadget) to confirm deserialization WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus deserialization-signature markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.ssrf_marker.safe">
+      <header>
+        <h3>WAF SSRF Marker (Safe)</h3>
+        <code class="check-id">waf.ssrf_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign SSRF marker pointing at a .invalid sink (never a metadata endpoint) to confirm SSRF WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus SSRF-URL markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>access_control</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.xxe_marker.safe">
+      <header>
+        <h3>WAF XXE Marker (Safe)</h3>
+        <code class="check-id">waf.xxe_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign DOCTYPE/external-entity marker referencing a .invalid sink to confirm XXE WAF rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus XXE DOCTYPE markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>data_exposure</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.file_upload_marker.safe">
+      <header>
+        <h3>WAF File-Upload Signature Marker (Safe)</h3>
+        <code class="check-id">waf.file_upload_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Benign upload filename marker (harmless .txt, no code) to confirm the edge flags web-shell upload signatures.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus upload-signature markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.jwt_tamper_marker.safe">
+      <header>
+        <h3>WAF/API-Gateway JWT Tamper Marker (Safe)</h3>
+        <code class="check-id">waf.jwt_tamper_marker.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Inert alg:none JWT with no real claims/signature to confirm gateway JWT-tamper rejection rules.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline plus alg:none JWT markers; blocked/challenged =&gt; protected, allowed =&gt; exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_class_marker_probe Max 8 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_class_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>access_control</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>none</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_unicode_normalization.safe">
+      <header>
+        <h3>WAF Evasion — Unicode Normalization (Safe)</h3>
+        <code class="check-id">waf.evasion_unicode_normalization.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Unicode normalization mismatch transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Unicode normalization mismatch variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_homoglyph.safe">
+      <header>
+        <h3>WAF Evasion — Homoglyph (Safe)</h3>
+        <code class="check-id">waf.evasion_homoglyph.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Unicode homoglyph / confusable substitution transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Unicode homoglyph / confusable substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_overlong_utf8.safe">
+      <header>
+        <h3>WAF Evasion — Overlong Utf8 (Safe)</h3>
+        <code class="check-id">waf.evasion_overlong_utf8.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Invalid / overlong UTF-8 handling discrepancy transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Invalid / overlong UTF-8 handling discrepancy variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_alt_charset.safe">
+      <header>
+        <h3>WAF Evasion — ALT Charset (Safe)</h3>
+        <code class="check-id">waf.evasion_alt_charset.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Alternate declared character set transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Alternate declared character set variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_html_entity.safe">
+      <header>
+        <h3>WAF Evasion — Html Entity (Safe)</h3>
+        <code class="check-id">waf.evasion_html_entity.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a HTML entity encoding transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTML entity encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_js_escape.safe">
+      <header>
+        <h3>WAF Evasion — JS Escape (Safe)</h3>
+        <code class="check-id">waf.evasion_js_escape.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a JavaScript string / Unicode escapes transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the JavaScript string / Unicode escapes variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_json_unicode_escape.safe">
+      <header>
+        <h3>WAF Evasion — Json Unicode Escape (Safe)</h3>
+        <code class="check-id">waf.evasion_json_unicode_escape.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a JSON Unicode escape encoding transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the JSON Unicode escape encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_css_escape.safe">
+      <header>
+        <h3>WAF Evasion — CSS Escape (Safe)</h3>
+        <code class="check-id">waf.evasion_css_escape.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a CSS escape encoding transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the CSS escape encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_base64_wrap.safe">
+      <header>
+        <h3>WAF Evasion — Base64 Wrap (Safe)</h3>
+        <code class="check-id">waf.evasion_base64_wrap.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Base64 / textual wrapping transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Base64 / textual wrapping variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_numeric_repr.safe">
+      <header>
+        <h3>WAF Evasion — Numeric Repr (Safe)</h3>
+        <code class="check-id">waf.evasion_numeric_repr.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Hex / octal / numeric representation transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Hex / octal / numeric representation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-236)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_whitespace.safe">
+      <header>
+        <h3>WAF Evasion — Whitespace (Safe)</h3>
+        <code class="check-id">waf.evasion_whitespace.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Whitespace substitution transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Whitespace substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-237)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_lexical_operator.safe">
+      <header>
+        <h3>WAF Evasion — Lexical Operator (Safe)</h3>
+        <code class="check-id">waf.evasion_lexical_operator.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Operator / function substitution transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Operator / function substitution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-237)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_lexical_tautology.safe">
+      <header>
+        <h3>WAF Evasion — Lexical Tautology (Safe)</h3>
+        <code class="check-id">waf.evasion_lexical_tautology.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Logical invariant / tautology mutation transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Logical invariant / tautology mutation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-237)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_lexical_literal.safe">
+      <header>
+        <h3>WAF Evasion — Lexical Literal (Safe)</h3>
+        <code class="check-id">waf.evasion_lexical_literal.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Number / literal shuffling transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Number / literal shuffling variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-237)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_control_char.safe">
+      <header>
+        <h3>WAF Evasion — Control Char (Safe)</h3>
+        <code class="check-id">waf.evasion_control_char.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Null-byte / control-character insertion transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Null-byte / control-character insertion variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-237)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_path_matrix.safe">
+      <header>
+        <h3>WAF Evasion — Path Matrix (Safe)</h3>
+        <code class="check-id">waf.evasion_path_matrix.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert path_traversal marker in a Matrix / path-parameter ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Matrix / path-parameter ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-238)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_path_suffix.safe">
+      <header>
+        <h3>WAF Evasion — Path Suffix (Safe)</h3>
+        <code class="check-id">waf.evasion_path_suffix.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert path_traversal marker in a Trailing dot / slash / suffix ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Trailing dot / slash / suffix ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-238)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_ip_representation.safe">
+      <header>
+        <h3>WAF Evasion — IP Representation (Safe)</h3>
+        <code class="check-id">waf.evasion_ip_representation.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Alternative IP-address representation transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Alternative IP-address representation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-238)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_parser_hpp.safe">
+      <header>
+        <h3>WAF Evasion — Parser HPP (Safe)</h3>
+        <code class="check-id">waf.evasion_parser_hpp.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a HTTP parameter pollution transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTTP parameter pollution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-239)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_parser_json_dup.safe">
+      <header>
+        <h3>WAF Evasion — Parser Json DUP (Safe)</h3>
+        <code class="check-id">waf.evasion_parser_json_dup.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Duplicate JSON key ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Duplicate JSON key ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-239)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_parser_header_dup.safe">
+      <header>
+        <h3>WAF Evasion — Parser Header DUP (Safe)</h3>
+        <code class="check-id">waf.evasion_parser_header_dup.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Duplicate / conflicting HTTP header ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Duplicate / conflicting HTTP header ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-239)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_framing_cl_te.safe">
+      <header>
+        <h3>WAF Evasion — Framing CL TE (Safe)</h3>
+        <code class="check-id">waf.evasion_framing_cl_te.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Content-Length vs Transfer-Encoding ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Content-Length vs Transfer-Encoding ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-240)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_framing_transfer_coding.safe">
+      <header>
+        <h3>WAF Evasion — Framing Transfer Coding (Safe)</h3>
+        <code class="check-id">waf.evasion_framing_transfer_coding.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Transfer-coding obfuscation transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Transfer-coding obfuscation variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-240)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_framing_h2_h1.safe">
+      <header>
+        <h3>WAF Evasion — Framing H2 H1 (Safe)</h3>
+        <code class="check-id">waf.evasion_framing_h2_h1.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a HTTP/2-to-HTTP/1 framing differential transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTTP/2-to-HTTP/1 framing differential variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-240)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_framing_line_ending.safe">
+      <header>
+        <h3>WAF Evasion — Framing Line Ending (Safe)</h3>
+        <code class="check-id">waf.evasion_framing_line_ending.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Line-ending / request-splitting discrepancy transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Line-ending / request-splitting discrepancy variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-240)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_framing_chunk_ext.safe">
+      <header>
+        <h3>WAF Evasion — Framing Chunk EXT (Safe)</h3>
+        <code class="check-id">waf.evasion_framing_chunk_ext.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Chunk-extension / trailer ambiguity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Chunk-extension / trailer ambiguity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-240)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_body_gzip.safe">
+      <header>
+        <h3>WAF Evasion — Body Gzip (Safe)</h3>
+        <code class="check-id">waf.evasion_body_gzip.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Compressed request-body evasion transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Compressed request-body evasion variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-241)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_body_nested_encoding.safe">
+      <header>
+        <h3>WAF Evasion — Body Nested Encoding (Safe)</h3>
+        <code class="check-id">waf.evasion_body_nested_encoding.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Nested content encoding transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Nested content encoding variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-241)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_content_type_binary.safe">
+      <header>
+        <h3>WAF Evasion — Content Type Binary (Safe)</h3>
+        <code class="check-id">waf.evasion_content_type_binary.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Binary / protobuf opacity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Binary / protobuf opacity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-242)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_struct_type_confusion.safe">
+      <header>
+        <h3>WAF Evasion — Struct Type Confusion (Safe)</h3>
+        <code class="check-id">waf.evasion_struct_type_confusion.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Type confusion / scalar-object switching transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Type confusion / scalar-object switching variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-242)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_struct_deep_nesting.safe">
+      <header>
+        <h3>WAF Evasion — Struct Deep Nesting (Safe)</h3>
+        <code class="check-id">waf.evasion_struct_deep_nesting.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Deep nesting / sparse-index abuse transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Deep nesting / sparse-index abuse variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-242)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_parameter_location.safe">
+      <header>
+        <h3>WAF Evasion — Parameter Location (Safe)</h3>
+        <code class="check-id">waf.evasion_parameter_location.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Parameter-location move transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Parameter-location move variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-242)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_method_override.safe">
+      <header>
+        <h3>WAF Evasion — Method Override (Safe)</h3>
+        <code class="check-id">waf.evasion_method_override.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a HTTP method override transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTTP method override variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-243)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_protocol_version.safe">
+      <header>
+        <h3>WAF Evasion — Protocol Version (Safe)</h3>
+        <code class="check-id">waf.evasion_protocol_version.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a HTTP version switch transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTTP version switch variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-243)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_protocol_upgrade.safe">
+      <header>
+        <h3>WAF Evasion — Protocol Upgrade (Safe)</h3>
+        <code class="check-id">waf.evasion_protocol_upgrade.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a WebSocket upgrade / post-upgrade opacity transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the WebSocket upgrade / post-upgrade opacity variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-243)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_benign_padding.safe">
+      <header>
+        <h3>WAF Evasion — Benign Padding (Safe)</h3>
+        <code class="check-id">waf.evasion_benign_padding.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a Benign padding / anomaly-score dilution transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Benign padding / anomaly-score dilution variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-246)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_polyglot_content.safe">
+      <header>
+        <h3>WAF Evasion — Polyglot Content (Safe)</h3>
+        <code class="check-id">waf.evasion_polyglot_content.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a Polyglot / multi-parser content transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Polyglot / multi-parser content variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-251)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_protocol_h3_h1.safe">
+      <header>
+        <h3>WAF Evasion — Protocol H3 H1 (Safe)</h3>
+        <code class="check-id">waf.evasion_protocol_h3_h1.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a HTTP/3-to-HTTP/1.1 translation differential transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the HTTP/3-to-HTTP/1.1 translation differential variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-252)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_protocol_qpack_hpack.safe">
+      <header>
+        <h3>WAF Evasion — Protocol Qpack Hpack (Safe)</h3>
+        <code class="check-id">waf.evasion_protocol_qpack_hpack.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert sqli marker in a QPACK / HPACK normalization gap transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the QPACK / HPACK normalization gap variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-252)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_multipart_charset.safe">
+      <header>
+        <h3>WAF Evasion — Multipart Charset (Safe)</h3>
+        <code class="check-id">waf.evasion_multipart_charset.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a Multipart per-part charset coverage gap transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the Multipart per-part charset coverage gap variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-254)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_xml_attribute.safe">
+      <header>
+        <h3>WAF Evasion — XML Attribute (Safe)</h3>
+        <code class="check-id">waf.evasion_xml_attribute.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Bounded probe: wraps the inert xss marker in a XML attribute-value inspection bypass transform and checks whether the WAF still blocks it.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Baseline inert marker should be blocked; if the XML attribute-value inspection bypass variant passes while baseline is blocked, evasion is suspected (finding). Both blocked = evasion resisted.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_evasion_marker_probe Max 4 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_evasion_marker_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-254)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.inspection_limit.safe">
+      <header>
+        <h3>WAF Inspection-Limit / Fail-Open (Safe)</h3>
+        <code class="check-id">waf.inspection_limit.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Wires the existing wave-3 waf_inspection_limit_probe to a check: places the inert marker past body/field/parser inspection limits and checks whether it is still blocked.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>If the marker placed past an inspection limit passes while an in-limit marker is blocked, an inspection-limit / fail-open gap is suspected.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: waf_inspection_limit_probe Max 6 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>waf_inspection_limit_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-241, ATT-247)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>customer_approves_waf_marker_probe</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_cache_key_mismatch.posture">
+      <header>
+        <h3>WAF Evasion Posture — Cache-key / routing mismatch</h3>
+        <code class="check-id">waf.evasion_cache_key_mismatch.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Cache-key / routing mismatch. Confirming a cache-key mismatch requires poisoning a shared cache, affecting third parties; records declared cache-key normalization posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-243)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_cache_key_normalization</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_reassembly_differential.posture">
+      <header>
+        <h3>WAF Evasion Posture — IP fragmentation / TCP segmentation differential</h3>
+        <code class="check-id">waf.evasion_reassembly_differential.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for IP fragmentation / TCP segmentation differential. Requires raw-packet fragmentation outside the bounded HTTP probe surface; records declared L3/L4 reassembly-normalization posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-243)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_edge_reassembly_policy</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_rule_gap.posture">
+      <header>
+        <h3>WAF Evasion Posture — Zero-day / rule-gap evasion</h3>
+        <code class="check-id">waf.evasion_rule_gap.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Zero-day / rule-gap evasion. No known marker can probe an unknown gap; records declared managed-ruleset / virtual-patching posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-248)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_managed_ruleset</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_second_order.posture">
+      <header>
+        <h3>WAF Evasion Posture — Stored / deferred second-order payload</h3>
+        <code class="check-id">waf.evasion_second_order.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Stored / deferred second-order payload. Confirmation requires a state-changing write then trigger; records declared stored-content inspection posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-249)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_stored_content_inspection</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_encrypted_payload.posture">
+      <header>
+        <h3>WAF Evasion Posture — Application-layer encrypted / opaque payload</h3>
+        <code class="check-id">waf.evasion_encrypted_payload.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Application-layer encrypted / opaque payload. No plaintext marker is inspectable outside-in; records declared application-layer decryption/inspection posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-251)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_app_layer_decryption</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_signed_structured_data.posture">
+      <header>
+        <h3>WAF Evasion Posture — Signed but malicious structured data</h3>
+        <code class="check-id">waf.evasion_signed_structured_data.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Signed but malicious structured data. A valid signature cannot be forged without the application key; records declared schema/signature-validation posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-251)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_schema_signature_validation</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_connection_coalescing.posture">
+      <header>
+        <h3>WAF Evasion Posture — Connection coalescing identity confusion</h3>
+        <code class="check-id">waf.evasion_connection_coalescing.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Connection coalescing identity confusion. Requires a multi-host TLS coalescing setup not reproducible via a single bounded probe; records declared per-host policy posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-252)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_per_host_policy</li></ul></details>
+    </article>
+    <article class="check" id="waf.evasion_ech_routing_metadata.posture">
+      <header>
+        <h3>WAF Evasion Posture — Encrypted ClientHello / hidden routing-metadata gap</h3>
+        <code class="check-id">waf.evasion_ech_routing_metadata.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for Encrypted ClientHello / hidden routing-metadata gap. Hidden routing metadata is not visible outside-in; records declared ECH/SNI inspection posture.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>delivery_pattern <span class="muted">(registry: ATT-252)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_ech_sni_inspection</li></ul></details>
+    </article>
+    <article class="check" id="waf.http_routing_trust.posture">
+      <header>
+        <h3>WAF HTTP Routing &amp; Proxy-Trust Posture</h3>
+        <code class="check-id">waf.http_routing_trust.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for WAF HTTP Routing &amp; Proxy-Trust Posture. Forwarded-header/HTTPoxy/authority trust is an origin-declared config fact not observable by a stateless outside-in marker.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>access_control</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_proxy_trust_boundary</li></ul></details>
+    </article>
+    <article class="check" id="waf.jsonp_css_policy.posture">
+      <header>
+        <h3>WAF JSONP &amp; CSS-Injection Policy Posture</h3>
+        <code class="check-id">waf.jsonp_css_policy.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">Posture-only record for WAF JSONP &amp; CSS-Injection Policy Posture. JSONP-hijack and CSS-injection exposure is governed by declared CSP and content-type headers, not by a reliable outside-in signature.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.</dd>
+        <dt>How we detect</dt>
+        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>metadata_marker</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>integrity_attack</dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_waf_asset</li><li>declared_content_security_policy</li></ul></details>
     </article></div>
     </section>
     <section id="family-l7">
-      <h2>L7 / API / HTTP <span style="color:var(--muted);font-weight:400">(48)</span></h2>
+      <h2>L7 / API / HTTP <span style="color:var(--muted);font-weight:400">(50)</span></h2>
       <div class="checks">
     <article class="check" id="l7.waf_marker_rule.safe">
       <header>
@@ -1742,14 +3685,14 @@
         <code class="check-id">l7.http_method_restriction.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Unusual HTTP method restriction metadata check (TRACE/unsafe methods).</p>
+      <p class="desc">HEAD/OPTIONS method-policy metadata observation; no TRACE or state-changing methods are sent.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Safe HEAD-only probe metadata; method policy validated via edge response codes (no unsafe methods sent).</dd>
+        <dd>HEAD and OPTIONS collect status and Allow metadata only; rejection of unsafe methods is not executed or proven.</dd>
         <dt>How we detect</dt>
-        <dd>Single bounded HTTP HEAD with optional harmless marker header. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: http_method_matrix Max 2 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http_head</code></dd>
+        <dd><code>http_method_matrix</code></dd>
         <dt>Exhausted resource</dt>
         <dd>application_l7 <span class="muted">(registry: ATT-051, ATT-053, ATT-132)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1776,9 +3719,9 @@
         <dt>What we detect</dt>
         <dd>Minimal HEAD probe confirms edge handles boundary policy without oversized request bodies.</dd>
         <dt>How we detect</dt>
-        <dd>Single bounded HTTP HEAD with optional harmless marker header. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: header_size_probe Max 2 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http_head</code></dd>
+        <dd><code>header_size_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>memory_exhaustion <span class="muted">(registry: ATT-059)</span></dd>
         <dt>Default expected behavior</dt>
@@ -1809,7 +3752,7 @@
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>application_l7 <span class="muted">(registry: ATT-051, ATT-175)</span></dd>
+        <dd>application_l7, delivery_pattern <span class="muted">(registry: ATT-051, ATT-175)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -1867,7 +3810,7 @@
         <dt>Probe kind</dt>
         <dd><code>http_head</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>computational <span class="muted">(registry: ATT-054, ATT-097)</span></dd>
+        <dd>computational, delivery_pattern <span class="muted">(registry: ATT-054, ATT-097)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -1908,7 +3851,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_auth_endpoint</li><li>isolated_synthetic_test_identity</li><li>customer_approves_auth_probe</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_login_probe_path</li><li>isolated_synthetic_test_identity</li><li>customer_approves_auth_probe</li></ul></details>
     </article>
     <article class="check" id="l7.password_reset.safe">
       <header>
@@ -1954,7 +3897,7 @@
         <dt>Probe kind</dt>
         <dd><code>rate_limit_sequence</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>backend_exhaustion <span class="muted">(registry: ATT-055, ATT-056, ATT-112)</span></dd>
+        <dd>backend_exhaustion, application_l7 <span class="muted">(registry: ATT-055, ATT-056, ATT-112)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -1966,7 +3909,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_api_endpoint</li><li>test_api_identity_or_key_scope</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_api_probe_path</li><li>test_api_identity_or_key_scope</li></ul></details>
     </article>
     <article class="check" id="l7.graphql_complexity.safe">
       <header>
@@ -1983,7 +3926,7 @@
         <dt>Probe kind</dt>
         <dd><code>graphql_posture_probe</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>computational <span class="muted">(registry: ATT-054, ATT-055, ATT-057, ATT-114)</span></dd>
+        <dd>computational, backend_exhaustion <span class="muted">(registry: ATT-054, ATT-055, ATT-057, ATT-114)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -2041,7 +3984,7 @@
         <dt>Probe kind</dt>
         <dd><code>api_surface_scan</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>application_l7 <span class="muted">(registry: ATT-056, ATT-169)</span></dd>
+        <dd>application_l7, delivery_pattern <span class="muted">(registry: ATT-056, ATT-169)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -2140,7 +4083,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_validation_path</li><li>rps_limit_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>rps_limit_declaration</li></ul></details>
     </article>
     <article class="check" id="l7.http_post_flood.validation">
       <header>
@@ -2401,7 +4344,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_search_endpoint</li><li>search_limit_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_search_probe_path</li><li>search_limit_declaration</li></ul></details>
     </article>
     <article class="check" id="l7.export_abuse.validation">
       <header>
@@ -2430,7 +4373,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_export_endpoint</li><li>export_limit_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_export_probe_path</li><li>export_limit_declaration</li></ul></details>
     </article>
     <article class="check" id="l7.batch_api_abuse.validation">
       <header>
@@ -2488,7 +4431,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_token_endpoint</li><li>token_limit_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_token_probe_path</li><li>token_limit_declaration</li></ul></details>
     </article>
     <article class="check" id="l7.checkout_abuse.validation">
       <header>
@@ -2575,7 +4518,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_signup_endpoint</li><li>signup_limit_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_signup_probe_path</li><li>signup_limit_declaration</li></ul></details>
     </article>
     <article class="check" id="l7.elasticsearch_abuse.readiness">
       <header>
@@ -2907,9 +4850,9 @@
         <dt>What we detect</dt>
         <dd>Observed SETTINGS limits plus declared reset-rate budgets must match rapid-reset guidance; gaps raise a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Reads HTTP/2 SETTINGS frame limits (no reset flood). Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: http2_frame_probe Max 4 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http2_settings</code></dd>
+        <dd><code>http2_frame_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>computational <span class="muted">(registry: ATT-067)</span></dd>
         <dt>Default expected behavior</dt>
@@ -2936,9 +4879,9 @@
         <dt>What we detect</dt>
         <dd>Declared flow-control hardening (window caps, RESET budget accounting) must be present; absence raises a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Reads HTTP/2 SETTINGS frame limits (no reset flood). Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: http2_frame_probe Max 4 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http2_settings</code></dd>
+        <dd><code>http2_frame_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>computational <span class="muted">(registry: ATT-069)</span></dd>
         <dt>Default expected behavior</dt>
@@ -2965,11 +4908,11 @@
         <dt>What we detect</dt>
         <dd>Declared header-frame size/count limits (RFC 9113 hardening) must be present; absence raises a readiness finding.</dd>
         <dt>How we detect</dt>
-        <dd>Reads HTTP/2 SETTINGS frame limits (no reset flood). Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: http2_frame_probe Max 4 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http2_settings</code></dd>
+        <dd><code>http2_frame_probe</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>memory_exhaustion <span class="muted">(registry: ATT-068)</span></dd>
+        <dd>memory_exhaustion, packet_processing, computational, exploit_dos <span class="muted">(registry: ATT-068, ATT-230, ATT-231, ATT-232, ATT-233)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -3098,6 +5041,64 @@
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
       <details><summary>Customer setup required</summary><ul><li>qpack_limit_declaration</li></ul></details>
+    </article>
+    <article class="check" id="l7.compressed_request_decompression.posture">
+      <header>
+        <h3>Compressed Request Decompression Acceptance Posture (Safe)</h3>
+        <code class="check-id">l7.compressed_request_decompression.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One or two bounded requests declare a compressed body (Content-Encoding gzip/br) with a declared-decompressed-size header and a tiny inert benign body — no decompression bomb is sent. Reads whether the origin rejects the declared shape (413/415/400) before doing work.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Origin that rejects a declared oversize compressed request (413/415/431/400) is protected; one that accepts it for processing raises a decompression-acceptance readiness finding.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: l7_resource_posture_probe Max 2 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>l7_resource_posture_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>computational <span class="muted">(registry: ATT-196)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>http_endpoint</li><li>decompression_limit_declaration</li></ul></details>
+    </article>
+    <article class="check" id="l7.request_parser_size.posture">
+      <header>
+        <h3>Request URI / Parameter Size Limit Posture (Safe)</h3>
+        <code class="check-id">l7.request_parser_size.posture</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded request carries a benign 1KB URI marker plus a declared-URI-length header. Reads whether the origin enforces a URI / query size limit (414/431/400) before parsing.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Origin that rejects an oversize declared URI/query (414/431/400) is protected; one that accepts it for parsing raises a parser-size readiness finding.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: l7_resource_posture_probe Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>l7_resource_posture_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>backend_exhaustion <span class="muted">(registry: ATT-193)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>url, fqdn</dd>
+        <dt>Agent modes</dt>
+        <dd>heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>http_endpoint</li><li>request_size_limit_declaration</li></ul></details>
     </article></div>
     </section>
     <section id="family-tls">
@@ -3118,7 +5119,7 @@
         <dt>Probe kind</dt>
         <dd><code>tls_audit</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>computational <span class="muted">(registry: ATT-064, ATT-122, ATT-156)</span></dd>
+        <dd>computational, application_l7 <span class="muted">(registry: ATT-064, ATT-122, ATT-156)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -3143,9 +5144,9 @@
         <dt>What we detect</dt>
         <dd>Single HEAD within strict timeout collects edge timeout behavior metadata only.</dd>
         <dt>How we detect</dt>
-        <dd>Single bounded HTTP HEAD with optional harmless marker header. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: slow_header_probe Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>http_head</code></dd>
+        <dd><code>slow_header_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>memory_exhaustion <span class="muted">(registry: ATT-060)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3370,20 +5371,20 @@
     </article>
     <article class="check" id="protocol.http3_quic_exposure.safe">
       <header>
-        <h3>HTTP/3 QUIC Exposure (Safe)</h3>
+        <h3>HTTP/3 Alt-Svc Observation (Safe)</h3>
         <code class="check-id">protocol.http3_quic_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded QUIC reachability via Alt-Svc discovery and a single UDP-443 datagram.</p>
+      <p class="desc">One bounded HTTPS HEAD observes a modern h3 Alt-Svc advertisement; no UDP or QUIC handshake is attempted.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>HTTPS Alt-Svc hint plus one UDP datagram documents QUIC exposure without a QUIC flood.</dd>
+        <dd>HTTPS Alt-Svc metadata is observation-only and does not establish QUIC reachability or mitigation.</dd>
         <dt>How we detect</dt>
-        <dd>HTTPS Alt-Svc read plus one UDP/443 datagram. Max 2 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>HTTPS Alt-Svc read plus one UDP/443 datagram. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
         <dd><code>quic_reachability</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>volumetric <span class="muted">(registry: ATT-015, ATT-070)</span></dd>
+        <dd>volumetric, application_l7 <span class="muted">(registry: ATT-015, ATT-070)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -3466,7 +5467,7 @@
         <dt>What we detect</dt>
         <dd>One bounded gRPC health/reflection reachability request (metadata-only result, no stream pressure).</dd>
         <dt>How we detect</dt>
-        <dd>Probe kind: grpc_reflection_probe Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
         <dd><code>grpc_reflection_probe</code></dd>
         <dt>Exhausted resource</dt>
@@ -3544,20 +5545,20 @@
     </article>
     <article class="check" id="protocol.http3_control_stream.readiness">
       <header>
-        <h3>HTTP/3 Control Stream Readiness (Safe)</h3>
+        <h3>HTTP/3 Alt-Svc Posture Observation (Safe)</h3>
         <code class="check-id">protocol.http3_control_stream.readiness</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Single bounded QUIC reachability datagram plus declared control-stream budget posture (no SETTINGS flood).</p>
+      <p class="desc">One bounded HTTPS HEAD observes a modern h3 Alt-Svc advertisement only; no UDP, QUIC control stream, or SETTINGS validation is performed.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Declared control-stream/create limits must be present for HTTP/3 endpoints; absence raises a readiness finding.</dd>
+        <dd>Alt-Svc metadata is observation-only; governed evidence is required for HTTP/3 control-stream or SETTINGS readiness.</dd>
         <dt>How we detect</dt>
-        <dd>HTTPS Alt-Svc read plus one UDP/443 datagram. Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Probe kind: http3_control_probe Max 1 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
-        <dd><code>quic_reachability</code></dd>
+        <dd><code>http3_control_probe</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>application_l7 <span class="muted">(registry: ATT-153)</span></dd>
+        <dd>application_l7, memory_exhaustion <span class="muted">(registry: ATT-153, ATT-234)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -3602,7 +5603,7 @@
     </article></div>
     </section>
     <section id="family-reflection">
-      <h2>Reflection exposure <span style="color:var(--muted);font-weight:400">(16)</span></h2>
+      <h2>Reflection exposure <span style="color:var(--muted);font-weight:400">(21)</span></h2>
       <div class="checks">
     <article class="check" id="reflect.ssdp_exposure.safe">
       <header>
@@ -3615,9 +5616,9 @@
         <dt>What we detect</dt>
         <dd>An unexpected UDP discovery-response size class from the declared host raises a reflector-exposure finding; customer hosts must not run open responders.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-020)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3631,7 +5632,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_ssdp_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.snmp_exposure.safe">
       <header>
@@ -3644,9 +5645,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected SNMP response metadata from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-021)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3660,7 +5661,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_snmp_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.chargen_qotd_exposure.safe">
       <header>
@@ -3673,9 +5674,9 @@
         <dt>What we detect</dt>
         <dd>Any legacy responder answer (CHARGEN, QOTD, Echo class) from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-022)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3689,7 +5690,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_chargen_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.mdns_netbios_wsdiscovery_exposure.safe">
       <header>
@@ -3702,9 +5703,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected local-discovery answers from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-023)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3718,7 +5719,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_mdns_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.portmap_service_exposure.safe">
       <header>
@@ -3731,9 +5732,9 @@
         <dt>What we detect</dt>
         <dd>An open portmapper/rpcbind (or unexpected legacy routing service such as RIPv1) on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>tcp_connect</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-024)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3747,7 +5748,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_rpc_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_portmap_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.dtls_sip_rdp_tftp_exposure.safe">
       <header>
@@ -3760,9 +5761,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected session-protocol responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-025)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3776,18 +5777,18 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_tftp_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.quic_reflection_exposure.safe">
       <header>
-        <h3>QUIC Responder Exposure (Safe)</h3>
+        <h3>QUIC Alt-Svc Advertisement Observation (Safe)</h3>
         <code class="check-id">reflect.quic_reflection_exposure.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Single bounded QUIC reachability datagram documents whether an unexpected QUIC responder exists on the declared host.</p>
+      <p class="desc">One bounded HTTPS HEAD observes whether the declared host advertises modern h3 via Alt-Svc; no UDP responder test is performed.</p>
       <dl>
         <dt>What we detect</dt>
-        <dd>Unexpected QUIC response metadata from the declared host raises a reflector-exposure finding.</dd>
+        <dd>Alt-Svc metadata is observation-only and cannot prove a QUIC reflector or UDP reachability.</dd>
         <dt>How we detect</dt>
         <dd>HTTPS Alt-Svc read plus one UDP/443 datagram. Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
@@ -3805,7 +5806,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_quic_exposure_intent</li></ul></details>
     </article>
     <article class="check" id="reflect.tcp_middlebox_exposure.safe">
       <header>
@@ -3847,9 +5848,9 @@
         <dt>What we detect</dt>
         <dd>An open SQL Browser responder on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-116)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3863,7 +5864,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_mssql_resolver_host</li></ul></details>
     </article>
     <article class="check" id="reflect.jenkins_discovery_exposure.safe">
       <header>
@@ -3876,9 +5877,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected CI discovery responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-024, ATT-117)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3892,7 +5893,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_jenkins_discovery_host</li></ul></details>
     </article>
     <article class="check" id="reflect.coap_iot_exposure.safe">
       <header>
@@ -3905,9 +5906,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected CoAP responses from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-118)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3921,7 +5922,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_coap_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.legacy_device_discovery_exposure.safe">
       <header>
@@ -3934,9 +5935,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected legacy discovery/management answers from the declared host raise a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-020, ATT-024, ATT-118)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3950,7 +5951,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_ws_discovery_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.stun_turn_exposure.safe">
       <header>
@@ -3963,9 +5964,9 @@
         <dt>What we detect</dt>
         <dd>An unrestricted STUN/TURN responder on an Internet-facing host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-163)</span></dd>
         <dt>Default expected behavior</dt>
@@ -3979,7 +5980,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_stun_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.ipmi_bmc_exposure.safe">
       <header>
@@ -3992,9 +5993,9 @@
         <dt>What we detect</dt>
         <dd>An Internet-reachable BMC responder raises a critical reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-164)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4008,7 +6009,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_ipmi_responder_host</li></ul></details>
     </article>
     <article class="check" id="reflect.redis_direct_exposure.safe">
       <header>
@@ -4050,9 +6051,9 @@
         <dt>What we detect</dt>
         <dd>Unexpected VPN handshake metadata from the declared host raises a reflector-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One labeled UDP datagram (no amplification). Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>udp_probe</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>reflection <span class="muted">(registry: ATT-168)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4066,7 +6067,152 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_udp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_openvpn_responder_host</li></ul></details>
+    </article>
+    <article class="check" id="reflect.slp_amplification_exposure.safe">
+      <header>
+        <h3>SLP Amplification Exposure (Safe)</h3>
+        <code class="check-id">reflect.slp_amplification_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded UDP Service Location Protocol request on the declared host documents open-SLP reflector exposure via response size class and amplification-ratio metadata.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>An unexpected amplifying SLP response from the declared host raises a reflector-exposure finding; Internet-facing hosts must not run open SLP.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>reflection_service_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>amplification <span class="muted">(registry: ATT-086)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Agent modes</dt>
+        <dd>packet, heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_slp_responder_host</li></ul></details>
+    </article>
+    <article class="check" id="reflect.tp240_amplification_exposure.safe">
+      <header>
+        <h3>TP240 PhoneHome Amplification Exposure (Safe)</h3>
+        <code class="check-id">reflect.tp240_amplification_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded UDP status request to the declared Mitel MiCollab tp240dvr port documents reflector exposure by response size class only; the request is never the start-blast amplification command.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>Any tp240dvr response on an Internet-facing host raises a reflector-exposure finding (CVE-2022-26143 class); the driver test port must not be exposed.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>reflection_service_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>amplification <span class="muted">(registry: ATT-089)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Agent modes</dt>
+        <dd>packet, heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_tp240_responder_host</li></ul></details>
+    </article>
+    <article class="check" id="reflect.l2tp_reflection_exposure.safe">
+      <header>
+        <h3>L2TP Reflection Exposure (Safe)</h3>
+        <code class="check-id">reflect.l2tp_reflection_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded L2TP Start-Control-Connection-Request on the declared host documents reflector exposure via response size class metadata.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>An unexpected L2TP control-response from the declared host raises a reflector-exposure finding; Internet-facing L2TP control ports must be filtered.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>reflection_service_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>reflection <span class="muted">(registry: ATT-087)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Agent modes</dt>
+        <dd>packet, heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_l2tp_responder_host</li></ul></details>
+    </article>
+    <article class="check" id="reflect.natpmp_amplification_exposure.safe">
+      <header>
+        <h3>NAT-PMP Amplification Exposure (Safe)</h3>
+        <code class="check-id">reflect.natpmp_amplification_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded NAT-PMP public-address request on the declared host documents open-gateway reflector exposure via response size class and amplification-ratio metadata.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>A NAT-PMP response on an Internet-facing (WAN) interface raises a reflector-exposure finding; NAT-PMP must be answered only on the LAN side.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>reflection_service_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>amplification <span class="muted">(registry: ATT-181)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Agent modes</dt>
+        <dd>packet, heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_natpmp_responder_host</li></ul></details>
+    </article>
+    <article class="check" id="reflect.ipp_callback_exposure.safe">
+      <header>
+        <h3>CUPS/IPP Reflector Exposure (Safe)</h3>
+        <code class="check-id">reflect.ipp_callback_exposure.safe</code>
+        <span class="badge safe">safe</span>
+      </header>
+      <p class="desc">One bounded read-only IPP Get-Printer-Attributes request on the declared host documents exposed CUPS/IPP; the request carries no callback URL, so it cannot trigger callback fan-out to a third party.</p>
+      <dl>
+        <dt>What we detect</dt>
+        <dd>An IPP attribute response on an Internet-facing host raises a reflector-exposure finding (CVE-2024-47176 class); CUPS/IPP must not be reachable from the Internet.</dd>
+        <dt>How we detect</dt>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dt>Probe kind</dt>
+        <dd><code>reflection_service_probe</code></dd>
+        <dt>Exhausted resource</dt>
+        <dd>reflection <span class="muted">(registry: ATT-180)</span></dd>
+        <dt>Default expected behavior</dt>
+        <dd><code>must_block_before_origin</code></dd>
+        <dt>Targets</dt>
+        <dd>fqdn, ip</dd>
+        <dt>Agent modes</dt>
+        <dd>packet, heartbeat</dd>
+        <dt>Evidence required</dt>
+        <dd>probe_result, agent_observation</dd>
+        <dt>Stop conditions</dt>
+        <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
+      </dl>
+      <details><summary>Customer setup required</summary><ul><li>declared_ipp_responder_host</li></ul></details>
     </article></div>
     </section>
     <section id="family-amplification">
@@ -4083,9 +6229,9 @@
         <dt>What we detect</dt>
         <dd>Declared NTP restriction policy must disable legacy modes on Internet-facing hosts; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>metadata_marker</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>amplification <span class="muted">(registry: ATT-017)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4099,7 +6245,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>ntp_policy_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_ntp_responder_host</li></ul></details>
     </article>
     <article class="check" id="amp.cldap_exposure.safe">
       <header>
@@ -4112,9 +6258,9 @@
         <dt>What we detect</dt>
         <dd>Anonymous LDAP on Internet-facing hosts must be disabled per declared policy; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>No live network I/O — records declared intent only (deferred checks). Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>metadata_marker</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>amplification <span class="muted">(registry: ATT-018)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4128,7 +6274,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>ldap_exposure_declaration</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_cldap_responder_host</li></ul></details>
     </article>
     <article class="check" id="amp.memcached_exposure.safe">
       <header>
@@ -4141,9 +6287,9 @@
         <dt>What we detect</dt>
         <dd>An open cache-service port on an Internet-facing host raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>One TCP connect attempt to declared host:port. Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: reflection_service_probe Max 1 request(s), timeout ≤ 3000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>tcp_connect</code></dd>
+        <dd><code>reflection_service_probe</code></dd>
         <dt>Exhausted resource</dt>
         <dd>amplification <span class="muted">(registry: ATT-019)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4157,7 +6303,7 @@
         <dt>Stop conditions</dt>
         <dd>max_events_reached, max_duration_elapsed, customer_cancel, tenant_kill_switch</dd>
       </dl>
-      <details><summary>Customer setup required</summary><ul><li>declared_tcp_fingerprint_host</li></ul></details>
+      <details><summary>Customer setup required</summary><ul><li>declared_memcached_udp_responder_host</li></ul></details>
     </article>
     <article class="check" id="amp.dns_any_txt_exposure.safe">
       <header>
@@ -4170,9 +6316,9 @@
         <dt>What we detect</dt>
         <dd>Declared response-rate-limiting and large-record policy must be present; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: dns_wire_query Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>amplification <span class="muted">(registry: ATT-115)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4228,9 +6374,9 @@
         <dt>What we detect</dt>
         <dd>Declared RRL plus restricted recursion must be present on authoritative infrastructure; absence raises an amplification-exposure finding.</dd>
         <dt>How we detect</dt>
-        <dd>Single DNS lookup for declared name. Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
+        <dd>Probe kind: dns_wire_query Max 2 request(s), timeout ≤ 5000ms. Correlates outside probe with agent observation when agent-assisted.</dd>
         <dt>Probe kind</dt>
-        <dd><code>dns_resolve</code></dd>
+        <dd><code>dns_wire_query</code></dd>
         <dt>Exhausted resource</dt>
         <dd>amplification <span class="muted">(registry: ATT-042)</span></dd>
         <dt>Default expected behavior</dt>
@@ -4559,7 +6705,7 @@
         <dt>Probe kind</dt>
         <dd><code>metadata_marker</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>delivery_pattern <span class="muted">(registry: ATT-175)</span></dd>
+        <dd>delivery_pattern, automation_abuse <span class="muted">(registry: ATT-175, ATT-245)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -4588,7 +6734,7 @@
         <dt>Probe kind</dt>
         <dd><code>metadata_marker</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>delivery_pattern <span class="muted">(registry: ATT-121)</span></dd>
+        <dd>delivery_pattern, ai_agentic <span class="muted">(registry: ATT-121, ATT-246, ATT-248, ATT-249, ATT-250, ATT-253)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -4617,7 +6763,7 @@
         <dt>Probe kind</dt>
         <dd><code>metadata_marker</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>delivery_pattern <span class="muted">(registry: ATT-146)</span></dd>
+        <dd>delivery_pattern, automation_abuse <span class="muted">(registry: ATT-146, ATT-244)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -4737,7 +6883,7 @@
         <dt>Probe kind</dt>
         <dd><code>metadata_marker</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>backend_exhaustion <span class="muted">(registry: ATT-212, ATT-213)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -4800,7 +6946,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>state_exhaustion <span class="muted">(registry: ATT-003, ATT-008, ATT-075)</span></dd>
+        <dd>state_exhaustion, memory_exhaustion, amplification, backend_exhaustion <span class="muted">(registry: ATT-003, ATT-008, ATT-075, ATT-038, ATT-039, ATT-198, ATT-206, ATT-220, ATT-221, ATT-222, ATT-223, ATT-224, ATT-229)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
@@ -4829,7 +6975,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>dns_exhaustion <span class="muted">(registry: ATT-041)</span></dd>
+        <dd>dns_exhaustion, amplification, computational <span class="muted">(registry: ATT-041, ATT-183, ATT-188, ATT-189)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
@@ -4945,7 +7091,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>delivery_pattern <span class="muted">(registry: ATT-093, ATT-096, ATT-099)</span></dd>
+        <dd>delivery_pattern, exploit_dos, computational, backend_exhaustion, memory_exhaustion, amplification <span class="muted">(registry: ATT-093, ATT-096, ATT-099, ATT-192, ATT-194, ATT-195, ATT-196, ATT-197, ATT-198, ATT-199, ATT-201, ATT-205, ATT-206, ATT-216, ATT-218, ATT-219, ATT-226, ATT-227, ATT-228, ATT-229)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
@@ -5003,7 +7149,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>volumetric <span class="muted">(registry: ATT-001, ATT-002, ATT-003, ATT-013, ATT-015, ATT-074, ATT-090)</span></dd>
+        <dd>volumetric, state_exhaustion, delivery_pattern, packet_processing, exploit_dos, computational, application_l7, reflection, amplification <span class="muted">(registry: ATT-001, ATT-002, ATT-003, ATT-013, ATT-015, ATT-074, ATT-090, ATT-028, ATT-029, ATT-030, ATT-031, ATT-032, ATT-033, ATT-034, ATT-035, ATT-036, ATT-037, ATT-040, ATT-076, ATT-077, ATT-078, ATT-079, ATT-080, ATT-081, ATT-082, ATT-083, ATT-084, ATT-085, ATT-088, ATT-177, ATT-178, ATT-179, ATT-182, ATT-185, ATT-186, ATT-208, ATT-225, ATT-235)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
@@ -5032,7 +7178,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5061,7 +7207,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5090,7 +7236,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5119,7 +7265,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>data_exposure</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5148,7 +7294,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5177,7 +7323,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>access_control</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5206,7 +7352,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5235,7 +7381,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>not DDoS-scored (WAF-offensive / monitor-only)</dd>
+        <dd>integrity_attack, access_control, automation_abuse, data_exposure, ai_agentic</dd>
         <dt>Default expected behavior</dt>
         <dd><code>must_block_before_origin</code></dd>
         <dt>Targets</dt>
@@ -5264,7 +7410,7 @@
         <dt>Probe kind</dt>
         <dd><code>none</code></dd>
         <dt>Exhausted resource</dt>
-        <dd>application_l7 <span class="muted">(registry: ATT-051, ATT-052, ATT-070)</span></dd>
+        <dd>application_l7, reflection, backend_exhaustion, state_exhaustion, amplification, ai_agentic, access_control <span class="muted">(registry: ATT-051, ATT-052, ATT-070, ATT-184, ATT-190, ATT-191, ATT-193, ATT-200, ATT-201, ATT-202, ATT-203, ATT-204, ATT-207, ATT-209, ATT-210, ATT-211, ATT-214, ATT-215, ATT-217, ATT-221)</span></dd>
         <dt>Default expected behavior</dt>
         <dd><code>soc_approval_required</code></dd>
         <dt>Targets</dt>
@@ -5281,7 +7427,7 @@
     </section>
   </main>
   <footer>
-    AstraNull · Check catalog v1.0.0 · 158 safe + 17 SOC-gated
+    AstraNull · Check catalog v1.0.0 · 232 safe + 17 SOC-gated
   </footer>
 </body>
 </html>

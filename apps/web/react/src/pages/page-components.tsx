@@ -43,7 +43,7 @@ import {
 } from '../components/policies/target-group-picker';
 import { EmptyState } from '../components/ui/empty-state';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
-import { ConfirmModal, FormModal, formatMutationSuccessMessage, renderFriendlyEmptyState } from '../lib/crud-ui';
+import { ConfirmModal, FormModal, formatMutationSuccessMessage, renderFriendlyEmptyState, useConfirmModal } from '../lib/crud-ui';
 import { apiErrorMessage, humanizeErrorCode } from '../lib/error-messages';
 import { Progress, type ProgressTone } from '../components/ui/progress';
 import { DataTable, type TableColumn } from '../components/ui/table';
@@ -53,12 +53,13 @@ import { Tabs } from '../components/ui/tabs';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
-import { buildEnvironmentReadinessRows } from '../lib/environments';
+import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
+import { isFindingOpen } from '../lib/findings-helpers';
 import { buildDetailHref } from '../lib/route-params';
 import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
 import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
-import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize } from '../lib/utils';
+import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
 
 function getString(item: DataItem, keys: string[], fallback = '—') {
   for (const key of keys) {
@@ -74,6 +75,15 @@ function getNumber(item: DataItem, keys: string[], fallback = 0) {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
   }
   return fallback;
+}
+
+function getOptionalNumber(item: DataItem | null | undefined, keys: string[]) {
+  if (!item) return null;
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
 function getNestedNumber(item: DataItem | null | undefined, path: string[], fallback = 0) {
@@ -292,7 +302,19 @@ function DashboardWorkspaceSkeleton() {
   );
 }
 
-const SUPPORT_CONTACT_MAILTO = 'mailto:support@astranull.example?subject=AstraNull%20support%20request';
+function configuredSupportUri(siteConfig: Record<string, unknown>) {
+  for (const key of ['support_uri', 'support_url']) {
+    const candidate = typeof siteConfig[key] === 'string' ? siteConfig[key].trim() : '';
+    if (!candidate) continue;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'mailto:' || parsed.protocol === 'https:') return candidate;
+    } catch {
+      // Invalid deployment configuration is treated as unconfigured.
+    }
+  }
+  return '';
+}
 
 function featureEnabled(data: PortalData, key: 'waf_posture' | 'external_discovery' | 'connectors') {
   return Boolean(data.deploymentFeatures?.[key]);
@@ -567,11 +589,11 @@ function businessServiceRows(data: PortalData) {
       const onlineAgents = boundAgents.filter((agent) => getString(agent, ['status']) === 'online').length;
       const openFindings = data.findings.filter((finding) =>
         getString(finding, ['target_group_id']) === groupId &&
-        getString(finding, ['status'], 'open') === 'open'
+        isFindingOpen(finding)
       ).length;
-      const completedRuns = data.runs.filter((run) =>
+      const evidenceBackedRuns = data.runs.filter((run) =>
         getString(run, ['target_group_id']) === groupId &&
-        ['completed', 'verdicted'].includes(getString(run, ['status']))
+        hasEvidenceBackedVerdict(run, data.evidence)
       ).length;
       return {
         group,
@@ -579,7 +601,7 @@ function businessServiceRows(data: PortalData) {
         boundAgents: boundAgents.length,
         onlineAgents,
         openFindings,
-        completedRuns
+        evidenceBackedRuns
       };
     });
 }
@@ -643,7 +665,7 @@ type DashboardNextStep = { key: string; title: string; detail: string; href: str
 function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof resolveDashboardMetrics>): DashboardNextStep[] {
   const steps: DashboardNextStep[] = [];
   const activeGroups = data.targetGroups.filter((group) => group.archived_at == null);
-  if (activeGroups.length === 0) {
+  if (!data.loadErrors.targetGroups && activeGroups.length === 0) {
     steps.push({
       key: 'declare-scope',
       title: 'Declare your first target group',
@@ -652,7 +674,7 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
       tone: 'info'
     });
   }
-  if (metrics.agentsOnline === 0 && data.agents.length === 0) {
+  if (!data.loadErrors.agents && metrics.agentsOnline === 0 && data.agents.length === 0) {
     steps.push({
       key: 'install-agent',
       title: 'Optionally add an observation agent',
@@ -661,18 +683,18 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
       tone: 'info'
     });
   }
-  if (metrics.openFindings > 0) {
-    const topFinding = data.findings.find((finding) => getString(finding, ['status'], 'open') === 'open');
+  if (!data.loadErrors.findings && metrics.openFindings > 0) {
+    const topFinding = data.findings.find((finding) => isFindingOpen(finding));
     const findingId = getString(topFinding ?? {}, ['id'], '');
     steps.push({
       key: 'triage-findings',
-      title: `Triage ${metrics.openFindings} open finding${metrics.openFindings === 1 ? '' : 's'}`,
+      title: `Triage ${formatNumber(metrics.openFindings)} open finding${metrics.openFindings === 1 ? '' : 's'}`,
       detail: topFinding ? getString(topFinding, ['title'], 'Review evidence-backed gaps.') : 'Review evidence-backed gaps.',
       href: findingId ? buildDetailHref('finding-detail', findingId) : '#findings',
       tone: 'warn'
     });
   }
-  if (!data.runs.some((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))) {
+  if (!data.loadErrors.runs && !data.loadErrors.evidence && !data.runs.some((run) => hasEvidenceBackedVerdict(run, data.evidence))) {
     steps.push({
       key: 'first-run',
       title: 'Run validation',
@@ -681,7 +703,7 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
       tone: 'info'
     });
   }
-  if (data.highScale.some((request) => ['submitted', 'under_review'].includes(getString(request, ['state'])))) {
+  if (!data.loadErrors.highScale && data.highScale.some((request) => ['submitted', 'under_review'].includes(getString(request, ['state'])))) {
     steps.push({
       key: 'high-scale-pack',
       title: 'Finish high-scale authorization metadata',
@@ -694,21 +716,13 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
 }
 
 function declaredEnvironmentComplete(data: PortalData) {
-  const fromGroups = new Set(
-    data.targetGroups
-      .filter((group) => group.archived_at == null)
-      .map((group) => getString(group, ['environment_id'], '').trim())
-      .filter(Boolean)
-  );
-  if (fromGroups.size > 0) return true;
-  return data.bootstrapTokens.some((token) => getString(token, ['environment_id'], '').trim() !== '');
+  return data.environments.length > 0;
 }
 
 function declaredTargetGroupComplete(data: PortalData) {
   return data.targetGroups.some((group) => group.archived_at == null);
 }
 
-const DASHBOARD_EVIDENCE_RUN_STATUSES = new Set(['completed', 'verdicted']);
 
 function formatDashboardShortRelative(iso: string) {
   const ts = Date.parse(iso);
@@ -756,12 +770,13 @@ export function ReadinessFactorsPanel({ factors }: { factors: ReadinessFactor[] 
             : READINESS_SCALE_POINTS;
         const share = Math.min(100, Math.max(0, (score / scale) * 100));
         const detail = getString(factor as DataItem, ['detail', 'reason'], '');
+        const factorTone = scoreTone(share);
         const provenance = `Factor ${key || label}: ${score} of ${scale} points, from GET /v1/state readiness.factors`;
 
         return (
           <div className="stack-tight" key={key || `${label}-${index}`} data-testid="readiness-factor-row">
-            <div className="legend-row">
-              <span className="ld" style={{ background: 'var(--success)' }} aria-hidden="true" />
+            <div className="legend-row" data-tone={factorTone}>
+              <span className="ld" aria-hidden="true" />
               <span className="lg-label" title={provenance}>{label}</span>
               <span
                 className="lg-bar-wrap"
@@ -769,7 +784,7 @@ export function ReadinessFactorsPanel({ factors }: { factors: ReadinessFactor[] 
                 aria-label={`${label} scored ${score} of ${scale} points`}
                 title={provenance}
               >
-                <span className="lg-bar" style={{ width: `${share}%`, background: 'var(--success)' }} />
+                <span className="lg-bar" style={{ width: `${share}%` }} />
               </span>
               <span className="lg-pct" title={provenance}>{score}</span>
               <b title={provenance}>{`/${scale}`}</b>
@@ -991,8 +1006,9 @@ export function DashboardPage({
   onRefresh: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<DashboardTabId>(readDashboardTabId);
+  const [refreshing, setRefreshing] = useState(false);
   const tabOptions = routeTabs('dashboard').map((item) => ({ id: item.id as DashboardTabId, label: item.label }));
-  const workspaceHydrating = !data.state && data.targetGroups.length === 0 && data.runs.length === 0;
+  const workspaceHydrating = !data.loaded;
 
   useEffect(() => {
     const onHashChange = () => {
@@ -1007,14 +1023,24 @@ export function DashboardPage({
     setTab(next);
     persistDashboardTab(next);
   }
+
+  async function handleDashboardRefresh() {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const score = typeof data.state?.readiness?.score === 'number' ? data.state.readiness.score : null;
   const metrics = resolveDashboardMetrics(data);
   const recentRuns = resolveRecentRuns(data, 6);
   const openFindingRows = data.findings
-    .filter((finding) => getString(finding, ['status'], 'open') === 'open')
+    .filter((finding) => isFindingOpen(finding))
     .slice(0, 6);
   const agingFindings = [...data.findings]
-    .filter((finding) => getString(finding, ['status'], 'open') === 'open')
+    .filter((finding) => isFindingOpen(finding))
     .sort((left, right) => String(left.created_at ?? left.id ?? '').localeCompare(String(right.created_at ?? right.id ?? '')))
     .slice(0, 8);
   const topTargetGroups = [...data.targetGroups]
@@ -1029,21 +1055,21 @@ export function DashboardPage({
   const groupsWithEvidence = activeTargetGroups.filter((group) => {
     const groupId = getString(group, ['id'], '');
     return data.runs.some(
-      (run) =>
-        getString(run, ['target_group_id'], '') === groupId &&
-        DASHBOARD_EVIDENCE_RUN_STATUSES.has(getString(run, ['status'], ''))
+      (run) => getString(run, ['target_group_id'], '') === groupId && hasEvidenceBackedVerdict(run, data.evidence)
     );
   }).length;
-  const coveragePercent = activeTargetGroups.length ? Math.round((groupsWithEvidence / activeTargetGroups.length) * 100) : 0;
+  const coveragePercent = data.loadErrors.targetGroups || data.loadErrors.runs || data.loadErrors.evidence || activeTargetGroups.length === 0
+    ? null
+    : Math.round((groupsWithEvidence / activeTargetGroups.length) * 100);
   const openFindingsAtS2 = data.findings.filter(
     (finding) =>
-      getString(finding, ['status'], 'open') === 'open' &&
+      isFindingOpen(finding) &&
       ['s2', 'high'].includes(getString(finding, ['severity'], '').toLowerCase())
   ).length;
   const lastRun = recentRuns[0] ?? null;
   const lastRunTimestamp = lastRun ? String(lastRun.created_at ?? lastRun.started_at ?? '') : '';
-  const lastSafeRunValue = lastRunTimestamp ? formatDashboardShortRelative(lastRunTimestamp) : '—';
-  const lastRunCheckCount = lastRun ? getNumber(lastRun, ['check_count'], 0) : 0;
+  const lastSafeRunValue = data.loadErrors.runs ? '—' : lastRunTimestamp ? formatDashboardShortRelative(lastRunTimestamp) : '—';
+  const lastRunCheckCount = lastRun ? getOptionalNumber(lastRun, ['check_count']) : null;
   const tenantId =
     getString(data.tenant ?? {}, ['id', 'tenant_id'], '') || (data.state?.tenant_id ?? '');
   const tenantEyebrow = tenantId && tenantId !== '—' ? `Tenant · ${tenantId.toUpperCase()}` : 'Tenant';
@@ -1056,7 +1082,7 @@ export function DashboardPage({
   function dashboardGroupVerdict(groupId: string): { label: string; tone: UiBadgeTone } {
     const latest = [...data.runs]
       .filter((run) => getString(run, ['target_group_id']) === groupId)
-      .filter((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))
+      .filter((run) => hasEvidenceBackedVerdict(run, data.evidence))
       .sort((left, right) =>
         String(right.started_at ?? right.created_at ?? '').localeCompare(
           String(left.started_at ?? left.created_at ?? '')
@@ -1076,12 +1102,13 @@ export function DashboardPage({
     if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
     if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
     if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
-    return { label: 'None', tone: 'muted' };
+    return { label: 'No verdict evidence', tone: 'muted' };
   }
 
   const dashboardGroupColumns: TableColumn<DataItem>[] = [
     { key: 'group', label: 'Group', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
     { key: 'name', label: 'Name', render: (item) => getString(item, ['name', 'id'], '—') },
+    { key: 'owner', label: 'Owner', render: (item) => <span className="muted">{getString(item, ['owner', 'business_owner'], 'unassigned')}</span> },
     {
       key: 'verdict',
       label: 'Verdict',
@@ -1119,14 +1146,18 @@ export function DashboardPage({
   // Correlated check count = sum of posture segment counts (pass + review + gap),
   // mirroring ReadinessPostureDonut's resolver. Never the catalog size (data.checks.length).
   const readinessPosture = data.state?.readiness?.posture;
-  const correlatedFromPosture =
-    readinessPosture && typeof readinessPosture === 'object'
-      ? Number(readinessPosture.pass ?? 0) + Number(readinessPosture.review ?? 0) + Number(readinessPosture.gap ?? 0)
-      : 0;
+  const postureCounts = readinessPosture && typeof readinessPosture === 'object'
+    ? [readinessPosture.pass, readinessPosture.review, readinessPosture.gap]
+    : [];
+  const correlatedFromPosture = postureCounts.length === 3 && postureCounts.every(
+    (value) => typeof value === 'number' && Number.isFinite(value)
+  )
+    ? postureCounts.reduce<number>((sum, value) => sum + Number(value), 0)
+    : null;
   const correlatedCheckIds = new Set<string>();
   for (const run of data.runs) {
     const checkId = getString(run, ['check_id'], '');
-    if (!checkId || !['completed', 'verdicted'].includes(getString(run, ['status'], ''))) continue;
+    if (!checkId || !hasEvidenceBackedVerdict(run, data.evidence)) continue;
     const rawVerdict = run.verdict;
     const verdictValue =
       typeof rawVerdict === 'string'
@@ -1138,9 +1169,14 @@ export function DashboardPage({
     if (!verdictKey || ['pending', 'planned', 'running'].includes(verdictKey)) continue;
     correlatedCheckIds.add(checkId);
   }
-  const correlatedChecks = correlatedFromPosture > 0 ? correlatedFromPosture : correlatedCheckIds.size;
+  const correlatedChecks = correlatedFromPosture ?? correlatedCheckIds.size;
+  const correlatedChecksUnavailable = correlatedFromPosture === null && Boolean(data.loadErrors.runs);
+  const nextSteps = buildDashboardNextSteps(data, metrics);
 
   function dashboardRunVerdict(run: DataItem): { label: string; tone: UiBadgeTone } {
+    if (!hasEvidenceBackedVerdict(run, data.evidence)) {
+      return { label: 'No verdict evidence', tone: 'muted' };
+    }
     const raw = run.verdict;
     const verdict =
       typeof raw === 'string'
@@ -1152,9 +1188,7 @@ export function DashboardPage({
     if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
     if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
     if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
-    const status = getString(run, ['status'], '');
-    if (status) return { label: formatRunStatusLabel(status), tone: runStatusBadgeTone(status) };
-    return { label: 'None', tone: 'muted' };
+    return { label: 'No verdict evidence', tone: 'muted' };
   }
 
   const dashboardFindingColumns: TableColumn<DataItem>[] = [
@@ -1183,14 +1217,16 @@ export function DashboardPage({
   ];
 
   const dashboardEnvironmentRows = buildEnvironmentReadinessRows({
+    environments: data.environments,
     targetGroups: data.targetGroups,
     runs: data.runs,
-    findings: data.findings
+    findings: data.findings,
+    evidence: data.evidence
   }).slice(0, 5);
 
   const dashboardEnvironmentColumns: TableColumn<(typeof dashboardEnvironmentRows)[number]>[] = [
-    { key: 'environment', label: 'Environment', render: (row) => <span className="mono">{row.id}</span> },
-    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{row.groupCount}</span> },
+    { key: 'environment', label: 'Environment', render: (row) => <span title={row.id}>{row.name}</span> },
+    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{formatNumber(row.groupCount)}</span> },
     {
       key: 'status',
       label: 'Status',
@@ -1209,8 +1245,21 @@ export function DashboardPage({
         eyebrow={tenantEyebrow}
         title="Readiness overview"
         description="Every verdict below traces to observed probe data, agent observations, or explicit declarations."
+        actions={
+          <>
+            <Button type="button" variant="secondary" size="sm" loading={refreshing} onClick={() => void handleDashboardRefresh()}>
+              <RefreshCw size={15} aria-hidden="true" /> Refresh
+            </Button>
+            <AnchorButton href="#runs" variant="default" size="sm">Run safe validation</AnchorButton>
+          </>
+        }
       />
-      <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" />
+      <PageContextSummary>
+        <span className="tabular-nums">{data.loadErrors.targetGroups ? '—' : formatNumber(activeTargetGroups.length)}</span> declared groups ·{' '}
+        <span className="tabular-nums">{correlatedChecksUnavailable ? '—' : formatNumber(correlatedChecks)}</span> correlated checks ·{' '}
+        <span className="tabular-nums">{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</span> evidence records · high-scale remains SOC-gated
+      </PageContextSummary>
+      <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" ariaLabel="Dashboard sections" />
       {tab === 'overview' ? (
         workspaceHydrating ? (
           <DashboardWorkspaceSkeleton />
@@ -1251,30 +1300,61 @@ export function DashboardPage({
               label="Coverage"
               value={
                 <>
-                  {coveragePercent}
-                  <span className="unit">%</span>
+                  {coveragePercent ?? '—'}
+                  {coveragePercent !== null ? <span className="unit">%</span> : null}
                 </>
               }
-              delta={`${formatNumber(metrics.targetGroups)} ${pluralize(metrics.targetGroups, 'target')}`}
+              delta={data.loadErrors.targetGroups ? 'Target group data unavailable' : `${formatNumber(metrics.targetGroups)} ${pluralize(metrics.targetGroups, 'target group')}`}
             />
-            <KpiCell label="Open findings" value={metrics.openFindings} delta={`${openFindingsAtS2} at Severity 2 (High)`} />
+            <KpiCell
+              label="Open findings"
+              value={data.loadErrors.findings ? '—' : formatNumber(metrics.openFindings)}
+              delta={data.loadErrors.findings ? 'Finding data unavailable' : `${formatNumber(openFindingsAtS2)} at Severity 2 (High)`}
+            />
             <KpiCell
               label="Agents healthy"
-              value={`${agentsOnline}/${agentsTotalDisplay || agentsOnline}`}
-              delta="all heartbeats ≤ 30s"
+              value={data.loadErrors.agents ? '—' : `${formatNumber(agentsOnline)}/${formatNumber(agentsTotalDisplay || agentsOnline)}`}
+              delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Status reported by the agents API'}
             />
             <KpiCell
               label="Last run"
               value={lastSafeRunValue}
-              delta={lastRun ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount} checks` : 'No runs yet'}
+              delta={data.loadErrors.runs
+                ? 'Run history unavailable'
+                : lastRun
+                  ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount === null ? 'check count not recorded' : `${formatNumber(lastRunCheckCount)} ${pluralize(lastRunCheckCount, 'check')}`}`
+                  : 'No runs yet'}
             />
           </div>
+
+          {nextSteps.length > 0 ? (
+            <Card className="card--dense">
+              <PanelCardHeader
+                title="Priority actions"
+                description="Evidence-backed next steps ranked from current findings, coverage, agents, and approval state."
+                trailing={<Badge tone="muted">{nextSteps.length} open</Badge>}
+              />
+              <CardContent>
+                <ul className="dashboard-link-list">
+                  {nextSteps.map((step) => (
+                    <li key={`${step.title}-${step.href}`}>
+                      <div className="dashboard-link-copy">
+                        <strong>{step.title}</strong>
+                        <span className="dashboard-link-meta"><Badge tone={step.tone}>{step.detail}</Badge></span>
+                      </div>
+                      <AnchorButton href={step.href} variant="secondary" size="sm">Open</AnchorButton>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="dash-grid dash-grid--masonry">
             <Card>
               <CardHeader>
                 <CardTitle>Readiness posture</CardTitle>
-                <CardDescription>{countLabel(correlatedChecks, 'check')} correlated · this cycle</CardDescription>
+                <CardDescription>{correlatedChecksUnavailable ? 'Correlation data unavailable' : `${countLabel(correlatedChecks, 'check')} correlated · this cycle`}</CardDescription>
               </CardHeader>
               <CardContent>
                 <ReadinessPostureDonut state={data.state} runs={data.runs} checks={data.checks} />
@@ -1289,6 +1369,8 @@ export function DashboardPage({
                 <DataTable
                   columns={dashboardFindingColumns}
                   items={openFindingRows}
+                  loadError={data.loadErrors.findings}
+                  onRetry={() => void onRefresh()}
                   getRowId={(item) => getString(item, ['id'], '')}
                   getRowProps={(item) => {
                     const id = getString(item, ['id'], '');
@@ -1310,6 +1392,8 @@ export function DashboardPage({
                 <DataTable
                   columns={dashboardRunColumns}
                   items={recentRuns}
+                  loadError={data.loadErrors.runs}
+                  onRetry={() => void onRefresh()}
                   getRowId={(item) => getString(item, ['id'], '')}
                   getRowProps={(item) => {
                     const id = getString(item, ['id'], '');
@@ -1331,6 +1415,8 @@ export function DashboardPage({
                 <DataTable
                   columns={dashboardGroupColumns}
                   items={topTargetGroups}
+                  loadError={[data.loadErrors.targetGroups, data.loadErrors.runs].filter(Boolean).join(' ') || null}
+                  onRetry={() => void onRefresh()}
                   getRowId={(item) => getString(item, ['id'], '')}
                   getRowProps={(item) => {
                     const id = getString(item, ['id'], '');
@@ -1349,6 +1435,8 @@ export function DashboardPage({
                 <DataTable
                   columns={dashboardAgentColumns}
                   items={topAgents}
+                  loadError={data.loadErrors.agents}
+                  onRetry={() => void onRefresh()}
                   getRowId={(item) => getString(item, ['id'], '')}
                   getRowProps={(item) => {
                     const id = getString(item, ['id'], '');
@@ -1370,6 +1458,8 @@ export function DashboardPage({
                 <DataTable
                   columns={dashboardEnvironmentColumns}
                   items={dashboardEnvironmentRows}
+                  loadError={[data.loadErrors.targetGroups, data.loadErrors.runs, data.loadErrors.findings].filter(Boolean).join(' ') || null}
+                  onRetry={() => void onRefresh()}
                   getRowId={(row) => row.id}
                   getRowProps={(row) => (row.id ? detailRowProps('environment-detail', row.id, `Open environment ${row.id} detail`) : {})}
                   empty={<EmptyState icon={ServerCog} title="No environments yet." body="Create a declared target group with an environment ID to populate this view." actionHref="#target-groups" actionLabel="Open target groups" />}
@@ -1383,7 +1473,12 @@ export function DashboardPage({
               <CardDescription>Rolled up across declared target groups. Per-target detail on the target page.</CardDescription>
             </CardHeader>
             <CardContent>
-              <WafSummaryPanel summary={data.wafCoverageSummary} />
+              {data.loadErrors.wafCoverageSummary ? (
+                <div className="form-banner error row-actions" role="alert">
+                  <span>{data.loadErrors.wafCoverageSummary}</span>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => void onRefresh()}>Retry</Button>
+                </div>
+              ) : <WafSummaryPanel summary={data.wafCoverageSummary} />}
             </CardContent>
           </Card>
           <Card>
@@ -1404,7 +1499,7 @@ export function DashboardPage({
           <Card>
             <CardHeader>
               <CardTitle>Readiness trend</CardTitle>
-              <CardDescription>Score trajectory derived from validation run history.</CardDescription>
+              <CardDescription>Published per-run scores, with evidence-backed verdict history when numeric score history is absent.</CardDescription>
             </CardHeader>
             <CardContent>
               {score === null ? (
@@ -1511,12 +1606,20 @@ export function TargetGroupsPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [tenantEnvironments, setTenantEnvironments] = useState<DataItem[]>([]);
+  const [tenantEnvironmentsError, setTenantEnvironmentsError] = useState('');
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
   const filteredGroups = environmentFilter
     ? data.targetGroups.filter((group) => getString(group, ['environment_id'], '') === environmentFilter)
     : data.targetGroups;
   const addTargetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === addTargetGroupId) ?? data.targetGroups[0] ?? null;
   const effectiveGroupId = getString(addTargetGroup ?? {}, ['id'], addTargetGroupId);
+  const activeFilteredGroups = filteredGroups.filter((group) => group.archived_at == null && group.deleted_at == null);
+  const targetCountValues = activeFilteredGroups.map((group) => getOptionalNumber(group, ['target_count', 'targets_count']));
+  const declaredTargetCount = targetCountValues.every((value) => value !== null)
+    ? targetCountValues.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+    : null;
+  const onlineAgentCount = data.agents.filter((agent) => getString(agent, ['status'], '').toLowerCase() === 'online').length;
+  const openTargetFindingCount = data.findings.filter((finding) => isFindingOpen(finding)).length;
 
   useEffect(() => {
     const onHashChange = () => setEnvironmentFilter(getHashQueryParam('environment_id'));
@@ -1527,14 +1630,15 @@ export function TargetGroupsPage({
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setTenantEnvironmentsError('');
       try {
         const response = await requestJson(config, session, '/v1/environments') as { items?: DataItem[] } | DataItem[];
         const items = Array.isArray(response)
           ? response
           : Array.isArray(response?.items) ? response.items : [];
         if (!cancelled) setTenantEnvironments(items);
-      } catch {
-        if (!cancelled) setTenantEnvironments([]);
+      } catch (err) {
+        if (!cancelled) setTenantEnvironmentsError(apiErrorMessage(err, 'Environments could not be loaded.'));
       }
     })();
     return () => { cancelled = true; };
@@ -1581,7 +1685,7 @@ export function TargetGroupsPage({
   function lastVerdictForGroup(groupId: string) {
     const latest = [...data.runs]
       .filter((run) => getString(run, ['target_group_id']) === groupId)
-      .filter((run) => ['completed', 'verdicted'].includes(getString(run, ['status'])))
+      .filter((run) => hasEvidenceBackedVerdict(run, data.evidence))
       .sort((left, right) =>
         String(right.started_at ?? right.created_at ?? '').localeCompare(String(left.started_at ?? left.created_at ?? ''))
       )[0];
@@ -1604,17 +1708,6 @@ export function TargetGroupsPage({
     if (['gap', 'fail', 'failed'].includes(key)) return 'Gap';
     if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return 'Review';
     return formatPolicyVerdictLabel(verdict);
-  }
-
-  function criticalityBadgeTone(value: string): UiBadgeTone {
-    if (value.trim().toLowerCase() === 'critical') return 'info';
-    return value && value !== '—' ? 'muted' : 'muted';
-  }
-
-  function openFindingsBadgeTone(count: number): UiBadgeTone {
-    if (count <= 0) return 'success';
-    if (count >= 2) return 'danger';
-    return 'warn';
   }
 
   const groupColumns: TableColumn<DataItem>[] = [
@@ -1640,29 +1733,44 @@ export function TargetGroupsPage({
         const value = getString(item, ['criticality', 'business_criticality'], '');
         if (!value || value === '—') return <span className="muted">—</span>;
         const label = value.charAt(0).toUpperCase() + value.slice(1);
-        return <Badge tone={criticalityBadgeTone(value)}>{label}</Badge>;
+        return <Badge tone="muted">{label}</Badge>;
+      }
+    },
+    {
+      key: 'ownership',
+      label: 'Ownership proof',
+      render: (item) => {
+        const state = getString(item, ['ownership_status', 'verification_status'], '');
+        if (!state) return <span className="muted">Per target</span>;
+        const normalized = state.toLowerCase();
+        return <Badge tone={['verified', 'dns_verified', 'approved'].includes(normalized) ? 'success' : normalized.includes('fail') ? 'danger' : 'warn'}>{state.replaceAll('_', ' ')}</Badge>;
       }
     },
     {
       key: 'targets',
       label: 'Targets',
-      render: (item) => formatNumber(getNumber(item, ['target_count']))
+      render: (item) => {
+        const count = getOptionalNumber(item, ['target_count', 'targets_count']);
+        return count === null ? <span className="muted">—</span> : formatNumber(count);
+      }
     },
     {
       key: 'agents',
       label: 'Agents',
       render: (item) => {
+        if (data.loadErrors.agents) return <span className="muted">—</span>;
         const groupId = getString(item, ['id'], '');
         const stats = groupStatsById.get(groupId);
         const online = stats?.onlineAgents ?? 0;
         const total = stats?.boundAgents ?? 0;
-        return <span className={`mono${total === 0 ? ' muted' : ''}`} title={total === 0 ? 'No agents bound to this group yet' : undefined}>{`${online}/${total}`}</span>;
+        return <span className={`mono${total === 0 ? ' muted' : ''}`} title={total === 0 ? 'No agents bound to this group yet' : undefined}>{`${formatNumber(online)}/${formatNumber(total)}`}</span>;
       }
     },
     {
       key: 'runs',
       label: 'Runs',
       render: (item) => {
+        if (data.loadErrors.runs) return <span className="muted">—</span>;
         const groupId = getString(item, ['id'], '');
         const runCount = data.runs.filter((run) => getString(run, ['target_group_id']) === groupId).length;
         return <span className="num">{formatNumber(runCount)}</span>;
@@ -1672,16 +1780,18 @@ export function TargetGroupsPage({
       key: 'open',
       label: 'Open',
       render: (item) => {
+        if (data.loadErrors.findings) return <span className="muted">—</span>;
         const groupId = getString(item, ['id'], '');
         const open = groupStatsById.get(groupId)?.openFindings ?? 0;
         if (open === 0) return <Badge tone="success">0</Badge>;
-        return <Badge tone={openFindingsBadgeTone(open)}>{formatNumber(open)}</Badge>;
+        return <Badge tone="muted">{formatNumber(open)}</Badge>;
       }
     },
     {
       key: 'last_verdict',
       label: 'Last verdict',
       render: (item) => {
+        if (data.loadErrors.runs) return <Badge tone="muted">Unavailable</Badge>;
         const groupId = getString(item, ['id'], '');
         const verdict = lastVerdictForGroup(groupId);
         return <Badge tone={targetGroupVerdictBadgeTone(verdict)}>{formatTargetGroupVerdictLabel(verdict)}</Badge>;
@@ -1780,6 +1890,9 @@ export function TargetGroupsPage({
     <div className="content">
       <PageHeader
         route="target-groups"
+        title="Target groups"
+        eyebrow="Customer-declared scope"
+        description="Declare the services AstraNull validates. Ownership stays exact-target proof; AstraNull never scans the estate or requires cloud credentials."
         actions={
           <>
             <Button
@@ -1809,6 +1922,12 @@ export function TargetGroupsPage({
           </>
         }
       />
+      <div className="kpi-row" aria-label="Declared target group summary">
+        <KpiCell label="Active groups" value={data.loadErrors.targetGroups ? '—' : formatNumber(activeFilteredGroups.length)} delta={environmentFilter ? `Filtered to ${environmentFilter}` : 'Customer-declared scope'} />
+        <KpiCell label="Declared targets" value={data.loadErrors.targetGroups || declaredTargetCount === null ? '—' : formatNumber(declaredTargetCount)} delta={declaredTargetCount === null ? 'Count not returned for every group' : 'Exact targets only'} />
+        <KpiCell label="Agents healthy" value={data.loadErrors.agents ? '—' : `${formatNumber(onlineAgentCount)}/${formatNumber(data.agents.length)}`} delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Optional outbound observers'} />
+        <KpiCell label="Open findings" value={data.loadErrors.findings ? '—' : formatNumber(openTargetFindingCount)} delta={data.loadErrors.findings ? 'Finding data unavailable' : 'Across declared groups'} />
+      </div>
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>
       )}
@@ -1823,6 +1942,8 @@ export function TargetGroupsPage({
           <DataTable
             columns={groupColumns}
             items={filteredGroups}
+            loadError={data.loadErrors.targetGroups}
+            onRetry={() => void onRefresh()}
             getRowId={(item) => getString(item, ['id'], '')}
             getRowProps={(item) => {
               const id = getString(item, ['id'], '');
@@ -1849,6 +1970,9 @@ export function TargetGroupsPage({
             <span>Name</span>
             <input name="name" placeholder="Retail Checkout - Production" required autoFocus />
           </label>
+          {tenantEnvironmentsError ? (
+            <div className="form-banner error full" role="alert">{tenantEnvironmentsError} Previously loaded choices may be stale.</div>
+          ) : null}
           {environmentSelectOptions.length > 0 ? (
             <Select
               label="Environment"
@@ -1857,6 +1981,8 @@ export function TargetGroupsPage({
               options={environmentSelectOptions}
               onChange={setSelectedEnvironmentId}
             />
+          ) : tenantEnvironmentsError ? (
+            <p className="muted full">Environment choices are unavailable. Retry the page before creating a group so the scope is not bound from stale data.</p>
           ) : (
             <label>
               <span>Environment</span>
@@ -1931,41 +2057,6 @@ export function TargetGroupsPage({
   );
 }
 
-export function GovernancePage({ route, data }: { route: RouteId; data: PortalData }) {
-  const source =
-    route === 'notifications' ? data.notificationRules :
-      route === 'audit' ? data.audit :
-        data.runs;
-  const columns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Record', render: (item) => getString(item, ['title', 'name', 'id']) },
-    { key: 'state', label: 'State', render: (item) => <Badge tone={getString(item, ['status', 'state'], 'recorded') === 'open' ? 'warn' : 'muted'}>{getString(item, ['status', 'state'], 'recorded')}</Badge> },
-    { key: 'owner', label: 'Owner', render: (item) => getString(item, ['owner', 'actor_id', 'requested_by', 'created_by'], 'AstraNull') },
-    { key: 'time', label: 'Time', render: (item) => formatDate(item.created_at ?? item.updated_at) }
-  ];
-  return (
-    <div className="content">
-      <PageHeader route={route} />
-      <div className="metric-grid three">
-        <MetricCard label="High-scale requests" value={data.highScale.length} sub="SOC controls required" icon={ShieldCheck} tone="muted" />
-        <MetricCard label="Release evidence" value={data.releaseEvidence.length} sub="Metadata-only inventory" icon={FileText} tone="info" />
-        <MetricCard label="Audit entries" value={formatNumber(data.audit.length)} sub="Security-relevant actions" icon={FileCheck2} tone="success" />
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>{ROUTE_BY_ID.get(route)?.label}</CardTitle>
-          <CardDescription>Governance actions favor approval artifacts, custody, and fail-closed access boundaries.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable
-            columns={columns}
-            items={source}
-            empty={<EmptyState icon={ShieldCheck} title="No governance records yet." body="Requests, approvals, reports, and audit records appear here after controlled workflow activity." />}
-          />
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 
 type ReportExportPreview = {
   reportId: string;
@@ -2197,43 +2288,68 @@ export function ReportsPage({
     }, `Report exported as ${format}.`);
   }
 
+  const previewVerificationStatus = preview?.verification
+    ? getString(preview.verification, ['status', 'result'], preview.verification.valid === true ? 'verified' : preview.verification.valid === false ? 'failed' : 'recorded')
+    : 'not requested';
+  const previewVerificationPassed = preview?.verification?.valid === true
+    || ['verified', 'valid', 'passed'].includes(previewVerificationStatus.toLowerCase());
+
   return (
     <div className="content">
       <PageHeader
         route="reports"
+        eyebrow="Readiness · on the record"
+        description="Generate tenant-scoped readiness artifacts, verify JSON custody, and preserve export provenance for executive, technical, SOC, and audit review."
+        actions={<Button type="submit" form="report-generation-form" size="sm" loading={busy === 'create-report'} disabled={busy.startsWith('export-')}>Generate &amp; export</Button>}
       />
       <PageContextSummary>
-        <span className="tabular-nums">{reports.length}</span> reports ·{' '}
-        <span className="tabular-nums">{reportExports}</span> custody exports recorded
+        <span className="tabular-nums">{data.loadErrors.reports ? '—' : formatNumber(reports.length)}</span> reports ·{' '}
+        <span className="tabular-nums">{data.loadErrors.audit ? '—' : formatNumber(reportExports)}</span> custody exports recorded
       </PageContextSummary>
-      {(message || error) && (
-        <div className={error ? 'form-banner error' : 'form-banner'}>
-          {error || message}
-        </div>
-      )}
+      {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>{error || message}</div>}
+      {preview ? (
+        <Card className="card--dense">
+          <PanelCardHeader
+            title="Latest export custody"
+            description={`${preview.title} · ${preview.format.toUpperCase()}`}
+            trailing={<Badge tone={previewVerificationPassed ? 'success' : preview.verification ? 'warn' : 'muted'}>{previewVerificationStatus.replaceAll('_', ' ')}</Badge>}
+          />
+          <CardContent>
+            {preview.textPreview ? (
+              <pre className="codeblock" tabIndex={0} aria-label="Export text preview">{preview.textPreview}</pre>
+            ) : (
+              <div className="kv-list">
+                <div><span>Report</span><strong className="mono">{preview.reportId}</strong></div>
+                <div><span>Artifact</span><strong className="mono">{preview.artifactId || 'Not returned'}</strong></div>
+                <div><span>Schema</span><strong className="mono">{preview.schemaVersion || 'Not returned'}</strong></div>
+                <div><span>SHA-256</span><strong className="mono">{preview.contentSha256 || 'Not returned'}</strong></div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle>Generate report</CardTitle>
-          <CardDescription>Create a tenant-scoped report from current readiness, run, finding, and compliance mapping data. Generating a report also exports the selected format with custody metadata.</CardDescription>
+          <CardDescription>Select kind, export format, and period. JSON exports are verified against their returned custody envelope before the preview is marked verified.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
+          <form id="report-generation-form" className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
             <Select label="Kind" name="kind" value={selectedReportKind} options={reportKindOptions} onChange={setReportKind} />
             <Select label="Format" name="format" value={selectedReportFormat} options={reportFormatOptions} onChange={setReportFormat} />
             <Select label="Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={setReportPeriod} />
-            <div className="form-actions full">
-              <Button type="submit" loading={busy === 'create-report'}>Generate &amp; export</Button>
-              <span className="muted text-xs">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</span>
-            </div>
+            <p className="muted text-xs full">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</p>
           </form>
         </CardContent>
       </Card>
-      <Card>
-        <PanelCardHeader title="Recent reports" />
+      <Card className="card--dense">
+        <PanelCardHeader title="Recent reports" description="Open a report to inspect its scope, evidence summary, and available custody exports." />
         <CardContent aria-busy={busy.startsWith('export-') || busy === 'create-report' || undefined}>
           <DataTable
             columns={reportColumns}
             items={reports}
+            loadError={data.loadErrors.reports}
+            onRetry={() => void onRefresh()}
             getRowId={(item) => getString(item, ['id'], '')}
             getRowProps={(item) => {
               const id = getString(item, ['id'], '');
@@ -2290,6 +2406,7 @@ export function SettingsPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [tab, setTab] = useState<SettingsTab>('organization');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -2317,7 +2434,9 @@ export function SettingsPage({
   ];
   const privacy = getNestedItem(tenant, ['privacy_settings']) ?? {};
   const evidenceRetention = getNestedItem(privacy, ['evidence_retention']) ?? {};
-  const metadataRetentionDays = getNumber(privacy, ['metadata_retention_days'], 90);
+  const recordedMetadataRetentionDays = getOptionalNumber(privacy, ['metadata_retention_days']);
+  const metadataRetentionDays = recordedMetadataRetentionDays ?? 90;
+  const workspaceEnvironmentCount = new Set(data.targetGroups.map((group) => getString(group, ['environment_id'], '')).filter(Boolean)).size;
   const oidcPosture = readOidcPosture(config);
   const routeAccessContext = {
     principal: session.principal,
@@ -2330,7 +2449,15 @@ export function SettingsPage({
   const tokenColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Token', render: (item) => getString(item, ['name', 'id']) },
     { key: 'environment', label: 'Environment', render: (item) => getString(item, ['environment_id']) },
-    { key: 'usage', label: 'Usage', render: (item) => `${getNumber(item, ['registrations_used'])}/${getNumber(item, ['max_registrations'], 1)}` },
+    {
+      key: 'usage',
+      label: 'Usage',
+      render: (item) => {
+        const used = getOptionalNumber(item, ['registrations_used']);
+        const maximum = getOptionalNumber(item, ['max_registrations']);
+        return used === null || maximum === null ? <span className="muted">Not recorded</span> : `${used}/${maximum}`;
+      }
+    },
     { key: 'expires', label: 'Expires', render: (item) => formatDate(item.expires_at) },
     { key: 'state', label: 'State', render: (item) => <Badge tone={item.revoked_at ? 'muted' : 'success'}>{item.revoked_at ? 'revoked' : 'active'}</Badge> },
     {
@@ -2344,8 +2471,8 @@ export function SettingsPage({
   ];
   const serviceAccountColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Account', render: (item) => getString(item, ['name', 'id']) },
-    { key: 'role', label: 'Role', render: (item) => <Badge tone="info">{getString(item, ['role'])}</Badge> },
-    { key: 'scopes', label: 'Scopes', render: (item) => Array.isArray(item.scopes) ? item.scopes.join(', ') : 'role defaults' },
+    { key: 'role', label: 'Role', render: (item) => <Badge tone="muted">{getString(item, ['role'])}</Badge> },
+    { key: 'scopes', label: 'Scopes', render: (item) => Array.isArray(item.scopes) ? item.scopes.join(', ') : 'Not recorded' },
     { key: 'expires', label: 'Expires', render: (item) => item.expires_at ? formatDate(item.expires_at) : 'No expiry' },
     { key: 'state', label: 'State', render: (item) => <Badge tone={item.revoked_at ? 'muted' : 'success'}>{item.revoked_at ? 'revoked' : 'active'}</Badge> },
     {
@@ -2430,19 +2557,19 @@ export function SettingsPage({
 
   async function revokeBootstrapToken(id: string) {
     if (!id) return;
-    if (!window.confirm('Revoke this bootstrap token? New agent registrations using it will fail.')) return;
+    if (!await confirm({ title: 'Revoke bootstrap token', description: 'Revoke this bootstrap token? New agent registrations using it will fail.', confirmLabel: 'Revoke token' })) return;
     await runSettingsAction(`revoke-bootstrap-${id}`, () => requestJson(config, session, `/v1/bootstrap-tokens/${id}/revoke`, { method: 'POST' }), 'Bootstrap token revoked.');
   }
 
   async function revokeServiceAccount(id: string) {
     if (!id) return;
-    if (!window.confirm('Revoke this service account? API calls using its secret will stop working.')) return;
+    if (!await confirm({ title: 'Revoke service account', description: 'Revoke this service account? API calls using its secret will stop working.', confirmLabel: 'Revoke account' })) return;
     await runSettingsAction(`revoke-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/revoke`, { method: 'POST' }), 'Service account revoked.');
   }
 
   async function rotateServiceAccount(id: string) {
     if (!id) return;
-    if (!window.confirm('Rotate this service account? The current API secret will stop working immediately.')) return;
+    if (!await confirm({ title: 'Rotate service account secret', description: 'Rotate this service account? The current API secret will stop working immediately.', confirmLabel: 'Rotate secret' })) return;
     const result = await runSettingsAction(`rotate-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/rotate`, { method: 'POST' }), 'Service account rotated. Copy the new API secret now; it is shown once.');
     if (result && typeof result === 'object' && 'secret' in result && typeof (result as { secret?: unknown }).secret === 'string') {
       setOneTimeSecret({ label: 'Rotated service API secret', value: String((result as { secret: string }).secret) });
@@ -2500,7 +2627,7 @@ export function SettingsPage({
       setError('Purpose, name, and credential value are required.');
       return;
     }
-    if (!window.confirm('Store this integration secret? Authorized internal workflows will use the new credential.')) return;
+    if (!await confirm({ title: 'Store integration secret', description: 'Store this integration secret? Authorized internal workflows will use the new credential.', confirmLabel: 'Store secret', confirmTone: 'default' })) return;
     await runSettingsAction('create-vault-secret', () => requestJson(config, session, '/v1/secrets', {
       method: 'POST',
       body: {
@@ -2523,7 +2650,7 @@ export function SettingsPage({
       setError('Select a secret and provide the replacement credential value.');
       return;
     }
-    if (!window.confirm('Rotate this vault secret? The current credential will stop working for authorized internal workflows.')) return;
+    if (!await confirm({ title: 'Rotate vault secret', description: 'Rotate this vault secret? The current credential will stop working for authorized internal workflows.', confirmLabel: 'Rotate secret' })) return;
     await runSettingsAction(`rotate-vault-${id}`, () => requestJson(config, session, `/v1/secrets/${id}/rotate`, {
       method: 'POST',
       body: { plaintext }
@@ -2534,8 +2661,8 @@ export function SettingsPage({
 
   const secretColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Name', render: (item) => getString(item, ['name', 'id']) },
-    { key: 'purpose', label: 'Purpose', render: (item) => <Badge tone="info">{getString(item, ['purpose'])}</Badge> },
-    { key: 'rotation', label: 'Rotation', render: (item) => getNumber(item, ['rotation']) },
+    { key: 'purpose', label: 'Purpose', render: (item) => <Badge tone="muted">{getString(item, ['purpose'])}</Badge> },
+    { key: 'rotation', label: 'Rotation', render: (item) => getOptionalNumber(item, ['rotation']) ?? <span className="muted">—</span> },
     { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
       key: 'actions',
@@ -2564,13 +2691,14 @@ export function SettingsPage({
       <PageHeader
         route="settings"
         eyebrow="Tenant configuration"
+        description="Manage organization identity, one-time credentials, secret metadata, and retention while platform safety boundaries remain enforced."
       />
       <PageContextSummary>
         {getString(tenant ?? {}, ['name'], 'Organization')} ·{' '}
-        <span className="tabular-nums">{data.secrets.length}</span> vault secrets ·{' '}
-        <span className="tabular-nums">{metadataRetentionDays}</span>d metadata retention
+        <span className="tabular-nums">{data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)}</span> vault secrets ·{' '}
+        <span className="tabular-nums">{recordedMetadataRetentionDays === null ? 'not recorded' : `${recordedMetadataRetentionDays}d`}</span> metadata retention
       </PageContextSummary>
-      <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" />
+      <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections" />
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner'}>
           {error || message}
@@ -2652,10 +2780,10 @@ export function SettingsPage({
               <CardDescription>Live workspace counts — not editable here.</CardDescription>
             </CardHeader>
             <CardContent className="kv-list">
-              <div><span>Target groups</span><strong>{data.targetGroups.length}</strong></div>
-              <div><span>Agents</span><strong>{data.agents.length}</strong></div>
-              <div><span>Evidence records</span><strong>{data.evidence.length}</strong></div>
-              <div><span>Environments</span><strong>{new Set(data.targetGroups.map((group) => getString(group, ['environment_id'], 'unassigned'))).size}</strong></div>
+              <div><span>Target groups</span><strong>{data.loadErrors.targetGroups ? '—' : formatNumber(data.targetGroups.length)}</strong></div>
+              <div><span>Agents</span><strong>{data.loadErrors.agents ? '—' : formatNumber(data.agents.length)}</strong></div>
+              <div><span>Evidence records</span><strong>{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</strong></div>
+              <div><span>Environments</span><strong>{data.loadErrors.targetGroups ? '—' : formatNumber(workspaceEnvironmentCount)}</strong></div>
             </CardContent>
           </Card>
         </div>
@@ -2781,7 +2909,7 @@ export function SettingsPage({
             <PanelCardHeader
               title="Bootstrap tokens"
               description="Install tokens are redacted after creation and can be revoked immediately."
-              trailing={<Badge tone="info">{data.bootstrapTokens.length} records</Badge>}
+              trailing={<Badge tone="muted">{data.bootstrapTokens.length} records</Badge>}
             />
             <CardContent>
               <DataTable
@@ -2795,7 +2923,7 @@ export function SettingsPage({
             <PanelCardHeader
               title="Service accounts"
               description="Automation credentials are scoped, auditable, rotatable, and redacted after creation."
-              trailing={<Badge tone="success">{data.serviceAccounts.length} records</Badge>}
+              trailing={<Badge tone="muted">{data.serviceAccounts.length} records</Badge>}
             />
             <CardContent>
               <DataTable
@@ -2891,7 +3019,7 @@ export function SettingsPage({
             <PanelCardHeader
               title="Secret vault inventory"
               description="Stored secret metadata only — no plaintext, ciphertext, or auth tags."
-              trailing={<Badge tone="info">{data.secrets.length} records</Badge>}
+              trailing={<Badge tone="muted">{data.secrets.length} records</Badge>}
             />
             <CardContent>
               <DataTable
@@ -2991,9 +3119,11 @@ export function EnvironmentsPage({
   const [error, setError] = useState('');
   const [showDeclare, setShowDeclare] = useState(false);
   const rows = buildEnvironmentReadinessRows({
+    environments: data.environments,
     targetGroups: data.targetGroups,
     runs: data.runs,
-    findings: data.findings
+    findings: data.findings,
+    evidence: data.evidence
   });
 
   function openDeclare() {
@@ -3032,20 +3162,11 @@ export function EnvironmentsPage({
   }
 
   function environmentDisplayName(row: (typeof rows)[number]) {
-    const names = row.groups
-      .map((group) => getString(group, ['name', 'display_name'], ''))
-      .filter((name) => name && name !== '—');
-    if (names.length === 0) return '—';
-    const unique = [...new Set(names)];
-    return unique.length === 1 ? unique[0] : `${unique[0]} (+${unique.length - 1})`;
+    return row.name;
   }
 
-  function environmentRegion(row: (typeof rows)[number]) {
-    for (const group of row.groups) {
-      const region = getString(group, ['region', 'region_summary', 'location'], '');
-      if (region && region !== '—') return region;
-    }
-    return '—';
+  function environmentTimezone(row: (typeof rows)[number]) {
+    return row.timezone;
   }
 
   function environmentAgentCount(environmentId: string) {
@@ -3053,44 +3174,44 @@ export function EnvironmentsPage({
   }
 
   function environmentLastValidation(row: (typeof rows)[number]) {
-    const groupIds = new Set(row.groups.map((group) => getString(group, ['id'], '')));
-    let latestIso = '';
-    for (const run of data.runs) {
-      if (!groupIds.has(getString(run, ['target_group_id'], ''))) continue;
-      const stamp = run.completed_at ?? run.verdicted_at ?? run.updated_at ?? run.created_at;
-      if (stamp === undefined || stamp === null) continue;
-      const iso = String(stamp);
-      if (!latestIso || iso > latestIso) latestIso = iso;
-    }
-    return latestIso ? formatDate(latestIso) : '—';
+    return row.latestEvidenceAt ? formatDate(row.latestEvidenceAt) : '—';
   }
 
   function environmentStatusTone(row: (typeof rows)[number]) {
-    if (row.coverage === 100 && row.openFindings === 0) return 'success' as const;
-    if (row.coverage > 0) return 'warn' as const;
+    if (row.state === 'covered') return 'success' as const;
+    if (row.state === 'partial evidence') return 'warn' as const;
     return 'muted' as const;
   }
 
   function environmentStatusLabel(row: (typeof rows)[number]) {
-    if (row.coverage === 100 && row.openFindings === 0) return 'Validated';
-    if (row.coverage > 0) return 'Review';
-    if (environmentAgentCount(row.id) === 0 && row.groupCount > 0) return 'No agent';
+    if (row.state === 'covered') return 'Validated';
+    if (row.state === 'partial evidence') return 'Review';
     return 'Needs evidence';
   }
+
+  const onlineEnvironmentAgents = data.agents.filter((agent) => getString(agent, ['status'], '').toLowerCase() === 'online').length;
+  const validatedEnvironmentCount = rows.filter((row) => row.state === 'covered').length;
+  const environmentDataLoadError = [
+    data.loadErrors.environments,
+    data.loadErrors.targetGroups,
+    data.loadErrors.runs,
+    data.loadErrors.findings,
+    data.loadErrors.evidence,
+    data.loadErrors.agents
+  ].filter(Boolean).join(' ') || null;
 
   const environmentColumns: TableColumn<(typeof rows)[number]>[] = [
     { key: 'id', label: 'Environment', render: (row) => <span className="mono">{row.id}</span> },
     { key: 'name', label: 'Name', render: (row) => environmentDisplayName(row) },
-    { key: 'region', label: 'Region', render: (row) => <span className="muted">{environmentRegion(row)}</span> },
-    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{row.groupCount}</span> },
+    { key: 'timezone', label: 'Timezone', render: (row) => <span className="muted">{environmentTimezone(row)}</span> },
+    { key: 'groups', label: 'Target groups', render: (row) => <span className="tabular-nums">{formatNumber(row.groupCount)}</span> },
     { key: 'agents', label: 'Agents', render: (row) => <span className="tabular-nums">{environmentAgentCount(row.id)}</span> },
     {
       key: 'findings',
       label: 'Open findings',
       render: (row) => {
         const open = row.openFindings;
-        if (open <= 0) return <Badge tone="success">0</Badge>;
-        return <Badge tone={open >= 2 ? 'danger' : 'warn'}>{formatNumber(open)}</Badge>;
+        return <Badge tone="muted">{formatNumber(open)}</Badge>;
       }
     },
     {
@@ -3105,12 +3226,21 @@ export function EnvironmentsPage({
     <div className="content">
       <PageHeader
         route="environments"
+        title="Environments"
+        eyebrow="Isolation boundary"
+        description="Each row starts from the authoritative environment record, then joins declared target scope to agent, run, finding, and verdict evidence. No cloud credentials or automatic inventory discovery are required."
         actions={
           <Button variant="default" size="sm" disabled={busy !== ''} onClick={openDeclare}>
             Declare environment
           </Button>
         }
       />
+      <div className="kpi-row" aria-label="Environment readiness summary">
+        <KpiCell label="Environments" value={data.loadErrors.environments ? '—' : formatNumber(rows.length)} delta="Authoritative environment records" />
+        <KpiCell label="Target groups" value={data.loadErrors.targetGroups ? '—' : formatNumber(data.targetGroups.filter((group) => group.archived_at == null).length)} delta="Across environment boundaries" />
+        <KpiCell label="Agents online" value={data.loadErrors.agents ? '—' : `${formatNumber(onlineEnvironmentAgents)}/${formatNumber(data.agents.length)}`} delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Outbound-only observers'} />
+        <KpiCell label="Validated" value={environmentDataLoadError ? '—' : formatNumber(validatedEnvironmentCount)} delta="Full run coverage · no open findings" />
+      </div>
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
       )}
@@ -3119,6 +3249,8 @@ export function EnvironmentsPage({
           <DataTable
             columns={environmentColumns}
             items={rows}
+            loadError={environmentDataLoadError}
+            onRetry={() => void onRefresh()}
             getRowId={(row) => row.id}
             getRowProps={(row) => (row.id ? detailRowProps('environment-detail', row.id, `Open environment ${row.id} detail`) : {})}
             empty={
@@ -3170,6 +3302,7 @@ export function PolicyPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -3185,8 +3318,10 @@ export function PolicyPage({
   const checksById = new Map<string, DataItem>(
     data.checks.map((check) => [getString(check, ['check_id', 'id'], ''), check])
   );
-  const socScheduledCount = data.testPolicies.filter((policy) => isPolicySocGated(policy, checksById)).length;
-  const upcomingRuns = data.testPolicies
+  const activePolicies = data.testPolicies.filter((policy) => !['paused', 'archived', 'deleted'].includes(getString(policy, ['state'], 'active')));
+  const socScheduledCount = activePolicies.filter((policy) => isPolicySocGated(policy, checksById)).length;
+  const boundPolicyCount = activePolicies.filter((policy) => Boolean(getString(policy, ['check_id'], ''))).length;
+  const upcomingRuns = activePolicies
     .map((policy) => derivePolicyNextRun(policy, isPolicySocGated(policy, checksById)).iso)
     .filter((iso): iso is string => Boolean(iso))
     .sort((left, right) => left.localeCompare(right));
@@ -3293,7 +3428,16 @@ export function PolicyPage({
       }
     },
     { key: 'safe_window', label: 'Safe window', render: (item) => <span className="mono muted">{formatPolicySafeWindow(item)}</span> },
-    { key: 'expected', label: 'Expected verdict', render: (item) => <Badge tone={policyVerdictBadgeTone(getString(item, ['expected_verdict']))}>{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge> },
+    {
+      key: 'expected',
+      label: 'Expected verdict',
+      render: (item) => (
+        <div className="stack-tight">
+          <Badge tone={policyVerdictBadgeTone(getString(item, ['expected_verdict']))}>{formatPolicyVerdictLabel(getString(item, ['expected_verdict']))}</Badge>
+          <span className="muted small">Declared expectation</span>
+        </div>
+      )
+    },
     {
       key: 'exact_target',
       label: 'Exact target',
@@ -3542,11 +3686,16 @@ export function PolicyPage({
   async function patchPolicy(id: string, body: Record<string, unknown>, success: string) {
     if (!id) return;
     if ('cadence' in body && body.cadence === 'weekly') {
-      if (!window.confirm('Set this policy cadence to weekly? Scheduled runs will follow the weekly window.')) return;
+      if (!await confirm({ title: 'Change policy cadence', description: 'Set this policy cadence to weekly? Scheduled runs will follow the weekly window.', confirmLabel: 'Set weekly', confirmTone: 'default' })) return;
     }
     if ('state' in body) {
       const pausing = body.state === 'paused';
-      if (!window.confirm(pausing ? 'Pause this policy? Scheduled runs under it will stop.' : 'Resume this policy?')) return;
+      if (!await confirm({
+        title: pausing ? 'Pause policy' : 'Resume policy',
+        description: pausing ? 'Pause this policy? Scheduled runs under it will stop.' : 'Resume this policy?',
+        confirmLabel: pausing ? 'Pause policy' : 'Resume policy',
+        confirmTone: pausing ? 'danger' : 'default'
+      })) return;
     }
     await runPolicyAction(`patch-policy-${id}`, () => requestJson(config, session, `/v1/test-policies/${id}`, {
       method: 'PATCH',
@@ -3565,7 +3714,8 @@ export function PolicyPage({
       <PageHeader
         route="test-policies"
         title="Test policies"
-        description="Scheduled validation cadences, schedule windows, and target bindings. Each schedule declares when checks run and the verdict they expect. High-scale scenarios stay SOC-scheduled. Click a schedule to open its detail."
+        eyebrow="Declared scope · bounded execution"
+        description="Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts remain declarations until probe or agent evidence is recorded; high-scale scenarios stay SOC-scheduled."
         actions={
           <>
             <Button
@@ -3582,18 +3732,19 @@ export function PolicyPage({
       <div className="kpi-row">
         <KpiCell
           label="Active schedules"
-          value={formatNumber(data.testPolicies.length)}
-          delta={`${safeChecks.length} checks bindable`}
+          value={data.loadErrors.testPolicies ? '—' : formatNumber(activePolicies.length)}
+          delta={data.loadErrors.checks ? 'Check catalog unavailable' : `${safeChecks.length} checks bindable`}
         />
         <KpiCell
           label="Next run"
-          value={nextRunLabel}
-          delta={upcomingRuns.length > 0 ? `${upcomingRuns.length} upcoming` : 'No cadence scheduled'}
+          value={data.loadErrors.testPolicies ? '—' : nextRunLabel}
+          delta={data.loadErrors.testPolicies ? 'Policy data unavailable' : upcomingRuns.length > 0 ? `${upcomingRuns.length} upcoming` : 'No cadence scheduled'}
         />
+        <KpiCell label="Checks bound" value={data.loadErrors.testPolicies ? '—' : formatNumber(boundPolicyCount)} delta="Exact schedule bindings" />
         <KpiCell
           label="SOC-scheduled"
-          value={formatNumber(socScheduledCount)}
-          delta={socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
+          value={data.loadErrors.testPolicies || data.loadErrors.checks ? '—' : formatNumber(socScheduledCount)}
+          delta={data.loadErrors.testPolicies || data.loadErrors.checks ? 'SOC schedule data unavailable' : socScheduledCount > 0 ? 'Awaiting SOC' : 'None gated'}
         />
       </div>
       {(message || error) && (
@@ -3607,16 +3758,18 @@ export function PolicyPage({
               Scheduled bindings between declared target groups and customer-runnable checks.
               {' '}
               <span className="muted small">
-                {data.testPolicies.length} active · {safeChecks.length} checks · {socGatedChecks.length} SOC-gated
+                {activePolicies.length} active · {data.testPolicies.length} total · {safeChecks.length} safe checks · {socGatedChecks.length} SOC-gated
               </span>
             </>
           }
-          trailing={data.testPolicies.length > 0 ? <Badge tone="info">{data.testPolicies.length} active</Badge> : undefined}
+          trailing={data.testPolicies.length > 0 ? <Badge tone="info">{activePolicies.length} active</Badge> : undefined}
         />
         <CardContent>
           <DataTable
             columns={policyColumns}
             items={data.testPolicies}
+            loadError={data.loadErrors.testPolicies}
+            onRetry={() => void onRefresh()}
             getRowId={(item) => getString(item, ['id', 'policy_id'], '')}
             getRowProps={(item) => {
               const id = getString(item, ['id', 'policy_id'], '');
@@ -4276,6 +4429,7 @@ export function IntegrationPage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [selectedConnectorId, setSelectedConnectorId] = useState('');
   const [pendingConnector, setPendingConnector] = useState<DataItem | null>(null);
   const [pendingTargetGroup, setPendingTargetGroup] = useState<DataItem | null>(null);
@@ -4373,7 +4527,7 @@ export function IntegrationPage({
     },
     { key: 'status', label: 'Status', render: (item) => <Badge tone={getString(item, ['status']) === 'active' ? 'success' : getString(item, ['status']) === 'error' ? 'danger' : 'muted'}>{getString(item, ['status'], 'unrecorded')}</Badge> },
     { key: 'last_poll', label: 'Last poll', render: (item) => formatDate(item.last_polled_at ?? item.last_success_at ?? item.last_poll_at) },
-    { key: 'poll_errors', label: 'Poll errors', render: (item) => getNumber(item, ['poll_error_count', 'error_count'], 0) },
+    { key: 'poll_errors', label: 'Poll errors', render: (item) => getOptionalNumber(item, ['poll_error_count', 'error_count']) ?? <span className="muted">—</span> },
     { key: 'secret', label: 'Secret ref', render: (item) => getString(item, ['secret_id'], 'none — manual only') },
     { key: 'updated', label: 'Updated', render: (item) => formatDate(item.updated_at ?? item.created_at) },
     {
@@ -4642,7 +4796,7 @@ export function IntegrationPage({
       setError('Choose either a new credential or an existing secret reference, not both.');
       return;
     }
-    if (secretInput && !window.confirm('Store this read-only provider credential in the encrypted tenant vault before creating the connector?')) return;
+    if (secretInput && !(await confirm({ title: 'Store provider credential', description: 'Store this read-only provider credential in the encrypted tenant vault before creating the connector?', confirmLabel: 'Store and create', confirmTone: 'default' }))) return;
 
     const createdResult = await runAction('create-connector', async () => {
       let secretId = externalSecretId || null;
@@ -4707,7 +4861,7 @@ export function IntegrationPage({
 
   async function disableConnector(id: string) {
     if (!id) return;
-    if (!window.confirm('Disable this connector? Deliveries through it will stop.')) return;
+    if (!await confirm({ title: 'Disable connector', description: 'Disable this connector? Deliveries through it will stop.', confirmLabel: 'Disable connector' })) return;
     await runAction(`disable-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/disable`, { method: 'POST', body: { reason: 'Disabled from integrations page.' } }), 'Connector disabled.');
   }
 
@@ -4769,6 +4923,29 @@ export function IntegrationPage({
     return 'pending';
   }
 
+  const providerDirectoryColumns: TableColumn<DnsProviderDirectoryEntry>[] = [
+    {
+      key: 'provider',
+      label: 'Provider',
+      render: (provider) => {
+        const ProviderIcon = provider.icon;
+        return <div className="dns-provider-identity"><div className="dns-provider-mark" data-tone={provider.tone} aria-hidden="true"><ProviderIcon size={20} strokeWidth={1.8} /></div><div className="dns-provider-name"><strong>{provider.label}</strong><span>DNS / edge metadata</span></div></div>;
+      }
+    },
+    { key: 'capability', label: 'Access path', render: (provider) => <div className="stack-tight"><strong>{provider.capability}</strong><span className="muted small">{provider.description}</span></div> },
+    { key: 'access', label: 'Provider access', render: (provider) => <Badge tone={provider.supportsCredentialPolling ? 'info' : 'muted'}>{provider.supportsCredentialPolling ? 'Optional read-only' : 'None · manual'}</Badge> },
+    {
+      key: 'configured',
+      label: 'Configured',
+      render: (provider) => {
+        if (connectorsLoadError) return <span className="muted">Unavailable</span>;
+        const count = connectorRecords.filter((connector) => connectorDirectoryProvider(connector)?.id === provider.id).length;
+        return count > 0 ? <Badge tone="success">{count}</Badge> : <span className="muted">None</span>;
+      }
+    },
+    { key: 'action', label: 'Action', render: (provider) => <Button size="sm" variant="secondary" onClick={() => openProviderFlow(provider.id)}>Add</Button> }
+  ];
+
   return (
     <div className="content integration-page">
       <style>{INTEGRATION_PAGE_STYLES}</style>
@@ -4795,10 +4972,14 @@ export function IntegrationPage({
           </>
         }
       />
-      <PageContextSummary>
-        <span className="tabular-nums">{DNS_PROVIDER_DIRECTORY.length}</span> provider paths ·{' '}
-        {connectorsLoadError ? 'connector status unavailable' : <><span className="tabular-nums">{connectorRecords.length}</span> connector records</>} · provider access remains optional
-      </PageContextSummary>
+      <PageContextSummary>Optional enrichment only · no default cloud access · customer-declared domains remain the core path</PageContextSummary>
+      <div className="kpi-row" aria-label="Integration inventory summary">
+        <KpiCell label="Provider paths" value={formatNumber(DNS_PROVIDER_DIRECTORY.length)} delta="Read-only or manual metadata" />
+        <KpiCell label="Connectors" value={connectorsLoadError ? '—' : formatNumber(connectorRecords.length)} delta={connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`} />
+        <KpiCell label="Snapshots" value={connectorsLoadError ? '—' : formatNumber(snapshots.length)} delta="Normalized metadata only" />
+        <KpiCell label="Vault secrets" value={data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)} delta="Plaintext never rendered" />
+      </div>
+      <CalloutNote icon={ShieldCheck} tone="info">Provider access is optional. Core validation continues from customer-declared targets, and opening this directory never grants AstraNull cloud access.</CalloutNote>
       {(message || error) && (
         <div
           className={error ? 'form-banner error' : 'form-banner'}
@@ -4822,39 +5003,12 @@ export function IntegrationPage({
           </div>
         </CardHeader>
         <CardContent>
-          <div className="dns-provider-grid" aria-labelledby="dns-provider-directory-title">
-            {DNS_PROVIDER_DIRECTORY.map((provider) => {
-              const ProviderIcon = provider.icon;
-              const configuredCount = connectorsLoadError ? null : connectorRecords.filter(
-                (connector) => connectorDirectoryProvider(connector)?.id === provider.id
-              ).length;
-              return (
-                <article className="dns-provider-card" key={provider.id}>
-                  <div className="dns-provider-card-head">
-                    <div className="dns-provider-identity">
-                      <div className="dns-provider-mark" data-tone={provider.tone} aria-hidden="true">
-                        <ProviderIcon size={20} strokeWidth={1.8} />
-                      </div>
-                      <div className="dns-provider-name">
-                        <strong>{provider.label}</strong>
-                        <span>DNS / edge metadata</span>
-                      </div>
-                    </div>
-                    <Badge tone={provider.supportsCredentialPolling ? 'info' : 'muted'}>{provider.capability}</Badge>
-                  </div>
-                  <p className="dns-provider-description">{provider.description}</p>
-                  <div className="dns-provider-card-footer">
-                    <span className="dns-provider-record-count tabular-nums">
-                      {configuredCount === null ? 'Status unavailable' : configuredCount > 0 ? `${configuredCount} configured` : 'Not configured'}
-                    </span>
-                    <Button size="sm" variant="secondary" onClick={() => openProviderFlow(provider.id)}>
-                      Add
-                    </Button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+          <DataTable
+            columns={providerDirectoryColumns}
+            items={[...DNS_PROVIDER_DIRECTORY]}
+            getRowId={(provider) => provider.id}
+            empty={<EmptyState icon={PlugZap} title="No provider paths available." body="Use customer-declared target groups while provider options are unavailable." />}
+          />
         </CardContent>
       </Card>
 
@@ -4875,7 +5029,7 @@ export function IntegrationPage({
             <PanelCardHeader
               title="Configured connectors"
               description="Validate connector metadata, run supported credential-backed polls, load snapshots, or disable a record. Plaintext credentials are never rendered."
-              trailing={<Badge tone={connectorsLoadError ? 'warn' : 'info'}>{connectorsLoadError ? 'Unavailable' : `${connectorRecords.length} total`}</Badge>}
+              trailing={<Badge tone={connectorsLoadError ? 'warn' : 'muted'}>{connectorsLoadError ? 'Unavailable' : `${connectorRecords.length} total`}</Badge>}
             />
             <CardContent>
               <DataTable
@@ -5298,103 +5452,77 @@ export function IntegrationPage({
   );
 }
 
-export function SupportPage({ data, session }: { data: PortalData; session: Session }) {
+export function SupportPage({ data, session, config }: { data: PortalData; session: Session; config: PortalConfig }) {
   const summary = data.subscriptionSummary;
+  const supportUri = configuredSupportUri(config.siteConfig);
   const support = getNestedItem(summary, ['support']);
   const usage = getNestedItem(summary, ['usage']);
   const account = getNestedItem(summary, ['account']);
   const recentAudit = getNestedArray(support, ['recent_audit']);
-  const openFindings = getNumber(usage ?? {}, ['open_findings']);
-  const pendingHighScale = getNumber(usage ?? {}, ['pending_high_scale_requests']);
+  const openFindings = getOptionalNumber(usage, ['open_findings']);
+  const pendingHighScale = getOptionalNumber(usage, ['pending_high_scale_requests']);
+  const auditEvents = getOptionalNumber(usage, ['audit_events']);
   const supportOwner = getString(support ?? {}, ['owner'], 'Unassigned');
   const escalationState = getString(support ?? {}, ['escalation_state'], summary ? 'nominal' : 'No record');
-  const routeAccessContext = {
-    principal: session.principal,
-    staffRole: session.staff_role,
-  };
+  const supportLoadError = data.loadErrors.subscriptionSummary;
+  const routeAccessContext = { principal: session.principal, staffRole: session.staff_role };
   const role = session.role ?? 'admin';
   const canReadNotifications = canAccessRoute(role, 'notifications', routeAccessContext);
-  const supportRows = summary
-    ? [
-        { label: 'Support owner', value: supportOwner, icon: LifeBuoy },
-        { label: 'Account lifecycle', value: getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'), icon: ShieldCheck },
-        { label: 'Region', value: getString(account ?? support ?? {}, ['region'], 'unrecorded'), icon: Network },
-        { label: 'Recent tenant audit records', value: formatNumber(getNumber(usage ?? {}, ['audit_events'])), icon: FileCheck2 }
-      ]
-    : [];
+  const openFindingsLabel = openFindings === null ? 'not recorded' : formatNumber(openFindings);
+  const pendingHighScaleLabel = pendingHighScale === null ? 'not recorded' : formatNumber(pendingHighScale);
+  const supportRows = summary ? [
+    { label: 'Support owner', value: supportOwner, icon: LifeBuoy },
+    { label: 'Account lifecycle', value: getString(account ?? support ?? {}, ['lifecycle_state'], 'unrecorded'), icon: ShieldCheck },
+    { label: 'Region', value: getString(account ?? support ?? {}, ['region'], 'unrecorded'), icon: Network },
+    { label: 'Recent tenant audit records', value: auditEvents === null ? 'Not recorded' : formatNumber(auditEvents), icon: FileCheck2 }
+  ] : [];
 
   return (
     <div className="content">
       <PageHeader
         route="support"
         eyebrow="Readiness support"
-        actions={<AnchorButton href={SUPPORT_CONTACT_MAILTO} variant="default" size="sm">Contact support</AnchorButton>}
+        description="Account ownership, escalation context, and recent audit evidence inside AstraNull's defensive validation boundaries."
+        actions={supportUri ? <AnchorButton href={supportUri} variant="default" size="sm">Contact support</AnchorButton> : undefined}
       />
       <PageContextSummary>
-        Owner {summary ? supportOwner : '—'} ·{' '}
-        <span className="tabular-nums">{summary ? openFindings : '—'}</span> open findings ·{' '}
-        <span className="tabular-nums">{summary ? pendingHighScale : '—'}</span> SOC escalations
-        {summary ? ` (${escalationState.replaceAll('_', ' ')})` : ''}
+        Owner {summary ? supportOwner : '—'} · <span className="tabular-nums">{summary ? openFindingsLabel : '—'}</span> open findings · <span className="tabular-nums">{summary ? pendingHighScaleLabel : '—'}</span> SOC escalations{summary ? ` (${escalationState.replaceAll('_', ' ')})` : ''}
       </PageContextSummary>
+      {!supportUri ? (
+        <div className="form-banner info" role="status">
+          This deployment has not configured a support contact channel. Use the in-product evidence and SOC workflows below until an administrator provides one.
+        </div>
+      ) : null}
+      {supportLoadError ? <div className="form-banner error row-actions" role="alert"><span>{supportLoadError} Previously loaded support context may be stale.</span><Button type="button" size="sm" variant="secondary" onClick={() => window.location.reload()}>Retry</Button></div> : null}
       <div className="split">
         <Card>
-          <CardHeader>
-            <CardTitle>Support readiness</CardTitle>
-            <CardDescription>Tenant support posture from account, findings, high-scale, and audit records.</CardDescription>
-          </CardHeader>
+          <CardHeader><CardTitle>Support readiness</CardTitle><CardDescription>Tenant support posture from account, findings, high-scale, and audit records.</CardDescription></CardHeader>
           <CardContent className="settings-list">
-            {supportRows.length === 0 ? (
-              <EmptyState icon={LifeBuoy} title="No support account record." body="Approve a signup request or attach tenant account metadata before support readiness can show live ownership." />
-            ) : supportRows.map(({ label, value, icon: RowIcon }) => (
-              <div key={label}>
-                <RowIcon size={18} aria-hidden />
-                <span>
-                  <strong>{label}</strong>
-                  {' — '}
-                  {label === 'Account lifecycle'
-                    ? <Badge tone={lifecycleBadgeTone(value)}>{value}</Badge>
-                    : value}
-                </span>
-              </div>
+            {supportRows.length === 0 ? <EmptyState icon={LifeBuoy} title="No support account record." body="Approve a signup request or attach tenant account metadata before support readiness can show live ownership." /> : supportRows.map(({ label, value, icon: RowIcon }) => (
+              <div key={label}><RowIcon size={18} aria-hidden /><span><strong>{label}</strong>{' — '}{label === 'Account lifecycle' ? <Badge tone={lifecycleBadgeTone(value)}>{value}</Badge> : value}</span></div>
             ))}
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle>Recent support evidence</CardTitle>
-            <CardDescription>Latest tenant audit events exposed as metadata-only support context.</CardDescription>
-          </CardHeader>
+          <CardHeader><CardTitle>Recent support evidence</CardTitle><CardDescription>Latest tenant audit events exposed as metadata-only support context.</CardDescription></CardHeader>
           <CardContent className="queue-list support-evidence-list">
-            {recentAudit.length === 0 ? (
-              <EmptyState icon={FileCheck2} title="No recent support evidence." body="Tenant audit entries will appear here after support-relevant actions are recorded." />
-            ) : recentAudit.map((entry) => {
+            {recentAudit.length === 0 ? <EmptyState icon={FileCheck2} title="No recent support evidence." body="Tenant audit entries will appear here after support-relevant actions are recorded." /> : recentAudit.map((entry) => {
               const action = getString(entry, ['action'], '—');
               const resourceType = getString(entry, ['resource_type'], 'audit');
-              return (
-                <div key={getString(entry, ['id', 'created_at', 'action'])} className="support-evidence-item">
-                  <div className="support-evidence-main">
-                    <span className="support-evidence-type">{formatResourceTypeLabel(resourceType)}</span>
-                    <span className="support-evidence-action">{formatAuditAction(action, action)}</span>
-                  </div>
-                  <div className="support-evidence-meta">
-                    <span className="muted">{formatDate(entry.created_at)}</span>
-                    <AnchorButton size="sm" variant="ghost" href="#audit">View</AnchorButton>
-                  </div>
-                </div>
-              );
+              return <div key={getString(entry, ['id', 'created_at', 'action'])} className="support-evidence-item"><div className="support-evidence-main"><span className="support-evidence-type">{formatResourceTypeLabel(resourceType)}</span><span className="support-evidence-action">{formatAuditAction(action, action)}</span></div><div className="support-evidence-meta"><span className="muted">{formatDate(entry.created_at)}</span><AnchorButton size="sm" variant="ghost" href="#audit">View</AnchorButton></div></div>;
             })}
           </CardContent>
         </Card>
       </div>
       <Card>
-        <CardHeader>
-          <CardTitle>Support workflows</CardTitle>
-          <CardDescription>Customer escalation paths within authorized validation boundaries.</CardDescription>
-        </CardHeader>
-        <CardContent className="row-actions">
-          <AnchorButton href="#findings" variant="secondary" size="sm">Review open findings ({openFindings})</AnchorButton>
-          <AnchorButton href="#runs" variant="secondary" size="sm">Request SOC-governed test ({pendingHighScale} pending)</AnchorButton>
-          {canReadNotifications ? <AnchorButton href="#notifications" variant="secondary" size="sm">Notification rules</AnchorButton> : null}
+        <CardHeader><CardTitle>Support workflows</CardTitle><CardDescription>Customer escalation paths within authorized validation boundaries.</CardDescription></CardHeader>
+        <CardContent className="stack">
+          <CalloutNote icon={Siren} tone="warn">Support can coordinate escalation and request a stop. Only SOC can approve, schedule, execute, or stop high-scale validation; customer stop authority remains binding.</CalloutNote>
+          <div className="row-actions">
+            <AnchorButton href="#findings" variant="secondary" size="sm">Review open findings ({openFindingsLabel})</AnchorButton>
+            <AnchorButton href="#runs" variant="secondary" size="sm">Request SOC-governed test ({pendingHighScaleLabel} pending)</AnchorButton>
+            {canReadNotifications ? <AnchorButton href="#notifications" variant="secondary" size="sm">Notification rules</AnchorButton> : null}
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -5485,7 +5613,11 @@ const SUBSCRIPTION_PAGE_STYLES = `
 .subscription-page .subscription-usage-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--border-soft);
 }
 .subscription-page .subscription-usage-card {
   display: flex;
@@ -5493,9 +5625,9 @@ const SUBSCRIPTION_PAGE_STYLES = `
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--proof-surface);
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
 }
 .subscription-page .subscription-usage-copy,
 .subscription-page .subscription-usage-value {
@@ -5864,8 +5996,8 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
       <Card className="card--dense">
         <PanelCardHeader
           title="Usage against plan limits"
-          description="Each card joins the recorded count, authoritative limit, and progress state."
-          trailing={<Badge tone={recordedUsageCount === usageRows.length ? 'info' : 'muted'}>{recordedUsageCount} / {usageRows.length} recorded</Badge>}
+          description="Each metric joins the recorded count, authoritative limit, and progress state."
+          trailing={<Badge tone="muted">{recordedUsageCount} / {usageRows.length} recorded</Badge>}
         />
         <CardContent>
           {usage ? (
@@ -5953,13 +6085,13 @@ export function StaffSurfacePage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [entitlementTenantId, setEntitlementTenantId] = useState(() => getString(data.internalTenants[0] ?? {}, ['tenant_id', 'id'], ''));
   const [entitlementFeature, setEntitlementFeature] = useState('waf_posture');
   const [entitlementAction, setEntitlementAction] = useState('true');
-  const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<DataItem | null>(null);
   const entitlementFeatures = ['waf_posture', 'external_discovery', 'connectors', 'high_scale_program'] as const;
   const internalTenantOptions: SelectOption[] = data.internalTenants.length > 0
     ? data.internalTenants.map((tenant) => {
@@ -5979,12 +6111,14 @@ export function StaffSurfacePage({
     { value: 'false', label: 'Revoke / disable' }
   ];
   const isStaff = session.principal === 'staff';
-  const [adminTab, setAdminTab] = useState('signup-queue');
+  const [adminTab, setAdminTab] = useState('overview');
   const adminTabOptions = routeTabs('admin').map((tab) => ({ id: tab.id, label: tab.label }));
   const overview = data.internalOverview;
-  const queueDepth = getNumber(overview ?? {}, ['pending_signups']) + getNumber(overview ?? {}, ['pending_approval_requests']);
-  const tenantCount = getNumber(overview ?? {}, ['tenant_count'], data.internalTenants.length);
-  const highScaleReviews = getNumber(overview ?? {}, ['high_scale_reviews']);
+  const pendingSignups = data.loadErrors.internalSignupRequests ? null : getOptionalNumber(overview, ['pending_signups']) ?? data.internalSignupRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
+  const pendingApprovals = data.loadErrors.internalApprovalRequests ? null : getOptionalNumber(overview, ['pending_approval_requests']) ?? data.internalApprovalRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
+  const queueDepth = pendingSignups === null || pendingApprovals === null ? null : pendingSignups + pendingApprovals;
+  const tenantCount = getOptionalNumber(overview, ['tenant_count']) ?? (data.loadErrors.internalTenants ? null : data.internalTenants.length);
+  const highScaleReviews = getOptionalNumber(overview, ['high_scale_reviews']) ?? (data.loadErrors.internalApprovalRequests ? null : data.internalApprovalRequests.filter((item) => getString(item, ['kind'], '').includes('high_scale') && ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length);
   async function runStaffAction<T>(label: string, action: () => Promise<T>, success: string) {
     setBusy(label);
     setError('');
@@ -6003,7 +6137,7 @@ export function StaffSurfacePage({
   }
 
   async function approveSignup(id: string) {
-    if (!window.confirm('Approve this signup request? A tenant account will be provisioned.')) return;
+    if (!await confirm({ title: 'Approve signup request', description: 'Approve this signup request? A tenant account will be provisioned.', confirmLabel: 'Approve request', confirmTone: 'default' })) return;
     await runStaffAction(`approve-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${id}/approve`, {
       method: 'POST',
       body: { reason: 'Approved from React staff console.' }
@@ -6011,7 +6145,7 @@ export function StaffSurfacePage({
   }
 
   async function rejectSignup(id: string) {
-    if (!window.confirm('Reject this signup request? No tenant will be provisioned for this applicant.')) return;
+    if (!await confirm({ title: 'Reject signup request', description: 'Reject this signup request? No tenant will be provisioned for this applicant.', confirmLabel: 'Reject request' })) return;
     await runStaffAction(`reject-signup-${id}`, () => requestJson(config, session, `/internal/admin/signup-requests/${id}/reject`, {
       method: 'POST',
       body: { reason: 'Rejected from React staff console.' }
@@ -6020,31 +6154,13 @@ export function StaffSurfacePage({
 
   async function decideApproval(id: string, decision: 'approve' | 'reject') {
     if (decision === 'approve') {
-      if (!window.confirm('Approve this internal approval request? The requested action will proceed.')) return;
-    } else if (!window.confirm('Reject this internal approval request? The requested action will not proceed.')) return;
+      if (!await confirm({ title: 'Approve internal request', description: 'Approve this internal approval request? The requested action will proceed.', confirmLabel: 'Approve request', confirmTone: 'default' })) return;
+    } else if (!await confirm({ title: 'Reject internal request', description: 'Reject this internal approval request? The requested action will not proceed.', confirmLabel: 'Reject request' })) return;
     await runStaffAction(`approval-${id}-${decision}`, () => requestJson(config, session, `/internal/admin/approval-requests/${id}/decision`, {
       method: 'POST',
       body: { decision, reason: `${decision} from React staff console.` }
     }), `Approval request ${decision}d.`);
   }
-
-  useEffect(() => {
-    if (!isStaff || !entitlementTenantId) {
-      setSubscriptionSnapshot(null);
-      return;
-    }
-    let cancelled = false;
-    requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}/subscription`)
-      .then((payload) => {
-        if (!cancelled) setSubscriptionSnapshot(payload as DataItem);
-      })
-      .catch(() => {
-        if (!cancelled) setSubscriptionSnapshot(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [config, session, entitlementTenantId, isStaff, data.internalTenants]);
 
   async function grantEntitlement(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -6058,16 +6174,18 @@ export function StaffSurfacePage({
     }
     const featureLabel = ENTITLEMENT_FEATURE_LABELS[feature as (typeof ENTITLEMENT_FEATURES)[number]] ?? feature;
     if (enabled) {
-      if (!window.confirm(`Grant the ${featureLabel} entitlement for this tenant?`)) return;
-    } else if (!window.confirm(`Revoke the ${featureLabel} entitlement? The feature will be disabled for this tenant.`)) return;
+      if (!await confirm({ title: 'Grant tenant entitlement', description: `Grant the ${featureLabel} entitlement for this tenant?`, confirmLabel: 'Grant entitlement', confirmTone: 'default' })) return;
+    } else if (!await confirm({ title: 'Revoke tenant entitlement', description: `Revoke the ${featureLabel} entitlement? The feature will be disabled for this tenant.`, confirmLabel: 'Revoke entitlement' })) return;
     await runStaffAction(`entitlement-${entitlementTenantId}-${feature}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}/entitlements`, {
       method: 'POST',
       body: { feature, enabled, reason: reason || `Entitlement ${enabled ? 'granted' : 'revoked'} from React staff console.` }
     }), `${feature} entitlement ${enabled ? 'granted' : 'revoked'} for ${entitlementTenantId}.`);
   }
 
-  const effectiveEntitlements = getNestedItem(subscriptionSnapshot, ['effective_entitlements'])
-    ?? getNestedItem(subscriptionSnapshot, ['subscription', 'effective_entitlements']);
+  const selectedEntitlementTenant = data.internalTenants.find(
+    (tenant) => getString(tenant, ['tenant_id', 'id'], '') === entitlementTenantId
+  ) ?? null;
+  const effectiveEntitlements = getNestedItem(selectedEntitlementTenant, ['effective_entitlements']);
 
   const signupColumns: TableColumn<DataItem>[] = [
     { key: 'org', label: 'Organization', render: (item) => getString(item, ['organization_name', 'id']) },
@@ -6145,9 +6263,9 @@ export function StaffSurfacePage({
       />
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'}>{error || message}</div>}
       <PageContextSummary>
-        Review queue <span className="tabular-nums">{queueDepth}</span> ·{' '}
-        <span className="tabular-nums">{tenantCount}</span> tenants ·{' '}
-        <span className="tabular-nums">{highScaleReviews}</span> SOC reviews pending
+        Review queue <span className="tabular-nums">{queueDepth === null ? '—' : formatNumber(queueDepth)}</span> ·{' '}
+        <span className="tabular-nums">{tenantCount === null ? '—' : formatNumber(tenantCount)}</span> tenants ·{' '}
+        <span className="tabular-nums">{highScaleReviews === null ? '—' : formatNumber(highScaleReviews)}</span> SOC reviews pending
       </PageContextSummary>
       {!isStaff ? (
         <Card>
@@ -6161,16 +6279,23 @@ export function StaffSurfacePage({
         </Card>
       ) : (
         <>
-          <Tabs value={adminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" />
+          <CalloutNote icon={ShieldCheck} tone="warn">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
+          <Tabs value={adminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections" />
           {adminTab === 'overview' ? (
-            <Card density="compact">
-              <CardHeader><CardTitle>Staff overview</CardTitle><CardDescription>Queue depth and tenant posture from internal management APIs.</CardDescription></CardHeader>
-              <CardContent className="kv-list">
-                <div><span>Review queue</span><strong>{queueDepth}</strong></div>
-                <div><span>Tenants</span><strong>{tenantCount}</strong></div>
-                <div><span>SOC reviews pending</span><strong>{highScaleReviews}</strong></div>
-              </CardContent>
-            </Card>
+            <>
+              <div className="kpi-row" aria-label="Staff operations summary">
+                <KpiCell label="Review queue" value={queueDepth === null ? '—' : formatNumber(queueDepth)} delta="Signup and approval work" />
+                <KpiCell label="Pending signups" value={pendingSignups === null ? '—' : formatNumber(pendingSignups)} delta="Staff decision required" />
+                <KpiCell label="Tenants" value={tenantCount === null ? '—' : formatNumber(tenantCount)} delta="Managed accounts" />
+                <KpiCell label="SOC reviews" value={highScaleReviews === null ? '—' : formatNumber(highScaleReviews)} delta="High-scale governance" />
+              </div>
+              <Card density="compact">
+                <PanelCardHeader title="Recent internal activity" description="Latest audit-backed staff actions across managed tenants." trailing={<Badge tone="muted">{data.loadErrors.internalAudit ? 'Unavailable' : `${data.internalAudit.length} records`}</Badge>} />
+                <CardContent>
+                  <DataTable columns={auditColumns} items={data.internalAudit.slice(0, 6)} loadError={data.loadErrors.internalAudit} onRetry={() => void onRefresh()} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions appear here after they are recorded.' })} />
+                </CardContent>
+              </Card>
+            </>
           ) : null}
           {adminTab === 'signup-queue' ? (
             <Card density="compact" className="staff-queue-priority">
@@ -6179,7 +6304,7 @@ export function StaffSurfacePage({
                 <CardDescription>Requests from the staff-only signup review API.</CardDescription>
               </CardHeader>
               <CardContent>
-                <DataTable columns={signupColumns} items={data.internalSignupRequests} empty={renderFriendlyEmptyState({ icon: ClipboardList, title: 'No signup requests.', body: 'Reviewed account intake records will appear here after customers submit requests.' })} />
+                <DataTable columns={signupColumns} items={data.internalSignupRequests} empty={renderFriendlyEmptyState({ icon: ClipboardList, title: 'No signup requests.', body: 'Reviewed account intake records will appear here after customers submit requests.' })} loadError={data.loadErrors.internalSignupRequests} onRetry={() => void onRefresh()} />
               </CardContent>
             </Card>
           ) : null}
@@ -6190,7 +6315,7 @@ export function StaffSurfacePage({
                 <CardDescription>Managed tenant account and subscription metadata.</CardDescription>
               </CardHeader>
               <CardContent>
-                <DataTable columns={tenantColumns} items={data.internalTenants} empty={renderFriendlyEmptyState({ icon: Target, title: 'No managed tenants.', body: 'Provisioned tenants appear here after staff approval creates account records.' })} />
+                <DataTable columns={tenantColumns} items={data.internalTenants} empty={renderFriendlyEmptyState({ icon: Target, title: 'No managed tenants.', body: 'Provisioned tenants appear here after staff approval creates account records.' })} loadError={data.loadErrors.internalTenants} onRetry={() => void onRefresh()} />
               </CardContent>
             </Card>
           ) : null}
@@ -6216,21 +6341,27 @@ export function StaffSurfacePage({
               </CardContent>
             </Card>
           ) : null}
+          {adminTab === 'tenants' ? (<>
           <Card>
             <CardHeader>
               <CardTitle>Support owner assignment</CardTitle>
               <CardDescription>Assign the AstraNull support owner for the selected tenant.</CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="product-form" onSubmit={(event) => {
+              <form className="product-form" onSubmit={async (event) => {
                 event.preventDefault();
                 const owner = String(new FormData(event.currentTarget).get('support_owner') ?? '').trim();
                 if (!entitlementTenantId || !owner) {
                   setError('Select a tenant before assigning a support owner.');
                   return;
                 }
-                if (!window.confirm(`Assign support owner "${owner}" for tenant ${entitlementTenantId}?`)) return;
-                void runStaffAction(`support-owner-${entitlementTenantId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}`, {
+                if (!await confirm({
+                  title: 'Assign support owner',
+                  description: `Assign support owner "${owner}" for tenant ${entitlementTenantId}?`,
+                  confirmLabel: 'Assign owner',
+                  confirmTone: 'default'
+                })) return;
+                await runStaffAction(`support-owner-${entitlementTenantId}`, () => requestJson(config, session, `/internal/admin/tenants/${encodeURIComponent(entitlementTenantId)}`, {
                   method: 'PATCH',
                   body: { support_owner: owner, reason: 'Support owner updated from React staff console.' }
                 }), `Support owner updated for ${entitlementTenantId}.`);
@@ -6268,7 +6399,7 @@ export function StaffSurfacePage({
                     </div>
                   ))}
                 </div>
-              ) : <p className="muted">Effective entitlements load after tenant subscription is fetched.</p>}
+              ) : <p className="muted">Effective entitlement detail is available from the selected tenant detail record. You can still apply an explicit grant or revocation below.</p>}
               <form className="product-form" onSubmit={grantEntitlement}>
                 <Select
                   label="Feature"
@@ -6289,6 +6420,7 @@ export function StaffSurfacePage({
               </form>
             </CardContent>
           </Card>
+          </>) : null}
         </>
       )}
     </div>

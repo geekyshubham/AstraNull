@@ -15,10 +15,14 @@ import '../helpers/dev-data-dir.mjs';
  * flag, and the config refusing to arm that flag in production at all.
  */
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { loginBundledStagingPrincipal } from '../../src/services/bundledStagingAuth.mjs';
 import { rejectsPasswordlessProtectedStagingSession } from '../../src/server.mjs';
 import { loadRuntimeConfig } from '../../src/config.mjs';
+
+const TEST_SECRET_ENCRYPTION_KEY = randomBytes(32).toString('hex');
+const TEST_PROBE_WORKER_SECRET = randomBytes(32).toString('base64url');
 
 /** Fixture on, staff mint on — the shape a dev/staging deployment resolves to. */
 const STAGING = { bundledStagingOidc: true, bundledStagingStaffLogin: true };
@@ -170,9 +174,9 @@ function productionEnv(overrides = {}) {
     ASTRANULL_OIDC_ISSUER: 'https://astranull.example/staging-oidc',
     ASTRANULL_OIDC_AUDIENCE: 'astranull-hosted-staging',
     ASTRANULL_OIDC_JWKS_URL: 'https://astranull.example/jwks.json',
-    ASTRANULL_SECRET_ENCRYPTION_KEY: '7f'.repeat(32),
+    ASTRANULL_SECRET_ENCRYPTION_KEY: TEST_SECRET_ENCRYPTION_KEY,
     ASTRANULL_DATABASE_URL: 'postgres://u:p@h:5432/d',
-    ASTRANULL_PROBE_WORKER_SECRET: 'q'.repeat(48),
+    ASTRANULL_PROBE_WORKER_SECRET: TEST_PROBE_WORKER_SECRET,
     ASTRANULL_METRICS_TOKEN: 'm'.repeat(40),
     NODE_ENV: 'production',
     ...overrides,

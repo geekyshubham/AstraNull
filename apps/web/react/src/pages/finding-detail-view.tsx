@@ -1,23 +1,71 @@
 import { useEffect, useState } from 'react';
 import type { HTMLAttributes, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
-import { FileCheck2, ShieldCheck, Target, TriangleAlert, UserCog, Wrench } from 'lucide-react';
+import { Check, FileCheck2, ShieldCheck, Target, TriangleAlert, UserCog, Wrench } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { VerifyChip } from '../lib/verify-chip';
 import { requestJson } from '../lib/api';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
-import { findingSlaDueAt, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
+import { findingSlaDueAt, findingStatus as readFindingStatus, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
 import { MetricCard } from './page-components';
+import { useConfirmModal } from '../lib/crud-ui';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
+
+const FINDING_DETAIL_STYLES_ID = 'finding-detail-view-styles';
+const findingDetailStyles = `
+.finding-detail-page { gap: var(--space-6); }
+.finding-detail-page > .page-head { margin-bottom: 0; }
+.finding-detail-page .finding-title-copy { min-width: 0; }
+.finding-detail-page .finding-title-copy .page-title,
+.finding-detail-page .finding-id { overflow-wrap: anywhere; word-break: break-word; }
+.finding-detail-page .finding-summary-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); margin: 0; }
+.finding-detail-page .finding-summary-fact { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: color-mix(in oklab, var(--surface), var(--fg) 2%); }
+.finding-detail-page .finding-summary-fact dt { margin-bottom: var(--space-1); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.finding-detail-page .finding-summary-fact dd { min-width: 0; margin: 0; color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; word-break: break-word; }
+.finding-detail-page .finding-relations { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); }
+.finding-detail-page .finding-decision-ladder { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: var(--space-4); }
+.finding-detail-page .finding-digest { display: inline-block; min-width: 0; max-width: 42ch; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+.finding-detail-page .finding-artifact-row { cursor: pointer; }
+.finding-detail-page .finding-custody-card .code { max-width: 100%; white-space: pre; }
+@media (max-width: 720px) {
+  .finding-detail-page .finding-summary-facts,
+  .finding-detail-page .finding-decision-ladder { grid-template-columns: minmax(0, 1fr); }
+}
+`;
+
+function ensureFindingDetailStyles() {
+  if (typeof document === 'undefined' || document.getElementById(FINDING_DETAIL_STYLES_ID)) return;
+  const node = document.createElement('style');
+  node.id = FINDING_DETAIL_STYLES_ID;
+  node.textContent = findingDetailStyles;
+  document.head.appendChild(node);
+}
+
+type FindingDecisionStep = { id: string; label: string; done: boolean; meta: string };
+
+/** Describe progress only from persisted finding/remediation facts; no unsupported status mutation is implied. */
+function buildFindingDecisionSteps(status: string, owner: string, remState: string, hasPlaybook: boolean): FindingDecisionStep[] {
+  const normalizedStatus = status.trim().toLowerCase();
+  const normalizedOwner = owner.trim().toLowerCase();
+  const ownerAssigned = Boolean(normalizedOwner && normalizedOwner !== 'unassigned' && normalizedOwner !== '—');
+  const remediationTracked = hasPlaybook;
+  const decisionRecorded = ['accepted_risk', 'closed'].includes(normalizedStatus);
+  return [
+    { id: 'opened', label: 'Finding opened', done: true, meta: `Recorded status: ${formatFindingLabel(status, 'Open')}` },
+    { id: 'owned', label: 'Owner assigned', done: ownerAssigned, meta: ownerAssigned ? owner : 'No assignee recorded.' },
+    { id: 'remediation', label: 'Remediation linked', done: remediationTracked, meta: remediationTracked ? formatFindingLabel(remState, 'Playbook linked') : 'No playbook or progressed remediation state.' },
+    { id: 'decision', label: 'Decision recorded', done: decisionRecorded, meta: decisionRecorded ? formatFindingLabel(status) : 'Accept risk or close after review.' },
+  ];
+}
 
 function findingSeverityTone(value: string): StatTone {
   const key = value.trim().toLowerCase();
@@ -95,7 +143,7 @@ function evidenceRowNavProps(artifactId: string): Omit<HTMLAttributes<HTMLTableR
   return {
     role: 'link',
     tabIndex: 0,
-    style: { cursor: 'pointer' },
+    className: 'finding-artifact-row',
     'aria-label': `Open evidence detail for artifact ${artifactId}`,
     onClick: (event: ReactMouseEvent<HTMLTableRowElement>) => {
       if ((event.target as HTMLElement).closest('a, button')) return;
@@ -141,11 +189,18 @@ export function FindingDetailView({
   loading: boolean;
   loadError: string;
 }) {
+  ensureFindingDetailStyles();
+
+  const { confirm } = useConfirmModal();
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [evidence, setEvidence] = useState<Awaited<ReturnType<typeof populateFindingEvidence>> | null>(null);
+  const [evidenceReloadToken, setEvidenceReloadToken] = useState(0);
   const [affectedTargets, setAffectedTargets] = useState<DataItem[]>([]);
+  const [affectedTargetsLoading, setAffectedTargetsLoading] = useState(true);
+  const [affectedTargetsError, setAffectedTargetsError] = useState('');
+  const [affectedTargetsReloadToken, setAffectedTargetsReloadToken] = useState(0);
   const [chainVerified, setChainVerified] = useState<boolean | null>(null);
 
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
@@ -158,31 +213,45 @@ export function FindingDetailView({
   );
   const title = getString(entity, ['title', 'summary'], entityId);
   const slaDueAt = findingSlaDueAt(entity);
+  const severity = getString(entity, ['severity'], 'unknown');
+  const findingStatus = readFindingStatus(entity);
+  const owner = getString(entity, ['assignee', 'rem_owner'], 'unassigned');
+  const targetGroupId = getString(entity, ['target_group_id'], '');
+  const targetId = getString(entity, ['target_id'], '');
+  const testRunId = getString(entity, ['test_run_id'], '');
+  const checkId = getString(entity, ['check_id'], '');
+  const vectorFamily = getString(entity, ['vector_family', 'vector'], '');
+  const decisionSteps = buildFindingDecisionSteps(findingStatus, owner, remediation.remState, hasRemediationPlaybook);
 
   useEffect(() => {
     let cancelled = false;
+    setEvidence(null);
+    setChainVerified(null);
     populateFindingEvidence(config, session, entityId).then((payload) => {
       if (!cancelled) setEvidence(payload);
     });
     return () => { cancelled = true; };
-  }, [config, session, entityId]);
+  }, [config, session, entityId, evidenceReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
+    setAffectedTargets([]);
+    setAffectedTargetsError('');
     // Primary source per §4.6.3: affected targets embedded on the finding payload
     // (GET /v1/findings/:id, passed in as `entity`). Prefer `affected_targets`, then `targets`.
     const embedded = coerceItemArray(entity.affected_targets) ?? coerceItemArray(entity.targets);
     if (embedded && embedded.length > 0) {
       setAffectedTargets(embedded);
+      setAffectedTargetsLoading(false);
       return undefined;
     }
-    // Fallback: resolve declared-target linkage through the target group so the table stays
-    // populated against backends that don't yet embed affected targets on the finding.
+    // Fallback: resolve exact declared-target linkage through this finding's target group.
     const groupId = getString(entity, ['target_group_id'], '');
     if (!groupId) {
-      setAffectedTargets([]);
+      setAffectedTargetsLoading(false);
       return undefined;
     }
+    setAffectedTargetsLoading(true);
     requestJson(config, session, `/v1/target-groups/${encodeURIComponent(groupId)}`)
       .then((payload) => {
         if (cancelled) return;
@@ -195,9 +264,14 @@ export function FindingDetailView({
         }
         setAffectedTargets(matched);
       })
-      .catch(() => { if (!cancelled) setAffectedTargets([]); });
+      .catch((err) => {
+        if (!cancelled) setAffectedTargetsError(err instanceof Error ? err.message : 'Could not load affected targets.');
+      })
+      .finally(() => {
+        if (!cancelled) setAffectedTargetsLoading(false);
+      });
     return () => { cancelled = true; };
-  }, [config, session, entityId, entity]);
+  }, [config, session, entityId, entity, affectedTargetsReloadToken]);
 
   async function runAction(label: string, action: () => Promise<unknown>, success: string) {
     setBusy(label);
@@ -214,8 +288,8 @@ export function FindingDetailView({
     }
   }
 
-  async function patchFinding(body: Record<string, unknown>, success: string) {
-    await runAction(`finding-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }), success);
+  async function patchFinding(body: Record<string, unknown>, success: string, action = 'update') {
+    await runAction(`finding-${action}-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }), success);
   }
 
   async function markDelivered() {
@@ -280,25 +354,40 @@ export function FindingDetailView({
   ];
 
   const artifactColumns: TableColumn<DataItem>[] = [
-    { key: 'artifact', label: 'Artifact', render: (item) => getString(item, ['id', 'kind'], '—') },
+    {
+      key: 'artifact',
+      label: 'Artifact',
+      render: (item) => {
+        const artifactId = getString(item, ['id'], '');
+        const label = getString(item, ['id', 'kind'], '—');
+        return artifactId
+          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('evidence-detail', artifactId)}>{label}</AnchorButton>
+          : <span>{label}</span>;
+      }
+    },
     { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
-    { key: 'run', label: 'Run', render: (item) => getString(item, ['run_id'], '—') },
-    { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small">{getString(item, ['sha256', 'content_sha256'], '—')}</span> },
+    {
+      key: 'run',
+      label: 'Run',
+      render: (item) => {
+        const runId = getString(item, ['run_id'], '');
+        return runId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', runId)}>{runId}</AnchorButton> : <span>—</span>;
+      }
+    },
+    { key: 'sha', label: 'SHA-256', render: (item) => <span className="mono small finding-digest" title={getString(item, ['sha256', 'content_sha256'], '—')}>{getString(item, ['sha256', 'content_sha256'], '—')}</span> },
     { key: 'sealed', label: 'Sealed', render: (item) => formatDate(item.sealed_at) },
     { key: 'size', label: 'Size', render: (item) => <span className="num">{formatBytes(item.size_bytes)}</span> },
     {
       key: 'export',
       label: '',
-      render: (item) => <Button size="sm" variant="ghost" aria-label={`Export artifact ${getString(item, ['id', 'kind'], 'artifact')}`} onClick={() => void exportBundle()}>Export</Button>
+      render: (item) => <Button size="sm" variant="ghost" aria-label={`Export finding evidence bundle from artifact ${getString(item, ['id', 'kind'], 'artifact')}`} onClick={() => void exportBundle()}>Export bundle</Button>
     }
   ];
 
   const custodyChain = evidence?.custody_chain ?? [];
   const bundleSha256 = getString(evidence?.bundle, ['sha256'], '');
   const custodySealedAt = getString(evidence?.bundle, ['sealed_at'], '');
-  // `verified` reflects a real explicit Verify-chain result once run; before that it mirrors
-  // whether a sealed bundle digest / custody chain exists for the finding.
-  const custodyVerified = chainVerified !== null ? chainVerified : Boolean(bundleSha256 || custodyChain.length);
+  const custodyStatus = chainVerified === true ? 'Verified' : chainVerified === false ? 'Verification failed' : 'Not checked';
   const custodyYaml = [
     `finding: ${entityId}`,
     `digest_kind: ${getString(evidence?.bundle, ['custody_schema_version'], 'json-key-sorted-v1')}`,
@@ -310,16 +399,20 @@ export function FindingDetailView({
       : []),
     `bundle_sha256: ${bundleSha256 || '—'}`,
     ...(custodySealedAt ? [`sealed_at: ${custodySealedAt}`] : []),
-    `verified: ${custodyVerified}`
+    `verified: ${chainVerified === null ? 'not_checked' : chainVerified}`
   ].join('\n');
 
   return (
-    <div className="content stack finding-detail-page">
+    <div className="content finding-detail-page" aria-busy={loading || undefined}>
       <div className="page-head">
-        <div>
+        <div className="finding-title-copy">
           <p className="eyebrow">Evidence-backed finding</p>
           <h1 className="page-title">{title}</h1>
-          <p className="muted mono">{entityId}</p>
+          <p className="muted mono finding-id">{entityId}</p>
+          <div className="detail-status-line">
+            <Badge tone={findingSeverityTone(severity)} title={`Severity ${severity} from finding API`}>{formatSeverityLabel(severity)}</Badge>
+            <Badge tone={findingStatusTone(findingStatus)} title={`Status ${findingStatus} from finding API`}>{formatFindingLabel(findingStatus)}</Badge>
+          </div>
         </div>
         <div className="row-actions">
           <AnchorButton size="sm" variant="secondary" href="#findings">← Findings</AnchorButton>
@@ -330,21 +423,46 @@ export function FindingDetailView({
       {loading ? <PortalLoadingSkeleton rows={2} /> : null}
       <DetailStatusBanners loadError={loadError} message={message} error={error} />
 
+      {!loading ? (
+        <>
       <div className="metric-grid four">
-        <MetricCard label="Severity" value={formatFindingLabel(getString(entity, ['severity'], 'unknown'))} sub="Impact class from finding API" icon={TriangleAlert} tone={findingSeverityTone(getString(entity, ['severity'], 'unknown'))} />
-        <MetricCard label="Status" value={formatFindingLabel(getString(entity, ['status'], 'open'))} sub="Triage state" icon={ShieldCheck} tone={findingStatusTone(getString(entity, ['status'], 'open'))} />
-        <MetricCard label="Target group" value={getString(entity, ['target_group_id'], '—')} sub="Declared scope" icon={Target} tone="info" />
-        <MetricCard label="Owner" value={getString(entity, ['assignee', 'rem_owner'], 'unassigned')} sub="Accountable owner" icon={UserCog} tone="muted" />
+        <MetricCard label="Severity" value={formatSeverityLabel(severity)} sub="Impact class from finding API" icon={TriangleAlert} tone={findingSeverityTone(severity)} />
+        <MetricCard label="Status" value={formatFindingLabel(findingStatus)} sub="Recorded finding state" icon={ShieldCheck} tone={findingStatusTone(findingStatus)} />
+        <MetricCard label="Target group" value={targetGroupId || 'Not reported'} sub="Declared scope" icon={Target} tone="info" />
+        <MetricCard label="Owner" value={owner} sub="Accountable owner" icon={UserCog} tone="muted" />
       </div>
+
+      <Card className="finding-summary-card">
+        <CardHeader>
+          <div><CardTitle>Finding summary</CardTitle><CardDescription>Compact API-backed facts and exact relationships for triage and evidence review.</CardDescription></div>
+        </CardHeader>
+        <CardContent>
+          <dl className="finding-summary-facts">
+            <div className="finding-summary-fact"><dt>Finding ID</dt><dd className="mono">{entityId}</dd></div>
+            <div className="finding-summary-fact"><dt>SLA due</dt><dd>{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' · breached' : ''}</dd></div>
+            {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd className="mono">{checkId}</dd></div> : null}
+            {vectorFamily ? <div className="finding-summary-fact"><dt>Vector</dt><dd>{formatFindingLabel(vectorFamily)}</dd></div> : null}
+            {targetId ? <div className="finding-summary-fact"><dt>Target ID</dt><dd className="mono">{targetId}</dd></div> : null}
+            {testRunId ? <div className="finding-summary-fact"><dt>Source run</dt><dd className="mono">{testRunId}</dd></div> : null}
+            {entity.created_at ? <div className="finding-summary-fact"><dt>Opened</dt><dd>{formatDate(entity.created_at)}</dd></div> : null}
+            {entity.updated_at ? <div className="finding-summary-fact"><dt>Updated</dt><dd>{formatDate(entity.updated_at)}</dd></div> : null}
+          </dl>
+          <div className="finding-relations" aria-label="Finding relationships">
+            {targetGroupId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-group-detail', targetGroupId)}>Target group</AnchorButton> : null}
+            {targetId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('target-detail', targetId)}>Target</AnchorButton> : null}
+            {testRunId ? <AnchorButton size="sm" variant="secondary" href={buildDetailHref('run-detail', testRunId)}>Source run</AnchorButton> : null}
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="dash-grid">
         <Card>
           <CardHeader>
             <CardTitle>Verdict explanation</CardTitle>
             <CardDescription className="detail-status-line">
-              <Badge tone={findingSeverityTone(getString(entity, ['severity'], 'unknown'))} title={`Severity ${getString(entity, ['severity'], 'unknown')} from finding API`}>{formatFindingLabel(getString(entity, ['severity'], 'unknown'))}</Badge>
+              <Badge tone={findingSeverityTone(severity)} title={`Severity ${severity} from finding API`}>{formatSeverityLabel(severity)}</Badge>
               <span className="detail-status-sep" aria-hidden="true">·</span>
-              <Badge tone={findingStatusTone(getString(entity, ['status'], 'open'))} title={`Status ${getString(entity, ['status'], 'open')} from finding API`}>{formatFindingLabel(getString(entity, ['status'], 'open'))}</Badge>
+              <Badge tone={findingStatusTone(findingStatus)} title={`Status ${findingStatus} from finding API`}>{formatFindingLabel(findingStatus)}</Badge>
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -357,6 +475,17 @@ export function FindingDetailView({
             <CardDescription>Assign an owner, record notes, and move the finding state.</CardDescription>
           </CardHeader>
           <CardContent>
+            <ol className="verify-ladder finding-decision-ladder" aria-label="Finding decision status">
+              {decisionSteps.map((step, index) => {
+                const now = !step.done && decisionSteps.slice(0, index).every((entry) => entry.done);
+                return (
+                  <li key={step.id} className={`vl-step${step.done ? ' is-done' : ''}${now ? ' is-now' : ''}`}>
+                    <span className="vl-num" aria-hidden="true">{step.done ? <Check size={13} strokeWidth={2.6} /> : index + 1}</span>
+                    <div className="vl-body"><strong>{step.label}</strong><span className="vl-meta">{step.meta}</span></div>
+                  </li>
+                );
+              })}
+            </ol>
             <div className="kv-list">
               <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
               <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
@@ -364,15 +493,33 @@ export function FindingDetailView({
             <form className="product-form product-form--compact" onSubmit={(event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
-              void patchFinding({ assignee: String(form.get('assignee') ?? '').trim(), notes: String(form.get('notes') ?? '').trim() }, 'Triage updated.');
+              void patchFinding({ assignee: String(form.get('assignee') ?? '').trim(), notes: String(form.get('notes') ?? '').trim() }, 'Triage updated.', 'triage');
             }}>
               <label className="full"><span>Assignee</span><input name="assignee" defaultValue={getString(entity, ['assignee'], '')} /></label>
               <label className="full"><span>Notes</span><textarea name="notes" rows={3} defaultValue={getString(entity, ['notes'], '')} /></label>
               <div className="row-actions action-bar-compact full">
-                <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Save triage</Button>
-                <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.')}>Accept risk</Button>
-                <Button size="sm" variant="ghost" onClick={() => void patchFinding({ status: 'closed' }, 'Finding closed.')}>Close finding</Button>
-                <Button size="sm" variant="ghost" loading={busy === 'retest'} onClick={() => void runAction('retest', async () => {
+                <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-triage-${entityId}`} disabled={busy !== ''}>Save triage</Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={busy === `finding-accept-risk-${entityId}`}
+                  disabled={busy !== '' || ['accepted_risk', 'closed'].includes(findingStatus.toLowerCase())}
+                  onClick={async () => {
+                    if (!await confirm({ title: 'Accept finding risk', description: 'Accept this finding as risk? This records a terminal risk decision.', confirmLabel: 'Accept risk' })) return;
+                    await patchFinding({ status: 'accepted_risk' }, 'Finding accepted risk.', 'accept-risk');
+                  }}
+                >Accept risk</Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={busy === `finding-close-${entityId}`}
+                  disabled={busy !== '' || findingStatus.toLowerCase() === 'closed'}
+                  onClick={async () => {
+                    if (!await confirm({ title: 'Close finding', description: 'Close this finding after reviewing its evidence and remediation state?', confirmLabel: 'Close finding' })) return;
+                    await patchFinding({ status: 'closed' }, 'Finding closed.', 'close');
+                  }}
+                >Close finding</Button>
+                <Button size="sm" variant="ghost" loading={busy === `retest-${entityId}`} disabled={busy !== ''} onClick={() => void runAction(`retest-${entityId}`, async () => {
                   const retest = resolveFindingRetestAction(entity);
                   if (!retest) throw new Error('Retest context missing from finding API.');
                   // Every kind resolveFindingRetestAction can return must dispatch a real
@@ -397,9 +544,19 @@ export function FindingDetailView({
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Affected targets</CardTitle></CardHeader>
+        <CardHeader>
+          <div><CardTitle>Affected targets</CardTitle><CardDescription>Embedded finding links first; exact target-group linkage is the fallback.</CardDescription></div>
+        </CardHeader>
         <CardContent>
-          {affectedTargets.length === 0 ? (
+          {affectedTargetsLoading ? <PortalLoadingSkeleton rows={2} /> : affectedTargetsError ? (
+            <EmptyState
+              icon={TriangleAlert}
+              title="Affected targets unavailable"
+              body={`Could not load the target-group fallback: ${affectedTargetsError}`}
+              actionLabel="Retry"
+              onAction={() => setAffectedTargetsReloadToken((value) => value + 1)}
+            />
+          ) : affectedTargets.length === 0 ? (
             <EmptyState
               icon={TriangleAlert}
               title="No declared targets matched."
@@ -446,14 +603,14 @@ export function FindingDetailView({
                 event.preventDefault();
                 const form = new FormData(event.currentTarget);
                 const owner = String(form.get('rem_owner') ?? '').trim();
-                void patchFinding({ rem_owner: owner, assignee: owner }, 'Remediation owner reassigned.');
+                void patchFinding({ rem_owner: owner, assignee: owner }, 'Remediation owner reassigned.', 'remediation-owner');
               }}>
                 <label className="full">
                   <span>Remediation owner</span>
                   <input key={remediation.remOwner} name="rem_owner" defaultValue={remediation.remOwner} placeholder="team or user" />
                 </label>
                 <div className="row-actions action-bar-compact full">
-                  <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-${entityId}`}>Reassign owner</Button>
+                  <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-remediation-owner-${entityId}`} disabled={busy !== ''}>Reassign owner</Button>
                   <Button type="button" size="sm" variant="ghost" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
                 </div>
               </form>
@@ -470,14 +627,25 @@ export function FindingDetailView({
 
       <Card>
         <CardHeader>
-          <CardTitle>Evidence bundle</CardTitle>
+          <div>
+            <CardTitle>Evidence bundle</CardTitle>
+            <CardDescription>Artifacts, source runs, sealed digests, and custody positions returned by the finding evidence API.</CardDescription>
+          </div>
           <div className="row-actions">
-            <Button size="sm" variant="ghost" loading={busy === `verify-${entityId}`} onClick={() => void verifyChain()}>Verify chain</Button>
-            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}`} onClick={() => void exportBundle()}>Export bundle</Button>
+            <Button size="sm" variant="ghost" loading={busy === `verify-${entityId}`} disabled={evidence === null || busy !== ''} onClick={() => void verifyChain()}>Verify chain</Button>
+            <Button size="sm" variant="secondary" loading={busy === `export-${entityId}`} disabled={busy !== ''} onClick={() => void exportBundle()}>Export bundle</Button>
           </div>
         </CardHeader>
         <CardContent>
-          {evidence?.artifacts?.length ? (
+          {evidence === null ? <PortalLoadingSkeleton rows={3} /> : evidence.error ? (
+            <EmptyState
+              icon={FileCheck2}
+              title="Evidence unavailable"
+              body={evidence.error}
+              actionLabel="Retry"
+              onAction={() => setEvidenceReloadToken((value) => value + 1)}
+            />
+          ) : evidence.artifacts.length > 0 ? (
             <>
               <p className="muted small">Select an artifact to open its evidence detail — payload, SHA-256 digest, and custody position.</p>
               <DataTable
@@ -489,17 +657,26 @@ export function FindingDetailView({
               />
             </>
           ) : (
-            <EmptyState icon={FileCheck2} title="No evidence artifacts." body={getString(evidence?.meta, ['empty_reason'], evidence?.error ?? 'Evidence bundle not returned for this finding.')} />
+            <EmptyState icon={FileCheck2} title="No evidence artifacts." body={getString(evidence.meta, ['empty_reason'], 'Evidence bundle contains no artifacts for this finding.')} />
           )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle>Custody chain</CardTitle><CardDescription>Scoped YAML preview from evidence hydrator.</CardDescription></CardHeader>
+      <Card className="finding-custody-card">
+        <CardHeader>
+          <div><CardTitle>Custody chain</CardTitle><CardDescription>Hydrated manifest preview. Verification is reported only after the canonical export payload and custody manifest pass the verify endpoint.</CardDescription></div>
+          <Badge tone={chainVerified === true ? 'success' : chainVerified === false ? 'danger' : 'muted'}>{custodyStatus}</Badge>
+        </CardHeader>
         <CardContent>
-          <pre className="code" tabIndex={0} role="region" aria-label="Finding custody chain YAML">{custodyYaml}</pre>
+          {evidence === null ? <PortalLoadingSkeleton rows={2} /> : evidence.error ? (
+            <EmptyState icon={FileCheck2} title="Custody manifest unavailable" body={evidence.error} actionLabel="Retry" onAction={() => setEvidenceReloadToken((value) => value + 1)} />
+          ) : (
+            <pre className="code" tabIndex={0} role="region" aria-label="Finding custody chain YAML">{custodyYaml}</pre>
+          )}
         </CardContent>
       </Card>
+        </>
+      ) : null}
     </div>
   );
 }

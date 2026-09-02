@@ -9,7 +9,7 @@ import { closeServer, demoHeaders, request } from '../helpers/http.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 const envSnapshot = { ...process.env };
-const WORKER_SECRET = 'e'.repeat(32);
+const WORKER_SECRET = '6f8f57715090da2632453988d9a1501b3e6c8d4a9f2b7c1e5d0a3b8f4c9e2d6a';
 
 function restoreEnv() {
   for (const key of Object.keys(process.env)) {
@@ -36,6 +36,8 @@ function startServer(env, services = {}) {
   return { server, baseUrl: `http://127.0.0.1:${port}`, runtimeConfig };
 }
 
+const EDGE_NONCE = 'sha256:waf-edge-api-test';
+
 function edgeRun(id, overrides = {}) {
   return {
     id,
@@ -44,6 +46,7 @@ function edgeRun(id, overrides = {}) {
     target_id: 'tgt_1',
     check_id: WAF_EDGE_DETECTION_CHECK_ID,
     status: 'running',
+    correlation: { nonce_hash: EDGE_NONCE },
     ...overrides,
   };
 }
@@ -223,7 +226,9 @@ describe('WAF edge detection delegated API', () => {
       target_id: 'tgt_1',
       check_id: WAF_EDGE_DETECTION_CHECK_ID,
       source: 'probe_worker',
+      producer_kind: 'signed_probe',
       signal_type: 'probe_result',
+      nonce_hash: EDGE_NONCE,
       timestamp: '2026-08-29T15:10:00.000Z',
       metadata: {
         probe_kind: 'outside_in_waf_scan',
@@ -251,16 +256,22 @@ describe('WAF edge detection delegated API', () => {
   it('keeps worker errors distinct from an explicit successful fingerprint no-match', async () => {
     runs.set('run_error', edgeRun('run_error', { status: 'verdicted' }));
     events.set('run_error', [{
+      test_run_id: 'run_error',
       check_id: WAF_EDGE_DETECTION_CHECK_ID,
       source: 'probe_worker',
+      producer_kind: 'signed_probe',
       signal_type: 'probe_result',
+      nonce_hash: EDGE_NONCE,
       metadata: { external_result: 'timeout', error_class: 'probe_timeout' },
     }]);
     runs.set('run_no_match', edgeRun('run_no_match', { status: 'verdicted' }));
     events.set('run_no_match', [{
+      test_run_id: 'run_no_match',
       check_id: WAF_EDGE_DETECTION_CHECK_ID,
       source: 'probe_worker',
+      producer_kind: 'signed_probe',
       signal_type: 'probe_result',
+      nonce_hash: EDGE_NONCE,
       metadata: {
         external_result: 'connected',
         edge_signature: { waf_present: false, cdn_detected: false },
@@ -386,9 +397,18 @@ describe('WAF edge detection signed-worker safety path', () => {
       && entry.resource_id === accepted.json.detection_request.test_run_id
     )));
 
+    const probeRequestsSent = 1;
+    const destinationResolverAttempts = job.constraints.min_destination_resolver_attempts;
+    const totalOperations = probeRequestsSent + destinationResolverAttempts;
     const resultBody = {
       external_result: 'blocked',
-      safety_attestation: { requests_sent: 1, duration_ms: 75 },
+      safety_attestation: {
+        requests_sent: totalOperations,
+        probe_requests_sent: probeRequestsSent,
+        destination_resolver_attempts: destinationResolverAttempts,
+        total_operations: totalOperations,
+        duration_ms: 75,
+      },
       metadata: {
         probe_kind: 'outside_in_waf_scan',
         waf_detected: true,
@@ -454,7 +474,9 @@ describe('WAF edge detection Postgres service parity', () => {
     target_id: run.target_id,
     check_id: WAF_EDGE_DETECTION_CHECK_ID,
     source: 'probe_worker',
+    producer_kind: 'signed_probe',
     signal_type: 'probe_result',
+    nonce_hash: EDGE_NONCE,
     metadata: {
       external_result: 'blocked',
       edge_signature: {

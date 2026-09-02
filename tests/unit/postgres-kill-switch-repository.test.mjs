@@ -81,4 +81,29 @@ describe('postgres kill switch repository', () => {
 
     assert.equal(await repo.isKillSwitchActiveForTenant(CTX), false);
   });
+
+  it('reuses an existing tenant transaction client without another pool checkout', async () => {
+    let connectCalls = 0;
+    const sharedClient = {
+      queries: [],
+      async query(text, params) {
+        this.queries.push({ text, params });
+        return { rows: [{ active: true }] };
+      },
+    };
+    const pool = {
+      async connect() {
+        connectCalls += 1;
+        throw new Error('pool-size-1 second client requested');
+      },
+    };
+    const repo = createKillSwitchRepository(pool);
+
+    const active = await repo.isKillSwitchActiveForTenant(CTX, { client: sharedClient });
+
+    assert.equal(active, true);
+    assert.equal(connectCalls, 0);
+    assert.equal(sharedClient.queries.length, 1);
+    assert.deepEqual(sharedClient.queries[0].params, [CTX.tenantId]);
+  });
 });

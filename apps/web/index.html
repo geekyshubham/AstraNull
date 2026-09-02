@@ -6,8 +6,8 @@
   <title>AstraNull</title>
   <meta name="description" content="AstraNull — No-access-first DDoS readiness validation. Sign up for reviewed access or log in to the readiness console." />
   <meta name="color-scheme" content="dark light" />
-  <meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)" />
-  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f7f7f5" media="(prefers-color-scheme: light)" />
 
   <!-- Early theme init (light/dark) so there is no flash before React boots. -->
   <script>
@@ -20,11 +20,10 @@
     })();
   </script>
 
-  <!-- Geist · JetBrains Mono — the AstraNull "Observatory" typefaces (display+body = Geist; identity/mono = JetBrains Mono) -->
-  <!-- impeccable-disable overused-font -- Geist and JetBrains Mono are the committed AstraNull "Observatory" brand typefaces. Brand identity is intentional and preserved over font novelty (impeccable identity-preservation rule). -->
+  <!-- AstraNull typography: Space Grotesk display, Inter body, JetBrains Mono identifiers. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 
   <!--
     Boot styles. A minimal token subset (identical values to the compiled
@@ -34,33 +33,38 @@
   -->
   <style id="boot-styles">
     :root {
-      --bg: oklch(15.5% 0.005 255);
-      --surface: oklch(18.5% 0.005 255);
-      --fg: oklch(96% 0.003 250);
-      --fg-2: oklch(78% 0.012 250);
-      --muted: oklch(70% 0.012 250);
-      --border: oklch(96% 0.003 250 / .10);
-      --border-strong: oklch(96% 0.003 250 / .16);
-      --accent: oklch(65% 0.20 28);
-      --accent-on: oklch(14% 0.02 28);
-      --danger: oklch(70% 0.20 25);
-      --font-display: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
-      --font-body: "Geist", "Geist Sans", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --bg: #000000;
+      --surface: #000000;
+      --fg: #f0f0f0;
+      --fg-2: #a1a4a5;
+      --muted: #a1a4a5;
+      --border: rgba(214, 235, 253, 0.19);
+      --border-strong: rgba(214, 235, 253, 0.34);
+      --accent: #ff801f;
+      --accent-on: #000000;
+      --accent-hover: color-mix(in oklab, var(--accent), var(--fg) 10%);
+      --danger: #ff2047;
+      --font-display: "Space Grotesk", "Inter", -apple-system, system-ui, "Segoe UI", Arial, sans-serif;
+      --font-body: "Inter", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-      --motion-fast: .15s;
+      --motion-fast: 120ms;
+      --motion-base: 200ms;
+      --motion-slow: 300ms;
       --motion-ease: cubic-bezier(.2, 0, 0, 1);
+      --elev-ring: 0 0 0 1px var(--border);
     }
     [data-theme="light"] {
-      --bg: oklch(97.5% 0.003 250);
-      --surface: oklch(100% 0 0);
-      --fg: oklch(26% 0.015 260);
-      --fg-2: oklch(40% 0.016 260);
-      --muted: oklch(48% 0.016 260);
-      --border: oklch(26% 0.03 260 / .12);
-      --border-strong: oklch(26% 0.03 260 / .22);
-      --accent: oklch(55% 0.21 28);
-      --accent-on: oklch(99% 0.01 28);
-      --danger: oklch(53% 0.21 25);
+      --bg: #f7f7f5;
+      --surface: #ffffff;
+      --fg: #16181c;
+      --fg-2: #565b63;
+      --muted: #565b63;
+      --border: rgba(19, 22, 28, 0.13);
+      --border-strong: rgba(19, 22, 28, 0.24);
+      --accent: #ff801f;
+      --accent-on: #000000;
+      --accent-hover: color-mix(in oklab, var(--accent), var(--surface) 10%);
+      --danger: #c11533;
     }
 
     html, body {
@@ -83,7 +87,7 @@
       padding: 24px;
       background: var(--bg);
       opacity: 1;
-      transition: opacity .42s var(--motion-ease);
+      transition: opacity var(--motion-base) var(--motion-ease);
     }
     #boot.boot-hidden { opacity: 0; pointer-events: none; }
 
@@ -105,14 +109,14 @@
     }
     #boot .brand-mark { width: 42px; height: 42px; display: block; overflow: visible; }
     #boot .brand-mark .ring { fill: none; stroke: var(--fg); stroke-width: 1.6px; }
-    #boot .brand-mark .core { fill: var(--fg); }
+    #boot .brand-mark .core { fill: var(--accent); }
 
     .boot-spin {
       position: absolute;
       inset: 0;
       width: 72px;
       height: 72px;
-      animation: boot-rotate 1.05s linear infinite;
+      animation: boot-rotate var(--motion-slow) linear infinite;
     }
     .boot-spin-track { fill: none; stroke: var(--border); stroke-width: 2; }
     .boot-spin-arc {
@@ -152,7 +156,7 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       background: var(--surface);
-      box-shadow: 0 0 0 1px rgba(176, 199, 217, .1);
+      box-shadow: var(--elev-ring);
       padding: clamp(20px, 4vw, 26px);
       text-align: left;
     }
@@ -190,9 +194,9 @@
       min-height: 44px;
       padding: 0 20px;
       border-radius: 9999px;
-      border: 1px solid var(--fg);
-      background: var(--fg);
-      color: var(--bg);
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: var(--accent-on);
       font-family: var(--font-body);
       font-size: 14px;
       font-weight: 500;
@@ -200,13 +204,12 @@
       text-decoration: none;
       cursor: pointer;
       transition: transform var(--motion-fast) var(--motion-ease),
-                  background var(--motion-fast) ease,
-                  border-color var(--motion-fast) ease;
+                  background var(--motion-fast) var(--motion-ease),
+                  border-color var(--motion-fast) var(--motion-ease);
     }
-    .boot-btn:hover { background: #fff; transform: translateY(-1px); }
-    [data-theme="light"] .boot-btn:hover { background: #000; }
+    .boot-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); transform: translateY(-1px); }
     .boot-btn:active { transform: translateY(0); }
-    .boot-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .boot-btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
 
     .boot-btn-ghost {
       background: transparent;
@@ -349,7 +352,7 @@
         }
         boot.addEventListener('transitionend', remove, { once: true });
         // Fallback if the fade doesn't fire (e.g. prefers-reduced-motion).
-        setTimeout(remove, 650);
+        setTimeout(remove, 300);
       }
 
       function fail() {

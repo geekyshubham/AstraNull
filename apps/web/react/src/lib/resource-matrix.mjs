@@ -7,26 +7,28 @@
  * intentionally omits verdict records.
  */
 
+import { EXHAUSTED_RESOURCE_FAMILIES } from '../../../../../src/contracts/resourceExhaustionTaxonomy.mjs';
 import { itemCheckId, itemTargetGroupId } from './vector-coverage.mjs';
 
 export const RESOURCE_EVIDENCE_FRESHNESS_DAYS = 30;
 export const RESOURCE_EVIDENCE_FRESHNESS_MS = RESOURCE_EVIDENCE_FRESHNESS_DAYS * 24 * 60 * 60 * 1000;
 
-/** The twelve taxonomy families, in dashboard display order. */
-export const RESOURCE_FAMILIES = [
-  { id: 'volumetric', label: 'Volumetric', metric: 'Gbps/Tbps' },
-  { id: 'packet_processing', label: 'Packet-processing', metric: 'Mpps/Bpps' },
-  { id: 'state_exhaustion', label: 'State exhaustion', metric: 'CPS / states' },
-  { id: 'application_l7', label: 'Application L7', metric: 'RPS' },
-  { id: 'computational', label: 'Computational', metric: 'CPU / RPS' },
-  { id: 'memory_exhaustion', label: 'Memory exhaustion', metric: 'Connections' },
-  { id: 'backend_exhaustion', label: 'Backend exhaustion', metric: 'Queries/s' },
-  { id: 'dns_exhaustion', label: 'DNS exhaustion', metric: 'QPS' },
-  { id: 'reflection', label: 'Reflection', metric: 'pps / bps' },
-  { id: 'amplification', label: 'Amplification', metric: 'Ratio' },
-  { id: 'exploit_dos', label: 'Exploit-based DoS', metric: 'Varies' },
-  { id: 'delivery_pattern', label: 'Delivery pattern', metric: 'Cross-cutting' },
-];
+/** Every shipped taxonomy family, in the authoritative contract order; never first-N capped. */
+export const RESOURCE_FAMILIES = Object.freeze(EXHAUSTED_RESOURCE_FAMILIES.map((family) => {
+  const scoredForDdosReadiness = family.scored_for_ddos_readiness === true;
+  const visualization = scoredForDdosReadiness ? 'readiness_posture' : 'validation_coverage';
+  return Object.freeze({
+    id: family.id,
+    label: family.label,
+    metric: family.metric,
+    layer: family.layer,
+    scoredForDdosReadiness,
+    visualization,
+    description: scoredForDdosReadiness
+      ? `${family.layer} availability pressure measured with ${family.metric} evidence; included in DDoS readiness posture.`
+      : `${family.layer} application-security validation measured with ${family.metric}; displayed for coverage and excluded from DDoS readiness scoring.`,
+  });
+}));
 
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'verdicted']);
 const PROTECTED_VERDICTS = new Set([
@@ -117,11 +119,20 @@ export function resourceMatrixGroups(targetGroups) {
   return targetGroups.filter((group) => group.archived_at == null && group.deleted_at == null);
 }
 
-/** Check ids assigned to one resource family by the API-declared taxonomy field. */
+function declaredExhaustedResources(check) {
+  const plural = Array.isArray(check.exhausted_resources)
+    ? check.exhausted_resources.map(stringValue).filter(Boolean)
+    : [];
+  if (plural.length > 0) return new Set(plural);
+  const singular = stringValue(check.exhausted_resource);
+  return new Set(singular ? [singular] : []);
+}
+
+/** Check ids assigned to one resource family by the API-declared taxonomy fields. */
 export function resourceFamilyCheckIds(checks, family) {
   return new Set(
     checks
-      .filter((check) => check.exhausted_resource === family.id)
+      .filter((check) => declaredExhaustedResources(check).has(family.id))
       .map((check) => stringValue(check.check_id ?? check.id))
       .filter(Boolean),
   );
@@ -139,7 +150,7 @@ export function applicableResourceFamilyCheckIds({
   targets,
   targetInventoryLoaded = true,
 }) {
-  const mapped = checks.filter((check) => check.exhausted_resource === family.id);
+  const mapped = checks.filter((check) => declaredExhaustedResources(check).has(family.id));
   if (!targetInventoryLoaded) return resourceFamilyCheckIds(checks, family);
   if (!groupId) return new Set();
 

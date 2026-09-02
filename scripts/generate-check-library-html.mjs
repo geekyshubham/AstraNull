@@ -51,7 +51,8 @@ const PROBE_KINDS = {
   bot_challenge_probe: 'Cookie-less client; expects bot challenge or block.',
   graphql_posture_probe: 'Bounded GraphQL endpoint posture (no deep queries).',
   websocket_upgrade_posture: 'Single WebSocket upgrade request; classifies 101/403/426.',
-  outside_in_waf_scan: 'Up to 10 bounded probes: WAF fingerprint, benign markers, evasion variants, origin bypass.',
+  grpc_reflection_probe: 'One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only.',
+  outside_in_waf_scan: 'Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.',
 };
 
 const FAMILY_LABELS = {
@@ -129,8 +130,11 @@ function renderCheckCard(c) {
   const evidence = (c.evidence_required ?? []).map(esc).join(', ');
   const stops = (c.stop_conditions ?? []).map(esc).join(', ');
   const vectors = (c.attack_vector_ids ?? []).map(esc).join(', ');
-  const resourceLabel = c.exhausted_resource
-    ? `${esc(c.exhausted_resource)}`
+  const resources = Array.isArray(c.exhausted_resources) && c.exhausted_resources.length > 0
+    ? c.exhausted_resources
+    : (c.exhausted_resource ? [c.exhausted_resource] : []);
+  const resourceLabel = resources.length > 0
+    ? resources.map(esc).join(', ')
     : 'not DDoS-scored (WAF-offensive / monitor-only)';
   return `
     <article class="check" id="${esc(c.check_id)}">

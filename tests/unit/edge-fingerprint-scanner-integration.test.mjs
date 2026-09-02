@@ -77,8 +77,8 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
   });
 
   it('detects a CDN from cdncheck ranges and CNAME suffixes with no vendor headers at all', async () => {
-    // The cdncheck half of the corpus is only reachable through the resolver chain. Before the
-    // dns_chain_hint capability was wired through, this scan could never report a CDN.
+    // The cdncheck half of the corpus is reachable only through explicit direct-helper opt-in.
+    // Signed outside-in jobs deliberately keep these raw resolver collectors disabled.
     const outcome = await runOutsideInWafScan({
       url: 'https://plain.example.test/',
       hostname: 'plain.example.test',
@@ -168,7 +168,8 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
 
     assert.equal(outcome.edge_signature.waf_present, false);
     assert.equal(outcome.edge_signature.best_vendor, null);
-    assert.deepEqual(outcome.edge_signature.address_matches, []);
+    assert.equal(Object.hasOwn(outcome.edge_signature, 'address_matches'), false);
+    assert.equal(Object.hasOwn(outcome.edge_signature, 'cname_matches'), false);
     assert.equal(outcome.cdn_detected, false);
   });
 

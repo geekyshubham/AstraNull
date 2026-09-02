@@ -85,6 +85,7 @@ describe('portal has no fabricated runtime fallbacks (audit FT-PROV)', () => {
     assert.ok(!/\$\{score\}%/.test(src), 'heatmap must not print invented percentages');
     assert.ok(!/return 100;|return 75;|return 50;/.test(src), 'heatmap must not bucket into heuristic scores');
     assert.ok(/'no-data'/.test(src) && /'No data'/.test(src), 'heatmap must expose an explicit no-data state');
+    assert.doesNotMatch(src, /\.slice\(0,\s*5\)/, 'heatmap must render every declared target group');
   });
 });
 
@@ -179,6 +180,7 @@ describe('vector heatmap coverage derives from real data only', () => {
 describe('vector family assignment', () => {
   const dns = VECTOR_FAMILIES.find((f) => f.label === 'DNS');
   const origin = VECTOR_FAMILIES.find((f) => f.label === 'Origin');
+  const l7 = VECTOR_FAMILIES.find((f) => f.label === 'L7/API');
   const gid = 'grp_1';
 
   it('exposes the families the heatmap grid is sized from', () => {
@@ -200,6 +202,12 @@ describe('vector family assignment', () => {
     assert.ok(checkMatchesFamily({ check_id: 'chk_dns_flood' }, dns));
     assert.ok(!checkMatchesFamily({ name: 'TLS handshake' }, dns));
     assert.ok(!checkMatchesFamily({}, dns), 'a check with no fields matches nothing');
+  });
+
+  it('matches explicit L7/API tokens without matching api inside unrelated words', () => {
+    assert.ok(checkMatchesFamily({ vector_family: 'l7' }, l7));
+    assert.ok(checkMatchesFamily({ check_id: 'l7.foo' }, l7));
+    assert.ok(!checkMatchesFamily({ name: 'HTTP/2 Rapid Reset' }, l7));
   });
 
   it('collects only the matching check ids, accepting check_id or id', () => {

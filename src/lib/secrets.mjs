@@ -26,13 +26,13 @@ const KNOWN_WEAK_KEY_DIGESTS = new Map([
 ]);
 
 /**
- * Length of the shortest prefix the buffer is a repetition of. Returns the full
- * length when no shorter cycle exists. Deliberately does not require the period
- * to divide the length, so truncated repeats (ABCABCAB) are caught too.
+ * Length of the shortest meaningful prefix the buffer is a repetition of.
+ * Periods longer than half the buffer compare too little material to establish a
+ * cycle. The period need not divide the length, so truncated repeats are caught.
  * @param {Buffer} buf
  */
 function smallestRepeatingPeriod(buf) {
-  for (let period = 1; period < buf.length; period += 1) {
+  for (let period = 1; period <= Math.floor(buf.length / 2); period += 1) {
     let repeats = true;
     for (let i = period; i < buf.length; i += 1) {
       if (buf[i] !== buf[i % period]) {
@@ -82,11 +82,14 @@ export function assertStrongSecretEncryptionKey(key, env = process.env, name = '
     `${name} is unacceptably weak: ${reasons.join('; ')}. `
     + 'Generate a fresh key with: openssl rand -hex 32';
 
-  // Gated on the deployment profile only (never NODE_ENV): hosted-staging runs
-  // with NODE_ENV=production today and must keep booting with a loud warning.
-  if (resolveDeploymentProfile(env) === 'production') {
+  const deploymentProfile = resolveDeploymentProfile(env);
+  const deployedRuntime = env.NODE_ENV === 'production'
+    || deploymentProfile === 'hosted-staging'
+    || deploymentProfile === 'production';
+  if (deployedRuntime) {
     throw new Error(`Refusing to start: ${message}`);
   }
+  // Non-production local development can surface legacy fixture data without blocking startup.
   console.warn(`[astranull] WARNING: ${message}`);
 }
 

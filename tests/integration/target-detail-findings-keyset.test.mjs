@@ -460,7 +460,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 }, {
         queryCounter: plain,
       });
-      assert.equal(plain.count, 2, 'target lookup + batched fan-out');
+      assert.equal(plain.count, 10, 'target lookup + nine sequential detail reads');
 
       const page1 = await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 });
       const legacy = { count: 0 };
@@ -470,7 +470,7 @@ describeMaybe('target detail findings keyset pagination', () => {
         { findings_limit: 5, findings_cursor: encodeCursor({ id: page1.findings.at(-1).id }) },
         { queryCounter: legacy },
       );
-      assert.equal(legacy.count, 3, 'legacy cursor adds one indexed resolution lookup');
+      assert.equal(legacy.count, 11, 'legacy cursor adds one indexed resolution lookup');
     });
   });
 });

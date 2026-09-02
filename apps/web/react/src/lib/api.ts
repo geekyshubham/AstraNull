@@ -412,11 +412,9 @@ async function loadOptional<T>(
   try {
     return settled((await getJson(path, headers)) as T);
   } catch (err) {
-    const status = (err as { status?: number } | null)?.status;
-    // A record-detail lookup that 404s is a genuinely absent record, i.e. a real
-    // empty state. Everything else (401/403/5xx/network) is a LOAD FAILURE and
-    // must be surfaced rather than rendered as "nothing here".
-    if (status === 404) return settled(fallback);
+    // This helper hydrates top-level datasets, never entity-detail lookups. A 404
+    // therefore means the deployed API route is missing, not that the dataset is
+    // authoritatively empty, and must remain visible as a load failure.
     const message = err instanceof Error ? err.message : `Request failed for ${path}`;
     return { value: fallback, error: message };
   }
@@ -432,6 +430,7 @@ export type FetchPortalDataOptions = {
   datasets?: readonly PortalDataset[];
   includeCore?: boolean;
   force?: boolean;
+  shouldCommitCache?: () => boolean;
 };
 
 type PortalDataCacheEntry = {
@@ -463,6 +462,7 @@ const FEATURE_GATED_DATASETS = new Set<PortalDataset>([
 
 const ALL_PORTAL_DATASETS: readonly PortalDataset[] = [
   ...CORE_PORTAL_DATASETS,
+  'environments',
   'targetGroups',
   'targets',
   'agents',
@@ -531,15 +531,13 @@ function requestedPortalDatasets(options: FetchPortalDataOptions) {
   return requested;
 }
 
-function getPortalDataCacheEntry(identity: string) {
+function getPortalDataCacheEntry(identity: string): PortalDataCacheEntry {
   const cached = portalDataCache.get(identity);
   if (cached) return cached;
-  const created: PortalDataCacheEntry = {
+  return {
     data: { ...EMPTY_PORTAL_DATA, loadErrors: {} },
     loadedDatasets: new Set()
   };
-  portalDataCache.set(identity, created);
-  return created;
 }
 
 function datasetErrorKeys(dataset: PortalDataset): readonly string[] {
@@ -612,15 +610,14 @@ export async function fetchPortalData(
   const isStaffSession = session.principal === 'staff';
   const wantsStaffSocHydrate =
     isStaffSession && isStaffSocRole(session) && (options.route === 'internal-soc' || options.route === 'queue-detail');
-  const hydrateErrors: string[] = [];
   let useStaffSocTenantHeaders = wantsStaffSocHydrate;
   let tenantHeaders: Record<string, string> = headers;
   if (wantsStaffSocHydrate) {
     try {
       tenantHeaders = buildSocCustomerHeaders(config, session);
-    } catch (err) {
+    } catch {
+      // No execution tenant is a legitimate disabled state for the staff SOC queue.
       useStaffSocTenantHeaders = false;
-      hydrateErrors.push(err instanceof Error ? err.message : 'Staff SOC needs an execution tenant.');
     }
   }
   // Staff customer-API calls only when impersonating (SOC headers). Otherwise skip /v1/* hydrate.
@@ -678,6 +675,7 @@ export async function fetchPortalData(
     state: () => opt('/v1/state', socHeaders, null),
     tenant: () => opt('/v1/tenants/current', customerHeaders, null),
     deploymentFeatures: () => opt('/v1/tenant/deployment-features', customerHeaders, null),
+    environments: () => opt('/v1/environments', customerHeaders, { items: [] }),
     targetGroups: () => opt('/v1/target-groups', customerHeaders, { items: [] }),
     targets: () => opt('/v1/targets', customerHeaders, { items: [] }),
     agents: () => opt('/v1/agents', customerHeaders, { items: [] }),
@@ -752,27 +750,36 @@ export async function fetchPortalData(
     errorKeys.forEach((key) => delete data.loadErrors[key]);
     loadedDatasets.add(dataset);
   });
-  const aggregateErrors = [...new Set([...hydrateErrors, ...Object.values(data.loadErrors)])];
+  const aggregateErrors = [...new Set(Object.values(data.loadErrors))];
   data.error = aggregateErrors.length > 0
     ? (aggregateErrors.length === 1
       ? aggregateErrors[0]
       : `${aggregateErrors[0]} (+${aggregateErrors.length - 1} more load issues)`)
     : null;
-  portalDataCache.set(identity, { data, loadedDatasets });
+  if (options.shouldCommitCache?.() ?? true) {
+    portalDataCache.set(identity, { data, loadedDatasets });
+  }
   return data;
 }
 
 export function fetchPortalDatasets(
   config: PortalConfig,
   session: Session,
-  datasets: readonly PortalDataset[]
+  datasets: readonly PortalDataset[],
+  shouldCommitCache?: () => boolean
 ) {
-  return fetchPortalData(config, session, { datasets, includeCore: false, force: true });
+  return fetchPortalData(config, session, {
+    datasets,
+    includeCore: false,
+    force: true,
+    shouldCommitCache
+  });
 }
 
 export const EMPTY_PORTAL_DATA: PortalData = {
   state: null,
   tenant: null,
+  environments: [],
   targetGroups: [],
   targetGroupsMeta: null,
   targets: [],

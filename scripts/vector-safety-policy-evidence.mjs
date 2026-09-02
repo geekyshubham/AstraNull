@@ -40,7 +40,7 @@ const NEW_PROBE_KIND_SAFETY_RULES = Object.freeze({
   header_size_probe: { max_requests: 2, required_fields: ['oversize_header_bytes'] },
   slow_header_probe: { max_requests: 1, required_fields: [] },
   http2_frame_probe: { max_requests: 4, required_fields: [] },
-  http3_control_probe: { max_requests: 2, required_fields: [] },
+  http3_control_probe: { max_requests: 1, required_fields: [] },
   waf_inspection_limit_probe: { max_requests: 6, required_fields: [] },
 });
 

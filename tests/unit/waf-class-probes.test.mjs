@@ -111,6 +111,36 @@ test('probe honours the request bound across all placements', async () => {
   assert.equal(result.requests_sent, calls);
 });
 
+test('probe honors a worker-reduced one-request cap and cannot grade baseline-only evidence', async () => {
+  let calls = 0;
+  const result = await runWafClassMarkerProbe({
+    url: 'https://target.example/signed-path',
+    marker_class: 'crlf',
+    max_requests: 1,
+    fetchFn: async () => { calls += 1; return okResponse(200); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.requests_sent, 1);
+  assert.equal(result.max_requests, 1);
+  assert.equal(result.posture, 'inconclusive');
+  assert.deepEqual(result.marker_results, []);
+});
+
+test('probe stops after the first transport failure', async () => {
+  let calls = 0;
+  const result = await runWafClassMarkerProbe({
+    url: 'https://target.example/signed-path',
+    marker_class: 'crlf',
+    fetchFn: async () => {
+      calls += 1;
+      throw Object.assign(new Error('temporary failure'), { code: 'ECONNRESET' });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.requests_sent, 1);
+  assert.equal(result.posture, 'inconclusive');
+});
+
 test('probe refuses to run without an injected transport (no real network)', async () => {
   const result = await runWafClassMarkerProbe({ url: 'https://target.example/', marker_class: 'ssrf' });
   assert.equal(result.error_class, 'no_transport');

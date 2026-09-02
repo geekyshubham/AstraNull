@@ -5,6 +5,7 @@ import { createCoreCatalogRepository } from '../../src/persistence/postgres/core
 import { createOwnershipVerificationRepository } from '../../src/persistence/postgres/ownershipVerificationRepository.mjs';
 import { createPostgresOwnershipVerificationServices } from '../../src/persistence/postgres/ownershipVerificationServiceAdapters.mjs';
 import { createProbeJobRepository } from '../../src/persistence/postgres/probeJobRepository.mjs';
+import { createPostgresProbeJobServices } from '../../src/persistence/postgres/probeJobServiceAdapters.mjs';
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createValidationEvidenceRepository } from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
 import {
@@ -50,6 +51,12 @@ async function seed(client) {
      ) VALUES ($1, $2, $3, 'fqdn', 'owned.example', 'owned.example', now())`,
     [IDS.targetA, IDS.tenant, IDS.group],
   );
+  await client.query(
+    `INSERT INTO agents (
+       id, tenant_id, target_group_id, status, last_token_validation_status
+     ) VALUES ('agt_ownership', $1, $2, 'online', 'valid')`,
+    [IDS.tenant, IDS.group],
+  );
 }
 
 function agentControl() {
@@ -84,18 +91,21 @@ describe('postgres target-bound live-egress ownership', () => {
 
       const audit = createAuditRepository(pool);
       const ownershipVerifications = createOwnershipVerificationRepository(pool);
+      const probeJobs = createProbeJobRepository(pool);
       const { methods: agents, agent } = agentControl();
       const ownership = createPostgresOwnershipVerificationServices({
         repositories: { ownershipVerifications },
         agentControl: agents,
+        probeJobs,
         audit,
       });
 
       const challenge = await ownership.createOwnershipChallenge(CTX, {
         target_group_id: IDS.group,
         agent_id: agent.id,
-      });
+      }, SIGNED_WORKER);
       assert.equal(challenge.error, undefined);
+      assert.ok(challenge.verification.probe_job_id);
       const challengeBinding = await withTenantContext(pool, IDS.tenant, async (client) => {
         const { rows } = await client.query(
           `SELECT t.created_at AS target_created_at, ov.created_at AS challenge_created_at,
@@ -110,9 +120,74 @@ describe('postgres target-bound live-egress ownership', () => {
       });
       assert.equal(challengeBinding?.eligible, true, JSON.stringify(challengeBinding));
       const nonceHash = challenge.verification.challenge_nonce_hash;
+
+      await assert.rejects(
+        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
+          `UPDATE ownership_verifications
+           SET probe_job_id = 'pjob_wrong'
+           WHERE tenant_id = $1 AND id = $2`,
+          [IDS.tenant, challenge.verification.id],
+        )),
+        (error) => {
+          assert.equal(error.code, '23503');
+          assert.equal(error.constraint, 'fk_ownership_verifications_probe_job_tenant');
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
+          `UPDATE probe_jobs
+           SET check_id = 'origin.direct_bypass.safe'
+           WHERE tenant_id = $1 AND id = $2`,
+          [IDS.tenant, challenge.verification.probe_job_id],
+        )),
+        (error) => {
+          assert.equal(error.code, '23514');
+          assert.equal(error.constraint, 'probe_jobs_ownership_challenge_binding');
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => withTenantContext(pool, IDS.tenant, (client) => client.query(
+          `DELETE FROM probe_jobs WHERE tenant_id = $1 AND id = $2`,
+          [IDS.tenant, challenge.verification.probe_job_id],
+        )),
+        (error) => {
+          assert.equal(error.code, '23503');
+          assert.equal(error.constraint, 'fk_ownership_verifications_probe_job_tenant');
+          return true;
+        },
+      );
+
+      // Model a pre-hardening malformed historical row by bypassing triggers only in this
+      // ephemeral database. Repository reads must still fail closed even for such durable data.
+      const adminClient = await pool.connect();
+      try {
+        await adminClient.query(`SET session_replication_role = 'replica'`);
+        await adminClient.query(
+          `INSERT INTO probe_jobs (
+             id, tenant_id, test_run_id, target_id, check_id, status, nonce_hash,
+             target_descriptor_json, ownership_verification_id
+           ) VALUES (
+             'pjob_malformed_history', $1, $2, 'agt_ownership', 'ownership.challenge',
+             'completed', $3, '{"kind":"fqdn","value":"owned.example"}'::jsonb, NULL
+           )`,
+          [IDS.tenant, challenge.verification.id, nonceHash],
+        );
+      } finally {
+        try {
+          await adminClient.query(`SET session_replication_role = 'origin'`);
+        } finally {
+          adminClient.release();
+        }
+      }
+      assert.equal(await probeJobs.getJobById(CTX, 'pjob_malformed_history'), null);
+      await pool.query(`DELETE FROM probe_jobs WHERE id = 'pjob_malformed_history'`);
+
       await ownership.recordOwnershipSignal(CTX, challenge.verification.id, {
         source: 'probe',
         nonce_hash: nonceHash,
+        probe_job_id: challenge.verification.probe_job_id,
       });
       const completed = await ownership.recordOwnershipSignal(CTX, challenge.verification.id, {
         source: 'agent',
@@ -123,6 +198,65 @@ describe('postgres target-bound live-egress ownership', () => {
       assert.equal(completed.target_id, IDS.targetA);
       assert.equal(completed.target_verification.target_id, IDS.targetA);
       assert.equal(completed.target_verification.state, 'agent_verified');
+
+      await withTenantContext(pool, IDS.tenant, (client) => client.query(
+        `UPDATE probe_jobs
+         SET status = 'completed', completed_at = now()
+         WHERE tenant_id = $1 AND id = $2`,
+        [IDS.tenant, challenge.verification.probe_job_id],
+      ));
+      const ownershipProbeResults = createPostgresProbeJobServices({
+        probeJobs,
+        validationEvidence: createValidationEvidenceRepository(pool),
+        audit,
+        killSwitch: { isKillSwitchActiveForTenant: async () => false },
+      }, {
+        ownershipVerification: ownership,
+      });
+      const workerCtx = {
+        tenantId: IDS.tenant,
+        workerId: 'pw_ownership_retry',
+        role: 'probe_worker',
+      };
+      const retryJob = await probeJobs.getJobById(CTX, challenge.verification.probe_job_id);
+      const resolverAttempts = retryJob.constraints.min_destination_resolver_attempts ?? 0;
+      const probeRequests = Math.min(1, retryJob.constraints.max_probe_requests ?? 1);
+      const totalOperations = probeRequests + resolverAttempts;
+      const retryBody = {
+        external_result: 'connected',
+        safety_attestation: {
+          requests_sent: totalOperations,
+          probe_requests_sent: probeRequests,
+          destination_resolver_attempts: resolverAttempts,
+          total_operations: totalOperations,
+          duration_ms: 10,
+        },
+      };
+      const firstCompletedRetry = await ownershipProbeResults.ingestProbeResult(
+        workerCtx,
+        challenge.verification.probe_job_id,
+        retryBody,
+      );
+      const secondCompletedRetry = await ownershipProbeResults.ingestProbeResult(
+        workerCtx,
+        challenge.verification.probe_job_id,
+        retryBody,
+      );
+      assert.equal(firstCompletedRetry.reconciled, true, JSON.stringify(firstCompletedRetry));
+      assert.equal(secondCompletedRetry.reconciled, true, JSON.stringify(secondCompletedRetry));
+      const retryAuditCount = await withTenantContext(pool, IDS.tenant, async (client) => {
+        const { rows } = await client.query(
+          `SELECT COUNT(*)::int AS count
+           FROM audit_logs
+           WHERE tenant_id = $1
+             AND action = 'probe_job.result_reconciled'
+             AND resource_type = 'probe_job'
+             AND resource_id = $2`,
+          [IDS.tenant, challenge.verification.probe_job_id],
+        );
+        return rows[0].count;
+      });
+      assert.equal(retryAuditCount, 1);
 
       const coreCatalog = createCoreCatalogRepository(pool, { auditRepository: audit });
       const victim = await coreCatalog.addTarget(
@@ -196,7 +330,6 @@ describe('postgres target-bound live-egress ownership', () => {
       );
 
       const validationEvidence = createValidationEvidenceRepository(pool);
-      const probeJobs = createProbeJobRepository(pool);
       const { testRuns } = createPostgresValidationServices({
         validationEvidence,
         audit,
@@ -244,7 +377,9 @@ describe('postgres target-bound live-egress ownership', () => {
           [IDS.tenant],
         );
         const jobs = await client.query(
-          `SELECT COUNT(*)::int AS count FROM probe_jobs WHERE tenant_id = $1`,
+          `SELECT COUNT(*)::int AS count
+           FROM probe_jobs
+           WHERE tenant_id = $1 AND ownership_verification_id IS NULL`,
           [IDS.tenant],
         );
         const audits = await client.query(

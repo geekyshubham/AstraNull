@@ -10,7 +10,7 @@ function getString(item: DataItem, keys: string[], fallback = '') {
   return fallback;
 }
 
-function getNumber(item: DataItem, keys: string[], fallback = 0) {
+function getNumber(item: DataItem, keys: string[], fallback: number | null = null) {
   for (const key of keys) {
     const value = item[key];
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -46,38 +46,28 @@ function TargetGroupChip({
   id,
   name,
   disabled,
+  unavailable = false,
   onRemove,
 }: {
   id: string;
   name: string;
   disabled: boolean;
+  unavailable?: boolean;
   onRemove: (id: string) => void;
 }) {
+  const displayName = unavailable ? `${name} (unavailable)` : name;
   return (
     <span className="tg-chip">
-      {name}
-      <span
-        role="button"
-        tabIndex={disabled ? -1 : 0}
+      <span>{displayName}</span>
+      <button
+        type="button"
         className="tg-chip-remove"
-        aria-label={`Remove ${name}`}
-        aria-disabled={disabled || undefined}
-        onClick={(event) => {
-          if (disabled) return;
-          event.stopPropagation();
-          onRemove(id);
-        }}
-        onKeyDown={(event) => {
-          if (disabled) return;
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            event.stopPropagation();
-            onRemove(id);
-          }
-        }}
+        aria-label={`Remove ${displayName}`}
+        disabled={disabled}
+        onClick={() => onRemove(id)}
       >
         <X size={12} aria-hidden="true" />
-      </span>
+      </button>
     </span>
   );
 }
@@ -94,16 +84,22 @@ function TargetGroupOption({
   onToggle: (id: string) => void;
 }) {
   const id = getString(group, ['id']);
-  const name = getString(group, ['name', 'id']);
-  const env = getString(group, ['environment_id'], '—');
-  const criticality = getString(group, ['criticality'], '—');
+  const name = getString(group, ['name', 'id'], 'Unnamed target group');
+  const env = getString(group, ['environment_id']);
+  const criticality = getString(group, ['criticality']);
   const targetCount = getNumber(group, ['target_count', 'targets_count']);
+  const metadata = [
+    env || null,
+    criticality || null,
+    targetCount === null ? null : `${targetCount} target${targetCount === 1 ? '' : 's'}`,
+  ].filter(Boolean).join(' · ') || 'Group metadata unavailable';
 
   return (
     <div
       className="tg-picker-row"
       role="option"
       aria-selected={checked}
+      aria-disabled={disabled || undefined}
       tabIndex={disabled ? -1 : 0}
       onClick={() => {
         if (!disabled) onToggle(id);
@@ -126,7 +122,7 @@ function TargetGroupOption({
       />
       <span className="tg-check-box" aria-hidden="true" />
       <span className="tg-name">{name}</span>
-      <span className="tg-meta">{env} · {criticality} · {targetCount} targets</span>
+      <span className="tg-meta">{metadata}</span>
     </div>
   );
 }
@@ -147,9 +143,12 @@ export function TargetGroupPicker({
   label = 'Target groups'
 }: TargetGroupPickerProps) {
   const labelId = useId();
+  const summaryId = useId();
+  const helpId = useId();
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -161,6 +160,38 @@ export function TargetGroupPicker({
       document.removeEventListener('mousedown', onPointerDown);
     };
   }, []);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  function focusMenuOption(position: 'first' | 'last' = 'first') {
+    window.requestAnimationFrame(() => {
+      const options = menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]:not([aria-disabled="true"])');
+      if (!options?.length) return;
+      options[position === 'first' ? 0 : options.length - 1]?.focus({ preventScroll: true });
+    });
+  }
+
+  function openMenu(position: 'first' | 'last' = 'first') {
+    if (disabled || groups.length === 0) return;
+    setOpen(true);
+    focusMenuOption(position);
+  }
+
+  function moveOptionFocus(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const options = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]:not([aria-disabled="true"])') ?? []
+    );
+    if (options.length === 0) return;
+    event.preventDefault();
+    const currentIndex = options.indexOf(document.activeElement as HTMLElement);
+    if (event.key === 'Home') options[0]?.focus();
+    else if (event.key === 'End') options[options.length - 1]?.focus();
+    else if (event.key === 'ArrowDown') options[(currentIndex + 1 + options.length) % options.length]?.focus();
+    else options[(currentIndex - 1 + options.length) % options.length]?.focus();
+  }
 
   function toggleGroup(id: string) {
     if (selectedIds.includes(id)) {
@@ -174,14 +205,17 @@ export function TargetGroupPicker({
     onChange(selectedIds.filter((value) => value !== id));
   }
 
-  const selectedGroups = groups.filter((group) => selectedIds.includes(getString(group, ['id'])));
-  const selectionSummary = selectedGroups.length === 0
+  const selectedGroups = selectedIds.map((id) => ({
+    id,
+    group: groups.find((group) => getString(group, ['id']) === id) ?? null,
+  }));
+  const selectionSummary = selectedIds.length === 0
     ? 'No target groups selected'
-    : `${selectedGroups.length} target group${selectedGroups.length === 1 ? '' : 's'} selected`;
+    : `${selectedIds.length} target group${selectedIds.length === 1 ? '' : 's'} selected`;
 
   return (
     <div className="tg-picker-field">
-      <span className="field-label" id={labelId}>{label}</span>
+      <span className="data-label" id={labelId}>{label}</span>
       <div
         className="tg-picker"
         data-tg-picker
@@ -201,42 +235,39 @@ export function TargetGroupPicker({
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={menuId}
-          aria-labelledby={labelId}
-          aria-label={selectionSummary}
-          disabled={disabled}
+          aria-labelledby={`${labelId} ${summaryId}`}
+          aria-describedby={helpId}
+          disabled={disabled || groups.length === 0}
           onClick={() => setOpen((value) => !value)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              openMenu(event.key === 'ArrowUp' ? 'last' : 'first');
+            }
+          }}
         >
           <span className="tg-picker-values">
-            {selectedGroups.length === 0 ? (
-              <span className="tg-picker-placeholder">Select one or more target groups…</span>
-            ) : (
-              selectedGroups.map((group) => {
-                const id = getString(group, ['id']);
-                const name = getString(group, ['name', 'id']);
-                return (
-                  <TargetGroupChip
-                    key={id}
-                    id={id}
-                    name={name}
-                    disabled={disabled}
-                    onRemove={removeGroup}
-                  />
-                );
-              })
-            )}
+            <span
+              className={selectedIds.length === 0 ? 'tg-picker-placeholder' : 'text-sm'}
+              id={summaryId}
+            >
+              {selectionSummary}
+            </span>
           </span>
           <ChevronDown className="tg-picker-chevron" size={12} aria-hidden="true" />
         </button>
         <div
+          ref={menuRef}
           className="tg-picker-menu"
           id={menuId}
           role="listbox"
           aria-labelledby={labelId}
-          aria-label={`${label} options`}
+          aria-describedby={helpId}
           aria-multiselectable="true"
           hidden={!open}
+          onKeyDown={moveOptionFocus}
         >
-          {groups.map((group) => {
+          {groups.length > 0 ? groups.map((group) => {
             const id = getString(group, ['id']);
             const checked = selectedIds.includes(id);
             return (
@@ -248,9 +279,30 @@ export function TargetGroupPicker({
                 onToggle={toggleGroup}
               />
             );
-          })}
+          }) : (
+            <p className="muted small">No active target groups are available.</p>
+          )}
         </div>
       </div>
+
+      {selectedGroups.length > 0 ? (
+        <div className="tg-picker-values" aria-label="Selected target groups">
+          {selectedGroups.map(({ id, group }) => (
+            <TargetGroupChip
+              key={id}
+              id={id}
+              name={getString(group ?? {}, ['name', 'id'], id)}
+              unavailable={!group}
+              disabled={disabled}
+              onRemove={removeGroup}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      <p className="muted small" id={helpId}>
+        Select declared groups, then bind one exact compatible active target per group. AstraNull never assigns a target automatically.
+      </p>
     </div>
   );
 }

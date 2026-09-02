@@ -13,14 +13,68 @@ import {
   clearStoreCacheForTests,
   getStore,
   migrateDevStore,
+  persistStore,
   resetStoreForTests,
 } from '../../src/store.mjs';
+
+function assertDiskIsIgnoredAndUnchanged(configurePersistence) {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astranull-memory-store-'));
+  const dataFile = path.join(tmpDir, 'astranull-dev.json');
+  const staleJson = JSON.stringify({
+    tenants: [{ id: 'ten_stale_disk', name: 'Must not load' }],
+    checkCatalog: [],
+  });
+  const priorEnv = {
+    dataDir: process.env.ASTRANULL_DEV_DATA_DIR,
+    noPersist: process.env.ASTRANULL_NO_PERSIST,
+    persistenceMode: process.env.ASTRANULL_PERSISTENCE_MODE,
+  };
+  writeFileSync(dataFile, staleJson, 'utf8');
+
+  try {
+    process.env.ASTRANULL_DEV_DATA_DIR = tmpDir;
+    configurePersistence();
+    clearStoreCacheForTests();
+
+    const loaded = getStore();
+    assert.equal(loaded.tenants.some((tenant) => tenant.id === 'ten_stale_disk'), false);
+    assert.equal(loaded.checkCatalog.length, CHECK_CATALOG.length);
+    loaded.tenants.push({ id: 'ten_memory_only', name: 'Never persisted' });
+    persistStore();
+
+    assert.equal(readFileSync(dataFile, 'utf8'), staleJson);
+  } finally {
+    clearStoreCacheForTests();
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (priorEnv.dataDir === undefined) delete process.env.ASTRANULL_DEV_DATA_DIR;
+    else process.env.ASTRANULL_DEV_DATA_DIR = priorEnv.dataDir;
+    if (priorEnv.noPersist === undefined) delete process.env.ASTRANULL_NO_PERSIST;
+    else process.env.ASTRANULL_NO_PERSIST = priorEnv.noPersist;
+    if (priorEnv.persistenceMode === undefined) delete process.env.ASTRANULL_PERSISTENCE_MODE;
+    else process.env.ASTRANULL_PERSISTENCE_MODE = priorEnv.persistenceMode;
+  }
+}
 
 describe('dev store migration', () => {
   after(() => {
     delete process.env.ASTRANULL_NO_PERSIST;
+    delete process.env.ASTRANULL_PERSISTENCE_MODE;
     useIsolatedDevDataDir();
     clearStoreCacheForTests();
+  });
+
+  it('does not read or write stale disk when ASTRANULL_NO_PERSIST=1', () => {
+    assertDiskIsIgnoredAndUnchanged(() => {
+      process.env.ASTRANULL_NO_PERSIST = '1';
+      delete process.env.ASTRANULL_PERSISTENCE_MODE;
+    });
+  });
+
+  it('does not read or write stale disk in memory persistence mode', () => {
+    assertDiskIsIgnoredAndUnchanged(() => {
+      delete process.env.ASTRANULL_NO_PERSIST;
+      process.env.ASTRANULL_PERSISTENCE_MODE = 'memory';
+    });
   });
 
   it('upgrades a legacy 4-check catalog without dropping demo records', () => {

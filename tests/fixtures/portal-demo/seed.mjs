@@ -461,7 +461,6 @@ function enrichPortalDemoStore(store) {
       started_at: FROZEN,
       completed_at: FROZEN,
       created_at: FROZEN,
-      agent_id: ids.agentId,
     },
     {
       id: 'run_demo_running',
@@ -472,7 +471,6 @@ function enrichPortalDemoStore(store) {
       status: 'running',
       started_at: FROZEN,
       created_at: FROZEN,
-      agent_id: ids.agentId,
     },
   );
 

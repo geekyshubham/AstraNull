@@ -334,6 +334,8 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     }
     const validated = validateProbeResultBody(body, job.constraints ?? {}, {
       probeKind: job.probe_profile?.kind,
+      probeProfile: job.probe_profile,
+      target: job.target,
     });
     if (!validated.ok) {
       return {
@@ -406,6 +408,8 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
 
   const validated = validateProbeResultBody(body, job.constraints ?? {}, {
     probeKind: job.probe_profile?.kind,
+    probeProfile: job.probe_profile,
+    target: job.target,
   });
   if (!validated.ok) {
     return {
@@ -439,6 +443,7 @@ export function ingestProbeResult(workerCtx, jobId, body, runtimeConfig) {
     {
       ...workerMetadata,
       external_result: externalResult,
+      profile_kind: job.probe_profile?.kind ?? null,
       probe_worker_id: workerCtx.workerId,
       safety_attestation: safetyAttestation,
     },

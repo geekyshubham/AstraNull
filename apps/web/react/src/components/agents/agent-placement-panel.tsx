@@ -4,6 +4,10 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { VerifyChip } from '../../lib/verify-chip';
+import {
+  HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE,
+  type AgentRunAttributionStatus,
+} from '../../lib/agent-run-attribution.mjs';
 import { ONBOARDING_PLACEMENT_TEST_CHECK_ID } from '../../lib/onboarding';
 import { formatPlacementStatus, placementStatusHint } from '../../lib/agent-helpers';
 import type { DataItem } from '../../lib/types';
@@ -33,14 +37,16 @@ function PtMetricCell({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function PlacementGateRow({ gate, pass }: { gate: string; pass: boolean }) {
-  const status = pass ? 'pass' : 'pending';
+type PlacementGateState = 'pass' | 'pending' | 'checking' | 'unavailable';
+
+function PlacementGateRow({ gate, state }: { gate: string; state: PlacementGateState }) {
+  const tone = state === 'pass' ? 'success' : state === 'unavailable' ? 'warn' : state === 'checking' ? 'info' : 'muted';
   return (
     <li>
       <ListChecks size={14} aria-hidden="true" style={{ color: 'var(--fg-2)' }} />
       <span>{gate}</span>
-      <Badge tone={pass ? 'success' : 'muted'} aria-label={`${gate}: ${status}`}>
-        {status}
+      <Badge tone={tone} aria-label={`${gate}: ${state}`}>
+        {state}
       </Badge>
     </li>
   );
@@ -102,7 +108,21 @@ function resolvePlacementOutcome(run: DataItem | null): PlacementOutcome {
   return 'review';
 }
 
-function PlacementVerdictChip({ outcome, provenance }: { outcome: PlacementOutcome; provenance: string }) {
+function PlacementVerdictChip({
+  outcome,
+  provenance,
+  attributionStatus,
+}: {
+  outcome: PlacementOutcome;
+  provenance: string;
+  attributionStatus: AgentRunAttributionStatus;
+}) {
+  if (attributionStatus === 'unavailable') {
+    return <Badge tone="warn" title={provenance}>{HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE}</Badge>;
+  }
+  if (attributionStatus === 'loading') {
+    return <Badge tone="info" title={provenance}>Checking historical attribution</Badge>;
+  }
   if (outcome === 'pass') {
     return (
       <span className="verify-chip is-verified" title={provenance} aria-label={`Placement verified — last run passed. ${provenance}`}>
@@ -133,6 +153,7 @@ export function AgentPlacementPanel({
   agentId,
   targetGroupId,
   runs,
+  attributionStatus,
   placementReview,
   onRunPlacement,
   running,
@@ -142,28 +163,42 @@ export function AgentPlacementPanel({
   agentId: string;
   targetGroupId: string;
   runs: DataItem[];
+  attributionStatus: AgentRunAttributionStatus;
   placementReview: DataItem | null;
   onRunPlacement: () => void;
   running?: boolean;
   busy?: boolean;
 }) {
   const placementRun = useMemo(
-    () =>
-      runs
+    () => attributionStatus === 'available'
+      ? runs
         .filter((run) => getString(run, ['check_id']) === ONBOARDING_PLACEMENT_TEST_CHECK_ID)
         .sort((a, b) =>
           String(b.started_at ?? b.created_at ?? '').localeCompare(String(a.started_at ?? a.created_at ?? ''))
-        )[0] ?? null,
-    [runs]
+        )[0] ?? null
+      : null,
+    [attributionStatus, runs]
   );
 
   const outcome = resolvePlacementOutcome(placementRun);
   const pass = outcome === 'pass';
   const verdictValue = placementVerdictString(placementRun);
   const lifecycleStatus = getString(placementRun, ['status'], 'pending');
-  const provenance = placementRun
-    ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdictValue || '(none published)'} · status ${lifecycleStatus} · outcome ${outcome} from test-runs API.`
-    : 'No placement test run recorded for this agent scope.';
+  const provenance = attributionStatus === 'unavailable'
+    ? `${HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE}. One or more authoritative run-event endpoints failed, so no latest placement run is asserted.`
+    : attributionStatus === 'loading'
+      ? 'Checking authoritative run-event endpoints before selecting a placement run.'
+      : placementRun
+        ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdictValue || '(none published)'} · status ${lifecycleStatus} · outcome ${outcome} from test-runs API.`
+        : 'No placement test run recorded for this agent scope.';
+  const unresolvedValue = attributionStatus === 'unavailable'
+    ? 'Unavailable'
+    : attributionStatus === 'loading' ? 'Checking…' : null;
+  const gateState: PlacementGateState = attributionStatus === 'unavailable'
+    ? 'unavailable'
+    : attributionStatus === 'loading'
+      ? 'checking'
+      : pass ? 'pass' : 'pending';
 
   const runDisabled = busy || !targetGroupId;
   const runLabel = targetGroupId
@@ -171,14 +206,19 @@ export function AgentPlacementPanel({
     : 'Run placement test (select a target group first)';
 
   return (
-    <Card>
+    <Card className="agent-placement-panel">
       <CardHeader>
         <div>
-          <CardTitle>Placement test</CardTitle>
-          <CardDescription>Bounded protected-path canary. Metadata-only signal under custody.</CardDescription>
+          <CardTitle>Placement validation</CardTitle>
+          <CardDescription>Bounded protected-path canary for an optional observer. Outside-in checks remain available without an agent; this panel proves where internal corroboration was observed.</CardDescription>
         </div>
         <div className="row-actions">
-          <PlacementVerdictChip outcome={outcome} provenance={provenance} />
+          <Badge tone="muted" title="Agent observation supplements external probe evidence">Optional agent</Badge>
+          <PlacementVerdictChip
+            outcome={outcome}
+            provenance={provenance}
+            attributionStatus={attributionStatus}
+          />
           <Button
             size="sm"
             loading={running}
@@ -191,27 +231,38 @@ export function AgentPlacementPanel({
         </div>
       </CardHeader>
       <CardContent className="stack-tight">
+        {attributionStatus === 'unavailable' ? (
+          <div className="form-banner error" role="alert">
+            <strong>{HISTORICAL_RUN_ATTRIBUTION_UNAVAILABLE}</strong>
+            <span> One or more run-event endpoints failed. Placement history is not inferred from target-group membership.</span>
+          </div>
+        ) : attributionStatus === 'loading' ? (
+          <p className="muted" role="status">Checking historical run attribution before showing placement evidence.</p>
+        ) : null}
+        {placementRun && getString(placementRun, ['evidence_tier'], '') ? (
+          <p className="muted">Recorded evidence tier: <Badge tone="info">{getString(placementRun, ['evidence_tier'])}</Badge>. Tier is read from the run record, never inferred from registration.</p>
+        ) : null}
         <div className="pt-grid">
           <PtMetricCell
             label="Last test"
-            value={placementRun ? formatDate(placementRun.started_at ?? placementRun.created_at) : '—'}
+            value={unresolvedValue ?? (placementRun ? formatDate(placementRun.started_at ?? placementRun.created_at) : '—')}
           />
           <PtMetricCell
             label="Duration"
-            value={getString(placementRun, ['duration_ms', 'duration'], '—')}
+            value={unresolvedValue ?? getString(placementRun, ['duration_ms', 'duration'], '—')}
           />
           <PtMetricCell
             label="Signal"
-            value={getString(placementReview, ['observation_mode'], getString(agent, ['placement_type'], '—'))}
+            value={unresolvedValue ?? getString(placementReview, ['observation_mode'], getString(agent, ['placement_type'], '—'))}
           />
           <PtMetricCell
             label="Evidence"
-            value={placementRun ? getString(placementRun, ['id']) : '—'}
+            value={unresolvedValue ?? (placementRun ? getString(placementRun, ['id']) : '—')}
           />
         </div>
         <ul className="placement-gates" aria-label="Placement verification gates">
           {PLACEMENT_GATES.map((gate) => (
-            <PlacementGateRow key={gate} gate={gate} pass={pass} />
+            <PlacementGateRow key={gate} gate={gate} state={gateState} />
           ))}
         </ul>
         {placementReview ? (

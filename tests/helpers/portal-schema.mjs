@@ -35,20 +35,29 @@ function assertShape(value, shape, path = '$', issues = []) {
       if (!Array.isArray(value)) issues.push(`${path}: expected array`);
       return issues;
     }
+    if (shape.length === 1) {
+      if (!Array.isArray(value)) {
+        issues.push(`${path}: expected array`);
+        return issues;
+      }
+      for (let i = 0; i < value.length; i += 1) {
+        assertShape(value[i], shape[0], `${path}[${i}]`, issues);
+      }
+      return issues;
+    }
     if (shape.every((entry) => typeof entry === 'string')) {
       if (!shape.some((type) => matchesPrimitive(value, type))) {
         issues.push(`${path}: expected one of ${shape.join('|')}`);
       }
       return issues;
     }
+    if (shape.length === 2 && shape.includes('null')) {
+      if (value === null) return issues;
+      const childShape = shape.find((entry) => entry !== 'null');
+      return assertShape(value, childShape, path, issues);
+    }
     if (!Array.isArray(value)) {
       issues.push(`${path}: expected array`);
-      return issues;
-    }
-    if (shape.length === 1) {
-      for (let i = 0; i < value.length; i += 1) {
-        assertShape(value[i], shape[0], `${path}[${i}]`, issues);
-      }
       return issues;
     }
     assertShape(value, shape[0], path, issues);
@@ -87,6 +96,41 @@ export function validateShape(value, shape) {
   return { ok: issues.length === 0, issues };
 }
 
+export const EDGE_DETECTION_SHAPE = {
+  status: 'string',
+  reason: ['string', 'null'],
+  waf: {
+    status: 'string',
+    'provider?': 'string',
+    'type?': 'string',
+  },
+  cdn: {
+    status: 'string',
+    'provider?': 'string',
+    'type?': 'string',
+  },
+  waf_providers: ['string'],
+  cdn_providers: ['string'],
+  confidence: 'number',
+  conflicting_vendor_signals: 'boolean',
+  corpus_version: ['string', 'null'],
+  test_run_id: ['string', 'null'],
+  observed_at: ['string', 'null'],
+  updated_at: ['string', 'null'],
+  evidence: {
+    vendor_matches: [{
+      vendor: 'string',
+      name: 'string',
+      confidence: 'number',
+      matched_signals: [{ signal: 'string', tier: 'string' }],
+    }],
+    address_matches: [{ family: 'string', provider: 'string' }],
+    cname_matches: [{ provider: 'string', type: 'string', suffix: 'string' }],
+    dns_cname_chain: ['string'],
+    dns_resolved_ips: ['string'],
+  },
+};
+
 export const TARGET_DETAIL_SHAPE = {
   target: {
     id: 'string',
@@ -107,8 +151,14 @@ export const TARGET_DETAIL_SHAPE = {
     history: [{ state: 'string', transitioned_at: 'string', 'source_ref?': ['object', 'null'] }],
   },
   waf_posture: ['object', 'null'],
+  'edge_detection?': [EDGE_DETECTION_SHAPE, 'null'],
   checks_applied: [{ check_id: 'string', cadence: 'string', last_verdict: 'string', last_ran_at: 'string' }],
-  runs_recent: [{ run_id: 'string', policy_id: 'string', verdict: 'string', started_at: 'string', agent_id: 'string' }],
+  runs_recent: [{
+    run_id: 'string',
+    policy_id: ['string', 'null'],
+    verdict: 'string',
+    started_at: 'string',
+  }],
   findings: [{ id: 'string', severity: 'string', title: 'string', state: 'string', opened_at: 'string', owner_group: 'string' }],
   loa: ['object', 'null'],
   counts: { runs_total: 'number', findings_open: 'number', findings_closed: 'number' },

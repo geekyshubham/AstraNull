@@ -31,7 +31,7 @@ AstraNull checks must be scoped to customer-declared targets and governed by saf
 | Tenant rate budget | `safety_policy.max_runs_per_hour` caps customer-runnable runs per tenant (default 60/hour). |
 | Target group cooldown | `safety_policy.min_seconds_between_runs` blocks immediate repeat runs on the same group. |
 | Per-run event cap | Check `safety_constraints.max_events` enforced on probe, agent observations, and no-observation markers. |
-| Probe-worker cap attestation | Signed probe jobs carry `max_requests` and `timeout_ms`; `POST /internal/probe/jobs/:id/result` requires worker `safety_attestation` within those caps before evidence is recorded. The reference `workers/probe-worker.mjs` enforces the same caps locally (default one request per job) and rejects jobs with invalid `job_signature` without sending probe traffic. |
+| Probe-worker cap attestation | Signed probe jobs carry separate `max_probe_requests`, destination-resolver floor/cap, `max_total_operations` (with compatibility `max_requests` equal to that total), and `timeout_ms`; `POST /internal/probe/jobs/:id/result` requires coherent exact split `safety_attestation` within every cap before evidence is recorded. The reference `workers/probe-worker.mjs` reserves each logical probe or destination-vetting resolver attempt before I/O, reports the exact split and total without clamping, and rejects invalid signatures or incoherent caps before probe traffic. |
 | Rate cap | Check-level hard cap enforced server-side. |
 | Concurrency cap | Prevent overlapping test amplification. |
 | Time limit | Jobs expire automatically. |

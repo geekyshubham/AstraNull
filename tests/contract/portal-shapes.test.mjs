@@ -18,7 +18,41 @@ let server;
 
 before(() => {
   process.env.ASTRANULL_WAF_POSTURE_ENABLED = '1';
-  seedPortalBaseline();
+  const store = seedPortalBaseline();
+  store.targetEdgeDetections = [{
+    id: 'ted_contract_checkout',
+    tenant_id: PORTAL_BASELINE_IDS.tenantId,
+    target_group_id: PORTAL_BASELINE_IDS.targetGroupId,
+    target_id: PORTAL_BASELINE_IDS.targetId,
+    test_run_id: PORTAL_BASELINE_IDS.readinessRunId,
+    status: 'detected',
+    reason: null,
+    waf_status: 'detected',
+    waf_vendor: 'cloudflare',
+    waf_type: 'response_fingerprint',
+    waf_providers: ['cloudflare'],
+    cdn_status: 'detected',
+    cdn_provider: 'cloudfront',
+    cdn_type: 'cname_suffix',
+    cdn_providers: ['cloudfront'],
+    confidence: 0.94,
+    conflicting_vendor_signals: false,
+    corpus_version: 'edge-corpus-contract-v1',
+    evidence_json: {
+      vendor_matches: [{
+        vendor: 'cloudflare',
+        name: 'Cloudflare',
+        confidence: 0.94,
+        matched_signals: [{ signal: 'server_label', tier: 'high' }],
+      }],
+      address_matches: [{ family: 'waf', provider: 'cloudflare' }],
+      cname_matches: [{ provider: 'cloudfront', type: 'cdn', suffix: '.cloudfront.net' }],
+      dns_cname_chain: ['checkout.example.cloudfront.net'],
+      dns_resolved_ips: ['203.0.113.10'],
+    },
+    observed_at: PORTAL_BASELINE_IDS.frozenAt,
+    updated_at: PORTAL_BASELINE_IDS.frozenAt,
+  }];
   server = createServer();
   server.listen(0);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -52,8 +86,12 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     const live = await liveGet(`/v1/targets/${PORTAL_BASELINE_IDS.targetId}`);
     assert.equal(live.status, 200);
     assertConforms('live target-detail', live.json, TARGET_DETAIL_SHAPE);
-    assert.ok(live.json.target?.id === PORTAL_BASELINE_IDS.targetId);
+    assert.equal(live.json.target?.id, PORTAL_BASELINE_IDS.targetId);
+    assert.equal(live.json.edge_detection?.test_run_id, PORTAL_BASELINE_IDS.readinessRunId);
+    assert.equal(live.json.edge_detection?.waf?.provider, 'cloudflare');
     assert.ok(typeof live.json.counts?.runs_total === 'number');
+    assert.ok(live.json.runs_recent.length > 0);
+    assert.equal(Object.hasOwn(live.json.runs_recent[0], 'agent_id'), false);
   });
 
   it('FT-SHAPE-02 GET /v1/findings/:id/evidence conforms to evidence schema', async () => {

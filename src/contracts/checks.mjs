@@ -194,14 +194,12 @@ const ALLOWED_WAF_COLLECT_KEYS = new Set([
   'status_code',
   'server_header',
   'waf_product_hint',
-  'tls_fingerprint_hint',
   'marker_probes',
   'posture_status',
   'posture_label',
   'origin_bypass_confirmed',
   'evasion_bypass_suspected',
   'agent_corroboration_required',
-  'dns_chain_hint',
 ]);
 
 export const WAF_SAFE_CHECK_IDS = Object.freeze([
@@ -282,7 +280,6 @@ export const CAPABILITY_PROFILE_PASSTHROUGH_KEYS = Object.freeze([
   'expected_vendor_hint',
   'require_agent_for_protected',
   'agent_corroborated',
-  'follow_redirects',
   'probe_path',
 ]);
 
@@ -401,6 +398,9 @@ export function buildProbeProfile({
     }
     profile[key] = capabilityFields[key];
   }
+  // Signed outside-in execution has a static, pre-reserved HTTP plan. Keep redirect expansion
+  // disabled even when a legacy catalog or caller override requests it.
+  if (kind === 'outside_in_waf_scan') profile.follow_redirects = false;
   return profile;
 }
 
@@ -727,7 +727,7 @@ export const CHECK_CATALOG = [
     name: 'Outside-In WAF Scanner (Safe)',
     vector_family: 'waf',
     description:
-      'Bounded outside-in scan: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.',
+      'Bounded outside-in scan using pre-reserved, destination-pinned HTTP only: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['url', 'fqdn', 'ip'],
     required_customer_setup: ['declared_waf_asset', 'customer_approves_waf_fingerprint_probe'],
@@ -752,9 +752,6 @@ export const CHECK_CATALOG = [
         'origin_bypass_confirmed',
         'evasion_bypass_suspected',
         'agent_corroboration_required',
-        // Signed capability for the bounded CNAME/A/AAAA chain the pinned address and CNAME
-        // corpora match against. Without it the CDN half of the corpus never evaluates.
-        'dns_chain_hint',
       ],
     },
     safety_constraints: { max_events: 13, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },

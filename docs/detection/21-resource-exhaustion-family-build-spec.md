@@ -471,7 +471,7 @@ DET-025 CI + staging signoff (last)
 
 | Gap | Where it surfaced | Status |
 |---|---|---|
-| `exhausted_resource` field on catalog checks | DET-016 | **Done** — derived on all 175 checks from the registries; validator-enforced |
+| `exhausted_resource` field on catalog checks | DET-016 | **Done** — derived on all 249 checks from the registries; validator-enforced |
 | 12-family dashboard heatmap | DET-024 | **Dashboard source delivered** — evidence-referenced React `resource-matrix` alongside the 5-family vector heatmap; report/drill-down parity, committed bundle validation, accessibility, and staging remain open |
 | Live volumetric execution | SOC-011 | **External** — governed scenario contract + authorization-pack binding delivered; certified partner adapter execution remains open (control plane stays traffic-free) |
 | gRPC live probe | DET-021 | **Done** — bounded `grpc_reflection_probe` (single empty-frame request, metadata-only result) |
@@ -492,88 +492,25 @@ Output: `output/resource-exhaustion-taxonomy-validation.json` — pending ATT-* 
 
 ---
 
-## 18. Complete ATT-* inventory by family (149 vectors)
+## 18. Current ATT-* inventory (254 entries)
 
-Every attack class, exposure, and delivery pattern registered in `ATTACK_VECTOR_REGISTRY`. Status from validator snapshot.
-
-### 18.1 Volumetric (8 ATT-*)
-
-| ID | Vector | Status |
-|---|---|---|
-| ATT-001 | UDP flood | partial |
-| ATT-002 | ICMP / ping flood | pending |
-| ATT-013 | GRE flood | pending |
-| ATT-015 | QUIC flood | partial |
-| ATT-074 | SIP / VoIP flood | pending |
-| ATT-124 | IPv6 volumetric (beyond reachability) | partial |
-| ATT-135 | SCTP flood | pending |
-| ATT-137 | Multicast / broadcast storm | pending |
-
-### 18.2 Packet-processing (7 ATT-*)
-
-ATT-004 ACK · ATT-005 SYN-ACK · ATT-006 RST · ATT-007 TCP flag floods · ATT-009 out-of-state TCP · ATT-010 fragmentation · ATT-014 ESP/IPsec flood
-
-### 18.3 State exhaustion (8 ATT-*)
-
-ATT-003 SYN · ATT-008 TCP connection · ATT-075 app connection · ATT-123 SMTP · ATT-125 NAT/firewall state · ATT-136 IKE/IPsec · ATT-138 SSH · ATT-139 FTP
-
-### 18.4 Application L7 (32 ATT-*)
-
-Core floods: ATT-051 GET · ATT-052 POST · ATT-053 HEAD · ATT-056 API · ATT-058 cache bust (**implemented**) · ATT-070 HTTP/3/QUIC app · ATT-072 gRPC · ATT-073 XML-RPC · ATT-108 webhook · ATT-109 health-check
-
-Origin/edge exposure: ATT-100 direct bypass (**impl**) · ATT-101 leak scan (**impl**) · ATT-102 WAF (**impl**) · ATT-103 CDN bypass · ATT-122 cert/SAN · ATT-126 stale DNS · ATT-127 DNS hostname bypass · ATT-128 canary path · ATT-129 admin exposure · ATT-130 ephemeral ports · ATT-131 WAF-to-origin · ATT-132 TRACE/methods · ATT-170 WAF bypass · ATT-174 CORS · ATT-176 HTTP/2 readiness
-
-Extended HTTP: ATT-140 pipelining · ATT-141 Range · ATT-142 conditional revalidation · ATT-145 CAPTCHA · ATT-153 HTTP/3 SETTINGS · ATT-167 MQTT
-
-### 18.5 Computational (11 ATT-*)
-
-ATT-054 expensive endpoint · ATT-064 TLS handshake · ATT-065 renegotiation · ATT-067 Rapid Reset · ATT-069 MadeYouReset · ATT-110 HTTP/2 priority · ATT-111 TLS 0-RTT · ATT-147 ReDoS · ATT-152 QPACK · ATT-155 OCSP · ATT-156 cipher negotiation
-
-### 18.6 Memory exhaustion (13 ATT-*)
-
-ATT-059 large POST · ATT-060 slowloris · ATT-061 slow POST/RUDY · ATT-062 slow read · ATT-063 generic low-and-slow · ATT-068 CONTINUATION · ATT-071 WebSocket · ATT-104 SSE · ATT-113 file upload · ATT-148 JSON bomb · ATT-149 XML bomb · ATT-150 HPACK bomb · ATT-151 HTTP/2 push promise
-
-### 18.7 Backend exhaustion (12 ATT-*)
-
-ATT-055 DB exhaustion · ATT-057 GraphQL · ATT-105 search · ATT-106 export/report · ATT-107 batch API · ATT-112 OAuth/token · ATT-114 GraphQL batch · ATT-143 checkout/cart · ATT-144 OTP/SMS cost · ATT-157 signup · ATT-158 password reset · ATT-166 Elasticsearch
-
-### 18.8 DNS exhaustion (13 ATT-*)
-
-ATT-041 query flood · ATT-043 NXDOMAIN · ATT-044 water-torture · ATT-045 laundering · ATT-046 garbage · ATT-047 phantom domain · ATT-048 lock-up · ATT-049 NXNSAttack · ATT-050 DNSBomb · ATT-159 DoH/DoT · ATT-160 TCP fallback · ATT-161 zone walking · ATT-162 secondary failover
-
-### 18.9 Reflection (15 ATT-*)
-
-ATT-020 SSDP · ATT-021 SNMP · ATT-022 CHARGEN/QOTD · ATT-023 mDNS/NetBIOS/WS-Discovery · ATT-024 portmap/RIPv1/BitTorrent/Jenkins · ATT-025 DTLS/SIP/RDP/TFTP/ARMS/CoAP · ATT-026 QUIC reflection · ATT-027 TCP middlebox · ATT-116 MSSQL · ATT-117 Jenkins/CI · ATT-118 CoAP IoT · ATT-163 STUN/TURN · ATT-164 IPMI · ATT-165 Redis direct · ATT-168 OpenVPN/WireGuard
-
-### 18.10 Amplification (7 ATT-*)
-
-ATT-016 DNS reflection · ATT-017 NTP · ATT-018 CLDAP · ATT-019 Memcached · ATT-042 authoritative/resolver · ATT-115 ANY/TXT · ATT-134 Smurf/ICMP-broadcast
-
-### 18.11 Exploit-based DoS (6 ATT-*)
-
-ATT-011 Ping of Death · ATT-012 Teardrop · ATT-119 IP options · ATT-120 malformed QUIC · ATT-133 Land attack · ATT-154 QUIC migration abuse
-
-### 18.12 Delivery patterns (17 ATT-*)
-
-ATT-090 direct · ATT-091 spoofed · ATT-092 DRDoS · ATT-093 botnet (soc_only) · ATT-094 carpet bombing · ATT-095 pulse-wave · ATT-096 multi-vector (soc_only) · ATT-097 app-aware · ATT-098 ransom DDoS · ATT-099 multi-destination · ATT-121 adaptive evasion · ATT-146 residential proxy · ATT-169 API scraping · ATT-171 kill-switch/runbook · ATT-172 telemetry blind spot · ATT-173 recovery drill (soc_only) · ATT-175 rate-limit evasion
+`ATTACK_VECTOR_REGISTRY` is the only complete ATT inventory. It currently contains 254 entries: 249 DDoS-scored entries and 5 entries assigned only to non-DDoS exhausted-resource families. The scored distribution is 79 `implemented`, 92 `partial`, 78 `soc_only`, and 0 `pending` (171/249, or 68.7%, are implemented or partial). Do not copy static ID ranges into release evidence; run `npm run vector:taxonomy:validate`.
 
 ---
 
-## 19. WAF vulnerability registry (WV-001–008)
+## 19. WAF vulnerability registry (42 entries)
 
-Separate from DDoS taxonomy — SOC-only offensive WAF validation (`waf.offensive_*.soc` checks):
-
-WV-001 SQLi · WV-002 XSS · WV-003 RCE · WV-004 path traversal · WV-005 command injection · WV-006 LDAP injection · WV-007 SSTI · WV-008 combined suite
+`WAF_VULNERABILITY_REGISTRY` contains 42 current entries. Their mapped checks and execution classes are defined in the machine-readable registries and validated with the same taxonomy command; this document does not maintain a second hand-copied WV inventory.
 
 ---
 
-## 20. Non-DDoS availability threats (ND-001–009)
+## 20. Non-DDoS availability threats (12 entries)
 
-ND-001 BGP hijack · ND-002 route leak · ND-003 DNS hijack/poisoning · ND-004 autoscaling cost · ND-005 alert blind spots · ND-006 credential stuffing · ND-007 provider API exhaustion · ND-008 log/SIEM cost · ND-009 CT log noise
+`NON_DDOS_AVAILABILITY_THREATS` contains 12 current entries. They remain outside the 249-entry DDoS-scored status denominator; use the source registry and validator output for the complete ND inventory.
 
 ---
 
-## 21. Catalog check coverage (all 175 checks mapped)
+## 21. Catalog check coverage (all 249 checks mapped)
 
 Every `check_id` in `checks.mjs` maps to at least one ATT-*, ND-*, or WV-* row. Validator fails on orphan checks.
 
@@ -586,7 +523,7 @@ Every `check_id` in `checks.mjs` maps to at least one ATT-*, ND-*, or WV-* row. 
 | `tls.*` | TLS/connection | ATT-059–065, ATT-155–156 |
 | `protocol.*` | HTTP/2–3/gRPC/WS | ATT-066–072, ATT-104, ATT-150–154, ATT-176 |
 | `waf.*` (safe) | WAF readiness | ATT-102, ATT-170, ATT-175 |
-| `waf.offensive_*.soc` | WAF vuln validation | WV-001–008 |
+| `waf.offensive_*.soc` | WAF vuln validation | WV-* |
 | `ops.*` / `high_scale.*` | SOC/operational | ATT-171–173, ND-004–005 |
 | `path.*` | Canary path | ATT-128 |
 
@@ -594,10 +531,10 @@ Every `check_id` in `checks.mjs` maps to at least one ATT-*, ND-*, or WV-* row. 
 
 ## 22. Remaining implementation work (all families)
 
-Status 2026-08-29: every registered vector has catalog coverage (readiness posture, exposure inventory, or SOC-gated marker) — zero `pending`. The only open execution scope is the SOC-gated remainder:
+Current validator status: every registered vector has catalog coverage (readiness posture, exposure inventory, or SOC-gated marker) — zero `pending` in the 249-entry DDoS-scored registry. The only open execution scope is the SOC-gated remainder:
 
 | Family | Catalog coverage | Remaining execution scope |
 |---|---|---|
 | All 12 families | 0 pending — readiness/exposure checks in `CHECK_CATALOG` | Live scenario execution via certified governed partner adapter (SOC-011 / DET-023) + staging evidence per family (DET-025) |
 
-**Zero orphan catalog checks.** **149 ATT-* registered and mapped.** Reflection, amplification, and exploit-posture families are `implemented` in-repo; flood/stress execution is deliberately SOC-gated and never ships as reusable attack tooling.
+**Zero orphan catalog checks.** **254 ATT-* registered and mapped.** Reflection, amplification, and exploit-posture families are `implemented` in-repo; flood/stress execution is deliberately SOC-gated and never ships as reusable attack tooling.

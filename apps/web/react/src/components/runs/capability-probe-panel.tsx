@@ -4,7 +4,6 @@ import {
   capabilityProbeKindLabel,
   domXssValidationLabel,
   externalResultTone,
-  outsideInPostureExplanation,
   outsideInPostureLabel,
   postureLabelTone,
   probeEventMetadata,
@@ -21,9 +20,40 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
   return fallback;
 }
 
+function hasValue(value: unknown) {
+  if (value === undefined || value === null || value === '') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as object).length > 0;
+  return true;
+}
+
+function getValue(item: DataItem | null | undefined, keys: string[]) {
+  if (!item) return undefined;
+  for (const key of keys) {
+    const value = item[key];
+    if (hasValue(value)) return value;
+  }
+  return undefined;
+}
+
+function formatValue(value: unknown, fallback = '—') {
+  if (!hasValue(value)) return fallback;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function formatList(values: unknown, fallback = '—') {
   if (!Array.isArray(values) || values.length === 0) return fallback;
-  return values.map((entry) => String(entry)).join(', ');
+  if (values.every((entry) => ['string', 'number', 'boolean'].includes(typeof entry))) {
+    return values.map((entry) => String(entry)).join(', ');
+  }
+  return formatValue(values, fallback);
 }
 
 function formatBool(value: unknown) {
@@ -32,22 +62,28 @@ function formatBool(value: unknown) {
   return '—';
 }
 
-type EvidenceRow = { label: string; value: string };
+type EvidenceRow = { label: string; value: string; fullWidth?: boolean };
 
 function formatMarkerProbes(meta: DataItem) {
   const summary = meta.marker_summary as DataItem | undefined;
   if (summary && typeof summary === 'object') {
-    const blocked = getString(summary, ['blocked_count'], '0');
-    const allowed = getString(summary, ['allowed_count'], '0');
-    const challenged = getString(summary, ['challenged_count'], '0');
-    const sent = getString(summary, ['probes_sent'], '0');
-    return `${blocked} blocked, ${allowed} allowed, ${challenged} challenged (${sent} probes)`;
+    const outcomes = [
+      ['blocked_count', 'blocked'],
+      ['allowed_count', 'allowed'],
+      ['challenged_count', 'challenged'],
+    ].flatMap(([key, label]) => hasValue(summary[key]) ? [`${formatValue(summary[key])} ${label}`] : []);
+    const sent = getValue(summary, ['probes_sent']);
+    if (outcomes.length > 0) {
+      return `${outcomes.join(', ')}${hasValue(sent) ? ` (${formatValue(sent)} probes)` : ''}`;
+    }
+    return hasValue(sent) ? `${formatValue(sent)} probes` : '—';
   }
 
   if (!Array.isArray(meta.marker_probes) || meta.marker_probes.length === 0) return '—';
 
   return meta.marker_probes
     .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return formatValue(entry);
       const row = entry as DataItem;
       const family = getString(row, ['family']);
       const variant = getString(row, ['variant']);
@@ -57,8 +93,9 @@ function formatMarkerProbes(meta: DataItem) {
           ? 'blocked'
           : row.allowed === true
             ? 'allowed'
-            : 'inconclusive';
-      return variant ? `${family}/${variant}: ${outcome}` : `${family}: ${outcome}`;
+            : '—';
+      const label = variant ? `${family}/${variant}` : family;
+      return label ? `${label}: ${outcome}` : formatValue(row);
     })
     .join(', ');
 }
@@ -71,11 +108,12 @@ function formatVendorCandidates(meta: DataItem) {
   return meta.vendor_candidates
     .slice(0, 3)
     .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return formatValue(entry);
       const row = entry as DataItem;
       const vendor = getString(row, ['vendor']);
       const product = getString(row, ['product']);
       const confidence = row.confidence;
-      const label = product ? `${vendor}/${product}` : vendor;
+      const label = vendor && product ? `${vendor}/${product}` : vendor || product || formatValue(row);
       if (confidence === undefined || confidence === null || confidence === '') return label;
       return `${label} (${confidence})`;
     })
@@ -88,8 +126,6 @@ function outsideInWafScanRows(meta: DataItem): EvidenceRow[] {
     { label: 'Detected vendor', value: getString(meta, ['detected_vendor', 'waf_product_hint']) },
     { label: 'Scan phases', value: formatList(meta.scan_plan) },
     { label: 'Generic WAF signals', value: formatList(meta.generic_waf_reasons) },
-    { label: 'DNS hint', value: getString(meta, ['dns_chain_hint']) },
-    { label: 'TLS protocol', value: getString(meta, ['tls_protocol_hint', 'tls_protocol']) },
     {
       label: 'Redirect hops',
       value: meta.redirect_hops === undefined || meta.redirect_hops === null
@@ -104,7 +140,7 @@ function outsideInWafScanRows(meta: DataItem): EvidenceRow[] {
     { label: 'Origin bypass', value: formatBool(meta.origin_bypass_confirmed) },
     {
       label: 'DOM XSS validation',
-      value: domXssValidationLabel(getString(meta, ['dom_xss_validation'], 'agent_required')),
+      value: domXssValidationLabel(getString(meta, ['dom_xss_validation'])),
     },
     { label: 'Marker probes', value: formatMarkerProbes(meta) },
   ];
@@ -119,7 +155,7 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         { label: 'Origin IPs', value: formatList(meta.origin_ips) },
         { label: 'IPv6 addresses', value: formatList(meta.ipv6_addrs) },
         { label: 'Subdomains scanned', value: formatList(meta.subdomains_scanned) },
-        { label: 'Leak count', value: getString(meta, ['leak_count'], '0') },
+        { label: 'Leak count', value: getString(meta, ['leak_count']) },
       ];
     case 'host_sni_bypass':
       return [
@@ -133,7 +169,7 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         { label: 'Scan host', value: getString(meta, ['scan_host']) },
         { label: 'Open ports', value: formatList(meta.open_ports) },
         { label: 'Risky admin ports open', value: formatList(meta.risky_admin_ports_open) },
-        { label: 'Exposure count', value: getString(meta, ['exposure_count'], '0') },
+        { label: 'Exposure count', value: getString(meta, ['exposure_count']) },
       ];
     case 'waf_enforcement_probe':
       return [
@@ -151,8 +187,8 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
       ];
     case 'dnssec_posture':
       return [
-        { label: 'DNSKEY count', value: getString(meta, ['dnskey_count'], '0') },
-        { label: 'DS count', value: getString(meta, ['ds_count'], '0') },
+        { label: 'DNSKEY count', value: getString(meta, ['dnskey_count']) },
+        { label: 'DS count', value: getString(meta, ['ds_count']) },
         { label: 'DNSSEC configured', value: formatBool(meta.dnssec_configured) },
         { label: 'DNSSEC missing', value: formatBool(meta.dnssec_missing) },
       ];
@@ -171,7 +207,7 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
     case 'dns_failover_posture':
       return [
         { label: 'Nameservers', value: formatList(meta.nameservers) },
-        { label: 'Nameserver count', value: getString(meta, ['nameserver_count'], '0') },
+        { label: 'Nameserver count', value: getString(meta, ['nameserver_count']) },
         { label: 'Weak failover', value: formatBool(meta.weak_failover) },
       ];
     case 'tls_audit':
@@ -188,11 +224,12 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         { label: 'Cache key weakness', value: formatBool(meta.cache_key_weakness) },
         {
           label: 'Observations',
-          value: formatList(
-            Array.isArray(meta.observations)
-              ? meta.observations.map((entry) => String((entry as DataItem).status ?? ''))
-              : [],
-          ),
+          value: Array.isArray(meta.observations)
+            ? formatList(meta.observations.map((entry) => {
+              if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+              return getValue(entry as DataItem, ['status']) ?? entry;
+            }))
+            : '—',
         },
       ];
     case 'api_surface_scan':
@@ -200,10 +237,15 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
         {
           label: 'Exposed paths',
           value: Array.isArray(meta.exposed_paths)
-            ? meta.exposed_paths.map((entry) => `${entry.path} (${entry.status})`).join(', ')
+            ? formatList(meta.exposed_paths.map((entry) => {
+              if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+              const path = getString(entry as DataItem, ['path']);
+              const status = getString(entry as DataItem, ['status']);
+              return path ? `${path}${status ? ` (${status})` : ''}` : entry;
+            }))
             : formatList(meta.discovered_paths),
         },
-        { label: 'Exposure count', value: getString(meta, ['exposure_count'], '0') },
+        { label: 'Exposure count', value: getString(meta, ['exposure_count']) },
       ];
     case 'cors_posture_probe':
       return [
@@ -222,35 +264,62 @@ function rowsForProbeKind(probeKind: string, meta: DataItem): EvidenceRow[] {
       ];
     default:
       return Object.entries(meta)
-        .filter(([key]) => !['probe_kind', 'profile_kind', 'external_result'].includes(key))
+        .filter(([key]) => ![
+          'probe_kind',
+          'profile_kind',
+          'external_result',
+          'probe_job_id',
+          'probe_worker_id',
+          'verdict_consequence',
+          'consequence_for_verdict',
+          'consequence',
+        ].includes(key))
         .slice(0, 8)
         .map(([key, value]) => ({
           label: key.replaceAll('_', ' '),
-          value: Array.isArray(value) ? formatList(value) : String(value),
+          value: formatValue(value),
         }));
   }
 }
 
 function OutsideInWafPostureSummary({ meta }: { meta: DataItem }) {
   const postureRaw = getString(meta, ['posture_label', 'posture_status']);
-  const postureLabel = outsideInPostureLabel(postureRaw);
+  if (!postureRaw) return null;
 
   return (
     <div className="capability-probe-posture-row verdict-explanation-item verdict-explanation-item--full">
       <span className="verdict-explanation-label">Posture</span>
       <div className="capability-probe-posture-value">
-        <Badge tone={postureLabelTone(postureRaw)}>{postureLabel || '—'}</Badge>
-        {postureRaw ? <p className="muted small">{outsideInPostureExplanation(postureRaw)}</p> : null}
+        <Badge tone={postureLabelTone(postureRaw)}>{outsideInPostureLabel(postureRaw)}</Badge>
       </div>
     </div>
   );
 }
 
+function eventProofRows(event: DataItem, meta: DataItem): EvidenceRow[] {
+  const consequence = getValue(event, ['verdict_consequence', 'consequence_for_verdict', 'consequence'])
+    ?? getValue(meta, ['verdict_consequence', 'consequence_for_verdict', 'consequence']);
+  return [
+    { label: 'Event ID', value: formatValue(getValue(event, ['id'])) },
+    { label: 'Event source', value: formatValue(getValue(event, ['source'])) },
+    { label: 'Producer', value: formatValue(getValue(event, ['producer_kind'])) },
+    { label: 'Signal type', value: formatValue(getValue(event, ['signal_type', 'type'])) },
+    { label: 'Probe job ID', value: formatValue(getValue(meta, ['probe_job_id'])) },
+    { label: 'Probe worker ID', value: formatValue(getValue(meta, ['probe_worker_id'])) },
+    { label: 'Nonce hash', value: formatValue(getValue(event, ['nonce_hash'])), fullWidth: true },
+    { label: 'Verdict consequence', value: formatValue(consequence), fullWidth: true },
+  ].filter((row) => row.value !== '—');
+}
+
 export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
   const { meta, probeKind, externalResult } = probeEventMetadata(event);
-  const rows = rowsForProbeKind(probeKind, meta);
+  const rows = [
+    ...eventProofRows(event, meta),
+    ...rowsForProbeKind(probeKind, meta),
+  ].filter((row) => row.value !== '—');
   const errorClass = getString(meta, ['error_class']);
   const isOutsideInWafScan = probeKind === 'outside_in_waf_scan';
+  const hasPosture = Boolean(getString(meta, ['posture_label', 'posture_status']));
 
   return (
     <article className="capability-probe-card">
@@ -265,14 +334,26 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
       <div className="verdict-explanation-grid">
         {isOutsideInWafScan ? <OutsideInWafPostureSummary meta={meta} /> : null}
         {rows.map((row) => (
-          <ExplanationField key={row.label} label={row.label} value={row.value} />
+          <ExplanationField
+            key={row.label}
+            label={row.label}
+            value={row.value}
+            fullWidth={row.fullWidth}
+          />
         ))}
+        {rows.length === 0 && !hasPosture ? (
+          <p className="muted small">No additional capability metadata was recorded for this event.</p>
+        ) : null}
       </div>
     </article>
   );
 }
 
 export function CapabilityProbeResultsPanel({ events }: { events: DataItem[] }) {
+  if (events.length === 0) {
+    return <p className="muted small">No capability probe events were recorded for this run.</p>;
+  }
+
   return (
     <div className="stack">
       {events.map((event, index) => (
