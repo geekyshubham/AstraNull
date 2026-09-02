@@ -26,6 +26,7 @@ import type { PortalConfig } from '../lib/types';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Reveal } from '../components/ui/motion';
 import { Select } from '../components/ui/select';
 import { BrandMark } from '../components/layout/brand';
 
@@ -439,7 +440,7 @@ function ValidationContractPreview() {
 
 function ProofChainSection() {
   return (
-    <section className="public-section public-section--spaced" id="proof" aria-labelledby="proof-heading">
+    <Reveal as="section" className="public-section public-section--spaced" id="proof" aria-labelledby="proof-heading">
       <p className="eyebrow">Evidence before verdict</p>
       <h2 id="proof-heading">A conclusion should show its chain of proof.</h2>
       <p className="public-section-lead">AstraNull starts with declared scope, records bounded observations, and keeps uncertainty explicit. A verdict is the end of that chain, not a substitute for it.</p>
@@ -452,7 +453,7 @@ function ProofChainSection() {
           </div>
         </CardContent>
       </Card>
-    </section>
+    </Reveal>
   );
 }
 
@@ -471,7 +472,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
       <main id="public-main" className="public-wrap">
         <section className="public-section">
           <div className="public-hero-grid">
-            <div>
+            <Reveal>
               <p className="eyebrow">No-access-first DDoS readiness validation</p>
               <h1 className="auth-title">Prove DDoS readiness without handing over your cloud keys.</h1>
               <p className="public-hero-lead">{promise}</p>
@@ -484,7 +485,7 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                 ) : (
                   <AnchorButton href={loginUrl}>Log in</AnchorButton>
                 )}
-                <AnchorButton href="#proof" variant="ghost">See the proof chain</AnchorButton>
+                <AnchorButton href="#proof" variant="secondary">See the proof chain</AnchorButton>
               </div>
               <div className="public-hero-meta" id="trust" aria-label="Platform trust commitments">
                 {LANDING_TRUST_ITEMS.map(({ icon: Icon, text }) => (
@@ -494,14 +495,16 @@ export function PublicLandingPage({ config }: PublicPageProps) {
                   </span>
                 ))}
               </div>
-            </div>
-            <ValidationContractPreview />
+            </Reveal>
+            <Reveal step={1}>
+              <ValidationContractPreview />
+            </Reveal>
           </div>
         </section>
 
         <ProofChainSection />
 
-        <section className="public-section public-section--compare" id="compare">
+        <Reveal as="section" className="public-section public-section--compare" id="compare">
           <h2>Compare the operating model, not a marketing score.</h2>
           <p className="public-section-lead">The distinction is where scope comes from, what access is required, who controls high-scale work, and what evidence remains after the run.</p>
           <div
@@ -531,13 +534,13 @@ export function PublicLandingPage({ config }: PublicPageProps) {
               </tbody>
             </table>
           </div>
-        </section>
+        </Reveal>
 
-        <section className="public-cta-final">
+        <Reveal as="section" className="public-cta-final">
           <h2>Start with the scope you need to prove.</h2>
           <p>Request reviewed access, or return to an existing customer workspace.</p>
           <PublicAccessActions signupEnabled={signupEnabled} loginUrl={loginUrl} />
-        </section>
+        </Reveal>
 
         <footer className="public-footer">
           <span>© {productName} · Defensive DDoS readiness validation.</span>

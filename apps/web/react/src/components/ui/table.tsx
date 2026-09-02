@@ -1,5 +1,6 @@
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn, DEPLOYMENT_MODE_GAP_MESSAGE } from '../../lib/utils';
+import { useScrollEdges } from '../../lib/scroll-edges';
 
 export type TableColumn<T> = {
   key: string;
@@ -130,11 +131,16 @@ function DataTableChrome<T>({
   className?: string | undefined;
   children: ReactNode;
 }) {
+  const { setScrollNode, edges } = useScrollEdges<HTMLDivElement>();
+
   return (
-    <>
+    // The outer element carries the edge affordance: it must not scroll with
+    // the content it shades.
+    <div className="table-scroller" data-scroll-x={edges}>
       {/* tabIndex=0 makes the horizontally-scrollable region keyboard-accessible
           (WCAG 2.1.1 / axe scrollable-region-focusable). role+label name it. */}
       <div
+        ref={setScrollNode}
         className={cn('table-wrap', className)}
         tabIndex={0}
         role="region"
@@ -145,7 +151,7 @@ function DataTableChrome<T>({
           {children}
         </table>
       </div>
-    </>
+    </div>
   );
 }
 

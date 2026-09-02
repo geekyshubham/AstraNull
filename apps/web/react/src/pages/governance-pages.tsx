@@ -1070,7 +1070,7 @@ export function NotificationsPage({
           <DeliveryOperationPanel titleId="notification-preview-title" title="Preview" description="Dry-run — no ledger changes">
             <Button
               size="sm"
-              variant="ghost"
+              variant="secondary"
               loading={busy === 'process-retries-preview'}
               disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'process-retries-preview', false, dlqItems.length))}
               title={notificationOperationDisabledReason(canWrite, busy, 'process-retries-preview', false, dlqItems.length) || undefined}
@@ -1078,7 +1078,7 @@ export function NotificationsPage({
             >Preview due retries</Button>
             <Button
               size="sm"
-              variant="ghost"
+              variant="secondary"
               loading={busy === 'redrive-dlq-preview'}
               disabled={Boolean(notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-preview', true, dlqItems.length))}
               title={notificationOperationDisabledReason(canWrite, busy, 'redrive-dlq-preview', true, dlqItems.length) || undefined}

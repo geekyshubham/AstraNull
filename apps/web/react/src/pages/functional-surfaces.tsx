@@ -81,7 +81,8 @@ import {
   roadmapTierMeta,
   roadmapTotalItems
 } from '../lib/waf-helpers';
-import { formatDate, formatRunDuration, pluralize, scoreTone } from '../lib/utils';
+import { cn, formatDate, formatRunDuration, pluralize, scoreTone } from '../lib/utils';
+import { useTransitionKey } from '../lib/motion';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 
@@ -829,6 +830,8 @@ export function AgentsPage({
   const [trustKeyLoadError, setTrustKeyLoadError] = useState('');
   const [auxLoading, setAuxLoading] = useState(false);
   const [agentsTab, setAgentsTab] = useState<'fleet' | 'install' | 'operations'>('fleet');
+  // Only a deliberate tab change replays the panel rise; the first paint stays still.
+  const { entering: agentsPanelEntering } = useTransitionKey(agentsTab);
   const [selectedTargetGroupId, setSelectedTargetGroupId] = useState('');
   const [tokenScope, setTokenScope] = useState<{ id: string; label: string } | null>(null);
 
@@ -1661,7 +1664,7 @@ export function AgentsPage({
       />
 
       {agentsTab === 'fleet' ? (
-        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
+        <div className={cn('stack', 'agents-panel-stack', agentsPanelEntering && 'tab-rise')} role="tabpanel" id="agents-panel-fleet" aria-labelledby="agents-tab-fleet">
           <SurfaceTableCard
             title="Registered agents"
             description="Outbound-only observation agents are optional for external readiness validation. Use them when origin validation must correlate an outside probe with an observation from inside the protected path. Select a row for details."
@@ -1745,7 +1748,7 @@ export function AgentsPage({
       ) : null}
 
       {agentsTab === 'install' ? (
-        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-install" aria-labelledby="agents-tab-install">
+        <div className={cn('stack', 'agents-panel-stack', agentsPanelEntering && 'tab-rise')} role="tabpanel" id="agents-panel-install" aria-labelledby="agents-tab-install">
           <ol className="agents-install-flow" aria-label="Agent installation sequence">
             <li>
               <span className="agents-step-index" aria-hidden="true">1</span>
@@ -1887,7 +1890,7 @@ export function AgentsPage({
       ) : null}
 
       {agentsTab === 'operations' ? (
-        <div className="stack agents-panel-stack" role="tabpanel" id="agents-panel-operations" aria-labelledby="agents-tab-operations">
+        <div className={cn('stack', 'agents-panel-stack', agentsPanelEntering && 'tab-rise')} role="tabpanel" id="agents-panel-operations" aria-labelledby="agents-tab-operations">
           <section className="agents-operations-note" aria-labelledby="signed-release-boundary-title">
             <span className="agents-operations-icon" aria-hidden="true"><ShieldCheck size={17} /></span>
             <div className="agents-operations-copy">

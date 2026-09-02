@@ -5,13 +5,21 @@ export type CardProps = React.HTMLAttributes<HTMLDivElement> & {
   density?: 'default' | 'compact';
   /** Slightly elevated surface; uses the shared theme elevation tokens. */
   raised?: boolean;
+  /** The whole card navigates or opens something, so it may respond to hover. */
+  interactive?: boolean;
 };
 
-export function Card({ className, density = 'default', raised = false, ...props }: CardProps) {
+export function Card({ className, density = 'default', raised = false, interactive = false, ...props }: CardProps) {
   return (
     <div
       data-ui="card"
-      className={cn('card', density === 'compact' && 'card-compact', raised && 'card-raised', className)}
+      className={cn(
+        'card',
+        density === 'compact' && 'card-compact',
+        raised && 'card-raised',
+        interactive && 'card-interactive',
+        className
+      )}
       {...props}
     />
   );

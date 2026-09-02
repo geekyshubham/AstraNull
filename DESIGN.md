@@ -61,15 +61,78 @@ Dark depth comes from frost hairlines, not charcoal layers or glass blur. Canvas
 
 Light depth comes from a tinted canvas, white surfaces, recessed wells, and restrained shadows. Orange stays byte-identical across themes. Because orange ink is only about 2.34:1 on the light canvas, primary controls use black-on-orange fills and light-theme focus uses neutral dark ink.
 
-## Geometry, spacing, and motion
+## Geometry and spacing
 
 - Radius scale: 4 / 8 / 16 / pill.
 - Spacing scale: 4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48.
 - Sidebar: 248px expanded; responsive drawer below 1120px.
 - Main page measure: 1560px where the shell owns width.
-- Product motion: 120ms micro/hover, 200ms surfaces/drawers/modals, 300ms loading/value changes.
-- Animate only opacity and transform where practical. No decorative infinite motion; functional loading indicators may rotate.
-- `prefers-reduced-motion: reduce` disables all animation and transition and restores auto scrolling; computed-style browser guards pin this behavior.
+
+## Motion system
+
+Motion is a signal, not decoration. Every animation in the portal answers "what
+just changed?" — a route arrived, a value moved, a surface opened, work is in
+flight. Nothing animates to draw attention to itself.
+
+### Duration tiers
+
+| Tier | Token | Use |
+| --- | --- | --- |
+| Micro | `--motion-micro` 90ms | Press feedback, accent-rail opacity |
+| Fast | `--motion-fast` 120ms | Hover, focus, color changes |
+| Base | `--motion-base` 200ms | Surfaces, drawers, modals, route enter, scroll affordance |
+| Slow | `--motion-slow` 300ms | Loading, value changes, reveal |
+| Measure | `--motion-measure` 900ms | Chart and gauge value sweeps only |
+
+Easing is `--ease-out-soft` (`cubic-bezier(0.16, 1, 0.3, 1)`) for entrances and
+`--motion-ease` for the legacy shared transitions.
+
+### Sanctioned vocabulary
+
+- **Route enter** — 200ms opacity plus 8px rise, replayed on navigation only.
+  `RouteTransition` keys on the route, so a page load stays still; this remains a
+  navigation response, not page-load choreography.
+- **Tab panel rise** — 240ms, on deliberate tab change only.
+- **Value tween** — `useAnimatedNumber` counts a metric toward its new value on
+  the 300ms tier; gauge arcs sweep on the measure tier. The settled string is
+  always byte-identical to a static render.
+- **Micro-interaction** — hover wash, focus ring, 1px button press, nav accent rail.
+- **Functional loading** — spinner rotation (800ms) and skeleton shimmer.
+- **Surface enter** — modal and drawer open on the base tier.
+- **Scroll-reveal** — marketing surfaces only, via `Reveal`. Never inside the
+  operator console: an operator scanning a table must not wait on a reveal.
+
+Still excluded: aurora, neon/cyan identity, decorative gradients, glass-card
+stacks, scanlines, glow, decorative infinite motion, and parallax.
+
+### Accessibility contract
+
+- Animate only opacity and transform where practical.
+- `prefers-reduced-motion: reduce` disables all animation and transition and
+  restores auto scrolling; computed-style browser guards pin this behavior.
+- Motion helpers default to "reduced" until the preference is read, so no tween
+  can start before the preference is known. `Reveal` renders visible whenever
+  motion is unavailable, so content is never trapped in a pre-animation state.
+
+## Variant specificity rule
+
+The shared foundation declares component bases as `[data-ui='button'].btn` and
+`[data-ui='badge'].badge` — two classes. **Any rule that overrides a base
+declaration must match that specificity**, e.g. `[data-ui='badge'].badge-danger`
+or `.badge.badge-danger`, listed after the base.
+
+This is not stylistic. Single-class variant rules lost silently to the base
+regardless of source order, and the rendered result was: secondary buttons with a
+transparent border and fill (an outlined control rendering as a bare text label),
+compact 34px density never applying, and every status chip resolving to the same
+grey — semantic pass/review/gap color absent from the dark theme entirely. The
+tokens and the contrast tests described the intended design the whole time; only
+the cascade disagreed. Theme overrides go one level higher again
+(`:root[data-theme="light"] [data-ui='badge'].badge-danger`).
+
+Pages that inject styles as a runtime `<style>` element land after this sheet in
+the cascade. Shared geometry that must stay authoritative over them is written as
+`body <their selector>`.
 
 ## Shared components
 
@@ -79,7 +142,9 @@ Light depth comes from a tinted canvas, white surfaces, recessed wells, and rest
 - **Chips/badges:** inset pill, mono uppercase label, semantic tint only for state.
 - **Tabs:** inset pill rail with pill selections, horizontal overflow, complete roving-keyboard behavior.
 - **Inputs/selects:** 4px radius, 44px control height, recessed token surface, visible compliant focus, bounded popup placement.
-- **Tables:** scroll within their named keyboard-focusable region; mono uppercase masthead, 2px separation, zebra rhythm, orange hover wash and left edge, tabular numerics. Do not collapse data tables into unreadable mobile cards.
+- **Tables:** scroll within their named keyboard-focusable region; mono uppercase masthead, 2px separation, zebra rhythm, orange hover wash and left edge, tabular numerics. Do not collapse data tables into unreadable mobile cards. `DataTable` wraps the scroll region in `.table-scroller`, which shades whichever horizontal edge still has content behind it and shades nothing when the table fits — a column clipped mid-word at the card edge is otherwise indistinguishable from truncated data.
+- **Chips in narrow columns:** badges never break inside a word. `overflow-wrap: anywhere` made a badge's min-content one character wide, so a `HOSTNAME` chip in an auto-layout column rendered as eight stacked letters. Use `.badge-identifier` for chips that genuinely carry a long unbroken identifier.
+- **Filter rails:** micro-labels are mono uppercase, matching the table masthead they sit against; search fields and selects share the 4px input radius and 44px control height.
 - **Progress:** 7px pill track, semantic fills, transform-based value update.
 - **Empty state:** 56px inset icon visual, concise heading/body, optional real action.
 

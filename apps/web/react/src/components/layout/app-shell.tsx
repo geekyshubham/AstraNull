@@ -7,6 +7,7 @@ import { canAccessRoute } from '../../lib/route-access';
 import type { NavItem, PortalData, RouteId, Session } from '../../lib/types';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
+import { RouteTransition } from '../ui/motion';
 import { Select } from '../ui/select';
 import { Brand } from './brand';
 
@@ -61,10 +62,21 @@ function ShellIconButton({ label, onClick, className, variant = 'ghost', buttonR
   );
 }
 
-function NavLink({ item, active, onClick }: { item: NavItem; active: boolean; onClick: () => void }) {
+function NavLink({
+  item,
+  active,
+  onClick,
+  buttonRef
+}: {
+  item: NavItem;
+  active: boolean;
+  onClick: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+}) {
   const Icon = item.icon;
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={cn('nav-item', active && 'active', active && 'is-active')}
       onClick={onClick}
@@ -103,10 +115,12 @@ export function AppShell({
     document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [topbarScrolled, setTopbarScrolled] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const activeNavRef = useRef<HTMLButtonElement>(null);
   const routeArrivedRef = useRef(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -139,6 +153,17 @@ export function AppShell({
       return acc;
     }, {});
   }, [visibleNavItems]);
+
+  // The topbar is sticky: it only earns a separating hairline once page content
+  // has actually moved underneath it.
+  useEffect(() => {
+    function onScroll() {
+      setTopbarScrolled(window.scrollY > 4);
+    }
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   useEffect(() => {
     if (!sidebarOpen || !window.matchMedia('(max-width: 1120px)').matches) return undefined;
@@ -197,6 +222,13 @@ export function AppShell({
   useEffect(() => {
     document.title = `${current.label} · ${NAV_GROUP_LABELS[current.group]} · AstraNull`;
   }, [current.label, current.group]);
+
+  // The nav list scrolls once enough routes are visible for a role, and the
+  // selected row could sit outside it — leaving only a sliver of the accent fill
+  // at the clipped edge, which reads as a stray bar rather than "you are here".
+  useEffect(() => {
+    activeNavRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [route, visibleNavItems]);
 
   useEffect(() => {
     if (!routeArrivedRef.current) {
@@ -287,7 +319,13 @@ export function AppShell({
             <div className="nav-group" key={group}>
               <p>{NAV_GROUP_LABELS[group]}</p>
               {grouped[group]?.map((item) => (
-                <NavLink key={item.id} item={item} active={item.id === route} onClick={() => navigate(item.id)} />
+                <NavLink
+                  key={item.id}
+                  item={item}
+                  active={item.id === route}
+                  buttonRef={item.id === route ? activeNavRef : undefined}
+                  onClick={() => navigate(item.id)}
+                />
               ))}
             </div>
           ))}
@@ -325,7 +363,7 @@ export function AppShell({
         tabIndex={-1}
         aria-label={`${current.label} workspace`}
       >
-        <header className="topbar">
+        <header className={cn('topbar', topbarScrolled && 'is-scrolled')}>
           <ShellIconButton label="Open navigation" className="menu-btn" buttonRef={menuButtonRef} expanded={sidebarOpen} controls="portal-navigation" onClick={() => setSidebarOpen(true)}>
             <Menu size={18} aria-hidden="true" focusable="false" />
           </ShellIconButton>
@@ -350,7 +388,7 @@ export function AppShell({
             </Button>
           </div>
         ) : null}
-        {children}
+        <RouteTransition routeKey={route}>{children}</RouteTransition>
       </main>
     </div>
   );

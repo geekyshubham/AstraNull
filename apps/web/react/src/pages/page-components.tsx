@@ -50,13 +50,14 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select, type SelectOption } from '../components/ui/select';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
+import { AnimatedNumber } from '../components/ui/motion';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
 import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
 import { isFindingOpen } from '../lib/findings-helpers';
 import { buildDetailHref } from '../lib/route-params';
-import { DEFENSIVE_RULES, ROUTE_BY_ID } from '../lib/navigation';
+import { DEFENSIVE_RULES, NAV_GROUP_LABELS, ROUTE_BY_ID } from '../lib/navigation';
 import { routeTabs } from '../lib/prototype-manifest';
 import type { DataItem, PortalConfig, PortalData, ReadinessFactor, RouteId, Session } from '../lib/types';
 import { countLabel, formatAuditAction, formatDate, formatNumber, formatResourceTypeLabel, formatSeverityLabel, pluralize, scoreTone } from '../lib/utils';
@@ -377,7 +378,9 @@ export function PageHeader({
   return (
     <div className="page-head">
       <div>
-        <p className="eyebrow">{eyebrow ?? item?.group}</p>
+        {/* The raw group id ("governance") leaked into the eyebrow whenever a page
+            passed no explicit one; the shared label is what the breadcrumb shows. */}
+        <p className="eyebrow">{eyebrow ?? (item ? NAV_GROUP_LABELS[item.group] : undefined)}</p>
         <h1>{title ?? item?.label}</h1>
         <p>{description ?? item?.description}</p>
       </div>
@@ -427,6 +430,20 @@ export function PageContextSummary({ children }: { children: ReactNode }) {
 
 type LucideIcon = typeof Activity;
 
+/**
+ * Count a KPI toward its value when the surface already resolved to a plain
+ * grouped integer. Ratios, dashes, dates, and every other composed value are
+ * rendered untouched, and the settled text is byte-identical to a static render.
+ */
+function KpiValue({ value }: { value: ReactNode }) {
+  if (typeof value !== 'string') return <>{value}</>;
+  const digits = value.replace(/,/g, '');
+  if (!/^\d{1,9}$/.test(digits)) return <>{value}</>;
+  const parsed = Number(digits);
+  if (formatNumber(parsed) !== value) return <>{value}</>;
+  return <AnimatedNumber value={parsed} />;
+}
+
 function KpiCell({
   label,
   value,
@@ -447,7 +464,7 @@ function KpiCell({
   return (
     <div className="kpi-cell">
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
+      <div className="kpi-value"><KpiValue value={value} /></div>
       {DeltaIcon ? (
         <div className={deltaClassName} style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}>
           <DeltaIcon size={12} aria-hidden />
@@ -1255,9 +1272,12 @@ export function DashboardPage({
         }
       />
       <PageContextSummary>
-        <span className="tabular-nums">{data.loadErrors.targetGroups ? '—' : formatNumber(activeTargetGroups.length)}</span> declared groups ·{' '}
-        <span className="tabular-nums">{correlatedChecksUnavailable ? '—' : formatNumber(correlatedChecks)}</span> correlated checks ·{' '}
-        <span className="tabular-nums">{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</span> evidence records · high-scale remains SOC-gated
+        <span className="tabular-nums">{data.loadErrors.targetGroups ? '—' : formatNumber(activeTargetGroups.length)}</span>{' '}
+        {`declared ${pluralize(activeTargetGroups.length, 'group')} · `}
+        <span className="tabular-nums">{correlatedChecksUnavailable ? '—' : formatNumber(correlatedChecks)}</span>{' '}
+        {`correlated ${pluralize(correlatedChecks, 'check')} · `}
+        <span className="tabular-nums">{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</span>{' '}
+        {`evidence ${pluralize(data.evidence.length, 'record')} · high-scale remains SOC-gated`}
       </PageContextSummary>
       <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" ariaLabel="Dashboard sections" />
       {tab === 'overview' ? (
@@ -1287,7 +1307,7 @@ export function DashboardPage({
                   {score !== null ? <span className="unit">/100</span> : null}
                 </>
               }
-              delta={readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : '—'}
+              delta={readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : 'No prior cycle recorded'}
               deltaVariant={
                 readinessDelta !== null && readinessDelta !== 0
                   ? readinessDelta > 0
@@ -1938,6 +1958,13 @@ export function TargetGroupsPage({
         </div>
       ) : null}
       <Card>
+        <CardHeader>
+          <CardTitle>Declared target groups</CardTitle>
+          <CardDescription>
+            Customer-declared scope with ownership proof, agent coverage, and the latest
+            recorded verdict. Open any row for its targets, checks, and evidence.
+          </CardDescription>
+        </CardHeader>
         <CardContent>
           <DataTable
             columns={groupColumns}
@@ -3245,6 +3272,13 @@ export function EnvironmentsPage({
         <div className={error ? 'form-banner error' : 'form-banner neutral'}>{error || message}</div>
       )}
       <Card>
+        <CardHeader>
+          <CardTitle>Environment records</CardTitle>
+          <CardDescription>
+            Authoritative environment records joined to declared target scope, agent coverage, and
+            recorded validation. Open any row for its groups, runs, and evidence.
+          </CardDescription>
+        </CardHeader>
         <CardContent>
           <DataTable
             columns={environmentColumns}
