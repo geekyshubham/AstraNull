@@ -90,7 +90,7 @@ SSH is restricted to a single operator address.
 | Probe mode | `signed-worker` (probe worker secret configured) |
 | Connectors | disabled |
 | High-scale adapter | disabled |
-| Image | current `sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c` (commit `3aeb9c0f`); initial release `sha256:26fcc57c…` retained for rollback |
+| Image | current `sha256:0ca1c7ac2e16c29e232fb4c9c278fa45edc483b133bbce4ecbed5a328083b518` (commit `f66cfe58`); prior `sha256:b8d5c984…` retained for rollback |
 
 Running services: `postgres`, `control-plane`, `probe-worker`,
 `password-recovery-worker`, `test-policy-runner`, `caddy` — all healthy.
@@ -123,12 +123,20 @@ Commit `3aeb9c0f4dd9646f1e2663a82f4011a82b6e95f2` was transferred as an exact `g
 
 Post-activation checks confirmed `/health`, `/ready`, migrations through `0053_target_edge_detection_provenance`, the authenticated/bounded `/v1/vectors` route, unauthenticated `401`, exact `target_id` enforcement, and a healthy probe worker. The worker image now includes `db/seeds/waf-product-catalog.json`; the previous `ENOENT` packaging failure did not recur.
 
+### Vector-library customer workflow release (2026-09-02)
+
+Commit `f66cfe589e52db1f4013067b4fcbc9c8e16c0581` was transferred as an exact `git archive` (archive SHA-256 `8562ac0351d5f3d1f3f84446b77e5aabe2e71c774c0cf50f8ac9882d9cfe5f99`), built on-host, and activated as immutable image `sha256:0ca1c7ac2e16c29e232fb4c9c278fa45edc483b133bbce4ecbed5a328083b518`. The exact extracted release tree is `/opt/astranull-release-f66cfe589e52db1f4013067b4fcbc9c8e16c0581`.
+
+Before activation, encrypted backup `/opt/astranull-backups/postgres-2026-09-02T21-39-12-887Z-25d0de98b284.dump.enc` and its manifest were structurally parsed, restore-validated, and retained root-owned with mode 600. The prior orchestration tree is retained at `/opt/astranull-rollback-pre-f66cfe589e52db1f4013067b4fcbc9c8e16c0581`; prior image `sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c` remains the rollback image. Rollback is to export that prior image for all three image-ID variables from `/opt/astranull/ops/aws`, run `docker compose up -d --no-build --force-recreate control-plane probe-worker password-recovery-worker test-policy-runner`, then verify all four containers healthy and `/health` plus `/ready` successful. The database was not migrated beyond `0053_target_edge_detection_provenance`, so code rollback requires no schema downgrade.
+
+Post-activation checks confirmed `/health=ok`, `/ready=ready`, byte-identical local/live `react-app.js` SHA-256 `638984bf9f7e708fa269191d68bcfa91f1ef326719c4d54a2112fd9b19be126d`, unauthenticated vector API `401`, authenticated admin login, all 721 vectors over exactly eight bounded API reads, 25 rendered rows and 29 UI pages, explicit target-group and exact-target selection, SOC-governed `APP-003` and monitor-only `AMP-073` with no run launch or POST, zero serious/critical Axe findings, and read-only launch controls absent at a 390px viewport.
+
 ### Operating the stack
 
 ```bash
 ssh -i ops/aws/.staging-key.pem ubuntu@34.201.159.68
 cd /opt/astranull/ops/aws
-IMG=sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c
+IMG=sha256:0ca1c7ac2e16c29e232fb4c9c278fa45edc483b133bbce4ecbed5a328083b518
 export ASTRANULL_CONTROL_PLANE_IMAGE_ID=$IMG \
        ASTRANULL_CORE_WORKER_IMAGE_ID=$IMG \
        ASTRANULL_CONNECTOR_WORKER_IMAGE_ID=$IMG
