@@ -139,7 +139,84 @@ sudo -E docker compose logs -f control-plane
 sudo -E docker compose restart control-plane
 ```
 
+## Production cutover to astranull.site (2026-09-02)
+
+The previous AWS account and its production host were deleted, so this account is now the
+only account and this instance is the live host for `astranull.site`.
+
+| Field | Value |
+|---|---|
+| URL | `https://astranull.site` (and `www.astranull.site`) |
+| Origin | `34.201.159.68` → `i-00c7a0be239bc83ea` |
+| TLS | Let's Encrypt, `CN=astranull.site`, issued 2026-09-02, valid to 2026-12-01 |
+| HTTP | port 80 returns `308` → `https://astranull.site/` |
+| Instance tags | `Environment=production`, `Hostname=astranull.site`, `DeleteAfter=none` |
+
+A second instance was **not** created. The instance in the resource table above was built
+fresh in this account earlier the same day and already runs the exact verified commit, so
+it was reconfigured for `astranull.site` rather than duplicating cost.
+
+### DNS change made
+
+`astranull.site` was on Cloudflare nameservers and returning **Cloudflare error 1016**
+(origin DNS error) because the old origin no longer existed. Cloudflare API access was not
+available, so the domain was moved to Namecheap BasicDNS, which this environment can manage.
+
+Nameservers: `aspen/mack.ns.cloudflare.com` → `dns1/dns2.registrar-servers.com`.
+
+The zone was then written in a single authoritative `namecheap.domains.dns.setHosts` call
+(the CLI silently discards MX records unless `EmailType=MX` is supplied, and `setHosts`
+replaces the whole record set, which also cleared two stale A records still pointing at the
+dead `34.199.50.155`):
+
+| Type | Host | Value | Pref | TTL |
+|---|---|---|---|---|
+| A | `@` | `34.201.159.68` | — | 300 |
+| A | `www` | `34.201.159.68` | — | 300 |
+| MX | `@` | `mx.zoho.in.` | 10 | 1800 |
+| MX | `@` | `mx2.zoho.in.` | 20 | 1800 |
+| MX | `@` | `mx3.zoho.in.` | 50 | 1800 |
+| TXT | `@` | `v=spf1 include:zoho.in ~all` | — | 1800 |
+| TXT | `@` | `zoho-verification=zb31047184.zmverify.zoho.in` | — | 1800 |
+
+**Email was preserved deliberately.** The domain has live Zoho mail; the three MX records,
+the SPF record and the Zoho verification TXT were carried across unchanged. Verified
+resolving from the authoritative nameservers after the change.
+
+Pre-change snapshot: `ops/aws/dns-backup/astranull.site-precutover-20260902T141639Z.txt`.
+
+### DNS rollback
+
+```bash
+# Return the domain to Cloudflare nameservers (records in the Cloudflare zone are intact,
+# since the zone itself was never edited — only the registrar's NS delegation changed).
+namecheap ns set astranull.site aspen.ns.cloudflare.com mack.ns.cloudflare.com
+```
+
+Cloudflare will then serve its own zone again. Note that zone still points at the deleted
+origin, so it would return error 1016 until its A record is updated.
+
+### SSH access note
+
+The security group allows SSH from single `/32` operator addresses. When the operator IP
+changes, SSH times out while ports 80/443 stay up. Add the new address:
+
+```bash
+MYIP=$(curl -s https://checkip.amazonaws.com)
+aws ec2 authorize-security-group-ingress --profile astranull-staging --region us-east-1 \
+  --group-id sg-024035b0882f38f85 \
+  --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${MYIP}/32}]"
+```
+
+Currently allowed for port 22: `108.191.200.121/32`, `123.252.204.182/32`. Prune stale
+entries when convenient.
+
 ## Teardown
+
+> **This host now serves production `astranull.site`.** Running the teardown below takes the
+> live site down. It remains recorded because the resources were created here and must be
+> deletable, but treat it as a decommission procedure, not routine cleanup. Point DNS
+> somewhere else first.
 
 Run in this order. Commands are filled in with real IDs as resources are created.
 

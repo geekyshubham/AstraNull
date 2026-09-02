@@ -1,0 +1,35 @@
+# astranull.site DNS snapshot before cutover to new AWS account
+# captured 2026-09-02T14:16:39Z via public DNS (Cloudflare zone not API-readable)
+
+## NS
+aspen.ns.cloudflare.com.
+mack.ns.cloudflare.com.
+
+## A
+172.67.202.107
+104.21.37.16
+
+## AAAA
+2606:4700:3032::6815:2510
+2606:4700:3037::ac43:ca6b
+
+## MX
+10 mx.zoho.in.
+50 mx3.zoho.in.
+20 mx2.zoho.in.
+
+## TXT
+"v=spf1 include:zoho.in ~all"
+"zoho-verification=zb31047184.zmverify.zoho.in"
+
+## CAA
+
+## SOA
+aspen.ns.cloudflare.com. dns.cloudflare.com. 2413840674 10000 2400 604800 1800
+
+## www
+172.67.202.107
+104.21.37.16
+
+## _dmarc
+
