@@ -83,6 +83,7 @@ import {
 } from '../lib/waf-helpers';
 import { cn, formatDate, formatRunDuration, pluralize, scoreTone } from '../lib/utils';
 import { useTransitionKey } from '../lib/motion';
+import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 
@@ -238,13 +239,7 @@ function formatRunStatusLabel(status: string) {
   return labels[status] ?? status.replace(/_/g, ' ');
 }
 
-function runStatusBadgeTone(status: string): 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted' {
-  if (status === 'verdicted') return 'success';
-  if (status === 'running' || status === 'collecting') return 'info';
-  if (status === 'cancelled' || status === 'failed') return 'danger';
-  if (status === 'planned') return 'muted';
-  return 'warn';
-}
+
 
 type BadgeTone = 'default' | 'success' | 'warn' | 'danger' | 'info' | 'muted';
 

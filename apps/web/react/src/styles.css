@@ -7349,3 +7349,97 @@ body .targets-page .targets-summary-cell span {
   padding: 0;
   background-image: none;
 }
+
+/* ── Plan usage grid ─────────────────────────────────────────────────────
+   The grid paints hairlines by showing its own background through a 1px gap,
+   so any cell the last row is short of rendered as a raw grey block — five
+   usage metrics in a three-column grid left one visible. A trailing filler
+   carries the cell surface across the remainder, and is suppressed when the
+   row is already complete at the current column count. */
+body .subscription-page .subscription-usage-grid::after {
+  content: '';
+  grid-column: auto / -1;
+  background: var(--surface);
+}
+
+body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:nth-child(3n):last-child)::after {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:nth-child(3n):last-child)::after {
+    display: block;
+  }
+
+  body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:nth-child(2n):last-child)::after {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  body .subscription-page .subscription-usage-grid::after {
+    display: none;
+  }
+}
+
+/* ── KPI values ──────────────────────────────────────────────────────────
+   `overflow-wrap: anywhere` makes a value's min-content one character, so a
+   `minmax(0, 1fr)` metric column shrinks and splits an identifier mid-token —
+   `not_exposed` rendered as "not_expose / d". `break-word` keeps the same
+   last-resort safety net without contributing that 1ch min-content, so the
+   column sizes to the whole token first. Same principle as the chip rule
+   above: never break inside a word unless nothing else fits. */
+.kpi-cell .kpi-value {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* A 168px minimum left 136px of content at the 22px display size — a few pixels
+   short of a token like `not_exposed`, which then broke mid-word. 184px gives
+   the longest metric values room; `.kpi-row` already renders an incomplete
+   final row as plain canvas, so wrapping the overflow metric costs nothing. */
+.kpi-row {
+  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
+}
+
+/* ── Support evidence rows ───────────────────────────────────────────────
+   `.queue-list div` / `.kv-list div` are descendant selectors: they box, pad,
+   and vertically centre EVERY div inside the list, which is right for a flat
+   row list and wrong as soon as a row has structure. The support-evidence rows
+   hold two nested divs, so each row rendered as a bordered box containing two
+   more bordered boxes, with the label/value stack centred because
+   `align-items: center` centres horizontally once the stack is a column.
+
+   Narrowing the shared selector to `> div` would be the principled fix, but it
+   feeds ~45 `.kv-list` call sites, so this restores the two nested blocks
+   directly. The descendant selector remains a trap for the next nested row. */
+.support-evidence-list .support-evidence-main,
+.support-evidence-list .support-evidence-meta {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.support-evidence-list .support-evidence-main {
+  align-items: flex-start;
+}
+
+.support-evidence-list .support-evidence-meta {
+  align-items: center;
+}
+
+/* ── Detail breadcrumb ───────────────────────────────────────────────────
+   `.stack-tight` is a column flex, so its default `align-items: stretch`
+   stretched the back control to the wrapper's full width; `.btn` then centred
+   its own label, leaving "← Back to Reports" floating mid-row as though it were
+   deliberately centred. A control is intrinsically sized — the same reason
+   `.badge` carries `width: fit-content`. */
+.detail-crumb {
+  align-items: flex-start;
+}
+
+/* Pull the ghost control's label back onto the text column: its horizontal
+   padding otherwise indents "← Back to …" 16px off the eyebrow above it. */
+.detail-crumb > [data-ui='button'] {
+  margin-left: calc(-1 * var(--space-4));
+}

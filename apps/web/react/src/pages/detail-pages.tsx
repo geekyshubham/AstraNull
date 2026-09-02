@@ -57,6 +57,7 @@ import {
 } from '../lib/high-scale';
 import { routeTabs } from '../lib/prototype-manifest';
 import { ReadinessGauge } from '../components/charts/readiness-gauge';
+import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import { MetricCard, PageContextSummary } from './page-components';
 import { TargetGroupDetailView as TargetGroupDetailViewRevamp } from './target-group-detail-view';
 import { TargetDetailView } from './target-detail-view';
@@ -309,14 +310,7 @@ function formatStatusLabel(value: string, fallback = '—') {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function runStatusBadgeTone(status: string): StatusBadgeTone {
-  const key = normalizeStatusKey(status);
-  if (['completed', 'finalized', 'succeeded', 'pass'].includes(key)) return 'success';
-  if (['running', 'collecting', 'planned', 'pending', 'queued'].includes(key)) return 'info';
-  if (['failed', 'cancelled', 'canceled', 'error'].includes(key)) return 'danger';
-  if (['stopped', 'stopping'].includes(key)) return 'warn';
-  return 'muted';
-}
+
 
 function verdictBadgeTone(verdict: string): StatusBadgeTone {
   const key = normalizeStatusKey(verdict);
@@ -516,7 +510,7 @@ function DetailBreadcrumb({ route, title, entityId }: { route: RouteId; title: s
   const groupLabel = routeMeta?.group ? (DETAIL_GROUP_LABELS[routeMeta.group] ?? routeMeta.group) : 'Detail';
   const listLabel = listLink?.label ?? routeMeta?.label ?? 'List';
   return (
-    <p className="muted stack-tight">
+    <p className="muted stack-tight detail-crumb">
       {listLink && listHref ? (
         <AnchorButton size="sm" variant="ghost" href={listHref}>← Back to {listLink.label}</AnchorButton>
       ) : null}

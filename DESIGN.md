@@ -134,6 +134,14 @@ Pages that inject styles as a runtime `<style>` element land after this sheet in
 the cascade. Shared geometry that must stay authoritative over them is written as
 `body <their selector>`.
 
+Two shared selectors are descendant, not child: `.queue-list div` and
+`.kv-list div` box, pad, and vertically centre *every* div inside the list. That
+is correct for a flat row list and wrong the moment a row has internal
+structure — a nested stack renders as a box inside a box, horizontally centred
+(`align-items: center` centres across the axis once the stack is a column). Give
+any structured row an explicit reset, or the row will inherit list chrome it was
+never meant to have.
+
 ## Shared components
 
 - **Brand:** boxed 40px mark, orange core, Space Grotesk wordmark.

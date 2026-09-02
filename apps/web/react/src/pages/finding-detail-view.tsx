@@ -501,7 +501,7 @@ export function FindingDetailView({
                 <Button type="submit" size="sm" variant="secondary" loading={busy === `finding-triage-${entityId}`} disabled={busy !== ''}>Save triage</Button>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="secondary"
                   loading={busy === `finding-accept-risk-${entityId}`}
                   disabled={busy !== '' || ['accepted_risk', 'closed'].includes(findingStatus.toLowerCase())}
                   onClick={async () => {
@@ -511,7 +511,7 @@ export function FindingDetailView({
                 >Accept risk</Button>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant="secondary"
                   loading={busy === `finding-close-${entityId}`}
                   disabled={busy !== '' || findingStatus.toLowerCase() === 'closed'}
                   onClick={async () => {
@@ -519,7 +519,7 @@ export function FindingDetailView({
                     await patchFinding({ status: 'closed' }, 'Finding closed.', 'close');
                   }}
                 >Close finding</Button>
-                <Button size="sm" variant="ghost" loading={busy === `retest-${entityId}`} disabled={busy !== ''} onClick={() => void runAction(`retest-${entityId}`, async () => {
+                <Button size="sm" variant="secondary" loading={busy === `retest-${entityId}`} disabled={busy !== ''} onClick={() => void runAction(`retest-${entityId}`, async () => {
                   const retest = resolveFindingRetestAction(entity);
                   if (!retest) throw new Error('Retest context missing from finding API.');
                   // Every kind resolveFindingRetestAction can return must dispatch a real

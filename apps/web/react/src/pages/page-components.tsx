@@ -51,6 +51,7 @@ import { Select, type SelectOption } from '../components/ui/select';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { AnimatedNumber } from '../components/ui/motion';
+import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
@@ -246,13 +247,7 @@ function formatRunStatusLabel(status: string) {
   return labels[status] ?? status.replace(/_/g, ' ');
 }
 
-function runStatusBadgeTone(status: string): UiBadgeTone {
-  if (status === 'verdicted' || status === 'completed') return 'success';
-  if (status === 'running' || status === 'collecting') return 'info';
-  if (status === 'cancelled' || status === 'failed') return 'danger';
-  if (status === 'planned') return 'muted';
-  return 'warn';
-}
+
 
 function findingSeverityBadgeTone(severity: string): UiBadgeTone {
   const normalized = severity.toLowerCase();
