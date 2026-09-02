@@ -92,7 +92,7 @@ describe('ui and api smoke', () => {
     assert.ok(reactAppJs.text.includes('/v1/test-policies'), 'React test policies page creates safe policy records');
     assert.ok(reactAppJs.text.includes('/internal/soc/high-scale/'), 'React SOC console calls governed SOC execution routes');
     assert.ok(reactAppJs.text.includes('/internal/admin/signup-requests/'), 'React staff console approves signup requests');
-    assert.ok(reactAppJs.text.includes('Start safe run'), 'React runs page exposes safe validation start controls');
+    assert.ok(reactAppJs.text.includes('Open vector library'), 'React runs page routes operators into explicit vector, group, target, and check selection');
     assert.ok(reactAppJs.text.includes('/v1/waf/coverage/summary'), 'React dashboard loads WAF coverage summary');
     assert.ok(reactAppJs.text.includes('/v1/high-scale-requests'), 'React portal references governed high-scale requests');
     assert.ok(reactAppJs.text.includes('Vector coverage matrix'), 'Dashboard risk trends retains vector coverage panel');

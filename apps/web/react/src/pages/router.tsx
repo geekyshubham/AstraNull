@@ -18,6 +18,7 @@ import {
 } from './page-components';
 import { AuditPage, NotificationsPage, ReleaseEvidencePage, SocConsolePage } from './governance-pages';
 import { TargetsPage } from './targets-page';
+import { VectorLibraryPage } from './vector-library-page';
 
 const DETAIL_ROUTES = new Set<RouteId>([
   'target-group-detail',
@@ -33,7 +34,7 @@ const DETAIL_ROUTES = new Set<RouteId>([
   'queue-detail'
 ]);
 
-const VALIDATION_LIST_ROUTES = new Set<RouteId>(['checks', 'runs', 'findings']);
+const VALIDATION_LIST_ROUTES = new Set<RouteId>(['runs', 'findings']);
 
 function routeHydrationLabel(route: RouteId) {
   return `Loading ${route.replaceAll('-', ' ')}`;
@@ -82,6 +83,9 @@ export function RouteView({ route, data, config, session, onRefresh, hydrating }
   }
   if (route === 'test-policies') {
     return <PolicyPage data={data} config={config} session={session} onRefresh={onRefresh} />;
+  }
+  if (route === 'checks') {
+    return <VectorLibraryPage data={data} config={config} session={session} onRefresh={onRefresh} />;
   }
   if (VALIDATION_LIST_ROUTES.has(route)) {
     return <ValidationSurfacePage route={route} data={data} config={config} session={session} onRefresh={onRefresh} />;

@@ -181,10 +181,10 @@ Phase C classification (2026-07-05). Surfaces: `ValidationSurfacePage` (`functio
 
 | Feature | Classification | Customer UI | API / notes |
 |---------|----------------|-------------|-------------|
-| Check catalog browse | **Visible** | `#checks` | `GET /v1/checks`; All/Safe/SOC scope tabs + family tabs (Recommended, Origin, L3/L4, DNS, L7/API, Protocols, High-Scale) |
-| Custom check binding | **Partial** | `#checks` Custom tab | Empty-state links to `#test-policies`; **boundary:** no standalone custom-check create API — policies bind safe catalog checks |
+| Vector library browse | **Visible** | `#checks` | `GET /v1/vectors`; 721 canonical vectors, bounded pages, search/filter, E1–E5 boundaries, exposure/failure/control explanations, and exact-target disposition |
+| Check mapping and detail | **Visible** | `#checks`, `#check-detail` | Vector detail exposes mapped bounded checks; standalone check detail remains available for check execution contracts |
 | Test policy create/patch/archive | **Visible** | `#test-policies` | `POST/PATCH/DELETE /v1/test-policies`; cadence, expected verdict, safe windows |
-| Safe run start | **Visible** | `#runs`, `#onboarding` | `POST /v1/test-runs` with declared target group + target + safe check |
+| Safe run start | **Visible** | `#checks` vector library, `#onboarding` | `POST /v1/test-runs` only after explicit declared target group + exact target + mapped safe check selection and confirmation; `#runs` does not choose scope implicitly |
 | Run list + detail | **Visible** | `#runs`, `#run-detail` | `GET /v1/test-runs`, `GET /v1/test-runs/:id` |
 | Run cancel / finalize | **Visible** | `#runs`, `#run-detail` Actions | `POST /v1/test-runs/:id/cancel`, `POST …/finalize` |
 | Run timeline + raw events | **Visible** | `#runs`, `#run-detail` Timeline + Raw Events tabs | `GET /v1/test-runs/:id/events` |
@@ -209,7 +209,7 @@ Phase C classification (2026-07-05). Surfaces: `ValidationSurfacePage` (`functio
 | Evidence snapshot signing | **Operator-only** | Release evidence boundary | KMS/signing ceremony; digest verify exposed, not signing UI |
 | Scheduled policy execution | **Operator-only** | Policy records visible | Cadence stored; external scheduler/worker runs policies |
 
-**FM-VALIDATION verdict:** **PASS (T1)** — checks catalog, test policies, safe runs (start/cancel/finalize), full run tab depth (timeline, probe, agent, correlation, evidence, raw events), findings triage (tabs, assignee, notes, export, retest), and evidence vault + chain export with custody verify are wired to real APIs. **Remaining gaps (T2/T3, documented):** custom-check authoring beyond policy binding, per-evidence immutable snapshot signing UI (operator/KMS boundary), automated policy scheduler UI (operator worker boundary).
+**FM-VALIDATION verdict:** **PASS (T1)** — the 721-vector library, exact-target bounded launch, test policies, run lifecycle controls, full run tab depth (timeline, probe, agent, correlation, evidence, raw events), findings triage (tabs, assignee, notes, export, retest), and evidence vault + chain export with custody verify are wired to real APIs. E1/E2 are labeled below semantic proof; E4 remains governed and E5 monitor-only. **Remaining gaps (T2/T3, documented):** custom-check authoring beyond policy binding, per-evidence immutable snapshot signing UI (operator/KMS boundary), automated policy scheduler UI (operator worker boundary).
 
 ## FM-WAF — Posture, CVE, drift, orchestrator
 

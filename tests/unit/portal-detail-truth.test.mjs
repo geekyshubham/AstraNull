@@ -69,7 +69,7 @@ describe('portal detail truth labels', () => {
     const globalRunColumns = sourceBetween(
       functionalSurfaces,
       "if (route === 'runs')",
-      'const canStartRun =',
+      'const canOpenVectorLibrary =',
     );
     const currentGroupRunColumns = sourceBetween(
       targetGroupDetail,

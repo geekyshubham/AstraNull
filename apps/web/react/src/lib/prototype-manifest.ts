@@ -245,14 +245,14 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
   },
   {
     id: 'checks',
-    label: 'Checks Library',
+    label: 'Vector Library',
     route: '/app#checks',
     routeId: 'checks',
     audience: 'Customer',
     group: 'validation',
-    source: 'pages/functional-surfaces.tsx',
+    source: 'pages/vector-library-page.tsx',
     status: 'React implemented',
-    summary: 'Safe checks and SOC request-only scenarios with real execution bounds.'
+    summary: '721 vectors with exposure goals, failure meaning, expected controls, evidence limits, exact-target compatibility, and bounded safe-check launch.'
   },
   {
     id: 'check-detail',

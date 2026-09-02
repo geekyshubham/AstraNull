@@ -2016,23 +2016,11 @@ export function ValidationSurfacePage({
   const [exportPartialMissCount, setExportPartialMissCount] = useState(0);
   const [clipboardNotice, setClipboardNotice] = useState('');
   const [runStatusFilter, setRunStatusFilter] = useState('all');
-  const [runStartTargetPreview, setRunStartTargetPreview] = useState('');
-  const [runStartTargetLoading, setRunStartTargetLoading] = useState(false);
   const [showSocRequestForm, setShowSocRequestForm] = useState(false);
   const [cancelRunId, setCancelRunId] = useState('');
   const [finalizeRunId, setFinalizeRunId] = useState('');
-  const [pendingSafeRun, setPendingSafeRun] = useState<{
-    targetGroupId: string;
-    targetId: string;
-    checkId: string;
-    groupLabel: string;
-    targetLabel: string;
-    checkLabel: string;
-  } | null>(null);
   const evidenceChainCap = 12;
 
-  const firstGroup = data.targetGroups[0] ?? null;
-  const safeCheck = data.checks.find((check) => getString(check, ['safety_class']) === 'safe') ?? null;
   const inFlightRuns = data.runs.filter((run) => isCancellableRunStatus(getString(run, ['status'], '')));
 
   const checkSafetyCounts = useMemo(() => countChecksBySafetyScope(data.checks), [data.checks]);
@@ -2068,35 +2056,6 @@ export function ValidationSurfacePage({
   }, [data.runs, runStatusFilter]);
 
   useEffect(() => {
-    if (route !== 'runs') return undefined;
-    const targetGroupId = getString(firstGroup, ['id'], '');
-    if (!targetGroupId) {
-      setRunStartTargetPreview('');
-      setRunStartTargetLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setRunStartTargetLoading(true);
-    requestJson(config, session, `/v1/target-groups/${targetGroupId}`)
-      .then((detail) => {
-        if (cancelled) return;
-        const targets = Array.isArray((detail as DataItem).targets) ? (detail as DataItem).targets as DataItem[] : [];
-        const firstTarget = targets[0];
-        const label = firstTarget
-          ? `${getString(firstTarget, ['value', 'hostname', 'id'])} (${getString(firstTarget, ['id'])})`
-          : '';
-        setRunStartTargetPreview(label);
-      })
-      .catch(() => {
-        if (!cancelled) setRunStartTargetPreview('');
-      })
-      .finally(() => {
-        if (!cancelled) setRunStartTargetLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [route, firstGroup, config, session]);
-
-  useEffect(() => {
     if (data.evidence.length > 0) setShowEvidenceExportCenter(true);
   }, [data.evidence.length]);
 
@@ -2107,50 +2066,6 @@ export function ValidationSurfacePage({
     }, 8000);
     return () => window.clearInterval(timer);
   }, [route, inFlightRuns.length, onRefresh]);
-
-  async function startSafeRun(checkId?: string) {
-    const targetGroupId = getString(firstGroup, ['id'], '');
-    const resolvedCheckId = checkId ?? getString(safeCheck ?? {}, ['check_id'], '');
-    if (!targetGroupId || !resolvedCheckId) {
-      setError('Declare a target group and check before starting a run.');
-      return;
-    }
-    setError('');
-    let detail: DataItem;
-    try {
-      // Previously unguarded: a failed group lookup rejected into `void startSafeRun()` and
-      // the operator saw nothing at all.
-      detail = await requestJson(config, session, `/v1/target-groups/${targetGroupId}`) as DataItem;
-    } catch (err) {
-      setError(apiErrorMessage(err, 'Could not load the declared target group.'));
-      return;
-    }
-    const targets = Array.isArray(detail.targets) ? detail.targets as DataItem[] : [];
-    const targetId = getString(targets[0] ?? {}, ['id'], '');
-    const targetLabel = getString(targets[0] ?? {}, ['value', 'hostname', 'id'], targetId);
-    if (!targetId) {
-      setError('Add at least one target to the declared group before starting a run.');
-      return;
-    }
-    setPendingSafeRun({
-      targetGroupId,
-      targetId,
-      checkId: resolvedCheckId,
-      groupLabel: getString(firstGroup, ['name', 'id'], targetGroupId),
-      targetLabel,
-      checkLabel: checkDisplayName(data.checks, resolvedCheckId)
-    });
-  }
-
-  async function confirmStartSafeRun() {
-    const pending = pendingSafeRun;
-    if (!pending) return;
-    await runAction(setBusy, setError, setMessage, 'start-safe-run', () => requestJson(config, session, '/v1/test-runs', {
-      method: 'POST',
-      body: { target_group_id: pending.targetGroupId, target_id: pending.targetId, check_id: pending.checkId }
-    }), 'Validation run started.', onRefresh);
-    setPendingSafeRun(null);
-  }
 
   async function cancelRun(id: string) {
     if (!id) return;
@@ -2522,14 +2437,12 @@ export function ValidationSurfacePage({
         }
       }
     ];
-    const canStartRun = Boolean(firstGroup && safeCheck && runStartTargetPreview);
-    const startDisabledReason = !firstGroup
+    const canOpenVectorLibrary = data.targetGroups.length > 0 && data.checks.some((check) => getString(check, ['safety_class']) === 'safe');
+    const startDisabledReason = data.targetGroups.length === 0
       ? 'Declare a target group first.'
-      : !safeCheck
+      : !data.checks.some((check) => getString(check, ['safety_class']) === 'safe')
         ? 'No customer-runnable check in catalog.'
-        : !runStartTargetPreview
-          ? 'Add at least one target to the first target group.'
-          : '';
+        : '';
     const runStatusOptions = [
       { value: 'all', label: 'All statuses' },
       ...[...new Set(data.runs.map((run) => getString(run, ['status'], '')).filter(Boolean))].sort().map((status) => ({ value: status, label: formatRunStatusLabel(status) }))
@@ -2545,10 +2458,10 @@ export function ValidationSurfacePage({
             <RunsPageHeadActions
               onRefresh={() => void onRefresh()}
               onRequestSoc={() => setShowSocRequestForm(true)}
-              onStartSafeRun={() => void startSafeRun()}
+              onStartSafeRun={() => { window.location.hash = '#checks'; }}
               refreshBusy={busy === 'refresh-runs'}
-              safeRunBusy={busy === 'start-safe-run'}
-              safeRunDisabled={busy !== '' || !canStartRun}
+              safeRunBusy={false}
+              safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
             />
           )}
         />
@@ -2572,11 +2485,15 @@ export function ValidationSurfacePage({
             Runs in progress — live status auto-refreshes every 8s ({inFlightRuns.length} active). Verdicts appear when the observation window closes.
           </div>
         ) : null}
-        {!canStartRun && startDisabledReason ? (
+        {!canOpenVectorLibrary && startDisabledReason ? (
           <div className="form-banner neutral" role="note">
-            Start a run from “Run checks” above once ready — {startDisabledReason}
+            Open the vector library once ready — {startDisabledReason}
           </div>
-        ) : null}
+        ) : (
+          <div className="form-banner neutral" role="note">
+            Customer-safe runs start in the vector library, where you must select the exact target group, target, vector, and mapped bounded check.
+          </div>
+        )}
         <MutationFeedbackBanner message={message} error={error} neutral />
         <Card>
           <CardHeader>
@@ -2599,30 +2516,14 @@ export function ValidationSurfacePage({
                 icon: Activity,
                 title: 'No test runs yet.',
                 body: 'Start a validation run after declaring target scope.',
-                actionLabel: 'Start safe run',
-                onAction: () => void startSafeRun()
+                actionLabel: 'Open vector library',
+                onAction: () => { window.location.hash = '#checks'; }
               })}
               loadError={data.loadErrors.runs}
               onRetry={onRefresh ? () => void onRefresh() : undefined}
             />
           </CardContent>
         </Card>
-        <ConfirmModal
-          open={Boolean(pendingSafeRun)}
-          title="Start a validation run?"
-          description={(
-            <>
-              <p>Target group: {pendingSafeRun?.groupLabel}</p>
-              <p>Target: {pendingSafeRun?.targetLabel}</p>
-              <p>Check: {pendingSafeRun?.checkLabel}</p>
-            </>
-          )}
-          confirmLabel="Start run"
-          confirmTone="default"
-          busy={busy === 'start-safe-run'}
-          onCancel={() => setPendingSafeRun(null)}
-          onConfirm={() => void confirmStartSafeRun()}
-        />
         <ConfirmModal
           open={Boolean(cancelRunId)}
           title="Cancel this run in progress?"

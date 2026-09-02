@@ -55,7 +55,7 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     await stopPortalPlaywrightServer();
   });
 
-  test('Start safe run confirms in an in-app dialog and only POSTs after confirming', async ({ page }) => {
+  test('safe-run action opens the vector library and never chooses scope implicitly', async ({ page }) => {
     const baseUrl = getPortalPlaywrightBaseUrl();
     await injectPortalDevHeadersSession(page);
     const nativeDialogs = forbidNativeDialogs(page);
@@ -67,49 +67,15 @@ test.describe('portal in-app confirmations (FT-CONFIRM-01)', () => {
     });
 
     await gotoPortalRoute(page, 'runs', baseUrl);
-    const startBtn = page.getByRole('button', { name: 'Run checks' }).first();
-    await expect(startBtn).toBeEnabled({ timeout: 15_000 });
-    await startBtn.click();
+    const libraryButton = page.getByRole('button', { name: 'Open vector library' }).first();
+    await expect(libraryButton).toBeEnabled({ timeout: 15_000 });
+    await libraryButton.click();
 
-    const confirm = page.locator('dialog.modal-confirm[open]');
-    await expect(confirm).toBeVisible({ timeout: 10_000 });
-    await expect(confirm).toContainText('Start a validation run?');
-    // The confirmation still shows the immutable run scope before execution.
-    await expect(confirm).toContainText(/Target group:/);
-    await expect(confirm).toContainText(/Target:/);
-    await expect(confirm).toContainText(/Check:/);
-    expect(runPosts, 'opening the confirm must not start a run').toHaveLength(0);
-
-    await confirm.getByRole('button', { name: 'Start run' }).click();
-    await expect(confirm).toBeHidden({ timeout: 10_000 });
-    await expect
-      .poll(() => runPosts.length, { timeout: 10_000 })
-      .toBeGreaterThan(0);
+    await expect.poll(() => new URL(page.url()).hash).toBe('#checks');
+    await expect(page.getByRole('heading', { name: 'Vector library' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Declared target group', exact: true })).toContainText('Select a declared target group');
+    expect(runPosts, 'navigation must not start a run').toHaveLength(0);
     expect(nativeDialogs, 'no native window.confirm may be raised').toEqual([]);
-  });
-
-  test('cancelling the safe-run confirm fires no request', async ({ page }) => {
-    const baseUrl = getPortalPlaywrightBaseUrl();
-    await injectPortalDevHeadersSession(page);
-    const nativeDialogs = forbidNativeDialogs(page);
-
-    /** @type {string[]} */
-    const runPosts = [];
-    page.on('request', (req) => {
-      if (req.method() === 'POST' && /\/v1\/test-runs$/.test(req.url())) runPosts.push(req.url());
-    });
-
-    await gotoPortalRoute(page, 'runs', baseUrl);
-    const startBtn = page.getByRole('button', { name: 'Run checks' }).first();
-    await expect(startBtn).toBeEnabled({ timeout: 15_000 });
-    await startBtn.click();
-
-    const confirm = page.locator('dialog.modal-confirm[open]');
-    await expect(confirm).toBeVisible({ timeout: 10_000 });
-    await confirm.getByRole('button', { name: 'Cancel' }).click();
-    await expect(confirm).toBeHidden({ timeout: 10_000 });
-    expect(runPosts, 'declining the confirm must not start a run').toHaveLength(0);
-    expect(nativeDialogs).toEqual([]);
   });
 
   test('retention save confirms in an in-app dialog and PATCHes only on confirm', async ({ page }) => {

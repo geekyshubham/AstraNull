@@ -69,9 +69,9 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: 'checks',
-    label: 'Checks',
+    label: 'Vector library',
     group: 'validation',
-    description: 'Readiness checks and SOC-gated high-scale scenarios.',
+    description: 'Browse 721 vectors, evidence boundaries, expected controls, and exact-target bounded checks.',
     icon: ListChecks
   },
   {

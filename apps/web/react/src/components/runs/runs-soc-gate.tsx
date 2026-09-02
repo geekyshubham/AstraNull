@@ -701,7 +701,7 @@ export function RunsPageHeadActions({
   safeRunDisabled?: boolean;
 }) {
   const safeRunDisabledReason = safeRunDisabled
-    ? 'Safe run is unavailable until a declared target and customer-runnable bounded check are ready.'
+    ? 'Vector library launch is unavailable until a declared target group and customer-runnable bounded check are ready.'
     : '';
   return (
     <>
@@ -713,7 +713,7 @@ export function RunsPageHeadActions({
         title={safeRunDisabledReason || undefined}
         aria-describedby={safeRunDisabledReason ? 'safe-run-disabled-reason' : undefined}
         onClick={onStartSafeRun}
-      >Run checks</Button>
+      >Open vector library</Button>
       {safeRunDisabledReason ? <span className="sr-only" id="safe-run-disabled-reason">{safeRunDisabledReason}</span> : null}
     </>
   );

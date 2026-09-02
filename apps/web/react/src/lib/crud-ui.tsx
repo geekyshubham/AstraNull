@@ -4,6 +4,20 @@ import { EmptyState } from '../components/ui/empty-state';
 import { Button } from '../components/ui/button';
 import type { DataItem } from './types';
 
+function useRestoreDialogFocus(open: boolean) {
+  const openerRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      const opener = openerRef.current;
+      window.requestAnimationFrame(() => {
+        if (opener?.isConnected && !document.querySelector('dialog[open]')) opener.focus();
+      });
+    };
+  }, [open]);
+}
+
 export type FriendlyEmptyStateProps = {
   icon: LucideIcon;
   title: string;
@@ -64,6 +78,7 @@ export function ConfirmModal({
   const titleId = useId();
   const [typed, setTyped] = useState('');
   const dialogRef = useRef<HTMLDialogElement>(null);
+  useRestoreDialogFocus(open);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -144,6 +159,7 @@ export function FormModal({
   const titleId = useId();
   const descId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  useRestoreDialogFocus(open);
 
   useEffect(() => {
     const dialog = dialogRef.current;
