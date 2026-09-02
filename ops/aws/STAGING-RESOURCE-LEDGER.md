@@ -90,7 +90,7 @@ SSH is restricted to a single operator address.
 | Probe mode | `signed-worker` (probe worker secret configured) |
 | Connectors | disabled |
 | High-scale adapter | disabled |
-| Image | built from the deployed commit on the host, `sha256:26fcc57c…` |
+| Image | current `sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c` (commit `3aeb9c0f`); initial release `sha256:26fcc57c…` retained for rollback |
 
 Running services: `postgres`, `control-plane`, `probe-worker`,
 `password-recovery-worker`, `test-policy-runner`, `caddy` — all healthy.
@@ -113,24 +113,22 @@ invite/set flow against `usr_admin` / `ten_demo`.
 Verified live: `POST /v1/auth/login` returns `access_token` with `role=admin`,
 `tenant_id=ten_demo`. Unauthenticated `GET /v1/target-groups` returns `401`.
 
-### Deviation from the standard deploy path
+### Initial-release deviation from the standard deploy path
 
-`ops/aws/deploy.sh` was **not** used. It requires the host to be a clean git checkout
-with an `origin/main` remote, and it refuses to run when any tracked file is modified —
-but the staging hostname must be written into the tracked `ops/aws/Caddyfile` for TLS to
-work, and the release was transferred as a `git archive` (no `.git`). The stack was
-therefore brought up with Docker Compose directly, using an image built from
-`ops/aws/Dockerfile` on the exact deployed tree — the same Dockerfile and build input
-`deploy.sh` uses. What is skipped: the pre-migration encrypted backup, image-identity
-journalling, and release-state tracking. Acceptable for a disposable staging box with no
-data to lose; **not** a substitute for `deploy.sh` on a real host.
+`ops/aws/deploy.sh` was **not** used for the initial release. It requires the host to be a clean git checkout with an `origin/main` remote, and it refuses to run when any tracked file is modified—but the staging hostname had to be written into the tracked `ops/aws/Caddyfile` for TLS to work, and the release was transferred as a `git archive` (no `.git`). The stack was therefore brought up with Docker Compose directly, using an image built from `ops/aws/Dockerfile` on the exact deployed tree—the same Dockerfile and build input `deploy.sh` uses. That initial disposable-host activation skipped the pre-migration encrypted backup, image-identity journalling, and release-state tracking; this is not an acceptable substitute for a hardened production deployment.
+
+### Vector-library backend update (2026-09-02)
+
+Commit `3aeb9c0f4dd9646f1e2663a82f4011a82b6e95f2` was transferred as an exact `git archive`, built on-host, and activated as immutable image `sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c`. Before activation, encrypted backup `/opt/astranull-backups/postgres-2026-09-02T19-57-02-969Z-40cc417db3c8.dump.enc` and its manifest were validated and published root-owned with mode 600. The prior tree is retained at `/opt/astranull-rollback-pre-3aeb9c0f4dd9646f1e2663a82f4011a82b6e95f2`; prior image `sha256:26fcc57ce3dacead498ead91ba9f4602fd553b93d9f45dd1dbe8d9e2174114b4` remains the rollback image.
+
+Post-activation checks confirmed `/health`, `/ready`, migrations through `0053_target_edge_detection_provenance`, the authenticated/bounded `/v1/vectors` route, unauthenticated `401`, exact `target_id` enforcement, and a healthy probe worker. The worker image now includes `db/seeds/waf-product-catalog.json`; the previous `ENOENT` packaging failure did not recur.
 
 ### Operating the stack
 
 ```bash
 ssh -i ops/aws/.staging-key.pem ubuntu@34.201.159.68
 cd /opt/astranull/ops/aws
-IMG=sha256:26fcc57ce3dacead498ead91ba9f4602fd553b93d9f45dd1dbe8d9e2174114b4
+IMG=sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c
 export ASTRANULL_CONTROL_PLANE_IMAGE_ID=$IMG \
        ASTRANULL_CORE_WORKER_IMAGE_ID=$IMG \
        ASTRANULL_CONNECTOR_WORKER_IMAGE_ID=$IMG

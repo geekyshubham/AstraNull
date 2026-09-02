@@ -95,7 +95,26 @@ Live control plane: `https://astranull.site`
 
 The signed worker recorded 15 probe requests and two destination-resolver operations in 190 ms. The run's safety constraints were 15 events, 120 seconds maximum duration, one concurrent run per target group, and 60 runs/hour. Placement was deliberately refused as `missing_agent` / `unbound`: no internal path proof was claimed without an optional agent.
 
-Do not repeatedly execute the run as a load test. Additional customer-safe checks must stay within the product's bounded policies; high-scale tests require SOC authorization.
+### Complete 721-vector evaluation (2026-09-02)
+
+The canonical catalog was evaluated row-by-row against this exact target profile (`fqdn`, `external_only`, no agent). Complete custody evidence is committed at [`evidence/shubht-online-full-catalog-evaluation-2026-09-02.json`](evidence/shubht-online-full-catalog-evaluation-2026-09-02.json).
+
+| Disposition | Catalog rows | Meaning |
+|---|---:|---|
+| Evaluated with bounded evidence | 404 | At least one directly linked, target-compatible customer-safe check ran and is referenced by exact run/event IDs. |
+| Additional input required | 10 | A bounded check exists but requires a customer-declared URL/path or equivalent setup not fabricated for this target. |
+| SOC-gated, not executed | 258 | Requires governed authorization/adapters; no unmanaged high-scale traffic was generated. |
+| Monitor-only, not executed | 49 | Passive/integration evidence or a non-routable outside-in scope boundary; no active probe is claimed. |
+
+The 404 evaluated rows map to 194 unique directly linked safe checks. All 194 ran sequentially to terminal `verdicted` state with zero refusals and exactly one `probe_result` event each. All events have producer `signed_probe`, source `probe_worker`, and confidence `external_only`. Aggregate check verdicts were 31 `edge_protected`, 26 `edge_exposed`, and 137 `inconclusive`; the signed worker recorded 509 bounded requests/operations. Verdicts remain check-level evidence—the artifact does not synthesize a per-vector outcome where checks are shared.
+
+The target group's `max_runs_per_hour` was temporarily raised from 60 to 240 only to admit the complete sequential bounded inventory. Per-check request/duration caps, the one-active-run constraint, external-only mode, and the host's 5 requests/second burst-10 limiter remained enforced. The group policy was restored to 60 runs/hour and zero minimum interval after completion. No agent, SOC adapter, or high-scale executor ran.
+
+One `waf.fingerprint.safe` attempt (`run_98a2dac76251a932`) exposed a release packaging defect: the old worker image omitted `db/seeds/waf-product-catalog.json`, logged `ENOENT`, restarted, and left the run without evidence. The expired run was cancelled. The catalog asset and a release-archive regression were added in commit `3aeb9c0f`; exact image `sha256:b8d5c9842aa584f68b635e62be5e462b73fec2f86acc3f47294cf9aaa5a2b27c` was deployed after an encrypted database backup. Retry `run_caf69ab12a3c69c8` verdicted successfully, the worker remained healthy, and no further missing-catalog error occurred.
+
+Custody binds 721 unique rows, 194 unique selected runs/events, exact tenant/group/target/check identifiers, generator SHA-256, generated-catalog/matrix/live-input SHA-256 values, and a `json-key-sorted-v1` content digest. Independent regeneration was byte-identical and gitleaks reported zero findings.
+
+Do not repeatedly execute the run set as a load test. Additional customer-safe checks must stay within the product's bounded policies; high-scale tests require SOC authorization.
 
 ## Cost controls
 
