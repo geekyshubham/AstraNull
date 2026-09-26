@@ -261,7 +261,7 @@ Public signup routes are intentionally narrow and expose only sanitized request 
 
 **OpenAPI:** [`docs/api/waf-posture-openapi.json`](api/waf-posture-openapi.json) — OpenAPI 3.1 artifact for WAF assets, coverage analytics, safe validations, orchestrator execute/retest/cancel paths, CVE playbooks, action items, RBAC, and metadata-only safety notes. Check locally with `npm run api:waf:openapi:check`. This artifact does **not** close staging/live orchestrator, provider, or security/release signoff gates.
 
-Disabled by default. `ASTRANULL_WAF_POSTURE_ENABLED=1` enables the current route family; when disabled, `/v1/waf/*` returns `404 { "error": "waf_feature_disabled" }`. The add-on does **not** require cloud/WAF credentials for core no-access mode. PostgreSQL schema, migration support (`0008_waf_posture`), repository primitives, and `runtime.services.wafPosture` adapters exist for the WAF asset/coverage/validation/drift routes; in custom Postgres servers without an injected WAF service the API still fails closed with `503 { "error": "postgres_route_not_wired" }`.
+Disabled by default. `ASTRANULL_WAF_POSTURE_ENABLED=1` enables the current route family; when disabled, `/v1/waf/*` returns `404 { "error": "waf_feature_disabled" }`. The add-on does **not** require cloud/WAF credentials for core no-access mode. PostgreSQL schema, migration support (`0008_waf_posture` and `0057_waf_offensive_workflow`), repository primitives, and `runtime.services.wafPosture` adapters exist for the WAF asset/coverage/validation/drift routes. `runtime.services.wafOffensive` durably backs the customer request and internal SOC route families in Postgres mode. Custom Postgres servers missing the applicable injected WAF service fail closed with `503 { "error": "postgres_route_not_wired" }`; they never fall through to the dev JSON store.
 
 WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/header/packet fields, secrets, exploit material, SOC-gated profiles, prohibited profiles, automatic discovery approval, and protected-posture finalization without bound safe test-run evidence or explicit metadata-only scenario evidence.
 
@@ -287,6 +287,23 @@ WAF evidence is metadata-only. WAF validation contracts reject raw payload/body/
 | POST | `/v1/waf/validations/:id/finalize` | `waf:run` | metadata-only summary and `scenario_results[]` | `{ validation_run, posture }`; writes a current posture snapshot, refreshes WAF posture findings for underprotected/unprotected outcomes, and creates/refreshes behavior-drift events when previously protected posture weakens. `protected` is returned only when WAF is detected and validation passes with corroborating metadata evidence. |
 | GET | `/v1/waf/drift-events` | `waf:read` | — | `{ items }` open and historical behavior-drift events. |
 | PATCH | `/v1/waf/drift-events/:id` | `waf:write` | `{ status, notes? }` | `{ drift_event }`; allowed statuses are `open`, `acknowledged`, `remediation_started`, `retest_pending`, `resolved`, `accepted_risk`, and `false_positive`. |
+
+### Internal SOC WAF offensive workflow
+
+All routes below require `soc:waf_offensive`. Every successful mutation is audited. Approval, schedule, start, stop, reject, and close lock the request row in the tenant transaction. A second approval must come from a distinct SOC user; start requires an accepted artifact of every type in `WAF_OFFENSIVE_REQUIRED_ARTIFACT_TYPES`, a current schedule window, an unchanged scope hash computed from the request target group's authoritative Postgres targets, and an inactive Postgres tenant kill switch. Start creates one linked `waf_validation_runs` row with `execution_class: "offensive_suite"` and `status: "planned"`; it does not expose a raw or unmanaged traffic generator.
+
+| Method | Path | Request | Response / gate |
+|---|---|---|---|
+| POST | `/internal/soc/waf-offensive/:id/artifacts/:artifactId/review` | `{ status: "accepted"|"rejected"|"needs_revision", notes? }` | `{ artifact, authorization_pack_status }`; `404 artifact_not_found` for an unknown artifact. |
+| POST | `/internal/soc/waf-offensive/:id/approve` | — | First distinct SOC principal moves to `under_review`; second moves to `approved` and binds `scope_hash`; repeated principal gets `409 duplicate_soc_approval`. |
+| POST | `/internal/soc/waf-offensive/:id/reject` | `{ reason? }` | Moves submitted/review request to `rejected`. |
+| POST | `/internal/soc/waf-offensive/:id/schedule` | `{ window_start, window_end }` | Moves approved request to `scheduled`; missing window or scope hash returns `409`. |
+| POST | `/internal/soc/waf-offensive/:id/start` | — | Moves scheduled request to `running` and returns `{ offensive_request }`; `409 kill_switch_active`, `outside_schedule_window`, or `scope_hash_mismatch` fails closed without creating a run. |
+| POST | `/internal/soc/waf-offensive/:id/stop` | — | Moves `running` to `stopped`. |
+| POST | `/internal/soc/waf-offensive/:id/results` | `{ suite_results[] }` | Stores normalized metadata-only curated-suite results while `running` or `stopped`. |
+| POST | `/internal/soc/waf-offensive/:id/post-test-report` | `{ executive_summary?, blocking_verdict?, bypass_findings?, remediation_notes? }` | Creates (`201`) or updates (`200`) the one report allowed for a stopped request. |
+| GET | `/internal/soc/waf-offensive/:id/post-test-report` | — | `{ report }` or `404 report_not_found`. |
+| POST | `/internal/soc/waf-offensive/:id/close` | — | Moves stopped request to `closed`; `409 post_test_report_required` until its report exists. |
 
 ### WAF coverage analytics
 

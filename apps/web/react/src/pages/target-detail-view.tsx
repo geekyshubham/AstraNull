@@ -16,6 +16,7 @@ import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { requestJson } from '../lib/api';
+import { canStartRun } from '../lib/run-permissions.mjs';
 import { MetricCard } from './page-components';
 // @ts-ignore Plain ESM keeps evidence-conservative labels directly testable with node:test.
 import { evidenceModePresentation, evidenceTierInfo, plainProtectionLabel, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
@@ -403,11 +404,16 @@ export function TargetDetailView({
   const selectedRunCheck = checksApplied.find(
     (check) => getString(check, ['check_id', 'id'], '') === effectiveSelectedRunCheckId
   ) ?? null;
-  const canRun = targetEligible && Boolean(effectiveSelectedRunCheckId);
+  const canStartBoundedRun = canStartRun(session.role);
+  const canRun = canStartBoundedRun && targetEligible && Boolean(effectiveSelectedRunCheckId);
   // Do not render a posture panel unless the hydrator returned a real linked asset.
   const showWaf = Boolean(wafPosture);
 
   async function runBoundedChecks() {
+    if (!canStartBoundedRun) {
+      setError('Your role can review target evidence but cannot start validation runs.');
+      return;
+    }
     if (!targetEligible || !target) {
       setError('This target is not explicitly eligible for bounded validation.');
       return;
@@ -1051,16 +1057,18 @@ export function TargetDetailView({
             <div><CardTitle>Bound checks</CardTitle><CardDescription>Select the exact customer-runnable check before starting a bounded run. Bindings are not presented as run history.</CardDescription></div>
             <div className="row-actions">
               <Badge tone={effectiveSelectedRunCheckId ? 'success' : 'warn'}>{effectiveSelectedRunCheckId ? 'Selected' : 'Selection required'}</Badge>
-              <Button
-                size="sm"
-                className={canRun ? undefined : 'is-locked'}
-                disabled={!canRun || busy !== ''}
-                title={!targetEligible ? 'Target eligibility and ownership must be explicitly affirmative' : effectiveSelectedRunCheckId ? `Run selected check ${effectiveSelectedRunCheckId}` : 'Select a bound check below'}
-                loading={busy === 'run-checks'}
-                onClick={() => void runBoundedChecks()}
-              >
-                Run selected check
-              </Button>
+              {canStartBoundedRun ? (
+                <Button
+                  size="sm"
+                  className={canRun ? undefined : 'is-locked'}
+                  disabled={!canRun || busy !== ''}
+                  title={!targetEligible ? 'Target eligibility and ownership must be explicitly affirmative' : effectiveSelectedRunCheckId ? `Run selected check ${effectiveSelectedRunCheckId}` : 'Select a bound check below'}
+                  loading={busy === 'run-checks'}
+                  onClick={() => void runBoundedChecks()}
+                >
+                  Run selected check
+                </Button>
+              ) : <Badge tone="muted">Read-only role</Badge>}
             </div>
           </CardHeader>
           <CardContent>

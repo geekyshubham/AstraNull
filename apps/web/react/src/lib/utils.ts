@@ -22,7 +22,7 @@ export function formatNumber(value: unknown, fallback = '0') {
 
 export function formatDate(value: unknown) {
   if (!value) return 'Not recorded';
-  const date = new Date(String(value));
+  const date = new Date(typeof value === 'number' ? value : String(value));
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString(undefined, {
     month: 'short',

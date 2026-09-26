@@ -39,6 +39,8 @@ import { createHighScaleRepository } from './highScaleRepository.mjs';
 import { createProductionReleaseEvidenceRepository } from './productionReleaseEvidenceRepository.mjs';
 import { createRetentionRepository } from './retentionRepository.mjs';
 import { createWafPostureRepository } from './wafPostureRepository.mjs';
+import { createWafOffensiveRepository } from './wafOffensiveRepository.mjs';
+import { createPostgresWafOffensiveServices } from './wafOffensiveServiceAdapters.mjs';
 import { createWafOrchestratorRepository } from './wafOrchestratorRepository.mjs';
 import { createInternalManagementRepository } from './internalManagementRepository.mjs';
 import {
@@ -146,6 +148,7 @@ const DEFAULT_REPOSITORY_FACTORIES = {
   productionReleaseEvidence: createProductionReleaseEvidenceRepository,
   retention: createRetentionRepository,
   wafPosture: createWafPostureRepository,
+  wafOffensive: createWafOffensiveRepository,
   wafOrchestrator: createWafOrchestratorRepository,
   internalManagement: createInternalManagementRepository,
   portalRevamp: createPortalRevampRepository,
@@ -238,6 +241,9 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       } else repositories[key] = factory(pool);
     }
 
+    // Kept outside POSTGRES_RUNTIME_REPOSITORY_KEYS so that stable repository facade
+    // remains backward compatible while the production service gains its private ledger.
+    const wafOffensiveRepository = repositoryFactories.wafOffensive(pool);
     const testPolicyRepository = repositories.testPolicies;
 
     const retentionServices = createPostgresRetentionServices(repositories);
@@ -291,6 +297,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     const repositoriesWithCve = {
       ...repositories,
       cvePipeline: cvePipelineRepository,
+      wafOffensive: wafOffensiveRepository,
     };
     const wafPostureServices = createPostgresWafPostureServices(repositoriesWithCve, {
       ...(options.wafPostureServiceOptions ?? {}),
@@ -302,6 +309,10 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       requireConnectorJobVerifier:
         options.wafPostureServiceOptions?.requireConnectorJobVerifier === true,
     });
+    const wafOffensiveServices = createPostgresWafOffensiveServices(
+      repositoriesWithCve,
+      { wafPostureServices },
+    );
     const wafOrchestratorServices = createPostgresWafOrchestratorServices(repositories, {
       ...(options.wafOrchestratorServiceOptions ?? {}),
       testRuns: validationServices.testRuns,
@@ -385,6 +396,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       },
       wafDrift: wafDriftServices,
       wafCoverageRollup: wafCoverageRollupServices,
+      wafOffensive: wafOffensiveServices,
       wafOrchestrator: wafOrchestratorServices,
       cvePipeline: cvePipelineServices,
       externalDiscovery: externalDiscoveryServices,

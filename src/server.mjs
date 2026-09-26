@@ -237,6 +237,7 @@ function isWafCorePostureRoute(path) {
   if (isWafCvePipelineRoute(path)) return false;
   if (isWafSupplyChainRoute(path)) return false;
   if (isWafOrchestratorRoute(path)) return false;
+  if (path === '/v1/waf/offensive-suites' || path.startsWith('/v1/waf/offensive-requests')) return false;
   return true;
 }
 
@@ -310,8 +311,7 @@ function blockPostgresWafCvePipelineRoute(runtimeConfig, serviceDeps, path, res)
   return true;
 }
 
-// ponytail: WAF offensive requests have no Postgres repository yet; fail closed instead of
-// falling through to the dev JSON store (which 500s on read-only production filesystems).
+// Never fall through to the dev JSON store when the Postgres offensive service is absent.
 function blockPostgresWafOffensiveRoute(runtimeConfig, serviceDeps, path, res) {
   if (runtimeConfig.persistenceMode !== 'postgres' || serviceDeps.wafOffensive) return false;
   if (!path.startsWith('/v1/waf/offensive-requests') && !path.startsWith('/internal/soc/waf-offensive/')) return false;
@@ -343,6 +343,11 @@ function resolveWafPostureService(runtimeConfig, serviceDeps) {
 function resolveWafOrchestratorService(runtimeConfig, serviceDeps) {
   if (runtimeConfig.persistenceMode === 'postgres') return serviceDeps.wafOrchestrator;
   return wafOrchestrator;
+}
+
+function resolveWafOffensiveService(runtimeConfig, serviceDeps) {
+  if (runtimeConfig.persistenceMode === 'postgres') return serviceDeps.wafOffensive;
+  return wafOffensive;
 }
 
 function resolveCvePipelineService(runtimeConfig, serviceDeps) {
@@ -1478,6 +1483,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   const supplyChainSvc = resolveSupplyChainRiskService(runtimeConfig, serviceDeps);
   const actionItemsSvc = resolveActionItemsService(runtimeConfig, serviceDeps);
   const wafOrchestratorSvc = resolveWafOrchestratorService(runtimeConfig, serviceDeps);
+  const wafOffensiveSvc = resolveWafOffensiveService(runtimeConfig, serviceDeps);
 
   if (method === 'GET' && path === '/v1/waf/validation-plans') {
     const gate = requirePermission(ctx, 'waf:read');
@@ -1725,14 +1731,14 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'waf_offensive:request');
     if (!gate.ok) return json(res, gate.status, gate.body);
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = wafOffensive.createOffensiveRequest(ctx, body);
+    const result = await wafOffensiveSvc.createOffensiveRequest(ctx, body);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, result);
   }
   if (method === 'GET' && path === '/v1/waf/offensive-requests') {
     const gate = requirePermission(ctx, 'waf_offensive:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    const result = wafOffensive.listOffensiveRequests(ctx);
+    const result = await wafOffensiveSvc.listOffensiveRequests(ctx);
     if (result.error) return json(res, result.status ?? 404, result);
     return json(res, 200, result);
   }
@@ -1740,7 +1746,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (wafOffensiveGetMatch && method === 'GET') {
     const gate = requirePermission(ctx, 'waf_offensive:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    const result = wafOffensive.getOffensiveRequest(ctx, wafOffensiveGetMatch[1]);
+    const result = await wafOffensiveSvc.getOffensiveRequest(ctx, wafOffensiveGetMatch[1]);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 404, result);
     return json(res, 200, result);
@@ -1756,7 +1762,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       if (err instanceof HttpBodyError) return respondBodyError(res, err);
       throw err;
     }
-    const art = wafOffensive.addArtifact(ctx, wafOffensiveArtPost[1], upload.body, {
+    const art = await wafOffensiveSvc.addArtifact(ctx, wafOffensiveArtPost[1], upload.body, {
       uploadEnvelope: upload.envelope,
     });
     if (!art) return json(res, 404, { error: 'not_found' });
@@ -3424,7 +3430,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = wafOffensive.reviewArtifact(ctx, wofArtReview[1], wofArtReview[2], body);
+    const result = await wafOffensiveSvc.reviewArtifact(ctx, wofArtReview[1], wofArtReview[2], body);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
@@ -3435,7 +3441,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = wafOffensive.recordOffensiveSuiteResults(ctx, wofResults[1], body);
+    const result = await wafOffensiveSvc.recordOffensiveSuiteResults(ctx, wofResults[1], body);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
@@ -3446,7 +3452,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = wafOffensive.upsertOffensivePostTestReport(ctx, wofPostTestReport[1], body);
+    const result = await wafOffensiveSvc.upsertOffensivePostTestReport(ctx, wofPostTestReport[1], body);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 409, result);
     return json(res, result.created ? 201 : 200, result.report);
@@ -3455,7 +3461,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'soc:waf_offensive');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
-    const result = wafOffensive.getOffensivePostTestReport(ctx, wofPostTestReport[1]);
+    const result = await wafOffensiveSvc.getOffensivePostTestReport(ctx, wofPostTestReport[1]);
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 404, result);
     return json(res, 200, result);
@@ -3465,7 +3471,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const gate = requirePermission(ctx, 'soc:waf_offensive');
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
-    const result = wafOffensive.transitionOffensiveRequest(ctx, wofSocStart[1], 'start');
+    const result = await wafOffensiveSvc.transitionOffensiveRequest(ctx, wofSocStart[1], 'start');
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 409, result);
     return json(res, 200, result);
@@ -3479,7 +3485,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
       const body = action === 'schedule' || action === 'reject'
         ? await readJsonBody(req, runtimeConfig.maxJsonBodyBytes)
         : {};
-      const result = wafOffensive.transitionOffensiveRequest(ctx, m[1], action, body);
+      const result = await wafOffensiveSvc.transitionOffensiveRequest(ctx, m[1], action, body);
       if (!result) return json(res, 404, { error: 'not_found' });
       if (result.error) return json(res, result.status ?? 409, result);
       return json(res, 200, result);

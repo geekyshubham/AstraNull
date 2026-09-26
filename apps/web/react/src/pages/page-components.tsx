@@ -1825,6 +1825,7 @@ export function TargetGroupsPage({
   const [tenantEnvironments, setTenantEnvironments] = useState<DataItem[]>([]);
   const [tenantEnvironmentsError, setTenantEnvironmentsError] = useState('');
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
+  const canWriteTargetGroups = sessionHasPermission(session, 'target_group:write');
   const filteredGroups = environmentFilter
     ? data.targetGroups.filter((group) => getString(group, ['environment_id'], '') === environmentFilter)
     : data.targetGroups;
@@ -2043,6 +2044,7 @@ export function TargetGroupsPage({
 
   async function handleCreateGroup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTargetGroups) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const name = String(form.get('name') ?? '').trim();
@@ -2079,6 +2081,7 @@ export function TargetGroupsPage({
 
   async function handleAddTarget(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTargetGroups) return;
     if (!effectiveGroupId) {
       setError('Create or select a target group before adding a target.');
       return;
@@ -2110,7 +2113,7 @@ export function TargetGroupsPage({
         title="Target groups"
         eyebrow="Customer-declared scope"
         description="Declare the services AstraNull validates. Ownership stays exact-target proof; AstraNull never scans the estate or requires cloud credentials."
-        actions={
+        actions={canWriteTargetGroups ? (
           <>
             <Button
               variant="secondary"
@@ -2137,7 +2140,7 @@ export function TargetGroupsPage({
               Create target group
             </Button>
           </>
-        }
+        ) : undefined}
       />
       <div className="kpi-row" aria-label="Declared target group summary">
         <KpiCell label="Active groups" value={data.loadErrors.targetGroups ? '—' : formatNumber(activeFilteredGroups.length)} delta={environmentFilter ? `Filtered to ${environmentFilter}` : 'Customer-declared scope'} />
@@ -2183,7 +2186,7 @@ export function TargetGroupsPage({
         </CardContent>
       </Card>
       <FormModal
-        open={showCreateGroup}
+        open={canWriteTargetGroups && showCreateGroup}
         title="Create declared target group"
         description="Customers declare scope manually. AstraNull does not discover inventory automatically."
         onClose={() => setShowCreateGroup(false)}
@@ -2240,7 +2243,7 @@ export function TargetGroupsPage({
         </form>
       </FormModal>
       <FormModal
-        open={showAddTarget}
+        open={canWriteTargetGroups && showAddTarget}
         title="Add declared target"
         description="Add FQDN, URL, IP/port, DNS, or canary targets to the selected group."
         onClose={() => setShowAddTarget(false)}
@@ -2375,6 +2378,7 @@ export function ReportsPage({
   const [reportFormat, setReportFormat] = useState('json');
   const [reportPeriod, setReportPeriod] = useState('last-30-days');
   const reports = data.reports;
+  const canCreateReport = sessionHasPermission(session, 'report:create');
   const reportKindOptions = reportOptionsFromCapabilities(
     data.reportCapabilities,
     'kinds',
@@ -2430,6 +2434,7 @@ export function ReportsPage({
 
   async function handleCreateReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canCreateReport) return;
     const kind = selectedReportKind || 'technical';
     const format = (selectedReportFormat || 'json') as 'json' | 'markdown' | 'html';
     const created = await runReportAction('create-report', () => requestJson(config, session, '/v1/reports', {
@@ -2524,7 +2529,7 @@ export function ReportsPage({
         route="reports"
         eyebrow="Readiness · on the record"
         description="Generate tenant-scoped readiness artifacts, verify JSON custody, and preserve export provenance for executive, technical, SOC, and audit review."
-        actions={<Button type="submit" form="report-generation-form" size="sm" loading={busy === 'create-report'} disabled={busy.startsWith('export-')}>Generate &amp; export</Button>}
+        actions={canCreateReport ? <Button type="submit" form="report-generation-form" size="sm" loading={busy === 'create-report'} disabled={busy.startsWith('export-')}>Generate &amp; export</Button> : undefined}
       />
       <PageContextSummary>
         <span className="tabular-nums">{data.loadErrors.reports ? '—' : formatNumber(reports.length)}</span> reports
@@ -2562,12 +2567,14 @@ export function ReportsPage({
           <CardDescription>Select kind, export format, and period. JSON exports are verified against their returned custody envelope before the preview is marked verified.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form id="report-generation-form" className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
-            <Select label="Kind" name="kind" value={selectedReportKind} options={reportKindOptions} onChange={setReportKind} />
-            <Select label="Format" name="format" value={selectedReportFormat} options={reportFormatOptions} onChange={setReportFormat} />
-            <Select label="Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={setReportPeriod} />
-            <p className="muted text-xs full">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</p>
-          </form>
+          {canCreateReport ? (
+            <form id="report-generation-form" className="product-form" onSubmit={handleCreateReport} aria-busy={busy === 'create-report' || undefined}>
+              <Select label="Kind" name="kind" value={selectedReportKind} options={reportKindOptions} onChange={setReportKind} />
+              <Select label="Format" name="format" value={selectedReportFormat} options={reportFormatOptions} onChange={setReportFormat} />
+              <Select label="Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={setReportPeriod} />
+              <p className="muted text-xs full">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</p>
+            </form>
+          ) : <RoleRestrictedCard title="Report generation is not available for your role." />}
         </CardContent>
       </Card>
       <Card className="card--dense">
@@ -2678,6 +2685,10 @@ export function SettingsPage({
   const canReadServiceAccounts = canReadDataset(session, 'serviceAccounts');
   const canCreateBootstrapToken = sessionHasPermission(session, 'bootstrap_token:create');
   const canCreateServiceAccount = sessionHasPermission(session, 'service_account:create');
+  const canRevokeBootstrapToken = sessionHasPermission(session, 'bootstrap_token:revoke');
+  const canRevokeServiceAccount = sessionHasPermission(session, 'service_account:revoke');
+  const canRotateServiceAccount = sessionHasPermission(session, 'service_account:rotate');
+  const canWriteTenant = sessionHasPermission(session, 'tenant:write');
   const canWriteSecrets = sessionHasPermission(session, 'secret:write');
   const canRotateSecrets = sessionHasPermission(session, 'secret:rotate');
   const settingsTabOptions = SETTINGS_TAB_OPTIONS;
@@ -2700,6 +2711,7 @@ export function SettingsPage({
       label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
+        if (!canRevokeBootstrapToken) return <span className="muted">Read only</span>;
         return <Button size="sm" variant="danger" disabled={busy !== '' || Boolean(item.revoked_at)} onClick={() => void revokeBootstrapToken(id)}>Revoke</Button>;
       }
     }
@@ -2715,10 +2727,11 @@ export function SettingsPage({
       label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
+        if (!canRotateServiceAccount && !canRevokeServiceAccount) return <span className="muted">Read only</span>;
         return (
           <div className="row-actions">
-            <Button size="sm" variant="secondary" disabled={busy !== '' || Boolean(item.revoked_at)} onClick={() => void rotateServiceAccount(id)}>Rotate</Button>
-            <Button size="sm" variant="danger" disabled={busy !== '' || Boolean(item.revoked_at)} onClick={() => void revokeServiceAccount(id)}>Revoke</Button>
+            {canRotateServiceAccount ? <Button size="sm" variant="secondary" disabled={busy !== '' || Boolean(item.revoked_at)} onClick={() => void rotateServiceAccount(id)}>Rotate</Button> : null}
+            {canRevokeServiceAccount ? <Button size="sm" variant="danger" disabled={busy !== '' || Boolean(item.revoked_at)} onClick={() => void revokeServiceAccount(id)}>Revoke</Button> : null}
           </div>
         );
       }
@@ -2744,6 +2757,7 @@ export function SettingsPage({
 
   async function handleCreateBootstrapToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canCreateBootstrapToken) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const name = String(form.get('name') ?? '').trim() || 'Install token';
@@ -2768,6 +2782,7 @@ export function SettingsPage({
 
   async function handleCreateServiceAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canCreateServiceAccount) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const requestedScopes = String(form.get('scopes') ?? '')
@@ -2791,19 +2806,19 @@ export function SettingsPage({
   }
 
   async function revokeBootstrapToken(id: string) {
-    if (!id) return;
+    if (!canRevokeBootstrapToken || !id) return;
     if (!await confirm({ title: 'Revoke bootstrap token', description: 'Revoke this bootstrap token? New agent registrations using it will fail.', confirmLabel: 'Revoke token' })) return;
     await runSettingsAction(`revoke-bootstrap-${id}`, () => requestJson(config, session, `/v1/bootstrap-tokens/${id}/revoke`, { method: 'POST' }), 'Bootstrap token revoked.');
   }
 
   async function revokeServiceAccount(id: string) {
-    if (!id) return;
+    if (!canRevokeServiceAccount || !id) return;
     if (!await confirm({ title: 'Revoke service account', description: 'Revoke this service account? API calls using its secret will stop working.', confirmLabel: 'Revoke account' })) return;
     await runSettingsAction(`revoke-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/revoke`, { method: 'POST' }), 'Service account revoked.');
   }
 
   async function rotateServiceAccount(id: string) {
-    if (!id) return;
+    if (!canRotateServiceAccount || !id) return;
     if (!await confirm({ title: 'Rotate service account secret', description: 'Rotate this service account? The current API secret will stop working immediately.', confirmLabel: 'Rotate secret' })) return;
     const result = await runSettingsAction(`rotate-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/rotate`, { method: 'POST' }), 'Service account rotated. Copy the new API secret now; it is shown once.');
     if (result && typeof result === 'object' && 'secret' in result && typeof (result as { secret?: unknown }).secret === 'string') {
@@ -2813,6 +2828,7 @@ export function SettingsPage({
 
   async function handleSaveOrganization(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTenant) return;
     const form = new FormData(event.currentTarget);
     const name = String(form.get('name') ?? '').trim();
     if (!name) {
@@ -2827,6 +2843,7 @@ export function SettingsPage({
 
   function handleSaveRetention(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTenant) return;
     // Read the form here, not in the confirm handler: `currentTarget` is null once this
     // synchronous handler returns, and the modal resolves long after that.
     const form = new FormData(event.currentTarget);
@@ -2842,6 +2859,7 @@ export function SettingsPage({
   }
 
   async function confirmSaveRetention() {
+    if (!canWriteTenant) return;
     const privacySettings = pendingRetention;
     if (!privacySettings) return;
     await runSettingsAction('save-retention', () => requestJson(config, session, '/v1/tenants/current', {
@@ -2853,6 +2871,7 @@ export function SettingsPage({
 
   async function handleCreateVaultSecret(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteSecrets) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const purpose = String(form.get('purpose') ?? '').trim();
@@ -2877,6 +2896,7 @@ export function SettingsPage({
 
   async function handleRotateVaultSecret(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canRotateSecrets) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const id = String(form.get('secret_id') ?? rotateSecretId).trim();
@@ -2904,6 +2924,7 @@ export function SettingsPage({
       label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
+        if (!canRotateSecrets) return <span className="muted">Read only</span>;
         return (
           <Button
             size="sm"
@@ -2985,7 +3006,7 @@ export function SettingsPage({
                 <form className="product-form" onSubmit={handleSaveOrganization}>
                   <label className="full">
                     <span>Organization name</span>
-                    <input name="name" defaultValue={getString(tenant, ['name'])} required />
+                    <input name="name" defaultValue={getString(tenant, ['name'])} required readOnly={!canWriteTenant} />
                   </label>
                   <label>
                     <span>Tenant ID</span>
@@ -2996,7 +3017,9 @@ export function SettingsPage({
                     <input value={getString(tenant, ['data_region'], 'unrecorded')} readOnly />
                   </label>
                   <div className="form-actions full">
-                    <Button type="submit" loading={busy === 'save-organization'}>Save organization</Button>
+                    {canWriteTenant
+                      ? <Button type="submit" loading={busy === 'save-organization'}>Save organization</Button>
+                      : <span className="muted">Organization settings are read-only for your role.</span>}
                   </div>
                 </form>
               ) : (
@@ -3300,6 +3323,7 @@ export function SettingsPage({
             <CardDescription>Updates metadata and evidence retention for this tenant. Shorter windows can purge stored metadata immediately.</CardDescription>
           </CardHeader>
           <CardContent>
+            {canWriteTenant ? (
             <form className="product-form" onSubmit={handleSaveRetention}>
               <FormNumberField
                 label="Metadata retention (days)"
@@ -3341,6 +3365,7 @@ export function SettingsPage({
                 <Button type="submit" loading={busy === 'save-retention'} disabled={!tenant}>Save retention policy</Button>
               </div>
             </form>
+            ) : <RoleRestrictedCard title="Retention settings are read-only for your role." />}
           </CardContent>
           <CardContent className="settings-list">
             <SettingsNote icon={FileCheck2}>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</SettingsNote>
@@ -3350,7 +3375,7 @@ export function SettingsPage({
       )}
 
       <ConfirmModal
-        open={Boolean(pendingRetention)}
+        open={canWriteTenant && Boolean(pendingRetention)}
         title="Save retention settings?"
         description={<p>Shorter windows can immediately purge stored metadata.</p>}
         confirmLabel="Save retention policy"
@@ -3377,6 +3402,7 @@ export function EnvironmentsPage({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [showDeclare, setShowDeclare] = useState(false);
+  const canWriteEnvironments = sessionHasPermission(session, 'environment:write');
   const rows = buildEnvironmentReadinessRows({
     environments: data.environments,
     targetGroups: data.targetGroups,
@@ -3386,6 +3412,7 @@ export function EnvironmentsPage({
   });
 
   function openDeclare() {
+    if (!canWriteEnvironments) return;
     setError('');
     setMessage('');
     setShowDeclare(true);
@@ -3393,6 +3420,7 @@ export function EnvironmentsPage({
 
   async function handleCreateEnvironment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteEnvironments) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const name = String(form.get('name') ?? '').trim();
@@ -3488,11 +3516,11 @@ export function EnvironmentsPage({
         title="Environments"
         eyebrow="Isolation boundary"
         description="Each row starts from the authoritative environment record, then joins declared target scope to agent, run, finding, and verdict evidence. No cloud credentials or automatic inventory discovery are required."
-        actions={
+        actions={canWriteEnvironments ? (
           <Button variant="default" size="sm" disabled={busy !== ''} onClick={openDeclare}>
             Declare environment
           </Button>
-        }
+        ) : undefined}
       />
       <div className="kpi-row" aria-label="Environment readiness summary">
         <KpiCell label="Environments" value={data.loadErrors.environments ? '—' : formatNumber(rows.length)} delta="Authoritative environment records" />
@@ -3524,15 +3552,15 @@ export function EnvironmentsPage({
                 icon={ServerCog}
                 title="No environments yet."
                 body="Declare an environment below, or create a target group with an environment ID to populate this view."
-                actionLabel="Declare environment"
-                onAction={openDeclare}
+                actionLabel={canWriteEnvironments ? 'Declare environment' : undefined}
+                onAction={canWriteEnvironments ? openDeclare : undefined}
               />
             }
           />
         </CardContent>
       </Card>
       <FormModal
-        open={showDeclare}
+        open={canWriteEnvironments && showDeclare}
         title="Declare a new environment"
         description="Declared environments group target scope and validation evidence. No cloud credentials or IP discovery required."
         onClose={() => setShowDeclare(false)}
@@ -3579,6 +3607,7 @@ export function PolicyPage({
   const [policyExpectedVerdict, setPolicyExpectedVerdict] = useState('pass');
   const [archivePolicyId, setArchivePolicyId] = useState('');
   const [showCreateSchedule, setShowCreateSchedule] = useState(false);
+  const canWritePolicies = sessionHasPermission(session, 'test_policy:write');
   const safeChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'safe');
   const socGatedChecks = data.checks.filter((check) => getString(check, ['safety_class']) === 'soc_gated');
   const checksById = new Map<string, DataItem>(
@@ -3730,6 +3759,7 @@ export function PolicyPage({
         const state = getString(item, ['state'], 'active');
         const rowPatchBusy = busy === `patch-policy-${id}`;
         const rowArchiveBusy = busy === `archive-policy-${id}`;
+        if (!canWritePolicies) return <span className="muted">Read only</span>;
         const rowBlocked = busy !== '' && !rowPatchBusy && !rowArchiveBusy;
         return (
           <div className="row-actions" aria-busy={rowPatchBusy || rowArchiveBusy || undefined}>
@@ -3836,6 +3866,7 @@ export function PolicyPage({
 
   async function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWritePolicies) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const checkId = String(form.get('check_id') ?? '').trim();
@@ -3950,7 +3981,7 @@ export function PolicyPage({
   }
 
   async function patchPolicy(id: string, body: Record<string, unknown>, success: string) {
-    if (!id) return;
+    if (!canWritePolicies || !id) return;
     if ('cadence' in body && body.cadence === 'weekly') {
       if (!await confirm({ title: 'Change policy cadence', description: 'Set this policy cadence to weekly? Scheduled runs will follow the weekly window.', confirmLabel: 'Set weekly', confirmTone: 'default' })) return;
     }
@@ -3970,7 +4001,7 @@ export function PolicyPage({
   }
 
   async function archivePolicy(id: string) {
-    if (!id) return;
+    if (!canWritePolicies || !id) return;
     await runPolicyAction(`archive-policy-${id}`, () => requestJson(config, session, `/v1/test-policies/${id}`, { method: 'DELETE' }), 'Test policy archived.');
     setArchivePolicyId('');
   }
@@ -3982,18 +4013,16 @@ export function PolicyPage({
         title="Test policies"
         eyebrow="Declared scope · bounded execution"
         description="Scheduled validation cadences, exact target bindings, and safe windows. Expected verdicts remain declarations until probe or agent evidence is recorded; high-scale scenarios stay SOC-scheduled."
-        actions={
-          <>
-            <Button
-              variant="default"
-              size="sm"
-              disabled={busy !== ''}
-              onClick={() => setShowCreateSchedule(true)}
-            >
-              Create schedule
-            </Button>
-          </>
-        }
+        actions={canWritePolicies ? (
+          <Button
+            variant="default"
+            size="sm"
+            disabled={busy !== ''}
+            onClick={() => setShowCreateSchedule(true)}
+          >
+            Create schedule
+          </Button>
+        ) : undefined}
       />
       <div className="kpi-row">
         <KpiCell
@@ -4048,14 +4077,14 @@ export function PolicyPage({
               icon: ClipboardList,
               title: 'No schedules yet.',
               body: 'Create a validation schedule after declaring target groups and reviewing the check catalog.',
-              actionLabel: 'New schedule',
-              onAction: () => setShowCreateSchedule(true)
+              actionLabel: canWritePolicies ? 'New schedule' : undefined,
+              onAction: canWritePolicies ? () => setShowCreateSchedule(true) : undefined
             })}
           />
         </CardContent>
       </Card>
       <FormModal
-        open={showCreateSchedule}
+        open={canWritePolicies && showCreateSchedule}
         title="Create validation schedule"
         description="Bind a customer-runnable check to one exact active target in each selected group. Every target is selected explicitly, each group is written sequentially, and failed bindings remain selected for retry. SOC-gated checks remain request-only."
         wide
@@ -4212,7 +4241,7 @@ export function PolicyPage({
             </form>
       </FormModal>
       <ConfirmModal
-        open={Boolean(archivePolicyId)}
+        open={canWritePolicies && Boolean(archivePolicyId)}
         title={`Archive schedule ${archivePolicyId}`}
         description={<p>Are you sure? Scheduled runs under this schedule will stop and an audit entry will be written.</p>}
         confirmLabel="Archive schedule"
@@ -4725,6 +4754,9 @@ export function IntegrationPage({
   const connectorsLoadError = data.loadErrors.connectors;
   const canReadConnectors = canReadDataset(session, 'connectors');
   const canReadSecrets = canReadDataset(session, 'secrets');
+  const canWriteConnectors = sessionHasPermission(session, 'waf:connector_write');
+  const canWriteIntegrationTargets = sessionHasPermission(session, 'target_group:write');
+  const canAddIntegration = canWriteConnectors || canWriteIntegrationTargets;
   const targetGroupsLoadError = data.loadErrors.targetGroups;
   const connectorRecords = pendingConnector && !data.connectors.some(
     (connector) => getString(connector, ['id'], '') === getString(pendingConnector, ['id'], '')
@@ -4811,19 +4843,21 @@ export function IntegrationPage({
         const rowBlocked = busy !== '' && !rowBusy;
         return (
           <div className="row-actions row-actions--compact" aria-busy={rowBusy || undefined}>
-            <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void validateConnector(id)}>Validate</Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              loading={busy === `poll-${id}`}
-              disabled={rowBlocked || isDisabled || !canPoll}
-              title={canPoll ? 'Request a bounded read-only provider poll.' : 'Live polling is unavailable; use a manual metadata snapshot.'}
-              onClick={() => void pollConnector(id)}
-            >
-              Poll
-            </Button>
+            {canWriteConnectors ? <Button size="sm" variant="secondary" loading={busy === `validate-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void validateConnector(id)}>Validate</Button> : null}
+            {canWriteConnectors ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={busy === `poll-${id}`}
+                disabled={rowBlocked || isDisabled || !canPoll}
+                title={canPoll ? 'Request a bounded read-only provider poll.' : 'Live polling is unavailable; use a manual metadata snapshot.'}
+                onClick={() => void pollConnector(id)}
+              >
+                Poll
+              </Button>
+            ) : null}
             <Button size="sm" variant="ghost" loading={busy === `snapshots-${id}`} disabled={rowBlocked} onClick={() => void loadSnapshots(id)}>Snapshots</Button>
-            <Button size="sm" variant="danger" loading={busy === `disable-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void disableConnector(id)}>Disable</Button>
+            {canWriteConnectors ? <Button size="sm" variant="danger" loading={busy === `disable-${id}`} disabled={rowBlocked || isDisabled} onClick={() => void disableConnector(id)}>Disable</Button> : null}
           </div>
         );
       }
@@ -4831,6 +4865,7 @@ export function IntegrationPage({
   ];
 
   function openProviderFlow(providerId = 'cloudflare') {
+    if (!canAddIntegration) return;
     setSelectedCreateProviderId(providerId);
     setError('');
     setMessage('');
@@ -4838,7 +4873,7 @@ export function IntegrationPage({
   }
 
   function beginConnectorSetup(mode: 'connect' | 'manual') {
-    if (!connectorsEnabled) return;
+    if (!canWriteConnectors || !connectorsEnabled) return;
     if (mode === 'connect' && !selectedCreateProvider.supportsCredentialPolling) return;
     setConnectorSetupMode(mode);
     setShowProviderFlow(false);
@@ -4848,6 +4883,7 @@ export function IntegrationPage({
   }
 
   function openAddDomain() {
+    if (!canWriteIntegrationTargets) return;
     setShowProviderFlow(false);
     setShowAddDomain(true);
     setDomainScopeMode(targetGroupRecords.length > 0 ? 'existing' : 'new');
@@ -4908,6 +4944,7 @@ export function IntegrationPage({
 
   async function handleAddSingleDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteIntegrationTargets) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const hostnameResult = validateDeclaredHostname(String(form.get('hostname') ?? ''));
@@ -5037,6 +5074,7 @@ export function IntegrationPage({
 
   async function handleCreateConnector(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteConnectors) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const directoryProvider = getDirectoryProvider(String(form.get('provider') ?? selectedCreateProviderId));
@@ -5128,19 +5166,19 @@ export function IntegrationPage({
   }
 
   async function validateConnector(id: string) {
-    if (!id) return;
+    if (!canWriteConnectors || !id) return;
     await runAction(`validate-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/validate`, { method: 'POST' }), 'Connector validation completed.');
   }
 
   async function pollConnector(id: string) {
-    if (!id) return;
+    if (!canWriteConnectors || !id) return;
     const result = await runAction(`poll-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/poll`, { method: 'POST', body: {} }), 'Connector poll requested.');
     const nextSnapshots = result && typeof result === 'object' && 'snapshots' in result ? (result as { snapshots?: DataItem[] }).snapshots : null;
     if (Array.isArray(nextSnapshots)) setSnapshots(nextSnapshots);
   }
 
   async function disableConnector(id: string) {
-    if (!id) return;
+    if (!canWriteConnectors || !id) return;
     if (!await confirm({ title: 'Disable connector', description: 'Disable this connector? Deliveries through it will stop.', confirmLabel: 'Disable connector' })) return;
     await runAction(`disable-${id}`, () => requestJson(config, session, `/v1/connectors/${encodeURIComponent(id)}/disable`, { method: 'POST', body: { reason: 'Disabled from integrations page.' } }), 'Connector disabled.');
   }
@@ -5155,6 +5193,7 @@ export function IntegrationPage({
 
   async function handleManualSnapshot(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteConnectors) return;
     const formElement = event.currentTarget;
     const id = effectiveConnectorId;
     if (!id) {
@@ -5223,7 +5262,9 @@ export function IntegrationPage({
         return count > 0 ? <Badge tone="success">{count}</Badge> : <span className="muted">None</span>;
       }
     },
-    { key: 'action', label: 'Action', render: (provider) => <Button size="sm" variant="secondary" onClick={() => openProviderFlow(provider.id)}>Add</Button> }
+    { key: 'action', label: 'Action', render: (provider) => canAddIntegration
+      ? <Button size="sm" variant="secondary" onClick={() => openProviderFlow(provider.id)}>Add</Button>
+      : <span className="muted">Read only</span> }
   ];
 
   return (
@@ -5232,10 +5273,10 @@ export function IntegrationPage({
       <PageHeader
         route="integrations"
         eyebrow="DNS & edge integrations"
-        actions={
+        actions={canAddIntegration ? (
           <>
             <Button variant="default" size="sm" disabled={busy !== ''} onClick={() => openProviderFlow()}><PlugZap size={15} aria-hidden="true" /> Add provider</Button>
-            {connectorsEnabled && canReadConnectors ? (
+            {connectorsEnabled && canReadConnectors && canWriteConnectors ? (
               <Button
                 variant="secondary"
                 size="sm"
@@ -5250,7 +5291,7 @@ export function IntegrationPage({
               </Button>
             ) : null}
           </>
-        }
+        ) : undefined}
       />
       <PageContextSummary>Optional enrichment only · no default cloud access · customer-declared domains remain the core path</PageContextSummary>
       <div className="kpi-row" aria-label="Integration inventory summary">
@@ -5351,7 +5392,7 @@ export function IntegrationPage({
       )}
 
       <FormModal
-        open={showProviderFlow}
+        open={canAddIntegration && showProviderFlow}
         title="Add provider"
         description="Choose the least-access path that meets your need. A provider selection alone never connects an account."
         wide
@@ -5385,7 +5426,7 @@ export function IntegrationPage({
             <Button
               type="button"
               size="sm"
-              disabled={!connectorsEnabled || !selectedCreateProvider.supportsCredentialPolling}
+              disabled={!canWriteConnectors || !connectorsEnabled || !selectedCreateProvider.supportsCredentialPolling}
               onClick={() => beginConnectorSetup('connect')}
             >
               Continue to connect
@@ -5396,7 +5437,7 @@ export function IntegrationPage({
             <Badge tone={connectorsEnabled ? 'info' : 'muted'}>{connectorsEnabled ? 'No credentials' : 'Add-on disabled'}</Badge>
             <h3>Manual metadata</h3>
             <p>Create a provider record without credentials, then submit selected normalized zone or policy metadata. No provider API call is made.</p>
-            <Button type="button" size="sm" variant="secondary" disabled={!connectorsEnabled} onClick={() => beginConnectorSetup('manual')}>
+            <Button type="button" size="sm" variant="secondary" disabled={!canWriteConnectors || !connectorsEnabled} onClick={() => beginConnectorSetup('manual')}>
               Continue manually
             </Button>
           </article>
@@ -5405,9 +5446,11 @@ export function IntegrationPage({
             <Badge tone="info">Core workflow</Badge>
             <h3>Single domain</h3>
             <p>Declare one FQDN in an existing or new target group. This creates scoped inventory only; ownership verification remains required.</p>
-            <Button type="button" size="sm" variant="secondary" onClick={openAddDomain}>
-              + Add single domain
-            </Button>
+            {canWriteIntegrationTargets ? (
+              <Button type="button" size="sm" variant="secondary" onClick={openAddDomain}>
+                + Add single domain
+              </Button>
+            ) : <span className="muted">Domain declaration is read-only for your role.</span>}
           </article>
         </div>
         <div className="form-actions">
@@ -5415,7 +5458,7 @@ export function IntegrationPage({
         </div>
       </FormModal>
 
-      {connectorsEnabled ? (
+      {connectorsEnabled && canWriteConnectors ? (
         <>
           <FormModal
             open={showCreateConnector}
@@ -5575,7 +5618,7 @@ export function IntegrationPage({
       ) : null}
 
       <FormModal
-        open={showAddDomain}
+        open={canWriteIntegrationTargets && showAddDomain}
         title="Add single domain"
         description="Declare one hostname in an existing or new customer target group. This is not provider discovery and does not grant cloud access."
         wide

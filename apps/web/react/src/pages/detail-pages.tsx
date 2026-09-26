@@ -6,7 +6,7 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
 import { RoleRestrictedNotice } from '../components/ui/role-restricted';
-import { canReadDataset } from '../lib/dataset-access.mjs';
+import { canReadDataset, sessionHasPermission } from '../lib/dataset-access.mjs';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select } from '../components/ui/select';
 import { Tabs } from '../components/ui/tabs';
@@ -951,6 +951,7 @@ function RunDetailView({
   const relatedFindings = data.findings.filter((finding) => getString(finding, ['test_run_id'], '') === entityId);
   const status = getString(entity, ['status'], '');
   const cancellable = ['planned', 'running', 'collecting'].includes(status);
+  const canManageRun = sessionHasPermission(session, 'test_run:start');
 
   async function runAction(label: string, action: () => Promise<unknown>, success: string) {
     setBusy(label);
@@ -968,11 +969,13 @@ function RunDetailView({
   }
 
   async function confirmCancelRun() {
+    if (!canManageRun) return;
     await runAction(`cancel-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${encodeURIComponent(entityId)}/cancel`, { method: 'POST' }), 'Run cancelled.');
     setConfirmCancelOpen(false);
   }
 
   async function confirmFinalizeRun() {
+    if (!canManageRun) return;
     await runAction(`finalize-${entityId}`, () => requestJson(config, session, `/v1/test-runs/${encodeURIComponent(entityId)}/finalize`, { method: 'POST' }), 'Run finalized after observation window.');
     setConfirmFinalizeOpen(false);
   }
@@ -1041,7 +1044,7 @@ function RunDetailView({
             {primaryFinding ? (
               <AnchorButton size="sm" variant="default" href={buildDetailHref('finding-detail', getString(primaryFinding, ['id'], ''))}>Open finding</AnchorButton>
             ) : null}
-            {cancellable ? (
+            {cancellable && canManageRun ? (
               <>
                 <Button size="sm" variant="danger" loading={busy === `cancel-${entityId}`} disabled={busy !== ''} onClick={() => setConfirmCancelOpen(true)}>Cancel</Button>
                 <Button size="sm" variant="ghost" loading={busy === `finalize-${entityId}`} disabled={busy !== ''} onClick={() => setConfirmFinalizeOpen(true)}>Finalize</Button>
@@ -1307,7 +1310,7 @@ function RunDetailView({
         </>
       ) : null}
       <ConfirmModal
-        open={confirmCancelOpen}
+        open={canManageRun && confirmCancelOpen}
         title="Cancel this run in progress?"
         description={<p>Run {entityId} stops collecting and records no new verdict.</p>}
         confirmLabel="Cancel run"
@@ -1316,7 +1319,7 @@ function RunDetailView({
         onConfirm={() => void confirmCancelRun()}
       />
       <ConfirmModal
-        open={confirmFinalizeOpen}
+        open={canManageRun && confirmFinalizeOpen}
         title="Force finalize this run now?"
         description={<p>This asks the backend to finalize using the evidence available at that time.</p>}
         confirmLabel="Force finalize"
@@ -1736,6 +1739,8 @@ function AgentDetailView({
     : null;
   const agentLogs = filterAgentAuditEntries(data.audit, entityId);
   const canReadAudit = canReadDataset(session, 'audit');
+  const canRevokeAgent = sessionHasPermission(session, 'agent:revoke');
+  const canRunPlacement = sessionHasPermission(session, 'test_run:start');
   const agentAuditColumns: TableColumn<DataItem>[] = [
     { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
     { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'])}` },
@@ -1880,7 +1885,7 @@ function AgentDetailView({
   }, [tab, config, session, targetGroupId]);
 
   async function revokeAgent() {
-    if (!entityId || getString(entity, ['status']) === 'revoked') return;
+    if (!canRevokeAgent || !entityId || getString(entity, ['status']) === 'revoked') return;
     setBusy(`revoke-${entityId}`);
     setError('');
     setMessage('');
@@ -1897,6 +1902,7 @@ function AgentDetailView({
   }
 
   async function runPlacementTest() {
+    if (!canRunPlacement) return;
     if (!targetGroupId) {
       setError('Bind this agent to a target group before running a placement test.');
       return;
@@ -1972,6 +1978,7 @@ function AgentDetailView({
           attributionStatus={agentRunAttributionStatus}
           placementReview={placementReview ?? null}
           onRunPlacement={() => void runPlacementTest()}
+          canRun={canRunPlacement}
           running={busy === `placement-${entityId}`}
           busy={busy !== ''}
         />
@@ -2054,18 +2061,18 @@ function AgentDetailView({
                 <div><span>Status</span><StatusBadge value={getString(entity, ['status'], 'unknown')} tone={agentStatusBadgeTone(getString(entity, ['status'], 'unknown'))} fallback="unknown" /></div>
               </div>
               <div className="row-actions">
-                {getString(entity, ['status']) !== 'revoked' ? (
-                  <Button size="sm" variant="danger" loading={busy === `revoke-${entityId}`} disabled={busy !== ''} onClick={() => setRevokeConfirmOpen(true)}>Revoke agent</Button>
-                ) : (
+                {getString(entity, ['status']) === 'revoked' ? (
                   <p className="muted">This agent is revoked. Issue a new bootstrap token on <AnchorButton size="sm" variant="ghost" href="#agents">Agents</AnchorButton> to re-register.</p>
-                )}
+                ) : canRevokeAgent ? (
+                  <Button size="sm" variant="danger" loading={busy === `revoke-${entityId}`} disabled={busy !== ''} onClick={() => setRevokeConfirmOpen(true)}>Revoke agent</Button>
+                ) : <p className="muted">Agent revocation is read-only for your role.</p>}
                 <AnchorButton size="sm" variant="secondary" href="#agents">Open fleet install &amp; upgrades</AnchorButton>
               </div>
             </CardContent>
           </Card>
         </div>
         <ConfirmModal
-          open={revokeConfirmOpen}
+          open={canRevokeAgent && revokeConfirmOpen}
           title={`Revoke agent ${entityId}`}
           description={<p>Are you sure? Revoked agents stop reporting until re-registered with a new bootstrap token.</p>}
           confirmLabel="Revoke agent"
@@ -2487,6 +2494,7 @@ function HighScaleDetailView({
   const targetGroup = data.targetGroups.find((group) => getString(group, ['id'], '') === getString(entity, ['target_group_id'], ''));
   const title = detailEntityTitle('queue-detail', entity, entityId);
   const requiredArtifactTypes = authorizationArtifactTypesForRequest(entity);
+  const canWriteHighScale = sessionHasPermission(session, 'high_scale:write');
 
   function draftForType(type: string): AuthorizationArtifactDraft {
     return drafts[type] ?? { filename: '', content_sha256: '', custody_id: '' };
@@ -2508,6 +2516,7 @@ function HighScaleDetailView({
   }
 
   async function uploadAuthorizationArtifact(type: string) {
+    if (!canWriteHighScale) return;
     const draft = draftForType(type);
     const filename = draft.filename.trim();
     if (!filename) {
@@ -2574,7 +2583,7 @@ function HighScaleDetailView({
         title={title}
         actions={packOverall === 'accepted'
           ? <AnchorButton size="sm" variant="default" href="#runs">Open high-scale requests</AnchorButton>
-          : <Button size="sm" variant="default" onClick={() => setTab('authorization')}>Complete authorization pack</Button>}
+          : <Button size="sm" variant="default" onClick={() => setTab('authorization')}>{canWriteHighScale ? 'Complete authorization pack' : 'View authorization pack'}</Button>}
       />
       <PageContextSummary>
         <StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /> · pack{' '}
@@ -2582,7 +2591,7 @@ function HighScaleDetailView({
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message}>
-        {error && lastFailedUploadType ? (
+        {error && lastFailedUploadType && canWriteHighScale ? (
           <div className="row-actions">
             <Button size="sm" variant="secondary" loading={busy === `upload-${lastFailedUploadType}`} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(lastFailedUploadType)}>Retry artifact record</Button>
           </div>
@@ -2680,18 +2689,18 @@ function HighScaleDetailView({
                         <div className="product-form compact">
                           <label className="full">
                             <span>File name</span>
-                            <input value={draft.filename} placeholder={`${type}.pdf`} onChange={(event) => updateDraft(type, 'filename', event.target.value)} />
+                            <input value={draft.filename} readOnly={!canWriteHighScale} placeholder={`${type}.pdf`} onChange={(event) => updateDraft(type, 'filename', event.target.value)} />
                           </label>
                           <label className="full">
                             <span>Content digest (SHA-256)</span>
-                            <input value={draft.content_sha256} required placeholder="Required — SHA-256 of the artifact bytes" onChange={(event) => updateDraft(type, 'content_sha256', event.target.value)} />
+                            <input value={draft.content_sha256} readOnly={!canWriteHighScale} required placeholder="Required — SHA-256 of the artifact bytes" onChange={(event) => updateDraft(type, 'content_sha256', event.target.value)} />
                           </label>
                           <label className="full">
                             <span>Custody record id</span>
-                            <input value={draft.custody_id} placeholder="Optional external custody reference" onChange={(event) => updateDraft(type, 'custody_id', event.target.value)} />
+                            <input value={draft.custody_id} readOnly={!canWriteHighScale} placeholder="Optional external custody reference" onChange={(event) => updateDraft(type, 'custody_id', event.target.value)} />
                           </label>
                           <div className="form-actions full">
-                            <Button size="sm" variant="secondary" loading={uploadBusy} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(type)}>Record artifact</Button>
+                            {canWriteHighScale ? <Button size="sm" variant="secondary" loading={uploadBusy} disabled={busy !== ''} onClick={() => void uploadAuthorizationArtifact(type)}>Record artifact</Button> : <span className="muted">Read only</span>}
                           </div>
                         </div>
                       </div>
@@ -4215,9 +4224,6 @@ export function DetailRoutePage({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
   const [runEventState, setRunEventState] = useState<RunEventEvidenceState>({
     entityId: '',
     status: 'loading',
@@ -4355,37 +4361,6 @@ export function DetailRoutePage({
       });
     return () => { cancelled = true; };
   }, [route, entityId, config, session]);
-
-  async function runDetailAction(label: string, action: () => Promise<unknown>, success: string) {
-    setBusy(label);
-    setError('');
-    setMessage('');
-    try {
-      await action();
-      setMessage(success);
-      await onRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed.');
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function revokeAgent(agentId: string) {
-    if (!agentId) return;
-    setBusy(`revoke-${agentId}`);
-    setError('');
-    setMessage('');
-    try {
-      await requestJson(config, session, `/v1/agents/${encodeURIComponent(agentId)}/revoke`, { method: 'POST' });
-      setMessage('Agent revoked.');
-      await onRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Agent revoke failed.');
-    } finally {
-      setBusy('');
-    }
-  }
 
   if (route === 'tenant-detail') {
     if (!entityId) {

@@ -873,6 +873,11 @@ export function AgentsPage({
   ];
   const auxiliaryError = [releaseLoadError, trustKeyLoadError].filter(Boolean).join(' ');
   const canReadAgentUpdates = sessionHasPermission(session, 'agent_update:read');
+  const canWriteAgentUpdates = sessionHasPermission(session, 'agent_update:write');
+  const canRollbackAgentUpdates = sessionHasPermission(session, 'agent_update:rollback');
+  const canRevokeAgent = sessionHasPermission(session, 'agent:revoke');
+  const canCreateBootstrapToken = sessionHasPermission(session, 'bootstrap_token:create');
+  const canRevokeBootstrapToken = sessionHasPermission(session, 'bootstrap_token:revoke');
 
   // Load agent update releases + update-signing trust keys for the rollout / trust-key
   // panels. Both GET /v1/agent-updates and GET /v1/agent-update-trust-keys return
@@ -963,6 +968,7 @@ export function AgentsPage({
         const revoked = getString(item, ['status', 'state'], '') === 'revoked';
         if (revoked) return <span className="muted">revoked</span>;
         if (!id) return <span className="muted">—</span>;
+        if (!canRevokeAgent) return <span className="muted">Read only</span>;
         return (
           <div className="row-actions">
             <Button
@@ -1011,7 +1017,7 @@ export function AgentsPage({
       label: 'Actions',
       render: (item) => {
         const id = getString(item, ['id'], '');
-        const canRollback = Boolean(item.rollback) && getString(item, ['state']) !== 'rollback_requested';
+        const canRollback = canRollbackAgentUpdates && Boolean(item.rollback) && getString(item, ['state']) !== 'rollback_requested';
         return canRollback ? (
           <Button
             size="sm"
@@ -1046,6 +1052,7 @@ export function AgentsPage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const active = getString(item, ['status']) === 'active';
+        if (!canWriteAgentUpdates) return <span className="muted">Read only</span>;
         return active ? (
           <Button
             size="sm"
@@ -1064,6 +1071,7 @@ export function AgentsPage({
   ];
 
   async function createBootstrapToken() {
+    if (!canCreateBootstrapToken) return;
     if (targetGroupsLoadError) {
       setMessage('');
       setError('Target groups could not be refreshed. Retry before choosing scope or creating a bootstrap token.');
@@ -1120,6 +1128,7 @@ export function AgentsPage({
   }
 
   async function revokeBootstrapToken() {
+    if (!canRevokeBootstrapToken) return;
     if (!tokenId) {
       setError('No bootstrap token id was returned, so it cannot be revoked from here.');
       return;
@@ -1171,7 +1180,7 @@ export function AgentsPage({
   }
 
   async function revokeAgent(id: string) {
-    if (!id) return;
+    if (!canRevokeAgent || !id) return;
     if (!await confirm({
       title: 'Revoke agent credentials',
       description: "Revoke this agent's credentials? It will stop reporting until re-registered.",
@@ -1189,7 +1198,7 @@ export function AgentsPage({
   }
 
   async function requestReleaseRollback(releaseId: string) {
-    if (!releaseId) return;
+    if (!canRollbackAgentUpdates || !releaseId) return;
     if (!await confirm({
       title: 'Request agent rollback',
       description: 'Request rollback for this agent release? Eligible agents will move to the previous signed version.',
@@ -1210,7 +1219,7 @@ export function AgentsPage({
   }
 
   async function revokeTrustKey(keyId: string) {
-    if (!keyId) return;
+    if (!canWriteAgentUpdates || !keyId) return;
     if (!await confirm({
       title: 'Revoke update trust key',
       description: 'Revoke this agent update trust key? Agents will reject updates signed with it.',
@@ -1232,6 +1241,7 @@ export function AgentsPage({
 
   async function handleAddTrustKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteAgentUpdates) return;
     // Capture the form node before awaiting — event.currentTarget is nulled after the
     // synchronous handler returns, so form.reset() must use the captured reference.
     const form = event.currentTarget;
@@ -1781,6 +1791,7 @@ export function AgentsPage({
             </li>
           </ol>
 
+          {!canCreateBootstrapToken ? <RoleRestrictedCard title="Agent bootstrap token creation is not available for your role." /> : null}
           <Card className="agents-bootstrap-card">
             <CardHeader className="agents-card-header">
               <div className="agents-card-heading">
@@ -1866,16 +1877,18 @@ export function AgentsPage({
                     >
                       Copy
                     </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="agents-revoke-action"
-                      loading={busy === `revoke-bootstrap-${tokenId}`}
-                      disabled={!tokenId || tokenRevoked || (busy !== '' && busy !== `revoke-bootstrap-${tokenId}`)}
-                      onClick={() => void revokeBootstrapToken()}
-                    >
-                      {tokenRevoked ? 'Revoked' : 'Revoke'}
-                    </Button>
+                    {canRevokeBootstrapToken ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="agents-revoke-action"
+                        loading={busy === `revoke-bootstrap-${tokenId}`}
+                        disabled={!tokenId || tokenRevoked || (busy !== '' && busy !== `revoke-bootstrap-${tokenId}`)}
+                        onClick={() => void revokeBootstrapToken()}
+                      >
+                        {tokenRevoked ? 'Revoked' : 'Revoke'}
+                      </Button>
+                    ) : null}
                   </div>
                   {copyNotice ? <p className="muted" role="status" aria-live="polite">{copyNotice}</p> : null}
                 </section>
@@ -1887,6 +1900,7 @@ export function AgentsPage({
             tokenSecret={tokenRevoked ? '' : tokenSecret}
             onCreateToken={() => void createBootstrapToken()}
             createBusy={busy === 'create-bootstrap-token'}
+            canCreateToken={canCreateBootstrapToken}
             actionsDisabled={busy !== '' || Boolean(targetGroupsLoadError) || !selectedTargetGroup}
             updateReleases={updateReleases}
             trustKeys={trustKeys}
@@ -1981,6 +1995,7 @@ export function AgentsPage({
                 )}
               </div>
 
+              {canWriteAgentUpdates ? (
               <form className="product-form agents-trust-form" onSubmit={(event) => void handleAddTrustKey(event)} aria-label="Register agent update trust key">
                 <div className="agents-trust-form-head">
                   <h3>Register a public key</h3>
@@ -1992,6 +2007,7 @@ export function AgentsPage({
                   <Button type="submit" loading={busy === 'add-trust-key'} disabled={busy !== ''}>Register trust key</Button>
                 </div>
               </form>
+              ) : <RoleRestrictedCard title="Agent update trust-key changes are read-only for your role." />}
             </CardContent>
           </Card>
           </>) : (
@@ -2043,6 +2059,7 @@ export function ValidationSurfacePage({
   const inFlightRuns = data.runs.filter((run) => isCancellableRunStatus(getString(run, ['status'], '')));
   const activeScans = data.validationScans.filter((scan) => isScanActive(scan));
   const canManageScans = canStartRun(session.role);
+  const canRequestHighScale = sessionHasPermission(session, 'high_scale:request');
 
   const checkSafetyCounts = useMemo(() => countChecksBySafetyScope(data.checks), [data.checks]);
   const filteredChecks = useMemo(
@@ -2094,6 +2111,7 @@ export function ValidationSurfacePage({
   }
 
   async function confirmCancelRun() {
+    if (!canManageScans) return;
     const id = cancelRunId;
     if (!id) return;
     setBusy(`cancel-${id}`);
@@ -2117,6 +2135,7 @@ export function ValidationSurfacePage({
   }
 
   async function confirmFinalizeRun() {
+    if (!canManageScans) return;
     const id = finalizeRunId;
     if (!id) return;
     await runAction(setBusy, setError, setMessage, `finalize-${id}`, () => requestJson(config, session, `/v1/test-runs/${id}/finalize`, { method: 'POST' }), 'Run finalized after observation window.', onRefresh);
@@ -2440,7 +2459,7 @@ export function ValidationSurfacePage({
           const id = getString(item, ['id'], '');
           // Same gate the run-detail page uses: cancel and force-finalize are offered while
           // the run is still in flight (planned/running/collecting).
-          if (!id || !isCancellableRunStatus(getString(item, ['status'], ''))) {
+          if (!id || !isCancellableRunStatus(getString(item, ['status'], '')) || !canManageScans) {
             return <span className="muted">—</span>;
           }
           return (
@@ -2499,7 +2518,7 @@ export function ValidationSurfacePage({
           actions={(
             <RunsPageHeadActions
               onRefresh={() => void onRefresh()}
-              onRequestSoc={() => setShowSocRequestForm(true)}
+              onRequestSoc={canRequestHighScale ? () => setShowSocRequestForm(true) : undefined}
               onStartSafeRun={() => { window.location.hash = '#checks'; }}
               onStartScan={canManageScans ? () => setScanLauncher({ mode: 'create', scan: null }) : undefined}
               refreshBusy={busy === 'refresh-runs'}

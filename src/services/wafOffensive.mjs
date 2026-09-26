@@ -310,6 +310,14 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
   }
 
   if (action === 'start') {
+    refreshPackStatus(req);
+    if (!offensiveAuthorizationPackComplete(req)) {
+      return {
+        error: 'authorization_pack_incomplete',
+        status: 409,
+        authorization_pack_status: req.authorization_pack_status,
+      };
+    }
     if (distinctSocApprovalCount(req) < 2) {
       return { error: 'insufficient_soc_approvals', status: 409 };
     }
@@ -361,6 +369,17 @@ export function transitionOffensiveRequest(ctx, id, action, metadata = {}) {
       resource_type: 'waf_offensive_request',
       resource_id: id,
       metadata: { reason: metadata.reason ?? 'soc_stop' },
+    });
+  }
+
+  if (action === 'close') {
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'waf.offensive_request.closed',
+      resource_type: 'waf_offensive_request',
+      resource_id: id,
     });
   }
 

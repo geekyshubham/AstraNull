@@ -77,6 +77,7 @@ export default function App() {
   const [accessNotice, setAccessNotice] = useState('');
   const bootStarted = useRef(false);
   const lastHydratedRoute = useRef<RouteId | null>(null);
+  const deniedFallbackRouteRef = useRef<RouteId | null>(null);
   const payloadCommitGate = useRef(createPayloadCommitGate(route));
   payloadCommitGate.current.activate(route);
 
@@ -84,7 +85,10 @@ export default function App() {
 
   useEffect(() => {
     if (!accessNotice) return undefined;
-    const timer = window.setTimeout(() => setAccessNotice(''), 8000);
+    const timer = window.setTimeout(() => {
+      deniedFallbackRouteRef.current = null;
+      setAccessNotice('');
+    }, 8000);
     return () => window.clearTimeout(timer);
   }, [accessNotice]);
 
@@ -172,6 +176,7 @@ export default function App() {
         }) ? requestedBootRoute : fallbackRoute;
         if (bootRoute !== requestedBootRoute) {
           window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${fallbackRoute}`);
+          deniedFallbackRouteRef.current = fallbackRoute;
           setAccessNotice(routeDeniedNotice(requestedBootRoute, fallbackRoute, nextSession));
         }
         setRoute(bootRoute);
@@ -201,12 +206,17 @@ export default function App() {
       };
       const fallbackRoute = fallbackRouteForSession({ principal: accessContext.principal, staff_role: accessContext.staffRole });
       if (!canAccessRoute(role, nextRoute, accessContext)) {
+        deniedFallbackRouteRef.current = fallbackRoute;
         setAccessNotice(routeDeniedNotice(nextRoute, fallbackRoute, { principal: accessContext.principal, role, staff_role: accessContext.staffRole }));
         payloadCommitGate.current.activate(fallbackRoute);
         window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
         if (lastHydratedRoute.current !== fallbackRoute) setHydratingRoute(fallbackRoute);
         setRoute(fallbackRoute);
       } else {
+        if (deniedFallbackRouteRef.current && nextRoute !== deniedFallbackRouteRef.current) {
+          deniedFallbackRouteRef.current = null;
+          setAccessNotice('');
+        }
         payloadCommitGate.current.activate(nextRoute);
         if (lastHydratedRoute.current !== nextRoute) setHydratingRoute(nextRoute);
         setRoute(nextRoute);
@@ -238,6 +248,7 @@ export default function App() {
       staffRole: activeSession.staff_role,
     })) {
       const fallbackRoute = fallbackRouteForSession(activeSession);
+      deniedFallbackRouteRef.current = fallbackRoute;
       setAccessNotice(routeDeniedNotice(route, fallbackRoute, activeSession));
       payloadCommitGate.current.activate(fallbackRoute);
       window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
@@ -313,7 +324,10 @@ export default function App() {
       onRefresh={() => void handleRefresh()}
       showRoleSwitcher={config.authMode === 'dev-headers' && activeSession.principal !== 'staff'}
       accessNotice={accessNotice}
-      onDismissAccessNotice={() => setAccessNotice('')}
+      onDismissAccessNotice={() => {
+        deniedFallbackRouteRef.current = null;
+        setAccessNotice('');
+      }}
     >
       <RouteView
         route={route}

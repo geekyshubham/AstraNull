@@ -16,7 +16,7 @@ import { buildDetailHref } from '../lib/route-params';
 import { apiErrorCode, edgeDetectionLockedReason, edgeDetectionReasonExplanation, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
 import type { DataItem, PortalConfig, PortalData, PortalDataset, Session } from '../lib/types';
 import { canStartRun } from '../lib/run-permissions.mjs';
-import { canReadDataset } from '../lib/dataset-access.mjs';
+import { canReadDataset, sessionHasPermission } from '../lib/dataset-access.mjs';
 import { isScanActive, isScanScheduled, scanDisplayName, scanStatusLabel, validationScansPathForGroup } from '../lib/validation-scan.mjs';
 import { ValidationScanLauncher, type ScanLauncherMode } from '../components/runs/validation-scan-launcher';
 import { ValidationScansTable } from '../components/runs/validation-scans-table';
@@ -720,6 +720,8 @@ export function TargetGroupDetailView({
   const upcomingScans = groupScans.filter((scan) => isScanScheduled(scan) || isScanActive(scan));
   const visibleScans = showAllScans ? groupScans : upcomingScans;
   const canStartScan = canStartRun(session.role);
+  const canWriteTargets = sessionHasPermission(session, 'target_group:write');
+  const canWritePolicies = sessionHasPermission(session, 'test_policy:write');
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
   const targetCount = String(entity.target_count ?? targets.length);
   const loaState = getString(entity, ['loa_state', 'loa_status'], getString(entity.loa as DataItem | undefined, ['state'], 'required'));
@@ -770,9 +772,7 @@ export function TargetGroupDetailView({
   const selectedPolicyTarget = compatiblePolicyTargets.find(
     (target) => getString(target, ['id'], '') === effectiveSelectedPolicyTargetId
   ) ?? null;
-  const canCreateScheduledPolicy = ['owner', 'admin', 'engineer'].includes(
-    String(session.role ?? '').trim().toLowerCase()
-  );
+  const canCreateScheduledPolicy = canWritePolicies;
   const wafEdgeDetectionEnabled = data.deploymentFeatures?.waf_posture === true;
 
   const ownershipProvenTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
@@ -1046,6 +1046,7 @@ export function TargetGroupDetailView({
   }
 
   function openOnboardModal(tab: OnboardTab = 'fqdn') {
+    if (!canWriteTargets) return;
     setOnboardTab(tab);
     setError('');
     setMessage('');
@@ -1059,6 +1060,7 @@ export function TargetGroupDetailView({
     metadata?: Record<string, string>,
     options: { closeModal?: boolean; successMessage?: string } = {}
   ): Promise<DataItem | null> {
+    if (!canWriteTargets) return null;
     const trimmed = value.trim();
     if (!trimmed) {
       setError('A target value is required.');
@@ -1099,6 +1101,7 @@ export function TargetGroupDetailView({
   }
 
   async function removeTarget(item: DataItem) {
+    if (!canWriteTargets) return;
     const targetId = getString(item, ['id'], '');
     if (!targetId) return;
     const targetLabel = getString(item, ['value'], targetId);
@@ -1152,6 +1155,7 @@ export function TargetGroupDetailView({
   }
 
   async function issueDnsChallenge(targetId: string, createdTargetLabel = '') {
+    if (!canWriteTargets) return;
     const selectedTarget = fqdnTargets.find((target) => getString(target, ['id'], '') === targetId);
     const targetLabel = getString(selectedTarget, ['value'], createdTargetLabel || targetId);
     // The just-created target may not be present in parent props until refresh completes. Its
@@ -1235,6 +1239,7 @@ export function TargetGroupDetailView({
   }
 
   async function verifyDnsChallenge(explicitChallengeId: string, explicitTargetId = selectedDnsTargetId) {
+    if (!canWriteTargets) return;
     const challengeId = explicitChallengeId.trim();
     const targetId = explicitTargetId.trim();
     if (!challengeId || !targetId) {
@@ -1319,6 +1324,7 @@ export function TargetGroupDetailView({
   // Per-row Verify: for a domain, issue (or re-check) a scoped DNS TXT challenge in place; for an
   // IP/agent-bound target, jump to target detail where the agent-binding flow lives (§4.5).
   function verifyTarget(item: DataItem) {
+    if (!canWriteTargets) return;
     const id = getString(item, ['id'], '');
     if (!id) return;
     const kind = getString(item, ['kind'], '').toLowerCase();
@@ -1368,7 +1374,7 @@ export function TargetGroupDetailView({
   }
 
   async function importInventory() {
-    if (!inventoryProvider || selectedInventory.size === 0) return;
+    if (!canWriteTargets || !inventoryProvider || selectedInventory.size === 0) return;
     let importedCount = 0;
     let skippedCount = 0;
     let skippedDetails = '';
@@ -1437,6 +1443,7 @@ export function TargetGroupDetailView({
   }
 
   async function runBoundedTest(targetId: string) {
+    if (!canStartScan) return;
     if (!effectiveSelectedPolicyCheckId || !selectedPolicyCheck) {
       setError('Select a customer-runnable rule in Rules & schedule before starting a bounded run.');
       setMessage('');
@@ -1454,6 +1461,7 @@ export function TargetGroupDetailView({
   // Queue the fixed safe scanner for an already-declared target. The API resolves the
   // tenant-owned binding inside startTestRun; target values never leave this page as input.
   async function runEdgeDetection(item: DataItem) {
+    if (!canStartScan) return;
     const targetId = getString(item, ['id'], '');
     if (!targetId) {
       setError('This target does not have a valid identifier.');
@@ -1580,6 +1588,7 @@ export function TargetGroupDetailView({
 
   async function submitLoa(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTargets) return;
     const form = new FormData(event.currentTarget);
     if (form.get('attested') !== 'on') {
       setError('Attestation is required before signing the LOA.');
@@ -1730,7 +1739,7 @@ export function TargetGroupDetailView({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const runnable = canRunTest(targetVerificationState(item));
-        const runReady = runnable && Boolean(effectiveSelectedPolicyCheckId);
+        const runReady = canStartScan && runnable && Boolean(effectiveSelectedPolicyCheckId);
         const removing = busy === `remove-target-${id}`;
         const runTitle = !runnable
           ? 'Verify ownership to enable testing'
@@ -1747,15 +1756,17 @@ export function TargetGroupDetailView({
             >
               Open target
             </AnchorButton>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!id || removing || busy.startsWith('dns-')}
-              onClick={() => verifyTarget(item)}
-            >
-              Verify
-            </Button>
-            {wafEdgeDetectionEnabled ? (
+            {canWriteTargets ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!id || removing || busy.startsWith('dns-')}
+                onClick={() => verifyTarget(item)}
+              >
+                Verify
+              </Button>
+            ) : null}
+            {wafEdgeDetectionEnabled && canStartScan ? (
               <Button
                 size="sm"
                 variant="ghost"
@@ -1771,30 +1782,34 @@ export function TargetGroupDetailView({
                 Detect edge
               </Button>
             ) : null}
-            {wafEdgeDetectionEnabled && !runnable && id ? (
+            {wafEdgeDetectionEnabled && canStartScan && !runnable && id ? (
               <span id={`edge-lock-${id}`} className="sr-only">{edgeDetectionLockedReason(targetVerificationState(item))}</span>
             ) : null}
-            <Button
-              size="sm"
-              variant="ghost"
-              className={runReady ? undefined : 'is-locked'}
-              disabled={!runReady || busy === `run-test-${id}` || removing}
-              title={runTitle}
-              loading={busy === `run-test-${id}`}
-              onClick={() => void runBoundedTest(id)}
-            >
-              Run test
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={!id || busy === `run-test-${id}`}
-              loading={removing}
-              aria-label={`Remove target ${getString(item, ['value'], id)}`}
-              onClick={() => void removeTarget(item)}
-            >
-              <Trash2 size={13} /> Remove
-            </Button>
+            {canStartScan ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className={runReady ? undefined : 'is-locked'}
+                disabled={!runReady || busy === `run-test-${id}` || removing}
+                title={runTitle}
+                loading={busy === `run-test-${id}`}
+                onClick={() => void runBoundedTest(id)}
+              >
+                Run test
+              </Button>
+            ) : null}
+            {canWriteTargets ? (
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={!id || busy === `run-test-${id}`}
+                loading={removing}
+                aria-label={`Remove target ${getString(item, ['value'], id)}`}
+                onClick={() => void removeTarget(item)}
+              >
+                <Trash2 size={13} /> Remove
+              </Button>
+            ) : null}
           </div>
         );
       }
@@ -1961,8 +1976,8 @@ export function TargetGroupDetailView({
         </div>
         <div className="tg-head-actions">
           {canStartScan ? <Button size="sm" onClick={() => setScanLauncher({ mode: 'create', scan: null })}><Activity size={14} /> Start validation scan</Button> : null}
-          <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
-          <Button size="sm" variant="secondary" onClick={() => openOnboardModal('cloud')}><Bot size={14} /> Import DNS zones</Button>
+          {canWriteTargets ? <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button> : null}
+          {canWriteTargets ? <Button size="sm" variant="secondary" onClick={() => openOnboardModal('cloud')}><Bot size={14} /> Import DNS zones</Button> : null}
           {groupEnvironmentId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('environment-detail', groupEnvironmentId)}>Environment</AnchorButton> : null}
           <AnchorButton size="sm" variant="secondary" href="#target-groups">All groups</AnchorButton>
         </div>
@@ -2047,7 +2062,7 @@ export function TargetGroupDetailView({
           </p>
         </div>
         <div className="callout-actions">
-          {!loaSigned ? (
+          {!loaSigned && canWriteTargets ? (
             <>
               <Button size="sm" onClick={() => setShowLoaModal(true)}>Open target group &amp; sign LOA</Button>
               <Button size="sm" variant="ghost" onClick={() => void verifyDnsChallenge(activeChallengeId)} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId}>Review DNS status</Button>
@@ -2084,21 +2099,23 @@ export function TargetGroupDetailView({
                 })}
               </select>
             </label>
-            <Button
-              size="sm"
-              onClick={() => void issueDnsChallenge(selectedDnsTargetId)}
-              loading={busy === `dns-issue-${entityId}`}
-              disabled={dnsIssueBlocked}
-              title={activeChallengeIsPending
-                ? 'This target already has an unexpired pending challenge'
-                : dnsOwnershipConfirmed
-                  ? 'DNS ownership is already confirmed for this target'
-                  : busy.startsWith('dns-')
-                    ? 'Wait for the current DNS action to finish'
-                    : 'Issue a challenge for the selected target'}
-            >
-              {activeChallengeIsPending ? 'Challenge active' : dnsOwnershipConfirmed ? 'Ownership confirmed' : activeChallenge ? 'Issue new challenge' : 'Issue DNS challenge'}
-            </Button>
+            {canWriteTargets ? (
+              <Button
+                size="sm"
+                onClick={() => void issueDnsChallenge(selectedDnsTargetId)}
+                loading={busy === `dns-issue-${entityId}`}
+                disabled={dnsIssueBlocked}
+                title={activeChallengeIsPending
+                  ? 'This target already has an unexpired pending challenge'
+                  : dnsOwnershipConfirmed
+                    ? 'DNS ownership is already confirmed for this target'
+                    : busy.startsWith('dns-')
+                      ? 'Wait for the current DNS action to finish'
+                      : 'Issue a challenge for the selected target'}
+              >
+                {activeChallengeIsPending ? 'Challenge active' : dnsOwnershipConfirmed ? 'Ownership confirmed' : activeChallenge ? 'Issue new challenge' : 'Issue DNS challenge'}
+              </Button>
+            ) : null}
           </div>
         </CardHeader>
         <CardContent>
@@ -2144,9 +2161,11 @@ export function TargetGroupDetailView({
                 </div>
               </div>
               <div className="dns-footer">
-                <Button size="sm" onClick={() => void verifyDnsChallenge(activeChallengeId)} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId || dnsChipState === 'dns_verified'}>
-                  Check now
-                </Button>
+                {canWriteTargets ? (
+                  <Button size="sm" onClick={() => void verifyDnsChallenge(activeChallengeId)} loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId || dnsChipState === 'dns_verified'}>
+                    Check now
+                  </Button>
+                ) : null}
                 <span className="muted small">
                   {dnsChipState === 'dns_verified'
                     ? `Resolved ${formatDate(getString(activeChallenge, ['resolved_at'], '') || undefined)}`
@@ -2209,7 +2228,7 @@ export function TargetGroupDetailView({
           </div>
           <div className="row-actions">
             <TargetCsvImportButton config={config} session={session} targetGroupId={entityId} onImported={() => onRefresh()} />
-            <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
+            {canWriteTargets ? <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button> : null}
           </div>
         </CardHeader>
         <CardContent>
@@ -2530,7 +2549,7 @@ export function TargetGroupDetailView({
       </Card>
 
       <ValidationScanLauncher
-        open={Boolean(scanLauncher)}
+        open={canStartScan && Boolean(scanLauncher)}
         mode={scanLauncher?.mode ?? 'create'}
         scan={scanLauncher?.scan ?? null}
         config={config}
@@ -2581,13 +2600,13 @@ export function TargetGroupDetailView({
                 empty={emptyStateFromApi({ icon: Bot, meta: inventoryMeta })}
               />
               <div className="row-actions">
-                <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected DNS zones</Button>
+                {canWriteTargets ? <Button size="sm" disabled={selectedInventory.size === 0 || busy !== ''} loading={busy.startsWith('import-')} onClick={() => void importInventory()}>Import selected DNS zones</Button> : null}
               </div>
             </div>
         </DetailModal>
       ) : null}
 
-      {showOnboardModal ? (
+      {canWriteTargets && showOnboardModal ? (
         <DetailModal title="Onboard a target" onClose={() => setShowOnboardModal(false)} error={onboardTab === 'fqdn' ? dnsError || error : error}>
           <Tabs
             value={onboardTab}
@@ -2717,7 +2736,7 @@ export function TargetGroupDetailView({
         </DetailModal>
       ) : null}
 
-      {showLoaModal ? (
+      {canWriteTargets && showLoaModal ? (
         <DetailModal title={`Sign LOA · ${getString(entity, ['name'], entityId)}`} onClose={() => setShowLoaModal(false)} error={error}>
             <form className="loa-body product-form" onSubmit={(event) => void submitLoa(event)}>
               <div className="loa-doc">

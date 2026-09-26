@@ -91,6 +91,7 @@ export function AgentInstallMatrix({
   tokenSecret,
   onCreateToken,
   createBusy,
+  canCreateToken = true,
   actionsDisabled,
   updateReleases,
   trustKeys,
@@ -101,6 +102,7 @@ export function AgentInstallMatrix({
   tokenSecret: string;
   onCreateToken: () => void;
   createBusy: boolean;
+  canCreateToken?: boolean;
   actionsDisabled: boolean;
   updateReleases: DataItem[];
   trustKeys: DataItem[];
@@ -173,7 +175,8 @@ export function AgentInstallMatrix({
         <div className="row-actions page-toolbar">
           <Button
             loading={createBusy}
-            disabled={actionsDisabled}
+            disabled={!canCreateToken || actionsDisabled}
+            title={canCreateToken ? undefined : 'Your role cannot create agent bootstrap tokens.'}
             onClick={onCreateToken}
             aria-label="Create one-time bootstrap token for agent download preparation"
           >

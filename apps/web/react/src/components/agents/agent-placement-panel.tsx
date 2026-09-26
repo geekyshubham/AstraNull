@@ -156,6 +156,7 @@ export function AgentPlacementPanel({
   attributionStatus,
   placementReview,
   onRunPlacement,
+  canRun = true,
   running,
   busy
 }: {
@@ -166,6 +167,7 @@ export function AgentPlacementPanel({
   attributionStatus: AgentRunAttributionStatus;
   placementReview: DataItem | null;
   onRunPlacement: () => void;
+  canRun?: boolean;
   running?: boolean;
   busy?: boolean;
 }) {
@@ -219,15 +221,17 @@ export function AgentPlacementPanel({
             provenance={provenance}
             attributionStatus={attributionStatus}
           />
-          <Button
-            size="sm"
-            loading={running}
-            disabled={runDisabled}
-            onClick={onRunPlacement}
-            aria-label={runLabel}
-          >
-            Run placement test
-          </Button>
+          {canRun ? (
+            <Button
+              size="sm"
+              loading={running}
+              disabled={runDisabled}
+              onClick={onRunPlacement}
+              aria-label={runLabel}
+            >
+              Run placement test
+            </Button>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="stack-tight">

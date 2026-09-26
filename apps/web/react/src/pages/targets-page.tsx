@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { requestJson } from '../lib/api';
+import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import { formatDate, formatNumber } from '../lib/utils';
 import { resolveTargetVerificationProvenance, VerifyChip } from '../lib/verify-chip';
@@ -160,6 +161,7 @@ export function TargetsPage({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const canWriteTargets = sessionHasPermission(session, 'target_group:write');
   const targets = Array.isArray(data.targets) ? data.targets : [];
   const groups = Array.isArray(data.targetGroups) ? data.targetGroups : [];
 
@@ -196,6 +198,7 @@ export function TargetsPage({
 
   async function addDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWriteTargets) return;
     const form = new FormData(event.currentTarget);
     const groupId = String(form.get('target_group_id') ?? '').trim();
     const value = String(form.get('value') ?? '').trim().toLowerCase().replace(/\.$/, '');
@@ -225,6 +228,7 @@ export function TargetsPage({
   }
 
   async function removeTarget(item: DataItem) {
+    if (!canWriteTargets) return;
     const targetId = getString(item, ['id'], '');
     const groupId = getString(item, ['target_group_id'], '');
     const value = getString(item, ['value'], targetId);
@@ -315,7 +319,7 @@ export function TargetsPage({
             >
               Open target
             </AnchorButton>
-            <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button>
+            {canWriteTargets ? <Button size="sm" variant="danger" loading={busy === `remove-${id}`} onClick={() => void removeTarget(item)} aria-label={`Remove target ${getString(item, ['value'], id)}`}><Trash2 size={13} /> Remove</Button> : null}
           </span>
         );
       }
@@ -333,7 +337,7 @@ export function TargetsPage({
         </div>
         <div className="row-actions">
           <Button variant="secondary" onClick={() => { setVerificationFilter('unverified'); setEligibilityFilter('all'); }}>Review blocked</Button>
-          <Button onClick={() => setShowAdd((current) => !current)}><Plus size={16} /> Add single domain</Button>
+          {canWriteTargets ? <Button onClick={() => setShowAdd((current) => !current)}><Plus size={16} /> Add single domain</Button> : null}
         </div>
       </div>
 
@@ -347,7 +351,7 @@ export function TargetsPage({
         <div className="targets-summary-cell"><span>Unverified or blocked</span><strong>{formatNumber(blockedCount)}</strong></div>
       </div>
 
-      {showAdd ? (
+      {canWriteTargets && showAdd ? (
         <Card className="targets-intake">
           <CardHeader>
             <div><CardTitle>Add a single domain</CardTitle><CardDescription>Declare one hostname manually. Exact-target DNS verification is required before any external probe can run; agents remain optional.</CardDescription></div>
@@ -384,7 +388,7 @@ export function TargetsPage({
             getRowId={(item, index) => getString(item, ['id'], String(index))}
             loadError={data.loadErrors.targets}
             onRetry={() => void onRefresh()}
-            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets configured yet'} body={targets.length ? 'Clear or adjust the filters to return to the full declared inventory.' : 'Add a single domain here, or import approved provider inventory into a target group.'} actionLabel={targets.length ? undefined : 'Add single domain'} onAction={targets.length ? undefined : () => setShowAdd(true)} />}
+            empty={<EmptyState icon={Target} title={targets.length ? 'No targets match these filters' : 'No targets configured yet'} body={targets.length ? 'Clear or adjust the filters to return to the full declared inventory.' : 'Add a single domain here, or import approved provider inventory into a target group.'} actionLabel={!targets.length && canWriteTargets ? 'Add single domain' : undefined} onAction={!targets.length && canWriteTargets ? () => setShowAdd(true) : undefined} />}
           />
         </CardContent>
       </Card>

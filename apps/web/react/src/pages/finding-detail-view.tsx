@@ -5,12 +5,14 @@ import { FindingExplanationPanel } from '../components/findings/finding-explanat
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { VerifyChip } from '../lib/verify-chip';
 import { requestJson } from '../lib/api';
+import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
+import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
@@ -204,6 +206,8 @@ export function FindingDetailView({
   const [chainVerified, setChainVerified] = useState<boolean | null>(null);
 
   const remediation = readFindingRemediationFields(entity, data.wafActionItems);
+  const canWriteFinding = sessionHasPermission(session, 'finding:write');
+  const canStartFindingRetest = sessionHasPermission(session, 'test_run:start');
   const remSteps = remediation.remSteps.split('|').map((step) => step.trim()).filter(Boolean);
   const hasRemediationPlaybook = Boolean(
     remediation.remAction ||
@@ -289,10 +293,12 @@ export function FindingDetailView({
   }
 
   async function patchFinding(body: Record<string, unknown>, success: string, action = 'update') {
+    if (!canWriteFinding) return;
     await runAction(`finding-${action}-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}`, { method: 'PATCH', body }), success);
   }
 
   async function markDelivered() {
+    if (!canWriteFinding) return;
     if (!remediation.actionItemId) {
       setError('No remediation action item id returned by API.');
       return;
@@ -490,6 +496,7 @@ export function FindingDetailView({
               <div><span>Assignee</span><strong>{getString(entity, ['assignee'], 'unassigned')}</strong></div>
               <div><span>SLA due</span><strong title="SLA derived from severity hours and created_at">{slaDueAt ? formatDate(slaDueAt) : '—'}{isFindingSlaBreach(entity) ? ' (breach)' : ''}</strong></div>
             </div>
+            {canWriteFinding ? (
             <form className="product-form product-form--compact" onSubmit={(event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
@@ -519,7 +526,7 @@ export function FindingDetailView({
                     await patchFinding({ status: 'closed' }, 'Finding closed.', 'close');
                   }}
                 >Close finding</Button>
-                <Button size="sm" variant="secondary" loading={busy === `retest-${entityId}`} disabled={busy !== ''} onClick={() => void runAction(`retest-${entityId}`, async () => {
+                <Button size="sm" variant="secondary" loading={busy === `retest-${entityId}`} disabled={busy !== '' || !canStartFindingRetest} onClick={() => void runAction(`retest-${entityId}`, async () => {
                   const retest = resolveFindingRetestAction(entity);
                   if (!retest) throw new Error('Retest context missing from finding API.');
                   // Every kind resolveFindingRetestAction can return must dispatch a real
@@ -539,6 +546,7 @@ export function FindingDetailView({
                 }, 'Retest started.')}>Retest</Button>
               </div>
             </form>
+            ) : <RoleRestrictedCard title="Finding triage is read-only for your role." />}
           </CardContent>
         </Card>
       </div>
@@ -599,6 +607,7 @@ export function FindingDetailView({
                   ))}
                 </ol>
               ) : null}
+              {canWriteFinding ? (
               <form className="product-form product-form--compact" onSubmit={(event) => {
                 event.preventDefault();
                 const form = new FormData(event.currentTarget);
@@ -614,6 +623,7 @@ export function FindingDetailView({
                   <Button type="button" size="sm" variant="ghost" disabled={!remediation.actionItemId} loading={busy === `deliver-${entityId}`} onClick={() => void markDelivered()}>Mark delivered</Button>
                 </div>
               </form>
+              ) : <RoleRestrictedCard title="Remediation changes are read-only for your role." />}
             </>
           ) : (
             <EmptyState

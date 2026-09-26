@@ -103,7 +103,7 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(res.json.error, 'postgres_route_not_wired');
   });
 
-  it('fails closed on WAF offensive routes instead of touching the dev JSON store', async () => {
+  it('fails closed on WAF offensive routes when the Postgres service is missing', async () => {
     ({ server, baseUrl } = await listenPostgresServer(
       { tenants: { async getCurrentTenant() { return { id: 'ten_demo', name: 'Demo' }; } } },
       undefined,
@@ -114,10 +114,135 @@ describe('createServer postgres mode — route wiring', () => {
       ['GET', '/v1/waf/offensive-requests/wof_x', demoHeaders('admin')],
       ['POST', '/internal/soc/waf-offensive/wof_x/start', demoHeaders('soc')],
     ]) {
-      const res = await request(baseUrl, method, path, { headers, body: method === 'POST' ? {} : undefined });
-      assert.notEqual(res.status, 500, `${method} ${path}`);
-      if (res.status !== 403 && res.status !== 404) assert.equal(res.json.error, 'postgres_route_not_wired', `${method} ${path}`);
+      const res = await request(baseUrl, method, path, {
+        headers,
+        body: method === 'POST' ? {} : undefined,
+      });
+      assert.equal(res.status, 503, `${method} ${path}`);
+      assert.equal(res.json.error, 'postgres_route_not_wired', `${method} ${path}`);
     }
+  });
+
+  it('dispatches WAF offensive routes through the injected async Postgres service', async () => {
+    const calls = [];
+    const offensiveRequest = {
+      id: 'wof_pg',
+      tenant_id: 'ten_demo',
+      state: 'submitted',
+    };
+    const wafOffensive = {
+      async createOffensiveRequest(ctx, body) {
+        calls.push(['create', ctx.tenantId, body.objective]);
+        return { offensive_request: offensiveRequest };
+      },
+      async listOffensiveRequests(ctx) {
+        calls.push(['list', ctx.tenantId]);
+        return { items: [offensiveRequest] };
+      },
+      async getOffensiveRequest(ctx, id) {
+        calls.push(['get', ctx.tenantId, id]);
+        return { offensive_request: offensiveRequest };
+      },
+      async addArtifact(ctx, id, body) {
+        calls.push(['artifact', ctx.tenantId, id, body.type]);
+        return { artifact: { id: 'art_pg', type: body.type } };
+      },
+      async reviewArtifact(ctx, id, artifactId, body) {
+        calls.push(['review', ctx.tenantId, id, artifactId, body.status]);
+        return { artifact: { id: artifactId, status: body.status } };
+      },
+      async recordOffensiveSuiteResults(ctx, id, body) {
+        calls.push(['results', ctx.tenantId, id]);
+        return { offensive_request: offensiveRequest, suite_results: body.suite_results };
+      },
+      async upsertOffensivePostTestReport(ctx, id) {
+        calls.push(['report-upsert', ctx.tenantId, id]);
+        return { created: true, report: { id: 'wofrep_pg', waf_offensive_request_id: id } };
+      },
+      async getOffensivePostTestReport(ctx, id) {
+        calls.push(['report-get', ctx.tenantId, id]);
+        return { report: { id: 'wofrep_pg', waf_offensive_request_id: id } };
+      },
+      async transitionOffensiveRequest(ctx, id, action) {
+        calls.push(['transition', ctx.tenantId, id, action]);
+        return { offensive_request: { ...offensiveRequest, state: action === 'start' ? 'running' : action } };
+      },
+    };
+    ({ server, baseUrl } = await listenPostgresServer(
+      {
+        tenants: { async getCurrentTenant() { return { id: 'ten_demo', name: 'Demo' }; } },
+        wafOffensive,
+      },
+      undefined,
+      { featureFlags: { wafPostureEnabled: true, externalDiscoveryEnabled: false } },
+    ));
+
+    const admin = demoHeaders('admin');
+    const soc = demoHeaders('soc');
+    const created = await request(baseUrl, 'POST', '/v1/waf/offensive-requests', {
+      headers: admin,
+      body: { objective: 'postgres dispatch' },
+    });
+    assert.equal(created.status, 201);
+    const listed = await request(baseUrl, 'GET', '/v1/waf/offensive-requests', { headers: admin });
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.items[0].id, 'wof_pg');
+    const fetched = await request(baseUrl, 'GET', '/v1/waf/offensive-requests/wof_pg', { headers: admin });
+    assert.equal(fetched.status, 200);
+    const artifact = await request(
+      baseUrl,
+      'POST',
+      '/v1/waf/offensive-requests/wof_pg/artifacts',
+      { headers: admin, body: { type: 'customer_authorization_letter' } },
+    );
+    assert.equal(artifact.status, 201);
+    const reviewed = await request(
+      baseUrl,
+      'POST',
+      '/internal/soc/waf-offensive/wof_pg/artifacts/art_pg/review',
+      { headers: soc, body: { status: 'accepted' } },
+    );
+    assert.equal(reviewed.status, 200);
+    const started = await request(
+      baseUrl,
+      'POST',
+      '/internal/soc/waf-offensive/wof_pg/start',
+      { headers: soc },
+    );
+    assert.equal(started.status, 200);
+    assert.equal(started.json.offensive_request.state, 'running');
+    const results = await request(
+      baseUrl,
+      'POST',
+      '/internal/soc/waf-offensive/wof_pg/results',
+      { headers: soc, body: { suite_results: [{ suite_id: 'sqli_offensive' }] } },
+    );
+    assert.equal(results.status, 200);
+    const report = await request(
+      baseUrl,
+      'POST',
+      '/internal/soc/waf-offensive/wof_pg/post-test-report',
+      { headers: soc, body: { executive_summary: 'done' } },
+    );
+    assert.equal(report.status, 201);
+    const fetchedReport = await request(
+      baseUrl,
+      'GET',
+      '/internal/soc/waf-offensive/wof_pg/post-test-report',
+      { headers: soc },
+    );
+    assert.equal(fetchedReport.status, 200);
+    assert.deepEqual(calls.map((call) => call[0]), [
+      'create',
+      'list',
+      'get',
+      'artifact',
+      'review',
+      'transition',
+      'results',
+      'report-upsert',
+      'report-get',
+    ]);
   });
 
   it('serves /v1/subscription/current through the injected Postgres subscription service', async () => {

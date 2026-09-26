@@ -16,6 +16,7 @@ import {
 import { sha256CanonicalJsonForCustody } from '../../lib/custody';
 import { requestJson } from '../../lib/api';
 import { apiErrorMessage } from '../../lib/error-messages';
+import { sessionHasPermission } from '../../lib/dataset-access.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../../lib/types';
 import { formatDate, formatNumber } from '../../lib/utils';
@@ -204,6 +205,7 @@ export function RunsSocGatePanel({
   // P0#2: customers are non-staff principals. The queue item must open the customer
   // high-scale detail surface (HighScaleDetailView), not the staff SOC gate.
   const isStaffPrincipal = session.principal === 'staff';
+  const canRequestHighScale = sessionHasPermission(session, 'high_scale:request');
 
   const targetGroupOptions: SelectOption[] = [
     { value: '', label: 'Select declared scope' },
@@ -268,6 +270,7 @@ export function RunsSocGatePanel({
 
   async function handleCreateRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canRequestHighScale) return;
     const formEl = event.currentTarget;
     const form = new FormData(formEl);
     if (form.get('scope_confirmation') !== 'on') {
@@ -338,6 +341,7 @@ export function RunsSocGatePanel({
   }
 
   async function uploadPackArtifact(request: DataItem) {
+    if (!canRequestHighScale) return;
     const requestId = getString(request, ['id'], '');
     if (!requestId) return;
     const filename = 'authorization-pack-metadata.json';
@@ -451,15 +455,17 @@ export function RunsSocGatePanel({
               >
                 Open pack
               </AnchorButton>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busy !== '' && busy !== `pack-${id}`}
-                title={busy && busy !== `pack-${id}` ? 'Another high-scale action is in progress.' : 'Attach customer authorization letter metadata; remaining artifacts stay visible in request detail.'}
-                onClick={() => setPackRequestId(id)}
-              >
-                Attach letter
-              </Button>
+              {canRequestHighScale ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy !== '' && busy !== `pack-${id}`}
+                  title={busy && busy !== `pack-${id}` ? 'Another high-scale action is in progress.' : 'Attach customer authorization letter metadata; remaining artifacts stay visible in request detail.'}
+                  onClick={() => setPackRequestId(id)}
+                >
+                  Attach letter
+                </Button>
+              ) : null}
             </div>
           );
         }
@@ -484,17 +490,19 @@ export function RunsSocGatePanel({
             <CardTitle>Governed high-scale queue</CardTitle>
             <CardDescription>Customer intake and authorization status. Approval, scheduling, execution, and emergency stop remain SOC-only.</CardDescription>
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-expanded={showRequestForm}
-            aria-controls={showRequestForm ? 'high-scale-request-intake' : undefined}
-            disabled={Boolean(requestToggleDisabledReason)}
-            title={requestToggleDisabledReason || undefined}
-            onClick={() => setShowRequestForm(!showRequestForm)}
-          >
-            {showRequestForm ? 'Close intake' : 'New request'}
-          </Button>
+          {canRequestHighScale ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-expanded={showRequestForm}
+              aria-controls={showRequestForm ? 'high-scale-request-intake' : undefined}
+              disabled={Boolean(requestToggleDisabledReason)}
+              title={requestToggleDisabledReason || undefined}
+              onClick={() => setShowRequestForm(!showRequestForm)}
+            >
+              {showRequestForm ? 'Close intake' : 'New request'}
+            </Button>
+          ) : null}
         </CardHeader>
         <CardContent className="stack-tight">
           <div className="callout callout-soc" role="note" aria-labelledby="soc-gate-callout-title">
@@ -535,15 +543,15 @@ export function RunsSocGatePanel({
                 icon: ShieldCheck,
                 title: 'No SOC-gated requests in queue.',
                 body: 'Submit a governed request when you need high-scale validation under SOC oversight.',
-                actionLabel: 'Request SOC-gated run',
-                onAction: () => setShowRequestForm(true)
+                actionLabel: canRequestHighScale ? 'Request SOC-gated run' : undefined,
+                onAction: canRequestHighScale ? () => setShowRequestForm(true) : undefined
               })}
             />
           ) : null}
         </CardContent>
       </Card>
 
-      {showRequestForm ? (
+      {canRequestHighScale && showRequestForm ? (
         <Card id="high-scale-request-intake" raised>
           <CardHeader>
             <div>
@@ -664,7 +672,7 @@ export function RunsSocGatePanel({
       ) : null}
 
       <ConfirmModal
-        open={Boolean(packRequestId)}
+        open={canRequestHighScale && Boolean(packRequestId)}
         title="Attach customer authorization letter"
         description={(
           <>
@@ -695,7 +703,7 @@ export function RunsPageHeadActions({
   safeRunDisabled
 }: {
   onRefresh: () => void;
-  onRequestSoc: () => void;
+  onRequestSoc?: () => void;
   onStartSafeRun: () => void;
   onStartScan?: () => void;
   refreshBusy?: boolean;
@@ -707,7 +715,7 @@ export function RunsPageHeadActions({
     : '';
   return (
     <>
-      <Button size="sm" variant="secondary" onClick={onRequestSoc}>Request SOC-gated run</Button>
+      {onRequestSoc ? <Button size="sm" variant="secondary" onClick={onRequestSoc}>Request SOC-gated run</Button> : null}
       <Button
         size="sm"
         loading={safeRunBusy}
