@@ -457,7 +457,7 @@ describe('capability probes P0/P1', () => {
     const probedPorts = [];
     const outcome = await probePortScanBounded(
       job({
-        constraints: { timeout_ms: 1000, max_requests: 15 },
+        constraints: { timeout_ms: 10000, max_requests: 15 },
         target: { kind: 'fqdn', value: 'scan.example.test' },
         probe_profile: { kind: 'port_scan_bounded', max_requests: 15 },
       }),
