@@ -70,6 +70,7 @@ import {
   POSTGRES_EVENTS_SERVICE_METHODS,
 } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
 import { CHECK_CATALOG, customerSelectableChecks } from '../../src/contracts/checks.mjs';
+import { withCheckSection } from '../../src/contracts/validationScanManagement.mjs';
 import { createAddressedSecret } from '../../src/lib/addressedSecrets.mjs';
 import { generateSalt, hashSecretWithSalt } from '../../src/lib/crypto.mjs';
 import { buildAgentPackage } from '../../scripts/package-agent.mjs';
@@ -1298,7 +1299,8 @@ describe('postgres validation service adapters', () => {
       'getFinding',
       'patchFinding',
     ]);
-    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 9);
+    assert.equal(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.length, 11);
+    assert.ok(POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS.includes('registerRunTerminalHook'));
   });
 
   it('fails early when validationEvidence or audit is missing', () => {
@@ -1329,7 +1331,7 @@ describe('postgres validation service adapters', () => {
   it('listChecks returns safe catalog without dev store', () => {
     const { repositories } = createRecordingValidationRepositories();
     const { testRuns } = createPostgresValidationServices(repositories);
-    assert.deepEqual(testRuns.listChecks(), customerSelectableChecks(CHECK_CATALOG));
+    assert.deepEqual(testRuns.listChecks(), customerSelectableChecks(CHECK_CATALOG).map(withCheckSection));
   });
 
   it('getTestRun merges verdict and getRunEvents returns null when run is missing', async () => {
@@ -3047,6 +3049,117 @@ describe('postgres validation service adapters', () => {
       ({ entry }) => entry.action === 'probe_job.dispatch_recovered',
     ));
   });
+  describe('scan-dispatched startTestRun', () => {
+    const ctx = { tenantId: 'ten_demo', userId: 'validation-scan-scheduler', role: 'system', via: 'validation_scan' };
+    const body = { target_group_id: 'tg_1', target_id: 'tgt_1', check_id: 'origin.direct_bypass.safe' };
+    const signedConfig = { probeMode: 'signed-worker', probeWorkerSecret: 'probe-worker-signing-secret-for-tests' };
+    const dispatchOptions = { scanDispatch: { scan_id: 'scan_1', step_id: 'step_1', lease_token: 'lease_scan' } };
+
+    function scanRepositories(overrides = {}) {
+      let persistedRun = overrides.persistedRun ?? null;
+      let durableProbeJob = null;
+      let createProbeCalls = 0;
+      const recorded = createRecordingValidationRepositories({
+        getTargetGroup: async () => baseStartTargetGroup(),
+        listTestRuns: async (_ctx, query = {}) => (persistedRun && query.statuses ? [persistedRun] : []),
+        listAgents: async () => [baseOnlineAgent()],
+        createTestRun: async (_ctx, record) => {
+          persistedRun = { ...record };
+          return persistedRun;
+        },
+        updateTestRun: async (_ctx, id, patch) => {
+          persistedRun = { ...persistedRun, id, ...patch };
+          return persistedRun;
+        },
+        getTestRun: async () => persistedRun,
+        getProbeJobByTestRun: async () => durableProbeJob,
+        createProbeJob: async (_ctx, record) => {
+          createProbeCalls += 1;
+          if (overrides.failProbeJob) throw new Error('probe_job_store_unavailable');
+          durableProbeJob = { ...record, status: 'pending' };
+          return durableProbeJob;
+        },
+      });
+      recorded.repositories.validationEvidence.getTestRunByScanStepId = async (_ctx, stepId) => (
+        persistedRun?.scan_step_id === stepId ? persistedRun : null
+      );
+      recorded.repositories.validationScans = {
+        getScan: async () => ({
+          id: 'scan_1', tenant_id: 'ten_demo', status: 'running', target_group_id: 'tg_1',
+          lease_token: 'lease_scan', lease_expires_at: '2026-06-01T12:05:00.000Z',
+        }),
+        getStep: async () => ({
+          id: 'step_1', scan_id: 'scan_1', status: 'starting', check_id: body.check_id, target_id: 'tgt_1',
+        }),
+      };
+      if (overrides.suspended) {
+        recorded.repositories.internalManagement = {
+          getTenantDetail: async () => ({ account: { lifecycle_state: 'suspended' } }),
+        };
+      }
+      return {
+        recorded,
+        run: () => persistedRun,
+        job: () => durableProbeJob,
+        probeCalls: () => createProbeCalls,
+      };
+    }
+
+    it('denies signed-worker starts without signing material before any run is written', async () => {
+      const fixture = scanRepositories();
+      const { testRuns } = createPostgresValidationServices(fixture.recorded.repositories, { now: () => FIXED_NOW });
+      const result = await testRuns.startTestRun(ctx, body, { probeMode: 'signed-worker', probeWorkerSecret: null }, dispatchOptions);
+      assert.equal(result.error, 'probe_signing_unavailable');
+      assert.equal(result.status, 503);
+      assertNoRunProbeOrAgentSideEffects(fixture.recorded.validationCalls);
+      assert.ok(fixture.recorded.auditEvents.some(({ entry }) => entry.action === 'test_run.probe_signing_unavailable'));
+    });
+
+    it('cancels the committed run when its probe job cannot be created', async () => {
+      const fixture = scanRepositories({ failProbeJob: true });
+      const { testRuns } = createPostgresValidationServices(fixture.recorded.repositories, { now: () => FIXED_NOW });
+      const terminal = [];
+      testRuns.registerRunTerminalHook((run) => { terminal.push(run.id); });
+      const result = await testRuns.startTestRun(ctx, body, signedConfig, dispatchOptions);
+      assert.equal(result.error, 'probe_job_dispatch_failed');
+      assert.equal(result.retryable, true);
+      assert.equal(fixture.run().status, 'cancelled');
+      assert.equal(fixture.run().summary.dispatch_failed, true);
+      assert.deepEqual(terminal, [fixture.run().id]);
+      assert.ok(fixture.recorded.auditEvents.some(({ entry }) => entry.action === 'test_run.dispatch_failed'));
+    });
+
+    it('recreates a missing probe job when a scan step replays onto its committed run', async () => {
+      const fixture = scanRepositories({
+        persistedRun: {
+          id: 'run_orphan', tenant_id: 'ten_demo', target_group_id: 'tg_1', target_id: 'tgt_1',
+          check_id: body.check_id, status: 'running', scan_id: 'scan_1', scan_step_id: 'step_1',
+          correlation: { nonce_hash: null, window_ms: 120000 }, awaiting_external_probe: false,
+          created_at: FIXED_NOW.toISOString(),
+        },
+      });
+      const { testRuns } = createPostgresValidationServices(fixture.recorded.repositories, { now: () => FIXED_NOW });
+      const recovered = await testRuns.startTestRun(ctx, body, signedConfig, dispatchOptions);
+      assert.equal(recovered.idempotent_replay, true);
+      assert.equal(recovered.dispatch_repaired, true);
+      assert.equal(fixture.probeCalls(), 1);
+      assert.equal(recovered.run.awaiting_external_probe, true);
+      assert.equal(recovered.run.correlation.nonce_hash, fixture.job().nonce_hash);
+      assert.equal(fixture.recorded.validationCalls.some((c) => c.method === 'createTestRun'), false);
+      const repaired = fixture.recorded.auditEvents.find(({ entry }) => entry.action === 'probe_job.dispatch_recovered');
+      assert.equal(repaired.entry.metadata.probe_job_recreated, true);
+    });
+
+    it('honors tenant suspension for scan-driven starts', async () => {
+      const fixture = scanRepositories({ suspended: true });
+      const { testRuns } = createPostgresValidationServices(fixture.recorded.repositories, { now: () => FIXED_NOW });
+      const result = await testRuns.startTestRun(ctx, body, signedConfig, dispatchOptions);
+      assert.equal(result.error, 'tenant_suspended');
+      assert.equal(result.status, 403);
+      assertNoRunProbeOrAgentSideEffects(fixture.recorded.validationCalls);
+    });
+  });
+
   it('rejects mismatched, disabled, and expired policy dispatches before persistence', async () => {
     const ctx = { tenantId: 'ten_demo', userId: 'scheduler', role: 'system' };
     const body = {
@@ -3950,7 +4063,7 @@ describe('postgres secret vault service adapters', () => {
     const denied = await withoutConnectorKey.storeEncryptedSecret(ctx, {
       purpose: 'connector', name: 'cloudflare', plaintext: 'provider-token',
     }, globalKey);
-    assert.equal(denied.error, 'encryption_not_configured');
+    assert.equal(denied.error, 'connector_encryption_not_configured');
 
     const connectorVault = createPostgresSecretVaultServices(repositories, {
       encryptionKey: globalKey,

@@ -3,6 +3,7 @@ import { useIsolatedDevDataDir } from './dev-data-dir.mjs';
 import { createServer } from '../../src/server.mjs';
 import { getStore, resetStoreForTests } from '../../src/store.mjs';
 import { computeReadiness } from '../../src/services/readiness.mjs';
+import { advanceScan, dispatchDueValidationScans } from '../../src/services/validationScans.mjs';
 import {
   buildPortalBaselineStore,
   PORTAL_BASELINE_IDS,
@@ -189,6 +190,40 @@ export async function restartPortalPlaywrightWithEdgeStore() {
       Object.assign(store, buildPortalEdgeStore());
     },
   });
+}
+
+/** In-process scheduler tick: dispatches every scheduled scan whose `scheduled_for` is at or before `now`. */
+export function dispatchDueScansForTest({ tenantId = PORTAL_BASELINE_IDS.tenantId, now = new Date(), runtimeConfig } = {}) {
+  return dispatchDueValidationScans(
+    { tenantId, userId: 'system', role: 'system' },
+    { now, runtimeConfig: runtimeConfig ?? { probeMode: 'simulation' } },
+  );
+}
+
+/** In-process executor tick for one scan; the portal's GET polling normally drives this. */
+export function advanceScanForTest(scanId, { tenantId = PORTAL_BASELINE_IDS.tenantId, now = new Date(), runtimeConfig } = {}) {
+  return advanceScan(
+    { tenantId, userId: 'system', role: 'system' },
+    scanId,
+    { now, runtimeConfig: runtimeConfig ?? { probeMode: 'simulation' } },
+  );
+}
+
+/** Ends the simulated observation window of every child run of a scan so the next read finalizes it. */
+export function expireScanCollectionWindowsForTest(scanId, now = Date.now()) {
+  const expiredAt = new Date(now - 1000).toISOString();
+  let expired = 0;
+  for (const run of getStore().testRuns) {
+    if (scanId && run.scan_id !== scanId) continue;
+    if (!run.collection_deadline_at) continue;
+    run.collection_deadline_at = expiredAt;
+    expired += 1;
+  }
+  return expired;
+}
+
+export function findStoredScanForTest(scanId) {
+  return (getStore().validationScans ?? []).find((scan) => scan.id === scanId) ?? null;
 }
 
 export function portalOwnerHeaders() {

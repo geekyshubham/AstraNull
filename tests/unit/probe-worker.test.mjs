@@ -333,7 +333,7 @@ describe('probe worker safety accounting', () => {
     }).ok, true);
   });
 
-  it('real-catalog outside-in jobs pin and attest every initializer without raw DNS/TLS hints', async () => {
+  it('real-catalog outside-in jobs pin and attest every initializer, counting CNAME hops, without raw TLS hints', async () => {
     const check = getCheckById('waf.fingerprint.safe');
     const signedJob = buildSignedProbeJobRecord({
       run: {
@@ -354,7 +354,7 @@ describe('probe worker safety accounting', () => {
 
     assert.equal(verifyProbeJobSignature(signedJob, WORKER_SECRET), true);
     assert.equal(signedJob.probe_profile.kind, 'outside_in_waf_scan');
-    assert.equal(signedJob.probe_profile.max_requests, 13);
+    assert.equal(signedJob.probe_profile.max_requests, 16);
     assert.equal(signedJob.probe_profile.follow_redirects, false);
     assert.equal(signedJob.probe_profile.collect.includes('dns_chain_hint'), false);
     assert.equal(signedJob.probe_profile.collect.includes('tls_fingerprint_hint'), false);
@@ -363,15 +363,16 @@ describe('probe worker safety accounting', () => {
       max_destination_resolver_attempts: signedJob.constraints.max_destination_resolver_attempts,
       max_total_operations: signedJob.constraints.max_total_operations,
     }, {
-      max_probe_requests: 13,
+      max_probe_requests: 16,
       max_destination_resolver_attempts: 2,
-      max_total_operations: 15,
+      max_total_operations: 18,
     });
 
     const calls = {
       destinationA: 0,
       destinationAAAA: 0,
       http: 0,
+      cnameLookup: 0,
       cnameHint: 0,
       addressHintA: 0,
       addressHintAAAA: 0,
@@ -387,6 +388,11 @@ describe('probe worker safety accounting', () => {
       resolve6Fn: async () => {
         calls.destinationAAAA += 1;
         return [];
+      },
+      resolveCnameFn: async (host) => {
+        calls.cnameLookup += 1;
+        if (host === 'edge.example.test') return ['edge.example.test.cdn.cloudflare.net'];
+        throw Object.assign(new Error('no data'), { code: 'ENODATA' });
       },
       resolveCname: async () => {
         calls.cnameHint += 1;
@@ -430,6 +436,7 @@ describe('probe worker safety accounting', () => {
       destinationA: 1,
       destinationAAAA: 1,
       http: 12,
+      cnameLookup: 2,
       cnameHint: 0,
       addressHintA: 0,
       addressHintAAAA: 0,
@@ -444,33 +451,42 @@ describe('probe worker safety accounting', () => {
     }
     const actualInitializerCalls = Object.values(calls)
       .reduce((total, count) => total + count, 0);
-    assert.equal(actualInitializerCalls, 14);
+    assert.equal(actualInitializerCalls, 16);
     assert.deepEqual({
       requests_sent: body.safety_attestation.requests_sent,
       probe_requests_sent: body.safety_attestation.probe_requests_sent,
       destination_resolver_attempts: body.safety_attestation.destination_resolver_attempts,
       total_operations: body.safety_attestation.total_operations,
     }, {
-      requests_sent: 14,
-      probe_requests_sent: 12,
+      requests_sent: 16,
+      probe_requests_sent: 14,
       destination_resolver_attempts: 2,
-      total_operations: 14,
+      total_operations: 16,
     });
     assert.equal(actualInitializerCalls, body.safety_attestation.total_operations);
     assert.equal(body.metadata.network_hints_collected, false);
     assert.equal(body.metadata.redirect_following_enabled, false);
+    assert.deepEqual(body.metadata.dns_cname_chain, [
+      'edge.example.test',
+      'edge.example.test.cdn.cloudflare.net',
+    ]);
+    assert.deepEqual(body.metadata.dns_resolved_ips, ['203.0.113.10']);
+    assert.equal(body.metadata.edge_signature.dns_observed, true);
     for (const field of [
       'dns_chain_hint',
-      'dns_cname_chain',
-      'dns_resolved_ips',
       'tls_protocol_hint',
       'tls_cipher_hint',
       'vendor_chain_hints',
     ]) {
       assert.equal(Object.hasOwn(body.metadata, field), false, field);
     }
-    assert.equal(Object.hasOwn(body.metadata.edge_signature, 'address_matches'), false);
-    assert.equal(Object.hasOwn(body.metadata.edge_signature, 'cname_matches'), false);
+    assert.deepEqual(body.metadata.edge_signature.address_matches, []);
+    assert.deepEqual(body.metadata.edge_signature.cname_matches, []);
+    assert.deepEqual(body.metadata.edge_signature.waf_providers, ['cloudflare']);
+    assert.equal(body.metadata.edge_signature.wafw00f.plugin, 'cloudflare');
+    assert.deepEqual(body.metadata.edge_signature.cdncheck, {
+      matched: false, provider: null, item_type: null, source: null, value: null,
+    });
     assert.equal(validateProbeResultBody(body, signedJob.constraints, {
       probeKind: signedJob.probe_profile.kind,
       probeProfile: signedJob.probe_profile,

@@ -4,7 +4,7 @@ import { populateTargetDetail } from '../lib/target-detail-api';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
 // @ts-ignore Plain ESM keeps truthfulness rules executable in focused node tests.
-import { isSignedLoaState, isTargetRunEligible, ownershipMethodLabel, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueAppliedChecks, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
+import { edgeDetectionReasonExplanation, edgeFamilyProviderSummary, isSignedLoaState, isTargetRunEligible, ownershipMethodLabel, targetDeclarationProvenanceLabel, targetDisplayValue, uniqueAppliedChecks, uniqueRecentRuns, uniqueVerificationHistory } from '../lib/target-detail.mjs';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, Session } from '../lib/types';
@@ -43,7 +43,7 @@ const targetDetailStyles = `
 .target-detail-view .history-summary { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--text-xs); }
 .target-detail-view .target-eligibility-callout[data-eligible="true"] { border-color: color-mix(in oklab, var(--success), transparent 55%); background: color-mix(in oklab, var(--surface), var(--success) 7%); }
 .target-detail-view .target-eligibility-callout[data-eligible="true"] .callout-icon { color: var(--success); }
-.target-detail-view .edge-family-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: var(--space-4) 0; }
+.target-detail-view .edge-family-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); margin: var(--space-4) 0; }
 .target-detail-view .edge-family-card { min-width: 0; padding: var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface); }
 .target-detail-view .edge-family-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
 .target-detail-view .edge-family-card-head strong { font-size: var(--text-sm); }
@@ -139,10 +139,23 @@ function edgeConfidenceLabel(value: unknown) {
   return `${Math.round(Math.max(0, Math.min(1, parsed)) * 100)}%`;
 }
 
-/** Providers the API actually reported for a family, used when no single provider is asserted. */
-function edgeFamilyProviders(family: DataItem | null, providers: string[]) {
-  const asserted = getString(family, ['provider'], '');
-  return asserted ? providers.filter((entry) => entry !== asserted) : providers;
+function EdgeFamilyProviders({ family, providers }: { family: DataItem | null; providers: string[] }) {
+  const summary = edgeFamilyProviderSummary(getString(family, ['provider'], ''), providers) as { label: string; value: string };
+  return <><dt>{summary.label}</dt><dd>{summary.value}</dd></>;
+}
+
+/** Target-detail runs carry the verdict record's evidence ids beside the verdict text. */
+function recentRunVerdict(run: DataItem) {
+  const evidenceBacked = { ...run, id: getString(run, ['run_id', 'id'], ''), verdict: { verdict: run.verdict, evidence_ids: run.evidence_ids } };
+  return hasEvidenceBackedVerdict(evidenceBacked, []) ? publishedRunVerdict(evidenceBacked) : '';
+}
+
+function boundCheckScope(check: DataItem) {
+  const policyId = getString(check, ['policy_id'], '');
+  if (!policyId) return 'Binding source not reported';
+  const scope = getString(check, ['binding_scope'], '') === 'target' ? 'Target policy' : 'Target-group policy';
+  const state = getString(check, ['policy_state'], '');
+  return `${scope} ${policyId}${state && state !== 'active' ? ` · ${formatTargetLabel(state).toLowerCase()}` : ''}`;
 }
 
 function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {
@@ -235,7 +248,9 @@ export function TargetDetailView({
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof populateTargetDetail>> | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [startedRunId, setStartedRunId] = useState('');
   const [selectedRunCheckId, setSelectedRunCheckId] = useState('');
+  const [edgeRequestResult, setEdgeRequestResult] = useState<DataItem | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -257,6 +272,23 @@ export function TargetDetailView({
     });
     return () => { cancelled = true; };
   }, [config, session, entityId]);
+
+  const edgeRequest = asDataItem(detail?.edge_detection_request);
+  const edgeRequestId = getString(edgeRequest, ['test_run_id'], '');
+  const durableEdgeRunId = getString(asDataItem(detail?.edge_detection), ['test_run_id'], '');
+  const showEdgeRequest = Boolean(edgeRequestId) && edgeRequestId !== durableEdgeRunId;
+
+  useEffect(() => {
+    setEdgeRequestResult(null);
+    if (!showEdgeRequest) return undefined;
+    let cancelled = false;
+    requestJson(config, session, `/v1/waf/edge-detection/${encodeURIComponent(edgeRequestId)}`)
+      .then((payload) => { if (!cancelled) setEdgeRequestResult(asDataItem(payload)); })
+      .catch((err) => {
+        if (!cancelled) setEdgeRequestResult({ status: 'unavailable', read_error: err instanceof Error ? err.message : 'Result read failed' });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, edgeRequestId, showEdgeRequest]);
 
   const target = detail?.target ?? null;
   const verification = detail?.verification ?? null;
@@ -294,12 +326,14 @@ export function TargetDetailView({
     }
     setBusy('run-checks');
     setError('');
+    setStartedRunId('');
     try {
       const targetGroupId = getString(target, ['target_group_id'], '');
-      await requestJson(config, session, '/v1/test-runs', {
+      const started = await requestJson(config, session, '/v1/test-runs', {
         method: 'POST',
         body: { target_group_id: targetGroupId, target_id: entityId, check_id: effectiveSelectedRunCheckId }
-      });
+      }) as { run?: { id?: unknown }; id?: unknown };
+      setStartedRunId(String(started?.run?.id ?? started?.id ?? '').trim() || 'started');
       await onRefresh();
       const refreshed = await populateTargetDetail(config, session, entityId);
       setDetail(refreshed);
@@ -376,13 +410,14 @@ export function TargetDetailView({
     { key: 'run', label: 'Run', render: (item) => <DetailEntityLink route="run-detail" id={getString(item, ['run_id', 'id'], '')} /> },
     { key: 'binding', label: 'Rule / policy ref', render: (item) => <span className="mono">{getString(item, ['check_id', 'policy_id', 'test_policy_id'], 'Not reported')}</span> },
     { key: 'status', label: 'Lifecycle', render: (item) => {
-      const value = getString(item, ['status'], 'unknown');
+      const value = getString(item, ['status', 'run_status'], 'unknown');
       return <Badge tone={runOutcomeTone(value)} title="Run lifecycle status from target-detail API">{formatTargetLabel(value)}</Badge>;
     } },
     { key: 'verdict', label: 'Verdict', render: (item) => {
-      const value = hasEvidenceBackedVerdict(item, []) ? publishedRunVerdict(item) : '';
+      const value = recentRunVerdict(item);
+      const evidenceCount = Array.isArray(item.evidence_ids) ? item.evidence_ids.length : 0;
       return value
-        ? <Badge tone={runOutcomeTone(value)} title="Evidence-backed verdict from target-detail API">{formatTargetLabel(value)}</Badge>
+        ? <Badge tone={runOutcomeTone(value)} title={`Verdict ${getString(item, ['verdict_id'], 'record')} cites ${evidenceCount} evidence record${evidenceCount === 1 ? '' : 's'}`}>{formatTargetLabel(value)}</Badge>
         : <span className="muted">No verdict evidence</span>;
     } },
     { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
@@ -415,7 +450,7 @@ export function TargetDetailView({
       );
     } },
     { key: 'check', label: 'Bound check', render: (item) => <span className="mono">{getString(item, ['check_id', 'id'], 'Not reported')}</span> },
-    { key: 'scope', label: 'Scope', render: () => <span className="muted small">Target-group binding reported by target-detail API</span> }
+    { key: 'scope', label: 'Bound by', render: (item) => <span className="muted small mono">{boundCheckScope(item)}</span> }
   ];
 
   const verificationHistoryColumns: TableColumn<DataItem>[] = [
@@ -442,11 +477,25 @@ export function TargetDetailView({
   const edgeCdn = asDataItem(edgeDetection?.cdn);
   const edgeWafProviders = stringList(edgeDetection?.waf_providers);
   const edgeCdnProviders = stringList(edgeDetection?.cdn_providers);
+  const edgeCloud = asDataItem(edgeDetection?.cloud);
+  const edgeCloudProviders = stringList(edgeDetection?.cloud_providers);
   const edgeConfidence = edgeConfidenceLabel(edgeDetection?.confidence);
   const edgeEvidence = asDataItem(edgeDetection?.evidence);
   const edgeVendorMatches = dataItemList(edgeEvidence?.vendor_matches, 5);
+  const edgeWafw00f = asDataItem(edgeEvidence?.wafw00f);
+  const edgeWafw00fGeneric = asDataItem(edgeWafw00f?.generic);
+  const edgeCdncheck = asDataItem(edgeEvidence?.cdncheck);
+  const edgeCnameChain = stringList(edgeEvidence?.dns_cname_chain);
+  const edgeResolvedIps = stringList(edgeEvidence?.dns_resolved_ips);
   const edgeTestRunId = getString(edgeDetection, ['test_run_id'], '');
   const edgeObservedAt = edgeDetection?.observed_at ?? edgeDetection?.updated_at ?? null;
+  const edgeReasonExplanation = edgeDetectionReasonExplanation(edgeReason);
+  const edgeRequestStatus = getString(edgeRequestResult, ['status'], getString(edgeRequest, ['run_status'], 'unknown'));
+  const edgeRequestReason = getString(edgeRequestResult, ['reason'], '');
+  const edgeRequestExplanation = edgeRequestResult?.read_error
+    ? `Run status ${formatTargetLabel(getString(edgeRequest, ['run_status'], 'unknown')).toLowerCase()}; the detection result could not be read (${String(edgeRequestResult.read_error)}).`
+    : edgeDetectionReasonExplanation(edgeRequestReason) || (edgeRequestReason ? `Reported reason: ${formatTargetLabel(edgeRequestReason)}.` : '');
+  const edgeRequestAt = edgeRequest?.completed_at ?? edgeRequest?.started_at ?? null;
   const edgeVendorColumns: TableColumn<DataItem>[] = [
     { key: 'vendor', label: 'Vendor', render: (item) => <span>{getString(item, ['name', 'vendor'], 'Not reported')}</span> },
     { key: 'confidence', label: 'Confidence', render: (item) => <span className="mono">{edgeConfidenceLabel(item.confidence) || 'Not reported'}</span> },
@@ -482,6 +531,12 @@ export function TargetDetailView({
     <div className="content target-detail-view">
       {renderHeader()}
       {error ? <div className="form-banner error" role="alert">{error}</div> : null}
+      {startedRunId && !error ? (
+        <div className="form-banner" role="status">
+          Bounded run started for {effectiveSelectedRunCheckId || 'the selected check'}.
+          {startedRunId !== 'started' ? <> <DetailEntityLink route="run-detail" id={startedRunId} label="Open run" /></> : null}
+        </div>
+      ) : null}
 
       <Card className="target-verification-card">
         <CardHeader>
@@ -608,11 +663,22 @@ export function TargetDetailView({
             >
               {formatTargetLabel(edgeStatus)}
             </Badge>
+          ) : showEdgeRequest ? (
+            <Badge tone={edgeStatusTone(edgeRequestStatus)} title={`Latest detection request ${edgeRequestId}`}>{`Latest request: ${formatTargetLabel(edgeRequestStatus)}`}</Badge>
           ) : (
             <Badge tone="muted">Not detected yet</Badge>
           )}
         </CardHeader>
         <CardContent>
+          {showEdgeRequest ? (
+            <div className="target-selection-note edge-request-status" role="status">
+              <span>Latest detection request</span>
+              <DetailEntityLink route="run-detail" id={edgeRequestId} />
+              <Badge tone={edgeStatusTone(edgeRequestStatus)}>{formatTargetLabel(edgeRequestStatus)}</Badge>
+              {edgeRequestAt ? <span className="muted small">{formatDate(edgeRequestAt)}</span> : null}
+              {edgeRequestExplanation ? <span>{edgeRequestExplanation}</span> : edgeRequestResult ? null : <span className="muted">Reading detection result…</span>}
+            </div>
+          ) : null}
           {edgeDetection ? (
             <>
               <div className="kpi-row">
@@ -622,12 +688,12 @@ export function TargetDetailView({
                 <div className="kpi-cell"><div className="kpi-label">Observed</div><div className="kpi-value">{edgeObservedAt ? formatDate(edgeObservedAt) : 'Not reported'}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Source run</div><div className="kpi-value">{edgeTestRunId ? <DetailEntityLink route="run-detail" id={edgeTestRunId} /> : <span className="mono">Not reported</span>}</div></div>
               </div>
-              {edgeReason ? <p className="muted">Reported reason: {formatTargetLabel(edgeReason)}.</p> : null}
+              {edgeReason ? <p className="muted">Reported reason: {formatTargetLabel(edgeReason)}.{edgeReasonExplanation ? ` ${edgeReasonExplanation}` : ''}</p> : null}
               {edgeDetection.conflicting_vendor_signals === true ? (
                 <p className="muted">Vendor signals conflict, so no single WAF provider is asserted.</p>
               ) : null}
 
-              <div className="edge-family-grid" aria-label="Independent WAF and CDN detection">
+              <div className="edge-family-grid" aria-label="Independent WAF, CDN, and cloud hosting detection">
                 <section className="edge-family-card" aria-labelledby="target-edge-waf-title">
                   <div className="edge-family-card-head">
                     <strong id="target-edge-waf-title">WAF</strong>
@@ -641,8 +707,7 @@ export function TargetDetailView({
                   <dl>
                     <dt>Provider</dt><dd>{getString(edgeWaf, ['provider'], 'Not asserted')}</dd>
                     <dt>Type</dt><dd>{formatTargetLabel(getString(edgeWaf, ['type'], ''), 'Not reported')}</dd>
-                    <dt>Reported providers</dt>
-                    <dd>{edgeFamilyProviders(edgeWaf, edgeWafProviders).join(', ') || 'None reported'}</dd>
+                    <EdgeFamilyProviders family={edgeWaf} providers={edgeWafProviders} />
                   </dl>
                 </section>
                 <section className="edge-family-card" aria-labelledby="target-edge-cdn-title">
@@ -658,10 +723,65 @@ export function TargetDetailView({
                   <dl>
                     <dt>Provider</dt><dd>{getString(edgeCdn, ['provider'], 'Not asserted')}</dd>
                     <dt>Type</dt><dd>{formatTargetLabel(getString(edgeCdn, ['type'], ''), 'Not reported')}</dd>
-                    <dt>Reported providers</dt>
-                    <dd>{edgeFamilyProviders(edgeCdn, edgeCdnProviders).join(', ') || 'None reported'}</dd>
+                    <EdgeFamilyProviders family={edgeCdn} providers={edgeCdnProviders} />
                   </dl>
                 </section>
+                <section className="edge-family-card" aria-labelledby="target-edge-cloud-title">
+                  <div className="edge-family-card-head">
+                    <strong id="target-edge-cloud-title">Cloud hosting</strong>
+                    <Badge
+                      tone={edgeStatusTone(getString(edgeCloud, ['status'], 'inconclusive'))}
+                      title="cdncheck cloud range membership for the resolved addresses"
+                    >
+                      {formatTargetLabel(getString(edgeCloud, ['status'], 'inconclusive'))}
+                    </Badge>
+                  </div>
+                  <dl>
+                    <dt>Provider</dt><dd>{getString(edgeCloud, ['provider'], 'Not asserted')}</dd>
+                    <dt>Type</dt><dd>{formatTargetLabel(getString(edgeCloud, ['type'], ''), 'Not reported')}</dd>
+                    <EdgeFamilyProviders family={edgeCloud} providers={edgeCloudProviders} />
+                  </dl>
+                </section>
+              </div>
+
+              <div className="edge-evidence-block">
+                <h3 id="target-edge-verdicts-title">Tool verdicts</h3>
+                <div className="edge-family-grid" aria-labelledby="target-edge-verdicts-title">
+                  <section className="edge-family-card" aria-label="wafw00f verdict">
+                    <div className="edge-family-card-head">
+                      <strong>wafw00f</strong>
+                      <Badge tone={edgeWafw00f?.detected === true ? 'success' : edgeWafw00f ? 'muted' : 'warn'}>
+                        {edgeWafw00f ? (edgeWafw00f.detected === true ? 'WAF detected' : 'No WAF detected') : 'Not reported'}
+                      </Badge>
+                    </div>
+                    <dl>
+                      <dt>Firewall</dt><dd>{getString(edgeWafw00f, ['firewall'], 'Not reported')}</dd>
+                      <dt>Manufacturer</dt><dd>{getString(edgeWafw00f, ['manufacturer'], 'Not reported')}</dd>
+                      <dt>All matches</dt><dd>{stringList(edgeWafw00f?.all_matches).join(', ') || 'None'}</dd>
+                      <dt>Generic reason</dt>
+                      <dd>{edgeWafw00fGeneric?.found === true ? getString(edgeWafw00fGeneric, ['reason'], 'Reported') : 'Not triggered'}</dd>
+                    </dl>
+                  </section>
+                  <section className="edge-family-card" aria-label="cdncheck verdict">
+                    <div className="edge-family-card-head">
+                      <strong>cdncheck</strong>
+                      <Badge tone={edgeCdncheck?.matched === true ? 'success' : edgeCdncheck ? 'muted' : 'warn'}>
+                        {edgeCdncheck ? (edgeCdncheck.matched === true ? formatTargetLabel(getString(edgeCdncheck, ['item_type'], 'matched')) : 'No match') : 'DNS not observed'}
+                      </Badge>
+                    </div>
+                    <dl>
+                      <dt>Provider</dt><dd>{getString(edgeCdncheck, ['provider'], 'None')}</dd>
+                      <dt>Matched via</dt><dd>{getString(edgeCdncheck, ['source'], 'None').toUpperCase()}</dd>
+                      <dt>Matched value</dt><dd className="mono">{getString(edgeCdncheck, ['value'], 'None')}</dd>
+                    </dl>
+                  </section>
+                </div>
+                {edgeCnameChain.length > 0 ? (
+                  <p className="edge-chain"><span className="edge-chain-label">CNAME chain</span><span className="mono">{edgeCnameChain.join(' → ')}</span></p>
+                ) : null}
+                {edgeResolvedIps.length > 0 ? (
+                  <p className="edge-chain"><span className="edge-chain-label">Resolved addresses</span><span className="mono">{edgeResolvedIps.join(', ')}</span></p>
+                ) : null}
               </div>
 
               <div className="edge-evidence-block">
@@ -677,7 +797,9 @@ export function TargetDetailView({
               <p className="muted small">Fingerprint detection is not a protection verdict. A successful no-match does not prove that no edge control exists.</p>
             </>
           ) : (
-            <p className="muted">No edge detection has been recorded for this target yet. Run WAF/CDN detection from the target group to populate this section.</p>
+            <p className="muted">{showEdgeRequest
+              ? 'No durable edge detection has been recorded for this target. Only a trusted signed-worker result populates this section.'
+              : 'No edge detection has been recorded for this target yet. Run WAF/CDN detection from the target group to populate this section.'}</p>
           )}
         </CardContent>
       </Card>

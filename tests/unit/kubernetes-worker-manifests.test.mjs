@@ -11,6 +11,7 @@ import {
   KUBERNETES_WORKER_IMAGE_REPOSITORY_PLACEHOLDER,
   KUBERNETES_WORKER_MANIFESTS,
   KUBERNETES_WORKER_RELEASE_MANIFESTS,
+  KUBERNETES_SCAN_STEP_STARTING_MANIFESTS,
   assertExactWorkerDigest,
   assertKubernetesWorkerImageRepository,
   deriveKubernetesWorkerImageRepository,
@@ -46,7 +47,7 @@ const DIGEST_A = `sha256:${'a'.repeat(64)}`;
 const DIGEST_B = `sha256:${'b'.repeat(64)}`;
 
 describe('Kubernetes worker exact-digest manifests', () => {
-  it('keeps all five checked-in images on repository and digest placeholders', () => {
+  it('keeps every checked-in worker image on repository and digest placeholders', () => {
     assert.deepEqual(validateKubernetesWorkerManifestSources(), {
       manifest_count: KUBERNETES_WORKER_RELEASE_MANIFESTS.length,
       image_count: KUBERNETES_WORKER_IMAGE_COUNT,
@@ -221,6 +222,22 @@ describe('Kubernetes worker exact-digest manifests', () => {
       () => validateRenderedKubernetesWorkerManifests(mixedDigestDir),
       /one concrete repository@sha256 digest/,
     );
+  });
+
+  it('requires signed-worker probe env on every worker that can start validation scan steps', () => {
+    for (const name of KUBERNETES_SCAN_STEP_STARTING_MANIFESTS) {
+      const source = readFileSync(path.join(DEFAULT_KUBERNETES_WORKER_SOURCE_DIR, name), 'utf8');
+      assert.match(source, /- name: ASTRANULL_PROBE_MODE\n\s+value: "signed-worker"/, name);
+      assert.match(source, /- name: ASTRANULL_PROBE_WORKER_SECRET\n\s+valueFrom:\n\s+secretKeyRef:\n\s+name: astranull-worker-env\n\s+key: ASTRANULL_PROBE_WORKER_SECRET/, name);
+    }
+    const sourceDir = tempDir();
+    cpSync(DEFAULT_KUBERNETES_WORKER_SOURCE_DIR, sourceDir, { recursive: true });
+    const sweeper = path.join(sourceDir, 'collection-window-sweeper.yaml');
+    const original = readFileSync(sweeper, 'utf8');
+    writeFileSync(sweeper, original.replace(/\s+- name: ASTRANULL_PROBE_WORKER_SECRET\n\s+valueFrom:\n\s+secretKeyRef:\n\s+name: astranull-worker-env\n\s+key: ASTRANULL_PROBE_WORKER_SECRET/, ''));
+    assert.throws(() => validateKubernetesWorkerManifestSources(sourceDir), /collection-window-sweeper\.yaml .*ASTRANULL_PROBE_WORKER_SECRET/);
+    writeFileSync(sweeper, original.replace('value: "signed-worker"', 'value: "simulation"'));
+    assert.throws(() => validateKubernetesWorkerManifestSources(sourceDir), /ASTRANULL_PROBE_MODE to signed-worker/);
   });
 
   it('rejects missing deadlines, token automount, and non-empty worker RBAC', () => {

@@ -63,6 +63,9 @@ import {
 } from './serviceAdapters.mjs';
 import { createPostgresTestPolicyServices } from './testPolicyServiceAdapters.mjs';
 import { createPostgresTestPolicyRepository } from './testPolicyRepository.mjs';
+import { createPostgresValidationScanRepository } from './validationScanRepository.mjs';
+import { createPostgresValidationScanServices } from './validationScanServiceAdapters.mjs';
+import { resolveProbeDispatchConfig } from '../../config.mjs';
 import { createPostgresSubscriptionServices } from './subscriptionServiceAdapters.mjs';
 import { createPostgresCvePipelineServices } from './cvePipelineServiceAdapters.mjs';
 import { createCvePipelineRepository } from './cvePipelineRepository.mjs';
@@ -99,7 +102,24 @@ export const POSTGRES_RUNTIME_REPOSITORY_KEYS = Object.freeze([
   'internalManagement',
   'portalRevamp',
   'testPolicies',
+  'validationScans',
 ]);
+
+/**
+ * Probe dispatch config for hook-driven scan advancement in any process that builds this runtime.
+ * Invalid or missing signing material fails closed: scan steps are not started until a process
+ * with a validated secret advances them.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+export function scanRuntimeConfigFromEnv(env) {
+  const resolved = resolveProbeDispatchConfig(env);
+  return {
+    probeMode: resolved.probeMode ?? 'signed-worker',
+    probeWorkerSecret: resolved.probeWorkerSecret,
+    probeConfigError: resolved.error,
+  };
+}
 
 /**
  * @returns {string}
@@ -130,6 +150,7 @@ const DEFAULT_REPOSITORY_FACTORIES = {
   internalManagement: createInternalManagementRepository,
   portalRevamp: createPortalRevampRepository,
   testPolicies: createPostgresTestPolicyRepository,
+  validationScans: createPostgresValidationScanRepository,
 };
 
 /**
@@ -212,7 +233,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         throw new Error(`Missing repository factory for "${key}".`);
       }
       if (key === 'audit') repositories[key] = auditRepository;
-      else if (key === 'coreCatalog' || key === 'testPolicies' || key === 'wafPosture') {
+      else if (['coreCatalog', 'testPolicies', 'wafPosture', 'validationScans'].includes(key)) {
         repositories[key] = factory(pool, { auditRepository });
       } else repositories[key] = factory(pool);
     }
@@ -228,6 +249,20 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
       tokens: authServices.tokens,
     });
     const validationServices = createPostgresValidationServices(repositories);
+    const validationScanServices = createPostgresValidationScanServices(
+      {
+        validationScans: repositories.validationScans,
+        validationEvidence: repositories.validationEvidence,
+        coreCatalog: repositories.coreCatalog,
+        audit: repositories.audit,
+        killSwitch: repositories.killSwitch,
+        internalManagement: repositories.internalManagement,
+      },
+      {
+        testRuns: validationServices.testRuns,
+        runtimeConfig: options.validationScanRuntimeConfig ?? scanRuntimeConfigFromEnv(env),
+      },
+    );
     const secretVault = createPostgresSecretVaultServices(repositories, {
       encryptionKey: loadSecretEncryptionKey(env),
       connectorEncryptionKey: loadConnectorSecretEncryptionKey(env),
@@ -248,6 +283,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
     });
     const highScaleServices = createPostgresHighScaleServices(repositories, {
       notifications: notificationServices,
+      onRunTerminal: validationServices.testRuns.notifyRunTerminal,
     });
     const productionReleaseEvidenceServices =
       createPostgresProductionReleaseEvidenceServices(repositories);
@@ -335,6 +371,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
           }),
       },
       subscriptions: subscriptionServices,
+      validationScans: validationScanServices,
       productionReleaseEvidence: productionReleaseEvidenceServices,
       retention: retentionServices,
       wafPosture: {

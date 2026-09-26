@@ -128,6 +128,40 @@ function evidenceSummary(edgeSignature) {
         suffix: boundedString(match.suffix, 253),
       };
     }),
+    wafw00f: wafw00fSummary(edgeSignature.wafw00f),
+    cdncheck: cdncheckSummary(edgeSignature.cdncheck),
+  };
+}
+
+function wafw00fSummary(raw) {
+  const record = asRecord(raw);
+  if (!record) return null;
+  const generic = asRecord(record.generic);
+  return {
+    detected: record.detected === true,
+    firewall: boundedString(record.firewall, 200) || 'None',
+    manufacturer: boundedString(record.manufacturer, 200) || 'None',
+    plugin: boundedString(record.plugin) || null,
+    all_matches: boundedList(record.all_matches, MAX_EVIDENCE_MATCHES),
+    generic: generic
+      ? {
+          found: generic.found === true,
+          reason_code: boundedString(generic.reason_code, 64) || null,
+          reason: boundedString(generic.reason, 200) || null,
+        }
+      : null,
+  };
+}
+
+function cdncheckSummary(raw) {
+  const record = asRecord(raw);
+  if (!record) return null;
+  return {
+    matched: record.matched === true,
+    provider: boundedString(record.provider) || null,
+    item_type: boundedString(record.item_type, 16) || null,
+    source: boundedString(record.source, 16) || null,
+    value: boundedString(record.value, 253) || null,
   };
 }
 
@@ -136,8 +170,9 @@ function evidenceSummary(edgeSignature) {
  *
  * @param {object} metadata worker `probe_result` metadata (already redacted upstream)
  * @returns {{
- *   status: string, reason: string|null, waf: object, cdn: object,
- *   waf_providers: string[], cdn_providers: string[], detected_vendor: string,
+ *   status: string, reason: string|null, waf: object, cdn: object, cloud: object,
+ *   waf_providers: string[], cdn_providers: string[], cloud_providers: string[],
+ *   detected_vendor: string,
  *   confidence: number, conflicting_vendor_signals: boolean, corpus_version: string,
  *   evidence: object, dns_cname_chain: string[], dns_resolved_ips: string[],
  * }}
@@ -150,12 +185,15 @@ export function projectEdgeDetection(metadata = {}) {
   // `edge_signature` is canonical. Legacy top-level posture summaries may be recomputed during
   // agent enrichment without that nested input, so consult them only when the canonical boolean
   // is absent rather than manufacturing a contradiction.
+  const genericWaf = edgeSignature.waf_generic_detected === true;
   const wafSignal = explicitEdgeBoolean(typeof edgeSignature.waf_present === 'boolean'
-    ? [edgeSignature.waf_present]
+    ? [edgeSignature.waf_present || genericWaf]
     : [meta.waf_fingerprint_detected, meta.waf_detected]);
-  const cdnSignal = explicitEdgeBoolean(typeof edgeSignature.cdn_detected === 'boolean'
+  // A missing or null CDN answer means DNS was never observed: inconclusive, never not_detected.
+  const cdnSignal = explicitEdgeBoolean('cdn_detected' in edgeSignature
     ? [edgeSignature.cdn_detected]
     : [meta.cdn_detected]);
+  const cloudSignal = explicitEdgeBoolean([edgeSignature.cloud_hosted]);
 
   const conflictingVendorSignals = edgeSignature.conflicting_vendor_signals === true;
   const wafTypedMatch = findEdgeProviderMatch(edgeSignature, 'waf');
@@ -165,12 +203,16 @@ export function projectEdgeDetection(metadata = {}) {
   const waf = signalProjection(
     wafSignal,
     conflictingVendorSignals ? null : {
-      provider: responseProvider || wafTypedMatch?.provider,
-      type: responseProvider ? 'response_fingerprint' : wafTypedMatch?.type,
+      provider: responseProvider || wafTypedMatch?.provider || (genericWaf ? 'generic' : undefined),
+      type: responseProvider
+        ? 'response_fingerprint'
+        : wafTypedMatch?.type ?? (genericWaf ? 'generic_behavior' : undefined),
     },
     'vendor',
   );
   const cdn = signalProjection(cdnSignal, cdnTypedMatch, 'provider');
+  const cloudTypedMatch = findEdgeProviderMatch(edgeSignature, 'cloud');
+  const cloud = signalProjection(cloudSignal, cloudTypedMatch, 'provider');
 
   const positive = (wafSignal.value && !wafSignal.conflict)
     || (cdnSignal.value && !cdnSignal.conflict);
@@ -190,8 +232,10 @@ export function projectEdgeDetection(metadata = {}) {
         : null,
     waf,
     cdn,
+    cloud,
     waf_providers: boundedList(edgeSignature.waf_providers),
     cdn_providers: boundedList(edgeSignature.cdn_providers),
+    cloud_providers: boundedList(edgeSignature.cloud_providers),
     detected_vendor: responseProvider,
     confidence: Number(bestVendor?.confidence) || 0,
     conflicting_vendor_signals: conflictingVendorSignals,
@@ -234,6 +278,8 @@ export function edgeDetectionRowFields(projection, { testRunId = null, observedA
     corpus_version: projection.corpus_version || null,
     evidence_json: {
       ...projection.evidence,
+      cloud: projection.cloud,
+      cloud_providers: projection.cloud_providers,
       dns_cname_chain: projection.dns_cname_chain,
       dns_resolved_ips: projection.dns_resolved_ips,
     },

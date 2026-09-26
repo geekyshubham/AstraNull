@@ -117,10 +117,23 @@ export async function resolvePinnedDestination(host, deps = {}) {
 }
 
 function responseHeaders(headers) {
+  const source = headers ?? {};
+  const get = (name) => {
+    const value = source[String(name).toLowerCase()];
+    return Array.isArray(value) ? value.join(', ') : (value == null ? null : String(value));
+  };
+  const names = () => Object.keys(source).map((name) => name.toLowerCase()).sort();
   return {
-    get(name) {
-      const value = headers?.[String(name).toLowerCase()];
-      return Array.isArray(value) ? value.join(', ') : (value == null ? null : String(value));
+    get,
+    has: (name) => get(name) !== null,
+    keys: () => names()[Symbol.iterator](),
+    forEach(callback) {
+      for (const name of names()) callback(get(name), name, this);
+    },
+    getSetCookie() {
+      const value = source['set-cookie'];
+      if (value == null) return [];
+      return Array.isArray(value) ? value.map(String) : [String(value)];
     },
   };
 }
@@ -241,6 +254,7 @@ export async function pinnedFetch(urlValue, options = {}, deps = {}) {
       settled = true;
       resolve({
         status: res.statusCode ?? 0,
+        statusText: res.statusMessage ?? '',
         ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
         headers: responseHeaders(res.headers),
         url: url.href,

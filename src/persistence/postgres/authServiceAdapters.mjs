@@ -125,7 +125,7 @@ export function createPostgresAuthServices(repositories, options = {}) {
         id,
         tenant_id: ctx.tenantId,
         name: body.name ?? 'Install token',
-        environment_id: body.environment_id ?? 'env_demo',
+        environment_id: typeof body.environment_id === 'string' && body.environment_id.trim() ? body.environment_id.trim() : null,
         target_group_id: body.target_group_id ?? null,
         token_salt: tokenSalt,
         token_hash: tokenHash,

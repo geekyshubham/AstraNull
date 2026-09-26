@@ -24,6 +24,9 @@ Pass --interval-ms to run as a long-lived periodic loop instead.
 
 Environment:
   ASTRANULL_DATABASE_URL (required)
+  ASTRANULL_PROBE_MODE / ASTRANULL_PROBE_WORKER_SECRET (required to start the next validation
+    scan step when a finalized run belongs to a scan; without a valid secret the step is not
+    started, an advance_blocked audit entry is written, and validation-scan-runner resumes it)
 
 Options:
   --tenant-id <id>           Sweep one tenant (mutually exclusive with --tenant-ids-file)

@@ -76,6 +76,10 @@ Show checks as cards with risk class:
 | Last result | Pass/fail/inconclusive. |
 | Requirements | Agent mode, canary port, customer marker rule. |
 
+### Validation scans
+
+The group detail head carries a "Start validation scan" action (roles with `test_run:start`). It opens the launcher described in [Test Runs](06-test-runs-page.md#validation-scans-on-demand-and-scheduled) with the group preselected: choose the whole group or one exact target, multi-select checks by taxonomy section, optionally schedule with recurrence, review, and start. A "Validation scans" card below Rules and schedule lists this group's scans (scheduled first, with a show-all toggle) with Open, Edit, Cancel, and Schedule again actions. Rules and schedule keeps the single-check recurring test policy form.
+
 ## Completion criteria
 
 Target Groups page is complete when users can fully configure declared scope without cloud access, bind agents, enable checks, run safe tests, and understand missing requirements.

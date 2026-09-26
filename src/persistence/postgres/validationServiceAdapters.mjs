@@ -8,6 +8,7 @@ import {
 } from '../../contracts/checks.mjs';
 import { targetKindCompatibilityError } from '../../contracts/checkTargetCompatibility.mjs';
 import { targetDedupeKey } from '../../contracts/targetManagement.mjs';
+import { probeDispatchReady } from '../../config.mjs';
 import { newId } from '../../lib/ids.mjs';
 import {
   VERDICT_INSERTED,
@@ -46,6 +47,7 @@ import {
 import { simulateProbeResult } from '../../services/probeStub.mjs';
 import { LEAN_GROUP_LOOKUP } from './coreCatalogRepository.mjs';
 import { isWithinPolicySafeWindow } from '../../contracts/testPolicyManagement.mjs';
+import { normalizeCancelReason, withCheckSection } from '../../contracts/validationScanManagement.mjs';
 
 /** @type {readonly string[]} */
 export const VALIDATION_EVIDENCE_REPOSITORY_METHODS = Object.freeze([
@@ -305,6 +307,8 @@ export const POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS = Object.freeze([
   'cancelTestRun',
   'ingestObservation',
   'maybeFinalizeRunAfterProbeIngest',
+  'registerRunTerminalHook',
+  'notifyRunTerminal',
 ]);
 
 /** @type {readonly string[]} */
@@ -385,7 +389,58 @@ export function createPostgresValidationServices(repositories, options = {}) {
   // callers still construct; every egress path fails closed when the repository is absent.
   const ownershipVerifications = repositories.ownershipVerifications;
   const testPolicies = repositories.testPolicies;
+  // Optional: only wired when the validation scan slice is present. Scan dispatch fails closed without it.
+  const validationScans = repositories.validationScans;
+  const internalManagement = repositories.internalManagement ?? null;
   const nowFn = options.now ?? (() => new Date());
+  const runTerminalHooks = new Set();
+
+  async function notifyRunTerminal(run, context = {}) {
+    if (!run) return;
+    for (const hook of runTerminalHooks) {
+      try {
+        await hook(run, context);
+      } catch {
+        incMetric('run_terminal_hook_failed');
+      }
+    }
+  }
+
+  async function tenantSuspended(tenantId) {
+    if (typeof internalManagement?.getTenantDetail !== 'function') return false;
+    const detail = await internalManagement.getTenantDetail(tenantId);
+    return detail?.account?.lifecycle_state === 'suspended';
+  }
+
+  async function validateScanBinding(ctx, body, group, check, dispatchOptions = {}) {
+    const dispatch = dispatchOptions.scanDispatch;
+    if (!dispatch) return { scan: null, step: null };
+    if (dispatchOptions.policyDispatch || String(body.policy_id ?? '').trim()) {
+      return { error: 'conflicting_dispatch_context', status: 409 };
+    }
+    if (typeof validationScans?.getScan !== 'function' || typeof validationScans?.getStep !== 'function') {
+      return { error: 'scan_dispatch_invalid', status: 409 };
+    }
+    const scan = await validationScans.getScan(ctx, dispatch.scan_id);
+    if (!scan || scan.tenant_id !== ctx.tenantId || !['pending', 'running'].includes(scan.status)) {
+      return { error: 'scan_dispatch_invalid', status: 409 };
+    }
+    if (!scan.lease_token
+      || scan.lease_token !== dispatch.lease_token
+      || (scan.lease_expires_at && new Date(scan.lease_expires_at) <= nowFn())) {
+      return { error: 'scan_dispatch_invalid', status: 409 };
+    }
+    const step = await validationScans.getStep(ctx, dispatch.step_id);
+    if (!step
+      || step.scan_id !== scan.id
+      || step.status !== 'starting'
+      || step.check_id !== check.check_id
+      || scan.target_group_id !== group.id
+      || step.target_id !== body.target_id) {
+      return { error: 'scan_dispatch_invalid', status: 409 };
+    }
+    return { scan, step };
+  }
 
   /**
    * Gather ops-readiness governance records from Postgres repositories so the
@@ -505,6 +560,118 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return { error: 'policy_lease_invalid', status: 409 };
     }
     return { policy };
+  }
+
+  /**
+   * Replay a durable dispatch (policy occurrence or scan step) whose run row committed. Recreates a
+   * missing signed probe job and repairs run correlation so a run is never left waiting forever.
+   */
+  async function repairSignedDispatch(ctx, existingRun, { body, check, target, targetGroupId, probeWillLeaveThisHost, runtimeConfig, dispatchOptions, phase }) {
+    if (!probeDispatchReady(runtimeConfig)) {
+      return { error: 'probe_signing_unavailable', status: 503, retryable: true };
+    }
+    const finalValidation = await revalidateBeforeDispatch(
+      ctx,
+      { ...body, target_group_id: targetGroupId },
+      check,
+      target,
+      probeWillLeaveThisHost,
+      dispatchOptions,
+    );
+    if (finalValidation.error) {
+      return denySafeStart(
+        ctx,
+        finalValidation.error === 'ownership_not_verified'
+          ? 'test_run.ownership_denied'
+          : 'test_run.policy_dispatch_denied',
+        existingRun.id,
+        {
+          check_id: check.check_id,
+          policy_id: existingRun.policy_id ?? null,
+          scan_id: existingRun.scan_id ?? null,
+          target_group_id: targetGroupId,
+          target_id: target.id,
+          ownership_state: finalValidation.ownership_state,
+          reason: finalValidation.reason,
+          phase,
+        },
+        finalValidation.error,
+        finalValidation.status,
+      );
+    }
+    if (typeof probeJobs.getProbeJobByTestRun !== 'function') {
+      return {
+        error: 'probe_dispatch_recovery_unavailable',
+        status: 503,
+        retryable: true,
+      };
+    }
+
+    let probeJob = await probeJobs.getProbeJobByTestRun(ctx, existingRun.id);
+    const recoveredMissingJob = !probeJob;
+    if (!probeJob) {
+      const recoveryNow = nowFn();
+      const builtJob = buildSignedProbeJobRecord({
+        run: existingRun,
+        check,
+        target,
+        probeProfile: body.probe_profile,
+        ownershipBinding: finalValidation.ownershipBinding,
+        probeWorkerSecret: runtimeConfig.probeWorkerSecret,
+        now: recoveryNow,
+        newId: () => newId('pjob'),
+      });
+      // createProbeJob serializes by tenant/run and returns an already-committed row if
+      // another retry won the race, so this repair never creates duplicate outbound work.
+      probeJob = await probeJobs.createProbeJob(ctx, builtJob);
+    }
+
+    const probeBindingValid = probeJob?.id
+      && probeJob.test_run_id === existingRun.id
+      && probeJob.check_id === existingRun.check_id
+      && (probeJob.target_id ?? null) === (existingRun.target_id ?? null);
+    const persistedNonceHash = existingRun.correlation?.nonce_hash ?? null;
+    if (!probeBindingValid || (persistedNonceHash && persistedNonceHash !== probeJob.nonce_hash)) {
+      return {
+        error: 'probe_dispatch_binding_conflict',
+        status: 503,
+        retryable: true,
+      };
+    }
+
+    const repairPatch = {};
+    if (!persistedNonceHash) {
+      repairPatch.correlation = { nonce_hash: probeJob.nonce_hash, window_ms: 120000 };
+    }
+    if (['pending', 'leased'].includes(probeJob.status) && existingRun.awaiting_external_probe !== true) {
+      repairPatch.awaiting_external_probe = true;
+    }
+    const dispatchStateRepaired = Object.keys(repairPatch).length > 0;
+    const replayRun = dispatchStateRepaired
+      ? await validationEvidence.updateTestRun(ctx, existingRun.id, repairPatch)
+      : existingRun;
+
+    if (recoveredMissingJob || dispatchStateRepaired) {
+      await appendAudit(ctx, 'probe_job.dispatch_recovered', 'probe_job', probeJob.id, {
+        test_run_id: existingRun.id,
+        check_id: check.check_id,
+        probe_job_recreated: recoveredMissingJob,
+        run_state_repaired: dispatchStateRepaired,
+      });
+    }
+
+    return {
+      run: replayRun,
+      jobs_dispatched: 0,
+      probe_job: {
+        id: probeJob.id,
+        status: probeJob.status,
+        job_signature: probeJob.job_signature,
+        nonce_hash: probeJob.nonce_hash,
+      },
+      idempotent_replay: true,
+      dispatch_repaired: recoveredMissingJob || dispatchStateRepaired,
+    };
   }
 
   async function authoritativeOwnership(ctx, group, target) {
@@ -1089,8 +1256,14 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
   const testRuns = {
     listChecks() {
-      return customerSelectableChecks(CHECK_CATALOG);
+      return customerSelectableChecks(CHECK_CATALOG).map(withCheckSection);
     },
+    registerRunTerminalHook(hook) {
+      if (typeof hook !== 'function') throw new TypeError('registerRunTerminalHook requires a function.');
+      runTerminalHooks.add(hook);
+      return () => runTerminalHooks.delete(hook);
+    },
+    notifyRunTerminal,
     async listTestRuns(ctx) {
       return validationEvidence.listTestRuns(ctx);
     },
@@ -1156,12 +1329,15 @@ export function createPostgresValidationServices(repositories, options = {}) {
                   { client },
                 );
                 if (!fresh) return null;
-                return maybeFinalizeCollectingRun(ctx, fresh, agents, {
+                const verdict = await maybeFinalizeCollectingRun(ctx, fresh, agents, {
                   force: true,
                   client,
                   auditLockHeld: true,
                   mutationLocksHeld: true,
                 });
+                if (!verdict) return null;
+                const finalizedRun = await validationEvidence.getTestRun(ctx, staleRun.id, { client });
+                return { verdict, run: finalizedRun ?? fresh };
               },
               { client: auditClient },
             ),
@@ -1171,7 +1347,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
             summary.skipped_locked += 1;
           } else if (result) {
             summary.finalized += 1;
-            summary.finalized_runs.push({ run_id: staleRun.id, verdict: result.verdict });
+            summary.finalized_runs.push({ run_id: staleRun.id, verdict: result.verdict.verdict });
+            await notifyRunTerminal(result.run, { reason: 'verdicted', source: 'collection_window_sweep' });
           } else {
             summary.skipped_not_finalizable += 1;
           }
@@ -1223,12 +1400,17 @@ export function createPostgresValidationServices(repositories, options = {}) {
         && typeof validationEvidence.getTestRunByPolicyDispatchId === 'function'
         ? await validationEvidence.getTestRunByPolicyDispatchId(ctx, policyDispatchId)
         : null;
+      const scanStepId = dispatchOptions.scanDispatch?.step_id ?? null;
+      const existingScanRun = scanStepId
+        && typeof validationEvidence.getTestRunByScanStepId === 'function'
+        ? await validationEvidence.getTestRunByScanStepId(ctx, scanStepId)
+        : null;
       const activeRuns = await validationEvidence.listTestRuns(ctx, {
         targetGroupId,
         statuses: [...ACTIVE_RUN_STATUSES],
         limit: 1,
       });
-      if (activeRuns.length > 0 && !existingPolicyRun) {
+      if (activeRuns.length > 0 && !existingPolicyRun && !existingScanRun) {
         return { error: 'concurrent_run_blocked', status: 409 };
       }
 
@@ -1262,10 +1444,57 @@ export function createPostgresValidationServices(repositories, options = {}) {
 
       const policyBinding = await validatePolicyBinding(ctx, body, group, check, dispatchOptions);
       if (policyBinding.error) return policyBinding;
+      const scanBinding = await validateScanBinding(ctx, body, group, check, dispatchOptions);
+      if (scanBinding.error) return scanBinding;
+      if (scanBinding.scan && await tenantSuspended(ctx.tenantId)) {
+        return denySafeStart(
+          ctx,
+          'test_run.tenant_suspended_denied',
+          targetGroupId,
+          { check_id: check.check_id, target_group_id: targetGroupId, scan_id: scanBinding.scan.id },
+          'tenant_suspended',
+          403,
+        );
+      }
 
       const probeMode = runtimeConfig.probeMode ?? 'simulation';
       const inlineProbe = isOpsReadinessProbeKind(check) || probeMode !== 'signed-worker';
       const probeWillLeaveThisHost = !inlineProbe;
+
+      if (existingScanRun && scanBinding.step) {
+        if (inlineProbe || !ACTIVE_RUN_STATUSES.includes(existingScanRun.status)) {
+          return { run: await testRuns.getTestRun(ctx, existingScanRun.id), idempotent_replay: true };
+        }
+        const repaired = await repairSignedDispatch(ctx, existingScanRun, {
+          body,
+          check,
+          target,
+          targetGroupId,
+          probeWillLeaveThisHost,
+          runtimeConfig,
+          dispatchOptions,
+          phase: 'scan_dispatch_recovery',
+        });
+        if (!repaired.error || repaired.retryable) return repaired;
+        const cancelledRun = await validationEvidence.updateTestRun(ctx, existingScanRun.id, {
+          status: 'cancelled',
+          completed_at: nowFn().toISOString(),
+          summary: { dispatch_failed: true, reason: repaired.error },
+          expected_statuses: ['running'],
+        });
+        if (cancelledRun) await notifyRunTerminal(cancelledRun, { reason: 'dispatch_failed' });
+        return repaired;
+      }
+      if (probeWillLeaveThisHost && !probeDispatchReady(runtimeConfig)) {
+        return denySafeStart(
+          ctx,
+          'test_run.probe_signing_unavailable',
+          targetGroupId,
+          { check_id: check.check_id, target_group_id: targetGroupId, scan_id: scanBinding.scan?.id ?? null },
+          'probe_signing_unavailable',
+          503,
+        );
+      }
 
       if (existingPolicyRun) {
         if (inlineProbe) return { run: existingPolicyRun, idempotent_replay: true };
@@ -1273,107 +1502,16 @@ export function createPostgresValidationServices(repositories, options = {}) {
           return { error: 'policy_dispatch_run_cancelled', status: 409 };
         }
 
-        const finalValidation = await revalidateBeforeDispatch(
-          ctx,
-          { ...body, target_group_id: targetGroupId },
+        return repairSignedDispatch(ctx, existingPolicyRun, {
+          body,
           check,
           target,
+          targetGroupId,
           probeWillLeaveThisHost,
+          runtimeConfig,
           dispatchOptions,
-        );
-        if (finalValidation.error) {
-          return denySafeStart(
-            ctx,
-            finalValidation.error === 'ownership_not_verified'
-              ? 'test_run.ownership_denied'
-              : 'test_run.policy_dispatch_denied',
-            existingPolicyRun.id,
-            {
-              check_id: check.check_id,
-              policy_id: existingPolicyRun.policy_id,
-              target_group_id: targetGroupId,
-              target_id: target.id,
-              ownership_state: finalValidation.ownership_state,
-              reason: finalValidation.reason,
-              phase: 'policy_dispatch_recovery',
-            },
-            finalValidation.error,
-            finalValidation.status,
-          );
-        }
-        if (typeof probeJobs.getProbeJobByTestRun !== 'function') {
-          return {
-            error: 'probe_dispatch_recovery_unavailable',
-            status: 503,
-            retryable: true,
-          };
-        }
-
-        let probeJob = await probeJobs.getProbeJobByTestRun(ctx, existingPolicyRun.id);
-        const recoveredMissingJob = !probeJob;
-        if (!probeJob) {
-          const recoveryNow = nowFn();
-          const builtJob = buildSignedProbeJobRecord({
-            run: existingPolicyRun,
-            check,
-            target,
-            probeProfile: body.probe_profile,
-            ownershipBinding: finalValidation.ownershipBinding,
-            probeWorkerSecret: runtimeConfig.probeWorkerSecret,
-            now: recoveryNow,
-            newId: () => newId('pjob'),
-          });
-          // createProbeJob serializes by tenant/run and returns an already-committed row if
-          // another retry won the race, so this repair never creates duplicate outbound work.
-          probeJob = await probeJobs.createProbeJob(ctx, builtJob);
-        }
-
-        const probeBindingValid = probeJob?.id
-          && probeJob.test_run_id === existingPolicyRun.id
-          && probeJob.check_id === existingPolicyRun.check_id
-          && (probeJob.target_id ?? null) === (existingPolicyRun.target_id ?? null);
-        const persistedNonceHash = existingPolicyRun.correlation?.nonce_hash ?? null;
-        if (!probeBindingValid || (persistedNonceHash && persistedNonceHash !== probeJob.nonce_hash)) {
-          return {
-            error: 'probe_dispatch_binding_conflict',
-            status: 503,
-            retryable: true,
-          };
-        }
-
-        const repairPatch = {};
-        if (!persistedNonceHash) {
-          repairPatch.correlation = { nonce_hash: probeJob.nonce_hash, window_ms: 120000 };
-        }
-        if (['pending', 'leased'].includes(probeJob.status) && existingPolicyRun.awaiting_external_probe !== true) {
-          repairPatch.awaiting_external_probe = true;
-        }
-        const dispatchStateRepaired = Object.keys(repairPatch).length > 0;
-        const replayRun = dispatchStateRepaired
-          ? await validationEvidence.updateTestRun(ctx, existingPolicyRun.id, repairPatch)
-          : existingPolicyRun;
-
-        if (recoveredMissingJob || dispatchStateRepaired) {
-          await appendAudit(ctx, 'probe_job.dispatch_recovered', 'probe_job', probeJob.id, {
-            test_run_id: existingPolicyRun.id,
-            check_id: check.check_id,
-            probe_job_recreated: recoveredMissingJob,
-            run_state_repaired: dispatchStateRepaired,
-          });
-        }
-
-        return {
-          run: replayRun,
-          jobs_dispatched: 0,
-          probe_job: {
-            id: probeJob.id,
-            status: probeJob.status,
-            job_signature: probeJob.job_signature,
-            nonce_hash: probeJob.nonce_hash,
-          },
-          idempotent_replay: true,
-          dispatch_repaired: recoveredMissingJob || dispatchStateRepaired,
-        };
+          phase: 'policy_dispatch_recovery',
+        });
       }
 
       // First live-egress gate. Group ownership is summary-only; authorization always reads the
@@ -1505,6 +1643,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
         target_id: target.id,
         policy_id: finalValidation.policy?.id ?? null,
         policy_dispatch_id: dispatchOptions.policyDispatch?.dispatch_id ?? null,
+        scan_id: scanBinding.scan?.id ?? null,
+        scan_step_id: scanBinding.step?.id ?? null,
         check_id: check.check_id,
         vector_family: check.vector_family,
         safety_class: check.safety_class ?? check.risk_class,
@@ -1521,6 +1661,8 @@ export function createPostgresValidationServices(repositories, options = {}) {
       await appendAudit(ctx, 'test_run.started', 'test_run', runId, {
         check_id: check.check_id,
         policy_id: runRecord.policy_id,
+        scan_id: runRecord.scan_id,
+        scan_step_id: runRecord.scan_step_id,
       });
 
       let probe;
@@ -1542,21 +1684,39 @@ export function createPostgresValidationServices(repositories, options = {}) {
             429,
           );
         }
-        const builtJob = buildSignedProbeJobRecord({
-          run,
-          check,
-          target,
-          probeProfile: body.probe_profile,
-          ownershipBinding: finalValidation.ownershipBinding,
-          probeWorkerSecret: runtimeConfig.probeWorkerSecret,
-          now,
-          newId: () => newId('pjob'),
-        });
-        probeJob = await probeJobs.createProbeJob(ctx, builtJob);
-        run = await validationEvidence.updateTestRun(ctx, runId, {
-          correlation: { nonce_hash: probeJob.nonce_hash, window_ms: 120000 },
-          awaiting_external_probe: true,
-        });
+        try {
+          const builtJob = buildSignedProbeJobRecord({
+            run,
+            check,
+            target,
+            probeProfile: body.probe_profile,
+            ownershipBinding: finalValidation.ownershipBinding,
+            probeWorkerSecret: runtimeConfig.probeWorkerSecret,
+            now,
+            newId: () => newId('pjob'),
+          });
+          probeJob = await probeJobs.createProbeJob(ctx, builtJob);
+          run = await validationEvidence.updateTestRun(ctx, runId, {
+            correlation: { nonce_hash: probeJob.nonce_hash, window_ms: 120000 },
+            awaiting_external_probe: true,
+          });
+        } catch (error) {
+          // Policy occurrences keep the committed run so lease reclaim can repair it via repairSignedDispatch.
+          if (probeJob?.id || dispatchOptions.policyDispatch) throw error;
+          const cancelledRun = await validationEvidence.updateTestRun(ctx, runId, {
+            status: 'cancelled',
+            completed_at: nowFn().toISOString(),
+            summary: { dispatch_failed: true, reason: 'probe_job_dispatch_failed' },
+            expected_statuses: ['running'],
+          });
+          await appendAudit(ctx, 'test_run.dispatch_failed', 'test_run', runId, {
+            check_id: check.check_id,
+            scan_id: runRecord.scan_id,
+            reason: 'probe_job_dispatch_failed',
+          });
+          if (cancelledRun) await notifyRunTerminal(cancelledRun, { reason: 'dispatch_failed' });
+          return { error: 'probe_job_dispatch_failed', status: 503, retryable: true };
+        }
         probe = { nonce: probeJob.nonce, nonce_hash: probeJob.nonce_hash, external_result: null };
         await appendAudit(ctx, 'probe_job.created', 'probe_job', probeJob.id, {
           test_run_id: runId,
@@ -1698,12 +1858,16 @@ export function createPostgresValidationServices(repositories, options = {}) {
       }
       const updatedRun = await validationEvidence.getTestRun(ctx, id);
       const storedVerdict = await validationEvidence.getVerdictForRun(ctx, id);
+      await notifyRunTerminal(updatedRun, { reason: 'verdicted' });
       return { run: { ...updatedRun, verdict: storedVerdict ?? null }, verdict };
     },
-    async cancelTestRun(ctx, id) {
+    async cancelTestRun(ctx, id, cancelOptions = {}) {
+      const reason = normalizeCancelReason(cancelOptions.reason);
+      const source = cancelOptions.source ?? 'user';
       const completed_at = nowFn().toISOString();
       const cancellation = await validationEvidence.cancelTestRunAtomic(ctx, id, {
         completed_at,
+        cancellation: { reason, by: ctx.userId, role: ctx.role, source, scan_id: cancelOptions.scan_id ?? null },
       });
       if (!cancellation) return null;
       if (!cancellation.cancelled) {
@@ -1712,10 +1876,22 @@ export function createPostgresValidationServices(repositories, options = {}) {
         });
         return { error: 'not_cancellable', status: 409 };
       }
+      const run = cancellation.run;
+      const scanId = cancelOptions.scan_id ?? run.scan_id ?? null;
       await appendAudit(ctx, 'test_run.cancelled', 'test_run', id, {
+        reason,
+        cancelled_by: ctx.userId,
+        cancelled_by_role: ctx.role,
+        source,
+        check_id: run.check_id,
+        target_group_id: run.target_group_id,
+        scan_id: scanId,
         cancelled_probe_job_ids: cancellation.cancelled_jobs.map((job) => job.id),
+        cancelled_agent_job_ids: cancellation.cancelled_agent_job_ids
+          ?? (cancellation.cancelled_agent_jobs ?? []).map((job) => job.id),
       });
-      return { run: cancellation.run };
+      await notifyRunTerminal(run, { reason: 'cancelled', source });
+      return { run };
     },
     async ingestObservation(ctx, agentId, body) {
       const agent = await agentControl.getAgentById(
@@ -2037,56 +2213,64 @@ export function createPostgresValidationServices(repositories, options = {}) {
       if (!mutation.acquired) return { error: 'run_mutation_in_progress', status: 409 };
       if (mutation.result?.error) return mutation.result;
       const { freshRun, obsEvent, completionEvents } = mutation.result;
-      return completeObservationIngest(
+      const completion = await completeObservationIngest(
         runCtx,
         freshRun,
         agent,
         obsEvent,
         completionEvents,
       );
+      if (completion?.run?.verdict && completion.run.status === 'verdicted') {
+        await notifyRunTerminal(completion.run, { reason: 'verdicted' });
+      }
+      return completion;
     },
     async maybeFinalizeRunAfterProbeIngest(ctxOrRunId, maybeRunId) {
-      let ctx;
-      let runId;
-      if (typeof ctxOrRunId === 'string' || ctxOrRunId == null) {
-        runId = ctxOrRunId;
-        return null;
-      }
-      ctx = ctxOrRunId;
-      runId = maybeRunId;
-      if (!runId) return null;
-
-      const run = await validationEvidence.getTestRun(ctx, runId);
-      if (!run) return null;
-
-      const events = await validationEvidence.listRunEvents(ctx, runId, { limit: 1000 });
-      run.awaiting_external_probe = false;
-      await validationEvidence.updateTestRun(ctx, runId, { awaiting_external_probe: false });
-
-      if (!hasExternalProbeEvidence(run, events)) return null;
-
-      const agents = await agentControl.listAgents(ctx);
-      if (hasMatchingObservation(run, events)) {
-        return finalizeVerdictIfReady(ctx, run, agents);
-      }
-      const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
-      if (ingestGroup?.validation_mode === 'external_only') {
-        if (run.status === 'running') {
-          await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
-          run.status = 'collecting';
+      if (typeof ctxOrRunId === 'string' || ctxOrRunId == null) return null;
+      const verdict = await finalizeAfterProbeIngest(ctxOrRunId, maybeRunId);
+      if (verdict) {
+        const terminalRun = await validationEvidence.getTestRun(ctxOrRunId, maybeRunId);
+        if (terminalRun?.status === 'verdicted') {
+          await notifyRunTerminal(terminalRun, { reason: 'verdicted' });
         }
-        return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
       }
-      if (isCollectionWindowExpired(run, nowFn().getTime())) {
-        return maybeFinalizeCollectingRun(ctx, run, agents);
-      }
+      return verdict;
+    },
+  };
+
+  async function finalizeAfterProbeIngest(ctx, runId) {
+    if (!runId) return null;
+
+    const run = await validationEvidence.getTestRun(ctx, runId);
+    if (!run) return null;
+
+    const events = await validationEvidence.listRunEvents(ctx, runId, { limit: 1000 });
+    run.awaiting_external_probe = false;
+    await validationEvidence.updateTestRun(ctx, runId, { awaiting_external_probe: false });
+
+    if (!hasExternalProbeEvidence(run, events)) return null;
+
+    const agents = await agentControl.listAgents(ctx);
+    if (hasMatchingObservation(run, events)) {
+      return finalizeVerdictIfReady(ctx, run, agents);
+    }
+    const ingestGroup = await coreCatalog.getTargetGroup(ctx, run.target_group_id, LEAN_GROUP_LOOKUP);
+    if (ingestGroup?.validation_mode === 'external_only') {
       if (run.status === 'running') {
         await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
         run.status = 'collecting';
       }
-      return null;
-    },
-  };
+      return finalizeVerdictIfReady(ctx, run, agents, { agentObserved: false });
+    }
+    if (isCollectionWindowExpired(run, nowFn().getTime())) {
+      return maybeFinalizeCollectingRun(ctx, run, agents);
+    }
+    if (run.status === 'running') {
+      await validationEvidence.updateTestRun(ctx, runId, { status: 'collecting' });
+      run.status = 'collecting';
+    }
+    return null;
+  }
 
   const evidence = {
     async listEvidence(ctx) {

@@ -273,6 +273,68 @@ export function resolveProbeMode(env = process.env) {
   return nodeEnv === 'production' ? 'signed-worker' : 'simulation';
 }
 
+function probeWorkerSecretError(rawSecret) {
+  if (rawSecret.length < MIN_PROBE_WORKER_SECRET_LENGTH) {
+    return {
+      error: 'probe_worker_secret_too_short',
+      message: `ASTRANULL_PROBE_WORKER_SECRET must be at least ${MIN_PROBE_WORKER_SECRET_LENGTH} characters when probe mode is signed-worker.`,
+    };
+  }
+  const validatedSecret = validateHmacSecretEntropy(rawSecret);
+  if (!validatedSecret.ok) {
+    return {
+      error: validatedSecret.error,
+      message: `ASTRANULL_PROBE_WORKER_SECRET failed entropy validation (${validatedSecret.error}).`,
+    };
+  }
+  return { secret: validatedSecret.secret };
+}
+
+/**
+ * Non-throwing probe dispatch resolver for background processes that must fail closed per action.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {{ probeMode: string | null, probeWorkerSecret: string | null, error: string | null, message: string | null }}
+ */
+export function resolveProbeDispatchConfig(env = process.env) {
+  let probeMode;
+  try {
+    probeMode = resolveProbeMode(env);
+  } catch (err) {
+    return { probeMode: null, probeWorkerSecret: null, error: 'invalid_probe_mode', message: err.message };
+  }
+  if (probeMode !== 'signed-worker') {
+    return { probeMode, probeWorkerSecret: null, error: null, message: null };
+  }
+  const checked = probeWorkerSecretError(String(env.ASTRANULL_PROBE_WORKER_SECRET ?? ''));
+  if (checked.error) {
+    return { probeMode, probeWorkerSecret: null, error: checked.error, message: checked.message };
+  }
+  return { probeMode, probeWorkerSecret: checked.secret, error: null, message: null };
+}
+
+/**
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
+ * @returns {{ probeMode: string, probeWorkerSecret: string | null }}
+ */
+export function loadProbeDispatchConfig(env = process.env) {
+  const resolved = resolveProbeDispatchConfig(env);
+  if (resolved.error) throw new Error(resolved.message);
+  return { probeMode: resolved.probeMode, probeWorkerSecret: resolved.probeWorkerSecret };
+}
+
+/**
+ * Dispatch-time gate: signed-worker mode needs signing material that was already trimmed and
+ * validated by loadProbeDispatchConfig/loadRuntimeConfig. Entropy is enforced by those loaders.
+ *
+ * @param {{ probeMode?: string | null, probeWorkerSecret?: string | null } | null | undefined} runtimeConfig
+ */
+export function probeDispatchReady(runtimeConfig) {
+  if ((runtimeConfig?.probeMode ?? 'simulation') !== 'signed-worker') return true;
+  const secret = runtimeConfig?.probeWorkerSecret;
+  return typeof secret === 'string' && secret.length > 0 && secret === secret.trim();
+}
+
 export function resolveHighScaleAdapterMode(env = process.env) {
   const explicit = env.ASTRANULL_HIGH_SCALE_ADAPTER_MODE?.trim();
   const nodeEnv = env.NODE_ENV ?? 'development';
@@ -512,23 +574,7 @@ export function loadRuntimeConfig(env = process.env) {
   const databaseUrlConfigured =
     persistenceMode === 'postgres' && Boolean((env.ASTRANULL_DATABASE_URL ?? '').trim());
 
-  const probeMode = resolveProbeMode(env);
-  let probeWorkerSecret = null;
-  if (probeMode === 'signed-worker') {
-    probeWorkerSecret = env.ASTRANULL_PROBE_WORKER_SECRET ?? '';
-    if (probeWorkerSecret.length < MIN_PROBE_WORKER_SECRET_LENGTH) {
-      throw new Error(
-        `ASTRANULL_PROBE_WORKER_SECRET must be at least ${MIN_PROBE_WORKER_SECRET_LENGTH} characters when probe mode is signed-worker.`,
-      );
-    }
-    const validatedSecret = validateHmacSecretEntropy(probeWorkerSecret);
-    if (!validatedSecret.ok) {
-      throw new Error(
-        `ASTRANULL_PROBE_WORKER_SECRET failed entropy validation (${validatedSecret.error}).`,
-      );
-    }
-    probeWorkerSecret = validatedSecret.secret;
-  }
+  const { probeMode, probeWorkerSecret } = loadProbeDispatchConfig(env);
 
   const highScaleAdapterMode = resolveHighScaleAdapterMode(env);
   const agentIdentityMode = resolveAgentIdentityMode(env);

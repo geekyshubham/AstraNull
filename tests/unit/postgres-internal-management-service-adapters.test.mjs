@@ -84,6 +84,7 @@ function createRepo() {
     async listApprovalRequests() { return []; },
     async decideApprovalRequest() { return null; },
     async getApprovalRequest() { return null; },
+    async listSocHighScaleRequests() { return { items: [], tenants: [] }; },
     async listInternalAudit() { return this.audits; },
     async listBreakGlassActivations() {
       return this.breakGlassActivations.map((entry) => ({ ...entry }));

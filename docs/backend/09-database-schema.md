@@ -33,6 +33,14 @@ Planner/orchestration state aligned with `src/services/testRuns.mjs`: `check_id`
 
 Partial unique index `uniq_active_test_run` on `(tenant_id, target_group_id)` for active statuses prevents overlapping safe runs per group.
 
+`0054_validation_scans` adds nullable `scan_id` and `scan_step_id` so a run can name the validation scan step that started it; partial unique index `uniq_test_runs_scan_step` on `(tenant_id, scan_step_id)` guarantees at most one run per step.
+
+### validation_scans / validation_scan_steps (`0054_validation_scans`)
+
+Parent record for on-demand and scheduled multi-check scans (see [ADR-0006](../adr/0006-validation-scans-as-sequential-test-run-batches.md)). `validation_scans` holds scope (`target_group_id`, nullable `target_id`), `check_ids` and `plan_snapshot` JSON, status (`scheduled`, `pending`, `running`, `completed`, `denied`, `cancelled`), schedule fields (`scheduled_for`, `recurrence`, `recurrence_series_id`, `occurrence_key`, `occurrence_index`, `previous_scan_id`, `next_scan_id`), executor lease triple, `next_eligible_at`, `abort_reason`, cancel provenance, creator attribution, `revision`, and `summary`. `validation_scan_steps` holds one row per check and target pair with `position`, status (`pending`, `deferred`, `starting`, `running`, `collecting`, `verdicted`, `denied`, `skipped`, `cancelled`), `test_run_id`, `error_code`, `skip_reason`, `eligible_at`, `attempts`, and the plan-time `request_snapshot`.
+
+Indexes: `uniq_active_validation_scan_per_group` (one pending or running scan per group), `uniq_validation_scans_occurrence` (idempotent recurrence), `idx_validation_scans_due` (scheduled dispatch), `idx_validation_scans_runnable`, `uniq_validation_scan_steps_run`. Both tables carry tenant-consistent composite foreign keys and forced RLS. `0055_validation_scan_activity_indexes` adds partial expression indexes `idx_audit_tenant_metadata_scan_id` and `idx_audit_tenant_metadata_test_run_id` on `audit_logs` for the scan activity query.
+
 ### probe_jobs
 
 Signed external probe dispatch (`job_signature`, `constraints_json`, `target_descriptor_json`, lease/completion fields). Used when `probeMode=signed-worker`.
@@ -43,7 +51,7 @@ Hardened observation jobs: `type TEXT NOT NULL DEFAULT 'observe_window'` (not le
 
 ### events
 
-Correlation stream with `target_id`, `check_id`, `agent_id`, `signal_type`, `nonce_hash`. `event_id` is optional for internal runtime events; external idempotency via partial unique index `uniq_events_tenant_event_id` on `(tenant_id, event_id) WHERE event_id IS NOT NULL`.
+Correlation stream with `target_id`, `check_id`, `agent_id`, `signal_type`, `nonce_hash`. `event_id` is optional for internal runtime events; external idempotency via partial unique index `uniq_events_tenant_event_id` on `(tenant_id, event_id) WHERE event_id IS NOT NULL`. `ingested_at` (`0055`, default `now()`, null for pre-0055 rows) records database ingestion time so scan activity cursors page by arrival order instead of agent-supplied event time.
 
 ### verdicts / findings / evidence_vault
 
@@ -96,6 +104,8 @@ Tenant-scoped release gate evidence records for security review, migration apply
 ### high_scale_requests (expanded fields)
 
 `0002` adds `requested_window`, `emergency_contacts`, `scope_confirmation`, `created_by`, `audit_trail`, `artifacts`, `soc_approvals`, `provider_approval_checklist`, and `adapter_json` alongside the core request state machine.
+
+`0056_platform_scope_soc_high_scale_reads` adds the SELECT-only permissive policy `platform_scope_read_high_scale_requests` (same predicate as the `0038` platform-scope policies: transaction-local `app.platform_scope = 'on'` and unset `app.tenant_id`). It backs the audited staff SOC queue `GET /internal/admin/soc/high-scale-requests`; writes remain tenant-isolated.
 
 ## WAF posture tables (`0008_waf_posture`)
 

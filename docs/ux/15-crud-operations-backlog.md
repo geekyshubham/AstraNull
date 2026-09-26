@@ -119,7 +119,12 @@ The prototype demos triage but not archival.
 | Op | Route | Notes |
 |---|---|---|
 | Start safe run | `POST /v1/test-runs` | Existing. Prototype adds a locked-Run button on unverified targets. |
-| **Cancel run** | `POST /v1/test-runs/:id/cancel` | Confirmation required. Immediate kill of associated probe jobs. |
+| **Cancel run** | `POST /v1/test-runs/:id/cancel` `{ reason? }` | Confirmation required. Immediate kill of associated probe jobs and pending agent jobs; actor and reason audited. |
+| Start validation scan | `POST /v1/validation-scans` `{ target_group_id, target_id?, check_ids, name?, scheduled_for?, recurrence? }` | Launcher on `#runs` and target group detail: scope, section-grouped multi-select checks, run now or schedule, confirmation restating scope. Lands on `#scan-detail?id=`. |
+| Watch scan progress | `GET /v1/validation-scans/:id`, `GET /v1/validation-scans/:id/activity` | Polled live view: per-step request, response, requests sent, verdict; metadata-only activity log. |
+| **Stop scan** | `POST /v1/validation-scans/:id/cancel` `{ reason?, cancel_series? }` | Confirmation required. Cancels the active child run, skips pending steps. |
+| Edit scheduled scan | `PATCH /v1/validation-scans/:id` | Only while `scheduled`. |
+| List scheduled scans | `GET /v1/validation-scans?target_group_id&status` | Cards on `#runs` and target group detail with Open / Edit / Cancel / Schedule again. |
 | Finalize run | `POST /v1/test-runs/:id/finalize` | Manual finalize for edge cases (already wired). |
 | Request SOC-gated run | `POST /v1/high-scale-requests` `{ target_group_id, policy_id, peak_rps, window, business_impact }` | New page-head action on `#runs`. |
 | Upload authorization pack artifact | `POST /v1/high-scale-requests/:id/artifacts` (metadata-only) | Wizard-style flow for LOA / DPA / provider approval / runbook. Currently there is no wizard — see `docs/templates/high-scale-authorization-pack.md` for the 4 templates. |

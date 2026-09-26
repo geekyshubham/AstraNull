@@ -12,7 +12,7 @@ function resolveDataDir() {
   return path.join(process.cwd(), '.data');
 }
 
-function resolveDataFile() {
+export function resolveDataFile() {
   return path.join(resolveDataDir(), 'astranull-dev.json');
 }
 
@@ -29,6 +29,7 @@ function emptyStore() {
     targets: [],
     testPolicies: [],
     testPolicyDispatches: [],
+    validationScans: [],
     bootstrapTokens: [],
     serviceAccounts: [],
     agents: [],

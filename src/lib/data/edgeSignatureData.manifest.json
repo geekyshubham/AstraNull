@@ -1,10 +1,10 @@
 {
-  "manifest_version": 1,
-  "format": "astranull-edge-signature-corpus-manifest-v1",
-  "output_version": 2,
+  "manifest_version": 2,
+  "format": "astranull-edge-signature-corpus-manifest-v2",
+  "output_version": 3,
   "generator": {
     "path": "scripts/generate-edge-signatures.mjs",
-    "sha256": "086f72d2f558de45fcdf79f7dd96c03d56e93e6218c43f108d2dc06cf69a83ed"
+    "sha256": "619f3b246cc6582fc64fb5f988a441bfa550039ff712b45303b715f037c9f177"
   },
   "sources": {
     "wafw00f": {
@@ -705,6 +705,17 @@
       "matcher_calls": 518,
       "supported_plugins": 172,
       "unsupported_plugins": 0,
+      "engine_inputs": [
+        {
+          "path": "wafw00f/lib/evillib.py",
+          "sha256": "7c8b5187ff34324588654b82e6c22ea05f2b6d7a13d93f98730596342d79136b"
+        },
+        {
+          "path": "wafw00f/wafprio.py",
+          "sha256": "91f396bb667b3e15ecf64461a096cc35b3e266fe5a822f406bbf4afcd079bb50"
+        }
+      ],
+      "unprioritized_plugins": [],
       "license": {
         "path": "LICENSE",
         "sha256": "fdaaf8393afcbab5a0db158ae742e76ec3803a7c72af19489f5bd521d3db08ea",
@@ -717,14 +728,10 @@
       "ported_categories": [
         "cdn",
         "waf",
+        "cloud",
         "common"
       ],
-      "excluded_categories": [
-        {
-          "category": "cloud",
-          "reason": "general hosting ranges are not edge-protection evidence"
-        }
-      ],
+      "excluded_categories": [],
       "inputs": [
         {
           "path": "sources_data.json",
@@ -733,6 +740,10 @@
         {
           "path": "other.go",
           "sha256": "37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a"
+        },
+        {
+          "path": "cdncheck.go",
+          "sha256": "94ace4a1b96fc70be7c603e8e4cb3f3e2c563e86700e32c904364b0fcf5694ec"
         },
         {
           "path": "LICENSE.md",
@@ -747,9 +758,16 @@
       }
     }
   },
-  "output": {
-    "path": "src/lib/data/edgeSignatureData.mjs",
-    "sha256": "94b18d931b0ecbc962098a1378297a8b189e3eed78a0c79b1b62981887145dd4",
-    "bytes": 335800
-  }
+  "outputs": [
+    {
+      "path": "src/lib/data/edgeSignatureData.mjs",
+      "sha256": "610589e92e702d7df283f61619510cad13b17d36bc619c8283b4ef28c3479892",
+      "bytes": 339369
+    },
+    {
+      "path": "src/lib/data/edgeCloudRangeData.mjs",
+      "sha256": "0dbc9687af5234aa645a7961b61ef38ed8b36442b1df0dd15e2a0809466fd176",
+      "bytes": 1811626
+    }
+  ]
 }

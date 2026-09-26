@@ -1,8 +1,10 @@
 import {
   normalizeTargetInput,
+  targetDedupeKey,
   targetValidationResponse,
 } from '../../contracts/targetManagement.mjs';
 import { newId } from '../../lib/ids.mjs';
+import { csvImportRejected, validateTargetImportRows } from '../../lib/targetCsvImport.mjs';
 import {
   isCurrentProviderDnsOwnershipProof,
   isProviderVerifiedDnsEvidence,
@@ -174,6 +176,7 @@ function mapTargetGroupDetail(row, targets) {
     status: finding.status ?? 'open',
   }));
   return {
+    ownership_status: ownershipSummaryFromTargetStates(targets.map((target) => target.verification_state)),
     targets,
     target_count: targets.length,
     runs_recent: runsRecent,
@@ -829,6 +832,68 @@ export function createCoreCatalogRepository(pool, options = {}) {
           if (error?.code === '23505') return { error: 'target_exists', status: 409 };
           throw error;
         }
+      });
+    },
+
+    async importTargets(ctx, groupId, rows = [], options = {}) {
+      const now = options.now ?? new Date().toISOString();
+      const newTargetId = options.newId ?? (() => newId('target'));
+      return withCatalogMutation(pool, ctx, async (client) => {
+        const groupResult = await client.query(
+          `SELECT id FROM target_groups
+           WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL AND archived_at IS NULL`,
+          [groupId, ctx.tenantId],
+        );
+        if (!groupResult.rows[0]) return null;
+        const existing = await client.query(
+          `SELECT kind, value, normalized_value FROM targets
+           WHERE tenant_id = $1 AND target_group_id = $2 AND deleted_at IS NULL`,
+          [ctx.tenantId, groupId],
+        );
+        const existingKeys = new Set();
+        for (const row of existing.rows) {
+          try {
+            existingKeys.add(targetDedupeKey({ kind: row.kind, value: row.normalized_value ?? row.value }));
+          } catch { /* legacy rows that no longer normalize cannot collide with validated input */ }
+        }
+        const { accepted, errors } = validateTargetImportRows(rows, existingKeys);
+        if (errors.length) return csvImportRejected(errors);
+
+        const created = [];
+        for (const { row, normalized, expected_behavior: expectedBehavior } of accepted) {
+          const id = newTargetId();
+          const { rows: inserted } = await client.query(
+            `INSERT INTO targets (
+               id, tenant_id, target_group_id, kind, value, normalized_value,
+               expected_behavior, metadata_json, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8::timestamptz)
+             RETURNING id, tenant_id, target_group_id, kind, value, normalized_value,
+                       expected_behavior, metadata_json, created_at`,
+            [id, ctx.tenantId, groupId, normalized.kind, normalized.value, normalized.normalized_value,
+              expectedBehavior ?? null, now],
+          );
+          await appendMutationAudit(auditRepository, client, ctx, {
+            action: 'target.added',
+            resource_type: 'target',
+            resource_id: id,
+            metadata: { target_group_id: groupId, changed_fields: ['kind', 'value', 'expected_behavior'], import_source: 'csv', csv_row: row },
+          }, now);
+          created.push(mapTargetRow(inserted[0]));
+        }
+        await client.query(
+          `UPDATE target_groups
+           SET ownership_status = 'unverified'
+           WHERE tenant_id = $1 AND id = $2
+             AND deleted_at IS NULL AND archived_at IS NULL`,
+          [ctx.tenantId, groupId],
+        );
+        await appendMutationAudit(auditRepository, client, ctx, {
+          action: 'target.csv_imported',
+          resource_type: 'target_group',
+          resource_id: groupId,
+          metadata: { created_count: created.length, target_ids: created.map((target) => target.id) },
+        }, now);
+        return { created, errors: [] };
       });
     },
 

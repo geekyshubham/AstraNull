@@ -167,6 +167,16 @@ export function isStaffSocRole(session) {
   return STAFF_SOC_ROLES.has(String(session.staff_role ?? '').trim().toLowerCase());
 }
 
+/** SOC roles only read approvals on the admin console, so they land on the SOC console. @param {Session} session */
+export function staffHomeRoute(session) {
+  return isStaffSocRole(session) ? 'internal-soc' : 'admin';
+}
+
+/** @param {Session} session */
+export function staffHomePath(session) {
+  return isStaffSocRole(session) ? '/internal/soc' : '/internal/admin';
+}
+
 /**
  * Build request headers for the active session.
  *

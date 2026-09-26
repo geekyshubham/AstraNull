@@ -310,6 +310,17 @@ export const PROTOTYPE_SURFACES: PrototypeSurface[] = [
     summary: 'Verdict explanation, timeline, truth table, evidence chain, and bounded-run context.'
   },
   {
+    id: 'scan-detail',
+    label: 'Validation Scan',
+    route: '/app#scan-detail?id=:id',
+    routeId: 'scan-detail',
+    audience: 'Customer',
+    group: 'validation',
+    source: 'pages/scan-detail-view.tsx',
+    status: 'React implemented',
+    summary: 'Polled live view of one validation scan: step progress, bounded request and response metadata, requests sent, verdicts, activity log, and Stop.'
+  },
+  {
     id: 'findings',
     label: 'Findings',
     route: '/app#findings',

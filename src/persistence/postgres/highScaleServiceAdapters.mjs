@@ -204,20 +204,37 @@ async function autoCancelActiveSafeRunsForKillSwitch(ctx, reason, validationEvid
   });
   const cancelledRunIds = [];
   const cancelledProbeJobIds = [];
+  const cancelledRuns = [];
   const now = new Date().toISOString();
   for (const run of runs) {
-    const summary = { ...(run.summary ?? {}), cancelled_by_kill_switch: true };
+    const summary = {
+      ...(run.summary ?? {}),
+      cancelled_by_kill_switch: true,
+      cancellation: {
+        reason: reason ?? 'kill_switch',
+        by: ctx.userId,
+        role: ctx.role,
+        source: 'kill_switch',
+        scan_id: run.scan_id ?? null,
+      },
+    };
     const cancellation = await validationEvidence.cancelTestRunAtomic(ctx, run.id, {
       completed_at: now,
       summary,
     });
     if (!cancellation?.cancelled) continue;
+    const cancelledAgentJobIds = cancellation.cancelled_agent_job_ids
+      ?? (cancellation.cancelled_agent_jobs ?? []).map((job) => job.id);
     await appendAudit(auditRepo, ctx, 'test_run.kill_switch_auto_cancel', 'test_run', run.id, {
       reason: reason ?? null,
       check_id: run.check_id,
       target_group_id: run.target_group_id,
+      scan_id: run.scan_id ?? null,
+      cancelled_probe_job_ids: cancellation.cancelled_jobs.map((job) => job.id),
+      cancelled_agent_job_ids: cancelledAgentJobIds,
     });
     cancelledRunIds.push(run.id);
+    cancelledRuns.push(cancellation.run);
     for (const job of cancellation.cancelled_jobs) {
       cancelledProbeJobIds.push(job.id);
       await appendAudit(auditRepo, ctx, 'probe_job.kill_switch_auto_cancel', 'probe_job', job.id, {
@@ -226,7 +243,7 @@ async function autoCancelActiveSafeRunsForKillSwitch(ctx, reason, validationEvid
       });
     }
   }
-  return { cancelledRunIds, cancelledProbeJobIds };
+  return { cancelledRunIds, cancelledProbeJobIds, cancelledRuns };
 }
 
 /**
@@ -251,6 +268,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
   const notifications = options.notifications ?? repositories.notifications;
   const nowFn = options.now ?? (() => new Date());
   const newIdFn = options.newId ?? newId;
+  const onRunTerminal = typeof options.onRunTerminal === 'function' ? options.onRunTerminal : null;
 
   return {
     async createHighScaleRequest(ctx, body) {
@@ -864,6 +882,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         updated_by: ctx.userId,
         updated_at: now,
       });
+      const terminalRuns = [];
 
       if (active) {
         const running = await repo.listRunningHighScaleRequests(ctx);
@@ -915,6 +934,7 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
               cancelledProbeJobIds.push(jobId);
             }
           }
+          terminalRuns.push(...passCancellation.cancelledRuns);
         }
       }
       await appendAudit(auditRepo, ctx, active ? 'soc.kill_switch.activated' : 'soc.kill_switch.cleared', 'platform', 'kill_switch', {
@@ -924,6 +944,15 @@ export function createPostgresHighScaleServices(repositories, options = {}) {
         cancelled_run_ids: cancelledRunIds,
         cancelled_probe_job_ids: cancelledProbeJobIds,
       });
+      if (onRunTerminal) {
+        for (const run of terminalRuns) {
+          try {
+            await onRunTerminal(run, { reason: 'kill_switch' });
+          } catch {
+            incMetric('run_terminal_hook_failed');
+          }
+        }
+      }
       return {
         ...record,
         stopped_request_ids: stoppedRequestIds,

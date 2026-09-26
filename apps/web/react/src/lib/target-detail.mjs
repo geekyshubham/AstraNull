@@ -163,6 +163,36 @@ export function ownershipMethodLabel(verification) {
   return normalize(record.state) === 'unverified' ? 'No ownership proof recorded' : 'Ownership method not reported';
 }
 
+/** Provider row for an edge family: the asserted provider is shown separately, so list only the rest. */
+export function edgeFamilyProviderSummary(assertedProvider, providers) {
+  const asserted = firstString(assertedProvider);
+  const reported = Array.isArray(providers) ? providers.map((entry) => firstString(entry)).filter(Boolean) : [];
+  if (!asserted) return { label: 'Reported providers', value: reported.join(', ') || 'None reported' };
+  return { label: 'Other providers', value: reported.filter((entry) => entry !== asserted).join(', ') || 'None' };
+}
+
+const EDGE_REASON_EXPLANATIONS = {
+  simulation_not_detection: 'Simulation mode: the run completed with a simulated probe, which is never treated as edge evidence. Real detection requires a signed probe worker — see docs/operator-local-runbook.md "Real probe results locally".',
+  worker_result_pending: 'The governed test run is waiting for signed probe-worker evidence.',
+  worker_result_not_observed: 'The run finished without a trusted probe-worker result, so nothing can be asserted.',
+  worker_result_not_observed_before_poll_timeout: 'No trusted probe-worker result arrived during the bounded wait. The test-run page remains authoritative.',
+  worker_result_error: 'The probe worker reported an error, so no detection result was recorded.',
+  worker_result_incomplete: 'The probe-worker result was incomplete, so no detection result was recorded.',
+  test_run_failed: 'The detection test run failed before producing evidence.',
+  test_run_not_successful: 'The detection test run did not complete successfully.',
+};
+
+/** Human explanation for an edge-detection status reason; empty when the reason is unknown. */
+export function edgeDetectionReasonExplanation(reason) {
+  return EDGE_REASON_EXPLANATIONS[normalize(reason)] ?? '';
+}
+
+/** Why Detect edge is locked for a target whose ownership is not yet proven. */
+export function edgeDetectionLockedReason(verificationState) {
+  const state = humanize(verificationState) || 'Unverified';
+  return `Detect edge is locked: ownership is ${state.toLowerCase()}. Verify this target with DNS, provider, or agent proof first.`;
+}
+
 /** Prevent a clickable table row from intercepting nested controls or links. */
 export function isNestedInteractiveTarget(target, currentTarget) {
   if (!target || typeof target.closest !== 'function') return false;

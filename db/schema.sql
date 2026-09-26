@@ -520,6 +520,8 @@ CREATE TABLE test_runs (
   target_id TEXT,
   policy_id TEXT,
   policy_dispatch_id TEXT,
+  scan_id TEXT,
+  scan_step_id TEXT,
   check_id TEXT NOT NULL,
   created_by TEXT,
   initiated_by TEXT,
@@ -764,6 +766,83 @@ CREATE TABLE test_policy_dispatches (
   )
 );
 
+CREATE TABLE validation_scans (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  target_group_id TEXT NOT NULL,
+  target_id TEXT,
+  name TEXT,
+  status TEXT NOT NULL,
+  check_ids JSONB NOT NULL DEFAULT '[]',
+  plan_snapshot JSONB NOT NULL DEFAULT '{}',
+  scheduled_for TIMESTAMPTZ,
+  recurrence JSONB,
+  recurrence_series_id TEXT,
+  occurrence_key TEXT,
+  occurrence_index INTEGER NOT NULL DEFAULT 0,
+  previous_scan_id TEXT,
+  next_scan_id TEXT,
+  dispatched_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  abort_reason TEXT,
+  cancel_reason TEXT,
+  cancelled_by TEXT,
+  cancelled_by_role TEXT,
+  cancelled_at TIMESTAMPTZ,
+  created_by TEXT,
+  created_by_role TEXT,
+  lease_token TEXT,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  next_eligible_at TIMESTAMPTZ,
+  revision BIGINT NOT NULL DEFAULT 1,
+  summary JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT validation_scans_status_check
+    CHECK (status IN ('scheduled', 'pending', 'running', 'completed', 'denied', 'cancelled')),
+  CONSTRAINT validation_scans_scheduled_for_check
+    CHECK (status <> 'scheduled' OR scheduled_for IS NOT NULL),
+  CONSTRAINT validation_scans_lease_check CHECK (
+    (lease_token IS NULL AND lease_owner IS NULL AND lease_expires_at IS NULL)
+    OR (lease_token IS NOT NULL AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)
+  ),
+  CONSTRAINT validation_scans_recurrence_check CHECK (
+    recurrence IS NULL
+    OR (jsonb_typeof(recurrence) = 'object'
+      AND recurrence->>'cadence' IN ('daily', 'weekly', 'monthly'))
+  ),
+  CONSTRAINT validation_scans_cancelled_check
+    CHECK ((status = 'cancelled') = (cancelled_at IS NOT NULL))
+);
+
+CREATE TABLE validation_scan_steps (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  scan_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  check_name TEXT,
+  target_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  test_run_id TEXT,
+  error_code TEXT,
+  skip_reason TEXT,
+  eligible_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  request_snapshot JSONB NOT NULL DEFAULT '{}',
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT validation_scan_steps_tenant_scan_position_key UNIQUE (tenant_id, scan_id, position),
+  CONSTRAINT validation_scan_steps_status_check CHECK (
+    status IN ('pending', 'deferred', 'starting', 'running', 'collecting',
+      'verdicted', 'denied', 'skipped', 'cancelled')
+  )
+);
+
 CREATE TABLE loa_signatures (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -817,6 +896,7 @@ CREATE TABLE events (
   nonce_hash TEXT,
   timestamp TIMESTAMPTZ NOT NULL,
   metadata_json JSONB DEFAULT '{}',
+  ingested_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT events_reserved_producer_check CHECK (
     signal_type NOT IN ('probe_result', 'agent_observation', 'ownership_observation', 'agent_no_observation')
     OR producer_kind = 'legacy_untrusted'
@@ -1680,6 +1760,8 @@ ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_id_id_key UNIQUE (tenant_i
 ALTER TABLE test_runs ADD CONSTRAINT test_runs_tenant_run_group_target_key
   UNIQUE (tenant_id, id, target_group_id, target_id);
 ALTER TABLE test_policies ADD CONSTRAINT test_policies_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE validation_scans ADD CONSTRAINT validation_scans_tenant_id_id_key UNIQUE (tenant_id, id);
+ALTER TABLE validation_scan_steps ADD CONSTRAINT validation_scan_steps_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE verdicts ADD CONSTRAINT verdicts_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE events ADD CONSTRAINT events_tenant_id_id_key UNIQUE (tenant_id, id);
 ALTER TABLE high_scale_requests ADD CONSTRAINT high_scale_requests_tenant_id_id_key UNIQUE (tenant_id, id);
@@ -1749,6 +1831,14 @@ ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_poli
   FOREIGN KEY (tenant_id, policy_id) REFERENCES test_policies (tenant_id, id);
 ALTER TABLE test_policy_dispatches ADD CONSTRAINT fk_test_policy_dispatches_run_tenant
   FOREIGN KEY (tenant_id, run_id) REFERENCES test_runs (tenant_id, id);
+ALTER TABLE validation_scans ADD CONSTRAINT fk_validation_scans_target_group_tenant
+  FOREIGN KEY (tenant_id, target_group_id) REFERENCES target_groups (tenant_id, id);
+ALTER TABLE validation_scan_steps ADD CONSTRAINT fk_validation_scan_steps_scan_tenant
+  FOREIGN KEY (tenant_id, scan_id) REFERENCES validation_scans (tenant_id, id) ON DELETE CASCADE;
+ALTER TABLE validation_scan_steps ADD CONSTRAINT fk_validation_scan_steps_test_run_tenant
+  FOREIGN KEY (tenant_id, test_run_id) REFERENCES test_runs (tenant_id, id);
+ALTER TABLE test_runs ADD CONSTRAINT fk_test_runs_scan_tenant
+  FOREIGN KEY (tenant_id, scan_id) REFERENCES validation_scans (tenant_id, id);
 ALTER TABLE loa_signatures ADD CONSTRAINT fk_loa_signatures_target_group_tenant
   FOREIGN KEY (tenant_id, target_group_id)
   REFERENCES target_groups (tenant_id, id) ON DELETE CASCADE;
@@ -1938,6 +2028,22 @@ CREATE UNIQUE INDEX uniq_test_policy_dispatches_run
   ON test_policy_dispatches(tenant_id, run_id) WHERE run_id IS NOT NULL;
 CREATE UNIQUE INDEX uniq_test_runs_policy_dispatch
   ON test_runs(tenant_id, policy_dispatch_id) WHERE policy_dispatch_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_test_runs_scan_step
+  ON test_runs(tenant_id, scan_step_id) WHERE scan_step_id IS NOT NULL;
+CREATE UNIQUE INDEX uniq_validation_scans_occurrence
+  ON validation_scans(tenant_id, occurrence_key) WHERE occurrence_key IS NOT NULL;
+CREATE INDEX idx_validation_scans_due
+  ON validation_scans(tenant_id, scheduled_for, id) WHERE status = 'scheduled';
+CREATE INDEX idx_validation_scans_runnable
+  ON validation_scans(tenant_id, next_eligible_at, id) WHERE status = 'running';
+CREATE INDEX idx_validation_scans_tenant_group_created
+  ON validation_scans(tenant_id, target_group_id, created_at DESC);
+CREATE UNIQUE INDEX uniq_active_validation_scan_per_group
+  ON validation_scans(tenant_id, target_group_id) WHERE status IN ('pending', 'running');
+CREATE UNIQUE INDEX uniq_validation_scan_steps_run
+  ON validation_scan_steps(tenant_id, test_run_id) WHERE test_run_id IS NOT NULL;
+CREATE INDEX idx_validation_scan_steps_scan
+  ON validation_scan_steps(tenant_id, scan_id, position);
 CREATE UNIQUE INDEX loa_signatures_active_tenant_group
   ON loa_signatures(tenant_id, target_group_id) WHERE state = 'signed';
 CREATE INDEX loa_signatures_expiring
@@ -1972,6 +2078,11 @@ CREATE UNIQUE INDEX uniq_events_tenant_event_id ON events(tenant_id, event_id) W
 CREATE INDEX idx_findings_tenant_status ON findings(tenant_id, status, severity);
 CREATE UNIQUE INDEX uniq_audit_tenant_sequence ON audit_logs(tenant_id, sequence);
 CREATE INDEX idx_audit_tenant_time ON audit_logs(tenant_id, timestamp);
+CREATE INDEX idx_audit_tenant_resource ON audit_logs(tenant_id, resource_type, resource_id, sequence);
+CREATE INDEX idx_audit_tenant_metadata_scan_id ON audit_logs(tenant_id, (metadata_json->>'scan_id'), sequence)
+  WHERE (metadata_json->>'scan_id') IS NOT NULL;
+CREATE INDEX idx_audit_tenant_metadata_test_run_id ON audit_logs(tenant_id, (metadata_json->>'test_run_id'), sequence)
+  WHERE (metadata_json->>'test_run_id') IS NOT NULL;
 CREATE INDEX idx_hs_requests_tenant_state ON high_scale_requests(tenant_id, state);
 CREATE INDEX idx_service_accounts_tenant_role ON service_accounts(tenant_id, role);
 CREATE INDEX idx_agent_update_releases_tenant_state ON agent_update_releases(tenant_id, state);
@@ -2383,6 +2494,10 @@ ALTER TABLE test_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE test_policies FORCE ROW LEVEL SECURITY;
 ALTER TABLE test_policy_dispatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE test_policy_dispatches FORCE ROW LEVEL SECURITY;
+ALTER TABLE validation_scans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE validation_scans FORCE ROW LEVEL SECURITY;
+ALTER TABLE validation_scan_steps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE validation_scan_steps FORCE ROW LEVEL SECURITY;
 ALTER TABLE loa_signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loa_signatures FORCE ROW LEVEL SECURITY;
 ALTER TABLE agent_jobs ENABLE ROW LEVEL SECURITY;
@@ -2544,6 +2659,12 @@ CREATE POLICY tenant_isolation_test_policies ON test_policies
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY tenant_isolation_test_policy_dispatches ON test_policy_dispatches
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY validation_scans_tenant_isolation ON validation_scans
+  USING (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+CREATE POLICY validation_scan_steps_tenant_isolation ON validation_scan_steps
   USING (tenant_id = current_setting('app.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 CREATE POLICY loa_signatures_tenant_isolation ON loa_signatures
@@ -2751,6 +2872,13 @@ CREATE POLICY platform_scope_read_internal_approval_requests ON internal_approva
     AND coalesce(current_setting('app.tenant_id', true), '') = ''
   );
 CREATE POLICY platform_scope_read_internal_audit_log ON internal_audit_log
+  FOR SELECT
+  USING (
+    coalesce(current_setting('app.platform_scope', true) = 'on', false)
+    AND coalesce(current_setting('app.tenant_id', true), '') = ''
+  );
+-- Staff SOC cross-tenant high-scale queue (parity with db/migrations/0056_platform_scope_soc_high_scale_reads.sql).
+CREATE POLICY platform_scope_read_high_scale_requests ON high_scale_requests
   FOR SELECT
   USING (
     coalesce(current_setting('app.platform_scope', true) = 'on', false)

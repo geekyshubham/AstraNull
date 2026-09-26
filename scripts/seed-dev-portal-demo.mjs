@@ -5,13 +5,12 @@
  */
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { migrateDevStore, writeDevStoreToDisk, clearStoreCacheForTests } from '../src/store.mjs';
+import { migrateDevStore, writeDevStoreToDisk, clearStoreCacheForTests, resolveDataFile } from '../src/store.mjs';
 import {
   buildPortalDemoStore,
   PORTAL_DEMO_IDS,
 } from '../tests/fixtures/portal-demo/seed.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -167,7 +166,7 @@ Detail deep-links (append to /app#...):
     waf_connectors: store.wafConnectors.length,
   };
 
-  console.log(`seed-dev-portal-demo: wrote ${path.join(ROOT, '.data', 'astranull-dev.json')}`);
+  console.log(`seed-dev-portal-demo: wrote ${resolveDataFile()}`);
   console.log(`seed-dev-portal-demo: tenant=${PORTAL_DEMO_IDS.tenantId}`);
   for (const [key, value] of Object.entries(counts)) {
     console.log(`  ${key}: ${value}`);

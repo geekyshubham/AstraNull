@@ -20,6 +20,7 @@ import {
   saveSession,
   sessionFromLoginResponse
 } from '../lib/api';
+import { staffHomePath } from '../lib/portal-auth-policy.mjs';
 import { publicApiErrorCode, publicApiErrorMessage } from '../lib/error-messages';
 import { PLATFORM_PROMISE, STAFF_LINKS } from '../lib/navigation';
 import type { PortalConfig } from '../lib/types';
@@ -1970,7 +1971,7 @@ export function StaffLoginPage({ config }: PublicPageProps) {
   useEffect(() => {
     const existing = loadSession();
     if (existing?.access_token && existing.principal === 'staff') {
-      window.location.replace('/internal/admin');
+      window.location.replace(staffHomePath(existing));
     }
   }, []);
 
@@ -1997,14 +1998,15 @@ export function StaffLoginPage({ config }: PublicPageProps) {
     setLoading(true);
 
     if (isDevHeaders) {
-      saveSession({
+      const devSession = {
         mode: 'dev-headers',
         principal: 'staff',
         staff_id: staffId.trim(),
         staff_role: staffRole,
         staff_login_path: staffLoginPath
-      });
-      window.location.href = '/internal/admin';
+      };
+      saveSession(devSession);
+      window.location.href = staffHomePath(devSession);
       return;
     }
 
@@ -2026,11 +2028,12 @@ export function StaffLoginPage({ config }: PublicPageProps) {
           'Staff login failed. Check the selected staging identity and try again.'
         ));
       }
-      saveSession({
+      const staffSession = {
         ...sessionFromLoginResponse(json as Record<string, unknown>),
         staff_login_path: staffLoginPath
-      });
-      window.location.href = '/internal/admin';
+      };
+      saveSession(staffSession);
+      window.location.href = staffHomePath(staffSession);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Staff login failed.');
       setLoading(false);

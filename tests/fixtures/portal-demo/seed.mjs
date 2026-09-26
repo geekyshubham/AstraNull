@@ -2,6 +2,7 @@
  * Full local portal demo fixture — every customer/staff route has list + detail data.
  * Built on portal-baseline, remapped to ten_demo (default dev-headers session).
  */
+import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { CHECK_CATALOG } from '../../../src/contracts/checks.mjs';
 import { validateProductionReleaseEvidence } from '../../../src/contracts/productionReleaseEvidence.mjs';
 import {
@@ -9,6 +10,13 @@ import {
   buildDefaultSubscription,
 } from '../../../src/contracts/subscriptions.mjs';
 import { buildAuditRecord } from '../../../src/audit.mjs';
+import {
+  buildSignableManifestPayload,
+  fingerprintPublicKeyDerBase64,
+  stableStringify,
+} from '../../../src/lib/agentUpdates.mjs';
+import { REQUIRED_ARTIFACT_TYPES } from '../../../src/lib/highScalePolicy.mjs';
+import { computeScopeHashFromTargets } from '../../../src/lib/scopeHash.mjs';
 import { seedWafProductsIfEmpty } from '../../../src/lib/wafProductCatalog.mjs';
 import { PORTAL_BASELINE_IDS, buildPortalBaselineStore } from '../portal-baseline/seed.mjs';
 import { applyPortalBaselineReadinessBoost } from '../portal-baseline/readiness.mjs';
@@ -36,6 +44,122 @@ export const PORTAL_DEMO_IDS = Object.freeze({
 
 const FROZEN = PORTAL_DEMO_IDS.frozenAt;
 const IDS = PORTAL_DEMO_IDS;
+
+const DEMO_UPDATE_SIGNING_SEED = createHash('sha256').update('astranull-portal-demo-agent-update-key').digest();
+const ED25519_PKCS8_SEED_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+function buildDemoAgentUpdateRelease() {
+  const version = '0.2.0-demo';
+  const artifactName = `astranull-agent-${version}.tar.gz`;
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([ED25519_PKCS8_SEED_PREFIX, DEMO_UPDATE_SIGNING_SEED]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+  const publicKeyDerBase64 = createPublicKey(privateKey).export({ type: 'spki', format: 'der' }).toString('base64');
+  const manifest = {
+    package: 'astranull-agent',
+    version,
+    created_at: FROZEN,
+    artifact: {
+      name: artifactName,
+      sha256: createHash('sha256').update(`portal-demo:${artifactName}`).digest('hex'),
+      size: 8192,
+    },
+    files: [],
+    signing: { signed: true, algorithm: 'ed25519', public_key_der_base64: publicKeyDerBase64 },
+  };
+  const signature = sign(
+    null,
+    Buffer.from(stableStringify(buildSignableManifestPayload(manifest)), 'utf8'),
+    privateKey,
+  ).toString('base64');
+  const base = `https://downloads.demo.astranull.invalid/agent/${version}`;
+  return {
+    version,
+    manifest,
+    signature,
+    publicKeyDerBase64,
+    fingerprint: fingerprintPublicKeyDerBase64(publicKeyDerBase64),
+    distribution: {
+      manifest_url: `${base}/manifest.json`,
+      signature_url: `${base}/manifest.json.sig`,
+      artifact_url: `${base}/${artifactName}`,
+    },
+  };
+}
+
+const DEMO_HIGH_SCALE_WINDOW_DAYS = 30;
+
+function buildDemoApprovedHighScaleRequest(store, ids) {
+  const frozenMs = Date.parse(FROZEN);
+  const requestedWindow = {
+    window_start: new Date(frozenMs - 60 * 60 * 1000).toISOString(),
+    window_end: new Date(frozenMs + DEMO_HIGH_SCALE_WINDOW_DAYS * 86400000).toISOString(),
+    timezone: 'UTC',
+  };
+  const scopedTargets = store.targets.filter(
+    (target) => target.tenant_id === ids.tenantId && target.target_group_id === ids.targetGroupId && !target.deleted_at,
+  );
+  const scopeHash = computeScopeHashFromTargets(ids.targetGroupId, scopedTargets);
+  const scenarioFamilies = ['udp_flood'];
+  const deliveryPatterns = ['direct'];
+  const requestedLimits = { max_gbps: 0.5, max_duration_minutes: 45 };
+  const authorizationBinding = () => ({
+    tenant_id: ids.tenantId,
+    target_group_id: ids.targetGroupId,
+    scope_hash: scopeHash,
+    requested_window: { ...requestedWindow },
+    approved_schedule_window: { ...requestedWindow },
+    delivery_patterns: [...deliveryPatterns],
+  });
+  const artifacts = REQUIRED_ARTIFACT_TYPES.map((type) => ({
+    id: `art_demo_approved_${type}`,
+    type,
+    status: 'accepted',
+    content_sha256: createHash('sha256').update(`portal-demo:hsr_demo_approved:${type}`).digest('hex'),
+    custody_id: `cust_demo_approved_${type}`,
+    custody_uri: `custody://cust_demo_approved_${type}`,
+    upload_envelope: 'json',
+    valid_window: { valid_from: requestedWindow.window_start, valid_to: requestedWindow.window_end },
+    approved_targets: [ids.targetGroupId],
+    approved_scenario_families: [...scenarioFamilies],
+    approved_delivery_patterns: [...deliveryPatterns],
+    approved_limits: { ...requestedLimits },
+    authorization_binding: authorizationBinding(),
+    approval_reference: 'REF-DEMO-APPROVED',
+    approver: 'Demo Customer Approver',
+    reviewed_by: 'usr_soc',
+    reviewed_at: FROZEN,
+    created_at: FROZEN,
+  }));
+  return {
+    id: 'hsr_demo_approved',
+    tenant_id: ids.tenantId,
+    target_group_id: ids.targetGroupId,
+    state: 'approved',
+    reason: 'Approved drill window',
+    objective: 'Approved drill window',
+    environment: 'staging',
+    business_criticality: 'high',
+    emergency_contacts: [{ name: 'SOC', contact: 'soc@demo.astranull.local' }],
+    scope_confirmation: true,
+    requested_window: requestedWindow,
+    requested_scenario_families: scenarioFamilies,
+    delivery_patterns: deliveryPatterns,
+    requested_limits: requestedLimits,
+    stop_criteria: { abort_on_customer_signal: true, max_error_rate_pct: 5 },
+    abort_criteria: { threshold: 'error_rate_above_5pct', auto_stop: true },
+    created_at: FROZEN,
+    created_by: 'usr_owner',
+    audit_trail: [],
+    scheduled_window: null,
+    scope_hash: scopeHash,
+    soc_approvals: [{ user_id: 'usr_soc', at: FROZEN }, { user_id: 'usr_soc2', at: FROZEN }],
+    provider_approval_checklist: [],
+    artifacts,
+  };
+}
 
 function replaceTenantReferences(store, fromTenant, toTenant) {
   const walk = (value) => {
@@ -123,6 +247,7 @@ function enrichPortalDemoStore(store) {
       tenant_id: ids.tenantId,
       name: 'Checkout hourly bypass check',
       target_group_id: ids.targetGroupId,
+      target_id: ids.targetId,
       check_id: 'origin.direct_bypass.safe',
       cadence: 'hourly',
       enabled: true,
@@ -135,6 +260,7 @@ function enrichPortalDemoStore(store) {
       tenant_id: ids.tenantId,
       name: 'DNS authoritative weekly',
       target_group_id: ids.targetGroupId,
+      target_id: ids.targetId,
       check_id: 'dns.authoritative_response.safe',
       cadence: 'weekly',
       enabled: true,
@@ -419,22 +545,7 @@ function enrichPortalDemoStore(store) {
       audit_trail: [],
       artifacts: [],
     },
-    {
-      id: 'hsr_demo_approved',
-      tenant_id: ids.tenantId,
-      target_group_id: ids.targetGroupId,
-      state: 'approved',
-      reason: 'Approved drill window',
-      objective: 'Approved drill window',
-      emergency_contacts: [{ name: 'SOC', contact: 'soc@demo.astranull.local' }],
-      scope_confirmation: true,
-      created_at: FROZEN,
-      created_by: 'usr_owner',
-      audit_trail: [],
-      scope_hash: 'scope_hash_approved_demo',
-      soc_approvals: [{ user_id: 'usr_soc', at: FROZEN }, { user_id: 'usr_soc2', at: FROZEN }],
-      artifacts: [],
-    },
+    buildDemoApprovedHighScaleRequest(store, ids),
   );
 
   store.socNotes = [
@@ -562,16 +673,22 @@ function enrichPortalDemoStore(store) {
     },
   ];
 
+  const demoRelease = buildDemoAgentUpdateRelease();
   store.agentUpdateReleases = [
     {
       id: 'aurel_demo_1',
       tenant_id: ids.tenantId,
-      version: '0.2.0-demo',
+      version: demoRelease.version,
       channel: 'stable',
-      status: 'published',
-      rollout_percentage: 25,
+      manifest: demoRelease.manifest,
+      signature: demoRelease.signature,
+      distribution: demoRelease.distribution,
+      rollout: { percentage: 25 },
+      rollback: null,
+      state: 'active',
       created_at: FROZEN,
       created_by: 'usr_admin',
+      rollback_requested_at: null,
     },
   ];
 
@@ -580,9 +697,12 @@ function enrichPortalDemoStore(store) {
       id: 'autk_demo_1',
       tenant_id: ids.tenantId,
       name: 'Demo signing key',
-      fingerprint_sha256: 'aabbccdd00112233445566778899aabbccdd00112233445566778899aabbccdd',
+      public_key_der_base64: demoRelease.publicKeyDerBase64,
+      fingerprint_sha256: demoRelease.fingerprint,
       status: 'active',
       created_at: FROZEN,
+      created_by: 'usr_admin',
+      revoked_at: null,
     },
   ];
 

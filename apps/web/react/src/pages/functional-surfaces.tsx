@@ -28,6 +28,10 @@ import { Tabs } from '../components/ui/tabs';
 import { AgentInstallMatrix } from '../components/agents/agent-install-matrix';
 import { FindingsListView } from '../components/findings/findings-list';
 import { RunsPageHeadActions, RunsSocGatePanel } from '../components/runs/runs-soc-gate';
+import { ValidationScanLauncher, type ScanLauncherMode } from '../components/runs/validation-scan-launcher';
+import { ValidationScansTable } from '../components/runs/validation-scans-table';
+import { canStartRun } from '../lib/run-permissions.mjs';
+import { SCAN_STATUSES, isScanActive, scanDisplayName, scanStatusLabel } from '../lib/validation-scan.mjs';
 import { ConfirmModal, formatMutationSuccessMessage, renderFriendlyEmptyState, useConfirmModal } from '../lib/crud-ui';
 import { apiErrorMessage } from '../lib/error-messages';
 import { buildEvidenceCustodyManifest } from '../lib/custody';
@@ -86,6 +90,8 @@ import { useTransitionKey } from '../lib/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
+import { RoleRestrictedCard } from '../components/ui/role-restricted';
+import { sessionHasPermission } from '../lib/dataset-access.mjs';
 
 const WAF_POSTURE_SURFACE_TABS = [
   ...WAF_POSTURE_TABS,
@@ -866,15 +872,22 @@ export function AgentsPage({
     })
   ];
   const auxiliaryError = [releaseLoadError, trustKeyLoadError].filter(Boolean).join(' ');
+  const canReadAgentUpdates = sessionHasPermission(session, 'agent_update:read');
 
   // Load agent update releases + update-signing trust keys for the rollout / trust-key
   // panels. Both GET /v1/agent-updates and GET /v1/agent-update-trust-keys return
   // `{ items: [...] }`. There are no sub-tabs on this surface, so load once on mount.
   useEffect(() => {
     let cancelled = false;
-    setAuxLoading(true);
     setReleaseLoadError('');
     setTrustKeyLoadError('');
+    if (!canReadAgentUpdates) {
+      setUpdateReleases([]);
+      setTrustKeys([]);
+      setAuxLoading(false);
+      return () => { cancelled = true; };
+    }
+    setAuxLoading(true);
     Promise.allSettled([
       requestJson(config, session, '/v1/agent-updates'),
       requestJson(config, session, '/v1/agent-update-trust-keys')
@@ -900,7 +913,7 @@ export function AgentsPage({
         if (!cancelled) setAuxLoading(false);
       });
     return () => { cancelled = true; };
-  }, [config, session]);
+  }, [config, session, canReadAgentUpdates]);
 
   const fleetColumns: TableColumn<DataItem>[] = [
     {
@@ -1912,6 +1925,7 @@ export function AgentsPage({
             </div>
           </section>
 
+          {canReadAgentUpdates ? (<>
           <SurfaceTableCard
             title="Release rollout"
             description="Tenant agent release rollouts. Agents pull signed updates over the outbound channel. Request rollback to move eligible agents to the previous signed version."
@@ -1980,6 +1994,9 @@ export function AgentsPage({
               </form>
             </CardContent>
           </Card>
+          </>) : (
+            <RoleRestrictedCard title="Agent release rollouts and update trust keys are not available for your role." />
+          )}
         </div>
       ) : null}
     </div>
@@ -2019,9 +2036,13 @@ export function ValidationSurfacePage({
   const [showSocRequestForm, setShowSocRequestForm] = useState(false);
   const [cancelRunId, setCancelRunId] = useState('');
   const [finalizeRunId, setFinalizeRunId] = useState('');
+  const [scanLauncher, setScanLauncher] = useState<{ mode: ScanLauncherMode; scan: DataItem | null } | null>(null);
+  const [scanStatusFilter, setScanStatusFilter] = useState('all');
   const evidenceChainCap = 12;
 
   const inFlightRuns = data.runs.filter((run) => isCancellableRunStatus(getString(run, ['status'], '')));
+  const activeScans = data.validationScans.filter((scan) => isScanActive(scan));
+  const canManageScans = canStartRun(session.role);
 
   const checkSafetyCounts = useMemo(() => countChecksBySafetyScope(data.checks), [data.checks]);
   const filteredChecks = useMemo(
@@ -2060,12 +2081,12 @@ export function ValidationSurfacePage({
   }, [data.evidence.length]);
 
   useEffect(() => {
-    if (route !== 'runs' || inFlightRuns.length === 0) return undefined;
+    if (route !== 'runs' || (inFlightRuns.length === 0 && activeScans.length === 0)) return undefined;
     const timer = window.setInterval(() => {
-      void onRefresh(['runs', 'state']);
+      void onRefresh(['runs', 'state', 'validationScans']);
     }, 8000);
     return () => window.clearInterval(timer);
-  }, [route, inFlightRuns.length, onRefresh]);
+  }, [route, inFlightRuns.length, activeScans.length, onRefresh]);
 
   async function cancelRun(id: string) {
     if (!id) return;
@@ -2328,7 +2349,17 @@ export function ValidationSurfacePage({
       {
         key: 'run',
         label: 'Run',
-        render: (item) => <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
+        render: (item) => {
+          const scanId = getString(item, ['scan_id'], '');
+          return (
+            <span className="catalog-cell-stack">
+              <code className="traffic-path-label" title={getString(item, ['id'])}>{getString(item, ['id'])}</code>
+              {scanId ? (
+                <a className="scan-link small" href={buildDetailHref('scan-detail', scanId)} aria-label={`Open parent scan ${scanId}`} onClick={(event) => event.stopPropagation()}>Scan</a>
+              ) : null}
+            </span>
+          );
+        }
       },
       {
         key: 'group',
@@ -2447,6 +2478,17 @@ export function ValidationSurfacePage({
       { value: 'all', label: 'All statuses' },
       ...[...new Set(data.runs.map((run) => getString(run, ['status'], '')).filter(Boolean))].sort().map((status) => ({ value: status, label: formatRunStatusLabel(status) }))
     ];
+    const scanStatusOptions = [
+      { value: 'all', label: 'All scan statuses' },
+      ...SCAN_STATUSES.map((status) => ({ value: status, label: scanStatusLabel(status) }))
+    ];
+    const visibleScans = scanStatusFilter === 'all'
+      ? data.validationScans
+      : data.validationScans.filter((scan) => getString(scan, ['status'], '') === scanStatusFilter);
+    const liveCounts = [
+      inFlightRuns.length > 0 ? `${inFlightRuns.length} active ${pluralize(inFlightRuns.length, 'run')}` : '',
+      activeScans.length > 0 ? `${activeScans.length} active ${pluralize(activeScans.length, 'scan')}` : ''
+    ].filter(Boolean).join(', ');
     return (
       <div className="content validation-runs-page">
         <PageHeader
@@ -2459,6 +2501,7 @@ export function ValidationSurfacePage({
               onRefresh={() => void onRefresh()}
               onRequestSoc={() => setShowSocRequestForm(true)}
               onStartSafeRun={() => { window.location.hash = '#checks'; }}
+              onStartScan={canManageScans ? () => setScanLauncher({ mode: 'create', scan: null }) : undefined}
               refreshBusy={busy === 'refresh-runs'}
               safeRunBusy={false}
               safeRunDisabled={busy !== '' || !canOpenVectorLibrary}
@@ -2480,9 +2523,9 @@ export function ValidationSurfacePage({
           requestFormOpen={showSocRequestForm}
           onRequestFormOpenChange={setShowSocRequestForm}
         />
-        {inFlightRuns.length > 0 ? (
+        {inFlightRuns.length > 0 || activeScans.length > 0 ? (
           <div className="form-banner info" role="status" aria-live="polite">
-            Runs in progress — live status auto-refreshes every 8s ({inFlightRuns.length} active). Verdicts appear when the observation window closes.
+            Runs in progress — live status auto-refreshes every 8s ({liveCounts}). Verdicts appear when the observation window closes.
           </div>
         ) : null}
         {!canOpenVectorLibrary && startDisabledReason ? (
@@ -2495,6 +2538,33 @@ export function ValidationSurfacePage({
           </div>
         )}
         <MutationFeedbackBanner message={message} error={error} neutral />
+        <Card className="validation-scans-card">
+          <CardHeader>
+            <div><CardTitle>Validation scans</CardTitle><CardDescription>Multi-check scans run one bounded child run at a time. Scheduled scans dispatch at their planned time and stay editable until then.</CardDescription></div>
+            <Badge tone="muted">{data.validationScans.length} {pluralize(data.validationScans.length, 'scan')}</Badge>
+          </CardHeader>
+          <CardContent className="stack-tight">
+            <div className="catalog-filter-grid" role="group" aria-label="Validation scan filters">
+              <Select label="Scan status" value={scanStatusFilter} options={scanStatusOptions} onChange={setScanStatusFilter} />
+            </div>
+            <ValidationScansTable
+              scans={visibleScans}
+              meta={data.validationScansMeta}
+              loadError={data.loadErrors.validationScans}
+              onRetry={() => void onRefresh(['validationScans'])}
+              canManage={canManageScans}
+              config={config}
+              session={session}
+              onEdit={(scan) => setScanLauncher({ mode: 'edit', scan })}
+              onReschedule={(scan) => setScanLauncher({ mode: 'reschedule', scan })}
+              onCancelled={(scan) => {
+                setError('');
+                setMessage(`Scan ${scanDisplayName(scan)} is ${scanStatusLabel(getString(scan, ['status'], '')).toLowerCase()}.`);
+                void onRefresh(['validationScans', 'runs']);
+              }}
+            />
+          </CardContent>
+        </Card>
         <Card>
           <CardHeader>
             <div><CardTitle>Run history</CardTitle><CardDescription>Open a row for probe results, optional agent observations, correlation, and custody chain.</CardDescription></div>
@@ -2541,6 +2611,24 @@ export function ValidationSurfacePage({
           busy={busy === `finalize-${finalizeRunId}`}
           onCancel={() => setFinalizeRunId('')}
           onConfirm={() => void confirmFinalizeRun()}
+        />
+        <ValidationScanLauncher
+          open={Boolean(scanLauncher)}
+          mode={scanLauncher?.mode ?? 'create'}
+          scan={scanLauncher?.scan ?? null}
+          config={config}
+          session={session}
+          checks={data.checks}
+          targetGroups={data.targetGroups}
+          onClose={() => setScanLauncher(null)}
+          onScheduled={(scan, mode) => {
+            setScanLauncher(null);
+            setError('');
+            setMessage(mode === 'edit'
+              ? `Scan ${scanDisplayName(scan)} updated. Scheduled for ${formatDate(scan.scheduled_for)}.`
+              : `Scan ${scanDisplayName(scan)} scheduled for ${formatDate(scan.scheduled_for)}.`);
+            void onRefresh(['validationScans']);
+          }}
         />
       </div>
     );

@@ -1,6 +1,8 @@
 import { CORE_PORTAL_DATASETS, PORTAL_ROUTE_DATASETS } from './types';
 import type { DataItem, PortalConfig, PortalData, PortalDataset, RouteId, Session, StatePayload } from './types';
 import { asArray, DEPLOYMENT_MODE_GAP_MESSAGE } from './utils';
+import { canReadDataset } from './dataset-access.mjs';
+import { configurationErrorMessage } from './error-messages';
 // Plain ESM so node:test can exercise the real shipped logic rather than a copy of it. These
 // used to be defined here and re-implemented inside the test file, so the tests could not
 // observe a regression in them.
@@ -281,6 +283,8 @@ function friendlyHttpError(path: string, status: number, payload: unknown): stri
   if (status === 429) {
     return 'Too many requests right now. Wait a moment and try again.';
   }
+  const configurationCopy = status >= 500 ? configurationErrorMessage(payload) : '';
+  if (configurationCopy) return configurationCopy;
   if (status === 503) {
     if (isDeploymentModeGap(status, payload)) {
       return DEPLOYMENT_MODE_GAP_MESSAGE;
@@ -469,6 +473,7 @@ const ALL_PORTAL_DATASETS: readonly PortalDataset[] = [
   'checks',
   'testPolicies',
   'runs',
+  'validationScans',
   'findings',
   'evidence',
   'highScale',
@@ -560,6 +565,10 @@ function applyDatasetValue(data: PortalData, dataset: PortalDataset, value: unkn
     case 'targets':
       data.targets = asArray(value);
       data.targetsMeta = asObject((value as { meta?: unknown } | null)?.meta);
+      break;
+    case 'validationScans':
+      data.validationScans = asArray(value);
+      data.validationScansMeta = asObject((value as { meta?: unknown } | null)?.meta);
       break;
     case 'reports':
       data.reports = asArray(value);
@@ -682,6 +691,7 @@ export async function fetchPortalData(
     checks: () => opt('/v1/checks', customerHeaders, { items: [] }),
     testPolicies: () => opt('/v1/test-policies', customerHeaders, { items: [] }),
     runs: () => opt('/v1/test-runs', customerHeaders, { items: [] }),
+    validationScans: () => opt('/v1/validation-scans?limit=50', customerHeaders, { items: [] }),
     findings: () => opt('/v1/findings', socHeaders, { items: [] }),
     evidence: () => opt('/v1/evidence', customerHeaders, { items: [] }),
     highScale: () => opt('/v1/high-scale-requests', socHeaders, { items: [] }),
@@ -721,6 +731,7 @@ export async function fetchPortalData(
   const loadEntries: Partial<Record<PortalDataset, Promise<LoadResult<unknown>>>> = {};
   requested.forEach((dataset) => {
     if (dataset === 'deploymentFeatures') return;
+    if (!canReadDataset(session, dataset)) return;
     if (options.force !== true && initialCache.loadedDatasets.has(dataset)) return;
     loadEntries[dataset] = loaders[dataset]();
   });
@@ -788,6 +799,8 @@ export const EMPTY_PORTAL_DATA: PortalData = {
   checks: [],
   testPolicies: [],
   runs: [],
+  validationScans: [],
+  validationScansMeta: null,
   findings: [],
   evidence: [],
   highScale: [],

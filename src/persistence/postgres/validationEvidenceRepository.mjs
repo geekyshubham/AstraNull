@@ -1,12 +1,12 @@
 import { runWithTenantClient, withTenantContext } from './tenantContext.mjs';
 
-const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, check_id, created_by, initiated_by,
-  risk_class, safety_class, vector_family, status, probe_external_result, awaiting_external_probe,
+const TEST_RUN_COLUMNS = `id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, scan_id, scan_step_id,
+  check_id, created_by, initiated_by, risk_class, safety_class, vector_family, status, probe_external_result, awaiting_external_probe,
   remediation_template, safety_constraints, correlation_json, collection_deadline_at, started_at,
   completed_at, summary_json, created_at`;
 
 const EVENT_COLUMNS = `id, tenant_id, event_id, test_run_id, target_id, check_id, agent_id, source,
-  signal_type, producer_kind, nonce_hash, timestamp, metadata_json`;
+  signal_type, producer_kind, nonce_hash, timestamp, metadata_json, ingested_at`;
 
 const EVIDENCE_COLUMNS = `id, tenant_id, test_run_id, label, metadata_json, related_event_id, created_at`;
 
@@ -125,6 +125,8 @@ function mapTestRunRow(row) {
     target_id: row.target_id ?? undefined,
     policy_id: row.policy_id ?? null,
     policy_dispatch_id: row.policy_dispatch_id ?? null,
+    scan_id: row.scan_id ?? null,
+    scan_step_id: row.scan_step_id ?? null,
     check_id: row.check_id,
     created_by: row.created_by ?? undefined,
     initiated_by: row.initiated_by ?? undefined,
@@ -162,6 +164,7 @@ function mapEventRow(row) {
     nonce_hash: row.nonce_hash ?? undefined,
     timestamp: toIso(row.timestamp),
     metadata: asObject(row.metadata_json),
+    ingested_at: toIso(row.ingested_at) ?? undefined,
   };
 }
 
@@ -321,6 +324,33 @@ export function createValidationEvidenceRepository(pool) {
       });
     },
 
+    async getTestRunByScanStepId(ctx, scanStepId, options = {}) {
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${TEST_RUN_COLUMNS}
+           FROM test_runs
+           WHERE tenant_id = $1 AND scan_step_id = $2
+           LIMIT 1`,
+          [ctx.tenantId, scanStepId],
+        );
+        return mapTestRunRow(rows[0] ?? null);
+      });
+    },
+
+    async listTestRunsByIds(ctx, runIds, options = {}) {
+      const ids = normalizeRunIdBatch(runIds, 'listTestRunsByIds.runIds');
+      if (ids.length === 0) return [];
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${TEST_RUN_COLUMNS}
+           FROM test_runs
+           WHERE tenant_id = $1 AND id = ANY($2::text[])`,
+          [ctx.tenantId, ids],
+        );
+        return rows.map(mapTestRunRow);
+      });
+    },
+
     async createTestRun(ctx, record) {
       const tenantId = ctx.tenantId;
       const safetyConstraints = JSON.stringify(asObject(record.safety_constraints));
@@ -332,14 +362,15 @@ export function createValidationEvidenceRepository(pool) {
       return withTenantContext(pool, tenantId, async (client) => {
         const { rows } = await client.query(
           `INSERT INTO test_runs (
-             id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, check_id, created_by, initiated_by,
+             id, tenant_id, target_group_id, target_id, policy_id, policy_dispatch_id, scan_id, scan_step_id,
+             check_id, created_by, initiated_by,
              risk_class, safety_class, vector_family, status, probe_external_result,
              awaiting_external_probe, remediation_template, safety_constraints, correlation_json,
              collection_deadline_at, started_at, completed_at, summary_json, created_at
            )
            VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb,
-             $19::timestamptz, $20::timestamptz, $21::timestamptz, $22::jsonb, $23::timestamptz
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb,
+             $21::timestamptz, $22::timestamptz, $23::timestamptz, $24::jsonb, $25::timestamptz
            )
            RETURNING ${TEST_RUN_COLUMNS}`,
           [
@@ -349,6 +380,8 @@ export function createValidationEvidenceRepository(pool) {
             record.target_id ?? null,
             record.policy_id ?? null,
             record.policy_dispatch_id ?? null,
+            record.scan_id ?? null,
+            record.scan_step_id ?? null,
             record.check_id,
             record.created_by ?? null,
             record.initiated_by ?? null,
@@ -476,9 +509,21 @@ export function createValidationEvidenceRepository(pool) {
           return { run: current, cancelled: false, cancelled_jobs: [] };
         }
 
-        const summary = patch.summary === undefined
+        const baseSummary = patch.summary === undefined
           ? current.summary
           : asObject(patch.summary);
+        const merged = patch.summary_merge === undefined
+          ? baseSummary
+          : { ...asObject(baseSummary), ...asObject(patch.summary_merge) };
+        const summary = patch.cancellation === undefined
+          ? merged
+          : {
+            ...asObject(merged),
+            cancellation: {
+              ...asObject(patch.cancellation),
+              scan_id: patch.cancellation?.scan_id ?? current.scan_id ?? null,
+            },
+          };
         const updated = await client.query(
           `UPDATE test_runs
            SET status = 'cancelled', completed_at = $3::timestamptz, summary_json = $4::jsonb
@@ -495,10 +540,20 @@ export function createValidationEvidenceRepository(pool) {
            RETURNING id, test_run_id`,
           [tenantId, id, completedAt],
         );
+        const cancelledAgentJobs = await client.query(
+          `UPDATE agent_jobs
+           SET status = 'cancelled'
+           WHERE tenant_id = $1 AND test_run_id = $2
+             AND status IN ('pending', 'acked')
+           RETURNING id, test_run_id, agent_id`,
+          [tenantId, id],
+        );
         return {
           run: mapTestRunRow(updated.rows[0]),
           cancelled: true,
           cancelled_jobs: cancelledJobs.rows,
+          cancelled_agent_jobs: cancelledAgentJobs.rows,
+          cancelled_agent_job_ids: cancelledAgentJobs.rows.map((row) => row.id),
         };
       });
     },

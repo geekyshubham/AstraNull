@@ -19,6 +19,7 @@ export type RouteId =
   | 'policy-detail'
   | 'runs'
   | 'run-detail'
+  | 'scan-detail'
   | 'findings'
   | 'finding-detail'
   | 'evidence-detail'
@@ -47,6 +48,7 @@ export type PortalDataset =
   | 'checks'
   | 'testPolicies'
   | 'runs'
+  | 'validationScans'
   | 'findings'
   | 'evidence'
   | 'highScale'
@@ -95,16 +97,17 @@ export const PORTAL_ROUTE_DATASETS = {
   'environment-detail': ['environments', 'targetGroups', 'agents', 'checks', 'runs', 'findings', 'evidence'],
   'target-groups': ['targetGroups', 'agents', 'runs', 'findings', 'evidence'],
   targets: ['targets', 'targetGroups'],
-  'target-group-detail': ['targetGroups', 'agents', 'checks', 'testPolicies', 'connectors'],
+  'target-group-detail': ['targetGroups', 'agents', 'checks', 'testPolicies', 'connectors', 'validationScans'],
   'target-detail': [],
-  agents: ['targetGroups', 'agents', 'releaseEvidence'],
+  agents: ['targetGroups', 'agents'],
   'agent-detail': ['agents', 'audit', 'checks', 'runs', 'evidence'],
   checks: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
   'check-detail': ['checks', 'runs'],
   'test-policies': ['targetGroups', 'checks', 'testPolicies'],
   'policy-detail': ['checks', 'testPolicies'],
-  runs: ['targetGroups', 'checks', 'runs', 'findings', 'evidence', 'highScale'],
+  runs: ['targetGroups', 'checks', 'runs', 'findings', 'evidence', 'highScale', 'validationScans'],
   'run-detail': ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
+  'scan-detail': ['targetGroups', 'checks'],
   findings: ['targetGroups', 'checks', 'runs', 'findings', 'evidence'],
   'finding-detail': ['findings', 'wafActionItems'],
   'evidence-detail': ['evidence', 'findings'],
@@ -215,6 +218,8 @@ export type PortalData = {
   checks: DataItem[];
   testPolicies: DataItem[];
   runs: DataItem[];
+  validationScans: DataItem[];
+  validationScansMeta: DataItem | null;
   findings: DataItem[];
   evidence: DataItem[];
   highScale: DataItem[];

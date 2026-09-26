@@ -43,6 +43,10 @@ export declare const STAFF_SOC_ROLES: Set<string>;
 
 export declare function isStaffSocRole(session: Session): boolean;
 
+export declare function staffHomeRoute(session: Session): 'internal-soc' | 'admin';
+
+export declare function staffHomePath(session: Session): '/internal/soc' | '/internal/admin';
+
 export declare function buildApiHeaders(
   config: PortalConfig,
   session: Session,

@@ -1862,7 +1862,7 @@ export function listConnectorsEnvelope(ctx) {
   };
 }
 
-export function createConnector(ctx, body = {}) {
+export function createConnector(ctx, body = {}, options = {}) {
   ensureStoreShape();
   try {
     assertSafeConnectorPayload(body);
@@ -1924,6 +1924,9 @@ export function createConnector(ctx, body = {}) {
       last_success_revision: 0,
       poll_revision: 0,
     };
+    if (options.validateOnly === true) {
+      return { valid: true, connector: { provider, name, status, secret_id } };
+    }
     getStore().wafConnectors.push(record);
     audit({
       tenant_id: ctx.tenantId,

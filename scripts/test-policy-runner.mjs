@@ -6,6 +6,12 @@ import { resolveProbeMode } from '../src/config.mjs';
 import { redactDatabaseUrlInMessage } from '../src/lib/pgErrorRedact.mjs';
 import { validateHmacSecretEntropy } from '../src/lib/evidenceSigning.mjs';
 import { createPostgresRuntime } from '../src/persistence/postgres/runtime.mjs';
+import { runCollectionWindowSweeper } from './collection-window-sweeper.mjs';
+import {
+  parseValidationScanRunnerArgs,
+  resolveValidationScanRunnerConfig,
+  runValidationScanRunner,
+} from './validation-scan-runner.mjs';
 
 
 export const TEST_POLICY_SCHEDULER_MIN_INTERVAL_SECONDS = 5;
@@ -38,6 +44,8 @@ const USAGE = `test-policy-runner: dispatch due per-group validation rules (Post
 
 This operator CLI is not a daemon. Schedule it externally (cron, Kubernetes CronJob, CI job).
 It requires signed-worker mode and delegates only through the validated test-run service.
+Each apply tick also runs the collection-window sweeper and validation-scan runner for the
+same tenant scope, so hosted single-VM deployments need no extra scheduler services.
 
 Environment:
   ASTRANULL_DATABASE_URL (required)
@@ -342,6 +350,45 @@ export async function runTestPolicyRunner(env, config, deps = {}) {
   return { summary, exitCode: failed ? 1 : 0 };
 }
 
+/**
+ * Hosted single-VM deployments have no CronJob fleet, so the policy scheduler tick also
+ * drives the two other Postgres background loops for the same explicit tenant scope:
+ * the collection-window sweeper (finalizes runs whose window expired with no client call)
+ * and the validation-scan runner (starts scheduled scans and advances multi-step scans).
+ * Each is isolated: one failing never skips the other; the tick exits nonzero on any failure.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ tenantIds: string[], dryRun: boolean }} config
+ * @param {{ sweep?: typeof runCollectionWindowSweeper, scans?: typeof runValidationScanRunner }} [deps]
+ */
+export async function runScheduledCompanionJobs(env, config, deps = {}) {
+  if (config.dryRun) return { sweep: 'skipped', scans: 'skipped', exitCode: 0 };
+  const result = { sweep: 'ok', scans: 'ok', exitCode: 0 };
+  try {
+    const summary = await (deps.sweep ?? runCollectionWindowSweeper)(env, {
+      tenantIds: config.tenantIds, limit: 100, intervalMs: null, out: null,
+    });
+    if (summary?.totals?.errors > 0) result.sweep = 'errors';
+  } catch (error) {
+    result.sweep = 'failed';
+    console.error(`test-policy-runner: collection-window sweep failed: ${redactDatabaseUrlInMessage(error, env)}`);
+  }
+  try {
+    const scanConfig = resolveValidationScanRunnerConfig(
+      { ...env, ASTRANULL_VALIDATION_SCAN_TENANT_IDS: config.tenantIds.join(',') },
+      parseValidationScanRunnerArgs(['node', 'validation-scan-runner']),
+    );
+    if (!scanConfig.ok) throw new Error(scanConfig.message);
+    const { exitCode } = await (deps.scans ?? runValidationScanRunner)(env, scanConfig);
+    if (exitCode !== 0) result.scans = 'errors';
+  } catch (error) {
+    result.scans = 'failed';
+    console.error(`test-policy-runner: validation-scan tick failed: ${redactDatabaseUrlInMessage(error, env)}`);
+  }
+  if (result.sweep !== 'ok' || result.scans !== 'ok') result.exitCode = 1;
+  return result;
+}
+
 async function main() {
   let parsed;
   try {
@@ -368,7 +415,10 @@ async function main() {
     console.log(`  tenant_count: ${summary.tenant_count}`);
     console.log(`  due_count: ${summary.due_count}`);
     if (config.out) console.log(`  out: ${config.out}`);
-    process.exitCode = exitCode;
+    const companions = await runScheduledCompanionJobs(process.env, config);
+    console.log(`  collection_window_sweep: ${companions.sweep}`);
+    console.log(`  validation_scans: ${companions.scans}`);
+    process.exitCode = exitCode || companions.exitCode;
   } catch (error) {
     console.error(`test-policy-runner: failed: ${redactDatabaseUrlInMessage(error, process.env)}`);
     process.exitCode = 1;

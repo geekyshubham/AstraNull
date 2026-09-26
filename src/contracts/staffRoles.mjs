@@ -20,6 +20,7 @@ export const STAFF_PERMISSIONS = Object.freeze({
   'staff:approval:read': ['internal_admin', 'billing_ops', 'support_engineer', 'security_admin', 'soc_analyst', 'soc_lead'],
   'staff:approval:decide': ['internal_admin', 'billing_ops', 'security_admin', 'soc_analyst', 'soc_lead'],
   'staff:support:write': ['internal_admin', 'support_engineer'],
+  'staff:soc:read': ['soc_analyst', 'soc_lead'],
   'staff:audit:read': ['internal_admin', 'security_admin'],
 });
 

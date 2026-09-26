@@ -902,6 +902,49 @@ export function createInternalManagementRepository(pool) {
       return rows.map(mapInternalAudit);
     },
 
+    async listSocHighScaleRequests(filters = {}) {
+      const params = [];
+      const where = [];
+      if (filters.state) {
+        params.push(filters.state);
+        where.push(`h.state = $${params.length}`);
+      }
+      if (filters.tenant_id) {
+        params.push(filters.tenant_id);
+        where.push(`h.tenant_id = $${params.length}`);
+      }
+      params.push(Math.min(Math.max(Number(filters.limit) || 200, 1), 500));
+      return withPlatformScope(pool, async (client) => {
+        // tenant-query-audit: allow — staff SOC cross-tenant queue summary; SELECT-only platform_scope_read_* policies (0038, 0056) govern it.
+        const requests = await client.query(
+          `SELECT h.id, h.tenant_id, t.name AS tenant_name, h.target_group_id, h.state,
+                  h.scheduled_window, h.created_at, h.updated_at
+           FROM high_scale_requests h
+           LEFT JOIN tenants t ON t.id = h.tenant_id
+           ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY h.created_at DESC
+           LIMIT $${params.length}`,
+          params,
+        );
+        // tenant-query-audit: allow — staff SOC tenant picker for kill switch; same SELECT-only platform scope.
+        const tenants = await client.query(`SELECT t.id, t.name FROM tenants t ORDER BY t.name, t.id LIMIT 1000`);
+        return {
+          items: requests.rows.map((row) => ({
+            id: row.id,
+            tenant_id: row.tenant_id,
+            tenant_name: row.tenant_name ?? null,
+            target_group_id: row.target_group_id ?? null,
+            kind: 'high_scale',
+            state: row.state,
+            scheduled_window: row.scheduled_window ?? null,
+            created_at: toIso(row.created_at),
+            updated_at: toIso(row.updated_at) ?? null,
+          })),
+          tenants: tenants.rows.map((row) => ({ tenant_id: row.id, name: row.name })),
+        };
+      });
+    },
+
     async listBreakGlassActivations() {
       // Platform-level table (no tenant_id, no RLS) — see 0041 migration header.
       const rows = await queryPlatform(

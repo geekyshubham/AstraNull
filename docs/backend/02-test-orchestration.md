@@ -73,7 +73,24 @@ Each started run stores merged `safety_constraints` (check caps plus target grou
 
 ## Cancel semantics
 
-`POST /v1/test-runs/:id/cancel` succeeds only for `planned`, `running`, or `collecting` runs. Terminal runs (`verdicted`, `cancelled`, etc.) return HTTP `409` with `{ error: "not_cancellable" }`.
+`POST /v1/test-runs/:id/cancel` succeeds only for `planned`, `running`, or `collecting` runs. Terminal runs (`verdicted`, `cancelled`, etc.) return HTTP `409` with `{ error: "not_cancellable" }`. The optional body `{ reason }` is recorded on the run as `summary.cancellation` and in the `test_run.cancelled` audit entry together with `cancelled_by`, `cancelled_by_role`, `source`, and the revoked `cancelled_probe_job_ids` and `cancelled_agent_job_ids`. Pending or leased probe jobs and pending or acked agent jobs for the run are flipped to `cancelled`, so workers and agents never lease them afterwards.
+
+## Validation scans (multi-check orchestration)
+
+A validation scan is the customer-facing on-demand run. It is a parent record over ordinary test runs, not a new execution path (see [ADR-0006](../adr/0006-validation-scans-as-sequential-test-run-batches.md)).
+
+| Concept | Behaviour |
+|---|---|
+| Plan | `check_ids` (1 to 50 customer-runnable safe checks) times either one exact `target_id` or every active target in the group. Pairs whose `supported_targets` exclude the target kind are recorded in `excluded` and never run. Selecting a SOC-gated, monitor-only, or unknown check fails the whole request (`403 soc_gated_check`, `400 unknown_check`). |
+| Execution | Steps run one at a time because only one run may be active per target group. Each step calls `startTestRun` with a server-side `scanDispatch` context (scan id, step id, lease token). Child runs carry `scan_id` and `scan_step_id`. |
+| Denial handling | `safe_min_interval_active` defers the step until the cooldown elapses. `safe_window_closed`, `safe_rate_cap_exceeded`, `kill_switch_active`, `tenant_suspended`, and a foreign `concurrent_run_blocked` deny the remaining steps and finish the scan. Per-step errors such as `prerequisites_not_met` or `ownership_not_verified` deny only that step. |
+| Statuses | Scan: `scheduled`, `pending`, `running`, `completed`, `denied`, `cancelled`. Step: `pending`, `deferred`, `starting`, `running`, `collecting`, `verdicted`, `denied`, `skipped`, `cancelled`. |
+| Progress | `GET /v1/validation-scans/:id` projects each step with the bounded request (`kind`, `method`, `path`, `protocol`, `max_requests`, `timeout_ms` from the probe profile and signed job constraints), the response (`external_result`, `status_code`), `requests_sent` from the worker safety attestation (`0` with `requests_simulated: true` in simulation mode), and the verdict record. |
+| Activity | `GET /v1/validation-scans/:id/activity` merges `validation_scan.*` audit rows, child run audit rows, and child run events into one chronological metadata-only feed with allowlisted metadata keys. |
+| Stop | `POST /v1/validation-scans/:id/cancel` marks the scan cancelled first, cancels the active child run through `cancelTestRun`, skips pending and deferred steps, and audits `validation_scan.cancelled`. A racing executor start is refused by `scan_dispatch_invalid`. |
+| Scheduling | `scheduled_for` (at least one minute ahead) with optional `recurrence` (`daily`, `weekly`, `monthly` plus IANA timezone). Due scans are dispatched after re-checking kill switch, tenant suspension, group state, safe test window, and group concurrency; a denial sets status `denied`, audits `validation_scan.schedule_denied`, and never force-runs. Recurring scans create the next occurrence idempotently (`occurrence_key`). Only `scheduled` scans can be edited. |
+| Advancement | No daemon in the API process. Run-terminal hooks (`src/services/runTerminalHooks.mjs`) advance the parent when a child verdicts or cancels; the read path advances active scans and dispatches due scans in dev-json mode; Postgres deployments run `npm run validation-scan:runner -- --tenant-id <tenant>` from a CronJob. |
+| Audit | `validation_scan.created`, `scheduled`, `updated`, `dispatched`, `schedule_denied`, `step_started`, `step_deferred`, `step_denied`, `step_skipped`, `step_completed`, `cancelled`, `series_stopped`, `completed`, `advance_failed`, `create_denied`, `cancel_denied`. |
 
 ## Probe execution modes
 

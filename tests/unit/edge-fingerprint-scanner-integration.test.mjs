@@ -68,17 +68,17 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
     assert.equal(outcome.edge_signature.waf_present, true);
     assert.deepEqual(
       outcome.edge_signature.address_matches,
-      [{ family: 'cdn', provider: 'cloudfront' }],
+      [{ family: 'cdn', provider: 'cloudfront' }, { family: 'cloud', provider: 'aws' }],
     );
+    assert.deepEqual(outcome.edge_signature.cloud_providers, ['aws']);
     assert.equal(outcome.edge_signature.cdn_detected, true);
     assert.equal(outcome.waf_detected, true);
     assert.equal(outcome.cdn_detected, true);
-    assert.equal(outcome.edge_signature_corpus_version, '2');
+    assert.equal(outcome.edge_signature_corpus_version, '3');
   });
 
   it('detects a CDN from cdncheck ranges and CNAME suffixes with no vendor headers at all', async () => {
-    // The cdncheck half of the corpus is reachable only through explicit direct-helper opt-in.
-    // Signed outside-in jobs deliberately keep these raw resolver collectors disabled.
+    // Direct-helper opt-in collector; signed jobs pass vetted addresses and a counted CNAME chain.
     const outcome = await runOutsideInWafScan({
       url: 'https://plain.example.test/',
       hostname: 'plain.example.test',
@@ -105,7 +105,7 @@ describe('outside-in WAF scanner — edge signature corpus integration', () => {
     assert.deepEqual(outcome.edge_signature.cdn_providers, ['cloudfront']);
     assert.deepEqual(
       outcome.edge_signature.cname_matches,
-      [{ provider: 'amazon', type: 'waf', suffix: 'cloudfront.net' }],
+      [{ provider: 'amazon', type: 'waf', suffix: 'cloudfront.net', host: 'd123.cloudfront.net' }],
       'CNAME item type stays the pinned cdncheck value, not a provider-name guess',
     );
     assert.equal(outcome.edge_signature.vendor_matches.length, 0, 'no wafw00f header evidence');

@@ -1,4 +1,5 @@
 import { loadRuntimeConfig } from './config.mjs';
+import { ensureDeveloperSecretEncryptionKey } from './lib/devSecretEncryptionKey.mjs';
 import { beginDraining, createServer } from './server.mjs';
 import { createPostgresRuntime } from './persistence/postgres/runtime.mjs';
 import { redactDatabaseUrlInMessage } from './lib/pgErrorRedact.mjs';
@@ -68,6 +69,13 @@ export async function startControlPlane(options = {}) {
   }
 }
 
+export function warnIfConnectorVaultUnavailable(env = process.env, warn = (message) => console.warn(message)) {
+  const connectorsEnabled = ['1', 'true'].includes(String(env.ASTRANULL_CONNECTORS_ENABLED ?? '').trim().toLowerCase());
+  if (!connectorsEnabled || String(env.ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY ?? '').trim()) return false;
+  warn('AstraNull: connectors are enabled but ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY is not set; provider connector credentials cannot be stored until it is configured.');
+  return true;
+}
+
 /**
  * CLI entry: load config, bootstrap persistence + HTTP server, register signal handlers.
  *
@@ -81,6 +89,8 @@ export async function startControlPlane(options = {}) {
 export async function runControlPlaneProcess(options = {}) {
   const env = options.env ?? process.env;
   const port = Number(options.port ?? env.PORT ?? 3000);
+  ensureDeveloperSecretEncryptionKey(env);
+  warnIfConnectorVaultUnavailable(env);
   const app = await startControlPlane({
     env,
     createPostgresRuntime: options.createPostgresRuntime,

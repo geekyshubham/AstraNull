@@ -34,6 +34,7 @@ export function freshStore() {
       },
     ],
     testPolicies: [],
+    validationScans: [],
     bootstrapTokens: [],
     serviceAccounts: [],
     agents: [],

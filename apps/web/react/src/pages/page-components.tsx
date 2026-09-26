@@ -54,6 +54,8 @@ import { AnimatedNumber } from '../components/ui/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
+import { canReadDataset, sessionHasPermission, staffSessionHasPermission } from '../lib/dataset-access.mjs';
+import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
 import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
 import { isFindingOpen } from '../lib/findings-helpers';
@@ -2325,8 +2327,12 @@ export function ReportsPage({
         actions={<Button type="submit" form="report-generation-form" size="sm" loading={busy === 'create-report'} disabled={busy.startsWith('export-')}>Generate &amp; export</Button>}
       />
       <PageContextSummary>
-        <span className="tabular-nums">{data.loadErrors.reports ? '—' : formatNumber(reports.length)}</span> reports ·{' '}
-        <span className="tabular-nums">{data.loadErrors.audit ? '—' : formatNumber(reportExports)}</span> custody exports recorded
+        <span className="tabular-nums">{data.loadErrors.reports ? '—' : formatNumber(reports.length)}</span> reports
+        {canReadDataset(session, 'audit') ? (
+          <>
+            {' · '}<span className="tabular-nums">{data.loadErrors.audit ? '—' : formatNumber(reportExports)}</span> custody exports recorded
+          </>
+        ) : null}
       </PageContextSummary>
       {(message || error) && <div className={error ? 'form-banner error' : 'form-banner'} role={error ? 'alert' : 'status'}>{error || message}</div>}
       {preview ? (
@@ -2467,6 +2473,13 @@ export function SettingsPage({
   const role = session.role ?? 'admin';
   const canReadAudit = canAccessRoute(role, 'audit', routeAccessContext);
   const canReadNotifications = canAccessRoute(role, 'notifications', routeAccessContext);
+  const canReadSecrets = canReadDataset(session, 'secrets');
+  const canReadBootstrapTokens = canReadDataset(session, 'bootstrapTokens');
+  const canReadServiceAccounts = canReadDataset(session, 'serviceAccounts');
+  const canCreateBootstrapToken = sessionHasPermission(session, 'bootstrap_token:create');
+  const canCreateServiceAccount = sessionHasPermission(session, 'service_account:create');
+  const canWriteSecrets = sessionHasPermission(session, 'secret:write');
+  const canRotateSecrets = sessionHasPermission(session, 'secret:rotate');
   const settingsTabOptions = SETTINGS_TAB_OPTIONS;
   const tokenColumns: TableColumn<DataItem>[] = [
     { key: 'name', label: 'Token', render: (item) => getString(item, ['name', 'id']) },
@@ -2717,7 +2730,9 @@ export function SettingsPage({
       />
       <PageContextSummary>
         {getString(tenant ?? {}, ['name'], 'Organization')} ·{' '}
-        <span className="tabular-nums">{data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)}</span> vault secrets ·{' '}
+        {canReadSecrets ? (
+          <><span className="tabular-nums">{data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)}</span> vault secrets ·{' '}</>
+        ) : null}
         <span className="tabular-nums">{recordedMetadataRetentionDays === null ? 'not recorded' : `${recordedMetadataRetentionDays}d`}</span> metadata retention
       </PageContextSummary>
       <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections" />
@@ -2848,7 +2863,9 @@ export function SettingsPage({
 
       {tab === 'access' && (
         <>
+          {canCreateBootstrapToken || canCreateServiceAccount ? (
           <div className="split">
+            {canCreateBootstrapToken ? (
             <Card>
               <CardHeader>
                 <CardTitle>Create bootstrap token</CardTitle>
@@ -2888,6 +2905,8 @@ export function SettingsPage({
                 </form>
               </CardContent>
             </Card>
+            ) : null}
+            {canCreateServiceAccount ? (
             <Card>
               <CardHeader>
                 <CardTitle>Create service account</CardTitle>
@@ -2926,7 +2945,10 @@ export function SettingsPage({
                 </form>
               </CardContent>
             </Card>
+            ) : null}
           </div>
+          ) : null}
+          {canReadBootstrapTokens ? (
           <Card>
             <PanelCardHeader
               title="Bootstrap tokens"
@@ -2938,9 +2960,13 @@ export function SettingsPage({
                 columns={tokenColumns}
                 items={data.bootstrapTokens}
                 empty={<EmptyState icon={KeyRound} title="No bootstrap tokens." body="Create a short-lived token before installing an outbound-only agent." />}
+                loadError={data.loadErrors.bootstrapTokens}
+                onRetry={onRefresh ? () => void onRefresh() : undefined}
               />
             </CardContent>
           </Card>
+          ) : <RoleRestrictedCard title="Bootstrap tokens are not available for your role." />}
+          {canReadServiceAccounts ? (
           <Card>
             <PanelCardHeader
               title="Service accounts"
@@ -2952,9 +2978,12 @@ export function SettingsPage({
                 columns={serviceAccountColumns}
                 items={data.serviceAccounts}
                 empty={<EmptyState icon={UserCog} title="No service accounts." body="Create an API key only for a clear automation owner and scope." />}
+                loadError={data.loadErrors.serviceAccounts}
+                onRetry={onRefresh ? () => void onRefresh() : undefined}
               />
             </CardContent>
           </Card>
+          ) : <RoleRestrictedCard title="Service accounts are not available for your role." />}
         </>
       )}
 
@@ -2977,7 +3006,9 @@ export function SettingsPage({
               <SettingsNote icon={KeyRound}>Issuer and audience values are configured server-side. Public site-config currently exposes `auth_mode` only unless your deployment extends the payload.</SettingsNote>
             </CardContent>
           </Card>
+          {canWriteSecrets || (canRotateSecrets && canReadSecrets) ? (
           <div className="split">
+            {canWriteSecrets ? (
             <Card>
               <CardHeader>
                 <CardTitle>Store integration secret</CardTitle>
@@ -3008,6 +3039,8 @@ export function SettingsPage({
                 </form>
               </CardContent>
             </Card>
+            ) : null}
+            {canRotateSecrets && canReadSecrets ? (
             <Card>
               <CardHeader>
                 <CardTitle>Rotate stored secret</CardTitle>
@@ -3036,7 +3069,10 @@ export function SettingsPage({
                 </form>
               </CardContent>
             </Card>
+            ) : null}
           </div>
+          ) : null}
+          {canReadSecrets ? (
           <Card>
             <PanelCardHeader
               title="Secret vault inventory"
@@ -3053,6 +3089,7 @@ export function SettingsPage({
               />
             </CardContent>
           </Card>
+          ) : <RoleRestrictedCard title="Secret vault inventory is not available for your role." />}
         </>
       )}
 
@@ -4486,6 +4523,8 @@ export function IntegrationPage({
   const featureFlags = data.deploymentFeatures as { connectors?: boolean; waf_posture?: boolean } | null;
   const connectorsEnabled = featureFlags?.connectors === true;
   const connectorsLoadError = data.loadErrors.connectors;
+  const canReadConnectors = canReadDataset(session, 'connectors');
+  const canReadSecrets = canReadDataset(session, 'secrets');
   const targetGroupsLoadError = data.loadErrors.targetGroups;
   const connectorRecords = pendingConnector && !data.connectors.some(
     (connector) => getString(connector, ['id'], '') === getString(pendingConnector, ['id'], '')
@@ -4828,12 +4867,30 @@ export function IntegrationPage({
     if (secretInput && !(await confirm({ title: 'Store provider credential', description: 'Store this read-only provider credential in the encrypted tenant vault before creating the connector?', confirmLabel: 'Store and create', confirmTone: 'default' }))) return;
 
     const createdResult = await runAction('create-connector', async () => {
+      const connectorBody = {
+        provider,
+        name,
+        status: 'active',
+        config: {
+          read_only: true,
+          connection_mode: credentialSetup ? 'bounded_polling' : 'manual_metadata',
+          default_snapshot_kind: defaultSnapshotKind,
+          ...(provider === 'generic_waf' ? { owner_hint: directoryProvider.id } : {}),
+          ...(provider === 'cloudflare' && resourceRefHash ? { zone_ref_hash: resourceRefHash } : {}),
+          ...(provider !== 'cloudflare' && resourceRefHash ? { resource_ref_hash: resourceRefHash } : {}),
+          ...(provider === 'aws_waf' && region ? { region_summary: region } : {})
+        }
+      };
       let secretId = externalSecretId || null;
       if (secretInput) {
+        await requestJson(config, session, '/v1/connectors', {
+          method: 'POST',
+          body: { ...connectorBody, validate_only: true }
+        });
         const stored = await requestJson(config, session, '/v1/secrets', {
           method: 'POST',
           body: {
-            purpose: 'waf_connector',
+            purpose: 'connector',
             name: `${provider}:${name}`,
             plaintext: secretInput,
             metadata: { provider, read_only: true, access: 'bounded_metadata_polling' }
@@ -4841,24 +4898,18 @@ export function IntegrationPage({
         }) as { secret?: { id?: string } };
         secretId = stored.secret?.id ?? null;
       }
-      const created = await requestJson(config, session, '/v1/connectors', {
-        method: 'POST',
-        body: {
-          provider,
-          name,
-          ...(secretId ? { secret_id: secretId } : {}),
-          status: 'active',
-          config: {
-            read_only: true,
-            connection_mode: credentialSetup ? 'bounded_polling' : 'manual_metadata',
-            default_snapshot_kind: defaultSnapshotKind,
-            ...(provider === 'generic_waf' ? { owner_hint: directoryProvider.id } : {}),
-            ...(provider === 'cloudflare' && resourceRefHash ? { zone_ref_hash: resourceRefHash } : {}),
-            ...(provider !== 'cloudflare' && resourceRefHash ? { resource_ref_hash: resourceRefHash } : {}),
-            ...(provider === 'aws_waf' && region ? { region_summary: region } : {})
-          }
+      let created: { connector?: DataItem };
+      try {
+        created = await requestJson(config, session, '/v1/connectors', {
+          method: 'POST',
+          body: { ...connectorBody, ...(secretId ? { secret_id: secretId } : {}) }
+        }) as { connector?: DataItem };
+      } catch (err) {
+        if (secretInput && secretId) {
+          throw new Error(`${err instanceof Error ? err.message : String(err)} The credential was stored as vault secret ${secretId}; retry with that existing secret reference instead of re-entering it.`);
         }
-      }) as { connector?: DataItem };
+        throw err;
+      }
       if (created.connector?.id) {
         setPendingConnector(created.connector);
         setSelectedConnectorId(String(created.connector.id));
@@ -4967,7 +5018,7 @@ export function IntegrationPage({
       key: 'configured',
       label: 'Configured',
       render: (provider) => {
-        if (connectorsLoadError) return <span className="muted">Unavailable</span>;
+        if (!canReadConnectors || connectorsLoadError) return <span className="muted">Unavailable</span>;
         const count = connectorRecords.filter((connector) => connectorDirectoryProvider(connector)?.id === provider.id).length;
         return count > 0 ? <Badge tone="success">{count}</Badge> : <span className="muted">None</span>;
       }
@@ -4984,7 +5035,7 @@ export function IntegrationPage({
         actions={
           <>
             <Button variant="default" size="sm" disabled={busy !== ''} onClick={() => openProviderFlow()}><PlugZap size={15} aria-hidden="true" /> Add provider</Button>
-            {connectorsEnabled ? (
+            {connectorsEnabled && canReadConnectors ? (
               <Button
                 variant="secondary"
                 size="sm"
@@ -5004,9 +5055,13 @@ export function IntegrationPage({
       <PageContextSummary>Optional enrichment only · no default cloud access · customer-declared domains remain the core path</PageContextSummary>
       <div className="kpi-row" aria-label="Integration inventory summary">
         <KpiCell label="Provider paths" value={formatNumber(DNS_PROVIDER_DIRECTORY.length)} delta="Read-only or manual metadata" />
-        <KpiCell label="Connectors" value={connectorsLoadError ? '—' : formatNumber(connectorRecords.length)} delta={connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`} />
-        <KpiCell label="Snapshots" value={connectorsLoadError ? '—' : formatNumber(snapshots.length)} delta="Normalized metadata only" />
-        <KpiCell label="Vault secrets" value={data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)} delta="Plaintext never rendered" />
+        {canReadConnectors ? (
+          <>
+            <KpiCell label="Connectors" value={connectorsLoadError ? '—' : formatNumber(connectorRecords.length)} delta={connectorsLoadError ? 'Connector status unavailable' : `${activeConnectors.length} active`} />
+            <KpiCell label="Snapshots" value={connectorsLoadError ? '—' : formatNumber(snapshots.length)} delta="Normalized metadata only" />
+          </>
+        ) : <KpiCell label="Connectors" value="—" delta="Not available for your role" />}
+        <KpiCell label="Vault secrets" value={!canReadSecrets || data.loadErrors.secrets ? '—' : formatNumber(data.secrets.length)} delta={canReadSecrets ? 'Plaintext never rendered' : 'Not available for your role'} />
       </div>
       <CalloutNote icon={ShieldCheck} tone="info">Provider access is optional. Core validation continues from customer-declared targets, and opening this directory never grants AstraNull cloud access.</CalloutNote>
       {(message || error) && (
@@ -5052,6 +5107,8 @@ export function IntegrationPage({
             <CalloutNote icon={FileCheck2}>Contact support only if you need optional read-only connector metadata.</CalloutNote>
           </CardContent>
         </Card>
+      ) : !canReadConnectors ? (
+        <RoleRestrictedCard title="Configured connectors are not available for your role." />
       ) : (
         <>
           <Card className="card--dense">
@@ -6141,13 +6198,30 @@ export function StaffSurfacePage({
   ];
   const isStaff = session.principal === 'staff';
   const [adminTab, setAdminTab] = useState('overview');
-  const adminTabOptions = routeTabs('admin').map((tab) => ({ id: tab.id, label: tab.label }));
+  const canReadSignups = canReadDataset(session, 'internalSignupRequests');
+  const canReadTenants = canReadDataset(session, 'internalTenants');
+  const canReadApprovals = canReadDataset(session, 'internalApprovalRequests');
+  const canReadInternalAudit = canReadDataset(session, 'internalAudit');
+  const canDecideSignups = staffSessionHasPermission(session, 'staff:signup:decide');
+  const canDecideApprovals = staffSessionHasPermission(session, 'staff:approval:decide');
+  const canWriteTenants = staffSessionHasPermission(session, 'staff:tenant:write');
+  const canWriteEntitlements = staffSessionHasPermission(session, 'staff:entitlement:write');
+  const adminTabReadable: Record<string, boolean> = {
+    'signup-queue': canReadSignups,
+    tenants: canReadTenants,
+    approvals: canReadApprovals,
+    audit: canReadInternalAudit
+  };
+  const adminTabOptions = routeTabs('admin')
+    .filter((tab) => adminTabReadable[tab.id] ?? true)
+    .map((tab) => ({ id: tab.id, label: tab.label }));
+  const activeAdminTab = adminTabOptions.some((tab) => tab.id === adminTab) ? adminTab : 'overview';
   const overview = data.internalOverview;
-  const pendingSignups = data.loadErrors.internalSignupRequests ? null : getOptionalNumber(overview, ['pending_signups']) ?? data.internalSignupRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
-  const pendingApprovals = data.loadErrors.internalApprovalRequests ? null : getOptionalNumber(overview, ['pending_approval_requests']) ?? data.internalApprovalRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
+  const pendingSignups = !canReadSignups ? 0 : data.loadErrors.internalSignupRequests ? null : getOptionalNumber(overview, ['pending_signups']) ?? data.internalSignupRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
+  const pendingApprovals = !canReadApprovals ? 0 : data.loadErrors.internalApprovalRequests ? null : getOptionalNumber(overview, ['pending_approval_requests']) ?? data.internalApprovalRequests.filter((item) => ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length;
   const queueDepth = pendingSignups === null || pendingApprovals === null ? null : pendingSignups + pendingApprovals;
-  const tenantCount = getOptionalNumber(overview, ['tenant_count']) ?? (data.loadErrors.internalTenants ? null : data.internalTenants.length);
-  const highScaleReviews = getOptionalNumber(overview, ['high_scale_reviews']) ?? (data.loadErrors.internalApprovalRequests ? null : data.internalApprovalRequests.filter((item) => getString(item, ['kind'], '').includes('high_scale') && ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length);
+  const tenantCount = !canReadTenants ? null : getOptionalNumber(overview, ['tenant_count']) ?? (data.loadErrors.internalTenants ? null : data.internalTenants.length);
+  const highScaleReviews = !canReadApprovals ? null : getOptionalNumber(overview, ['high_scale_reviews']) ?? (data.loadErrors.internalApprovalRequests ? null : data.internalApprovalRequests.filter((item) => getString(item, ['kind'], '').includes('high_scale') && ['submitted', 'under_review'].includes(getString(item, ['state'], ''))).length);
   async function runStaffAction<T>(label: string, action: () => Promise<T>, success: string) {
     setBusy(label);
     setError('');
@@ -6227,7 +6301,7 @@ export function StaffSurfacePage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const state = getString(item, ['state'], '');
-        if (!['submitted', 'under_review'].includes(state)) return '—';
+        if (!canDecideSignups || !['submitted', 'under_review'].includes(state)) return '—';
         const rowBusy = busy === `approve-signup-${id}` || busy === `reject-signup-${id}`;
         const rowBlocked = busy !== '' && !rowBusy;
         return (
@@ -6266,7 +6340,7 @@ export function StaffSurfacePage({
       render: (item) => {
         const id = getString(item, ['id'], '');
         const state = getString(item, ['state'], '');
-        if (!['submitted', 'under_review'].includes(state)) return '—';
+        if (!canDecideApprovals || !['submitted', 'under_review'].includes(state)) return '—';
         const rowBusy = busy === `approval-${id}-approve` || busy === `approval-${id}-reject`;
         const rowBlocked = busy !== '' && !rowBusy;
         return (
@@ -6309,24 +6383,26 @@ export function StaffSurfacePage({
       ) : (
         <>
           <CalloutNote icon={ShieldCheck} tone="warn">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
-          <Tabs value={adminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections" />
-          {adminTab === 'overview' ? (
+          <Tabs value={activeAdminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections" />
+          {activeAdminTab === 'overview' ? (
             <>
               <div className="kpi-row" aria-label="Staff operations summary">
                 <KpiCell label="Review queue" value={queueDepth === null ? '—' : formatNumber(queueDepth)} delta="Signup and approval work" />
-                <KpiCell label="Pending signups" value={pendingSignups === null ? '—' : formatNumber(pendingSignups)} delta="Staff decision required" />
-                <KpiCell label="Tenants" value={tenantCount === null ? '—' : formatNumber(tenantCount)} delta="Managed accounts" />
-                <KpiCell label="SOC reviews" value={highScaleReviews === null ? '—' : formatNumber(highScaleReviews)} delta="High-scale governance" />
+                {canReadSignups ? <KpiCell label="Pending signups" value={pendingSignups === null ? '—' : formatNumber(pendingSignups)} delta="Staff decision required" /> : null}
+                {canReadTenants ? <KpiCell label="Tenants" value={tenantCount === null ? '—' : formatNumber(tenantCount)} delta="Managed accounts" /> : null}
+                {canReadApprovals ? <KpiCell label="SOC reviews" value={highScaleReviews === null ? '—' : formatNumber(highScaleReviews)} delta="High-scale governance" /> : null}
               </div>
+              {canReadInternalAudit ? (
               <Card density="compact">
                 <PanelCardHeader title="Recent internal activity" description="Latest audit-backed staff actions across managed tenants." trailing={<Badge tone="muted">{data.loadErrors.internalAudit ? 'Unavailable' : `${data.internalAudit.length} records`}</Badge>} />
                 <CardContent>
                   <DataTable columns={auditColumns} items={data.internalAudit.slice(0, 6)} loadError={data.loadErrors.internalAudit} onRetry={() => void onRefresh()} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions appear here after they are recorded.' })} />
                 </CardContent>
               </Card>
+              ) : null}
             </>
           ) : null}
-          {adminTab === 'signup-queue' ? (
+          {activeAdminTab === 'signup-queue' ? (
             <Card density="compact" className="staff-queue-priority">
               <CardHeader>
                 <CardTitle>Signup queue</CardTitle>
@@ -6337,7 +6413,7 @@ export function StaffSurfacePage({
               </CardContent>
             </Card>
           ) : null}
-          {adminTab === 'tenants' ? (
+          {activeAdminTab === 'tenants' ? (
             <Card density="compact">
               <CardHeader>
                 <CardTitle>Tenant directory</CardTitle>
@@ -6348,7 +6424,7 @@ export function StaffSurfacePage({
               </CardContent>
             </Card>
           ) : null}
-          {adminTab === 'approvals' ? (
+          {activeAdminTab === 'approvals' ? (
             <Card density="compact">
               <CardHeader>
                 <CardTitle>Approval requests</CardTitle>
@@ -6359,7 +6435,7 @@ export function StaffSurfacePage({
               </CardContent>
             </Card>
           ) : null}
-          {adminTab === 'audit' ? (
+          {activeAdminTab === 'audit' ? (
             <Card density="compact">
               <CardHeader>
                 <CardTitle>Internal audit</CardTitle>
@@ -6370,7 +6446,8 @@ export function StaffSurfacePage({
               </CardContent>
             </Card>
           ) : null}
-          {adminTab === 'tenants' ? (<>
+          {activeAdminTab === 'tenants' ? (<>
+          {canWriteTenants ? (
           <Card>
             <CardHeader>
               <CardTitle>Support owner assignment</CardTitle>
@@ -6407,6 +6484,8 @@ export function StaffSurfacePage({
               </form>
             </CardContent>
           </Card>
+          ) : null}
+          {canWriteEntitlements ? (
           <Card>
             <CardHeader>
               <CardTitle>Entitlement grants</CardTitle>
@@ -6449,6 +6528,7 @@ export function StaffSurfacePage({
               </form>
             </CardContent>
           </Card>
+          ) : null}
           </>) : null}
         </>
       )}

@@ -7,6 +7,7 @@ import {
   parseEd25519SpkiDerBase64,
   parseManifestSigningKey,
   toPublicRelease,
+  toPublicReleaseList,
   toPublicTrustKey,
   validateAgentUpdateStatusBody,
   validateDetachedSignature,
@@ -216,9 +217,9 @@ export function createAgentUpdateRelease(ctx, body) {
 }
 
 export function listAgentUpdateReleases(ctx) {
-  return getStore()
-    .agentUpdateReleases.filter((r) => r.tenant_id === ctx.tenantId)
-    .map(toPublicRelease);
+  return toPublicReleaseList(
+    getStore().agentUpdateReleases.filter((r) => r.tenant_id === ctx.tenantId),
+  );
 }
 
 export function requestAgentUpdateRollback(ctx, releaseId) {

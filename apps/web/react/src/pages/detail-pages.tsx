@@ -5,6 +5,8 @@ import { Badge, type BadgeProps } from '../components/ui/badge';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
+import { RoleRestrictedNotice } from '../components/ui/role-restricted';
+import { canReadDataset } from '../lib/dataset-access.mjs';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select } from '../components/ui/select';
 import { Tabs } from '../components/ui/tabs';
@@ -1033,6 +1035,9 @@ function RunDetailView({
         actions={(
           <>
             <AnchorButton size="sm" variant="secondary" href="#runs">Test runs</AnchorButton>
+            {getString(entity, ['scan_id'], '') ? (
+              <AnchorButton size="sm" variant="secondary" href={buildDetailHref('scan-detail', getString(entity, ['scan_id'], ''))}>Open parent scan</AnchorButton>
+            ) : null}
             {primaryFinding ? (
               <AnchorButton size="sm" variant="default" href={buildDetailHref('finding-detail', getString(primaryFinding, ['id'], ''))}>Open finding</AnchorButton>
             ) : null}
@@ -1730,6 +1735,7 @@ function AgentDetailView({
     ? (placementReviews.reviews as DataItem[]).find((review) => getString(review, ['target_group_id'], '') === targetGroupId)
     : null;
   const agentLogs = filterAgentAuditEntries(data.audit, entityId);
+  const canReadAudit = canReadDataset(session, 'audit');
   const agentAuditColumns: TableColumn<DataItem>[] = [
     { key: 'action', label: 'Action', render: (item) => getString(item, ['action']) },
     { key: 'resource', label: 'Resource', render: (item) => `${getString(item, ['resource_type'])}:${getString(item, ['resource_id'])}` },
@@ -1954,6 +1960,7 @@ function AgentDetailView({
           agent={entity}
           agentId={entityId}
           audit={data.audit}
+          auditRestricted={!canReadAudit}
           onRefresh={onRefresh}
           refreshing={busy !== ''}
         />
@@ -2120,11 +2127,15 @@ function AgentDetailView({
             <CardDescription>Metadata-only lifecycle events for this agent.</CardDescription>
           </CardHeader>
           <CardContent>
-            <DataTable
-              columns={agentAuditColumns}
-              items={agentLogs}
-              empty={<EmptyState icon={ClipboardList} title="No audit events for this agent yet." body="Registration, heartbeat, revoke, and update actions appear after lifecycle activity." />}
-            />
+            {canReadAudit ? (
+              <DataTable
+                columns={agentAuditColumns}
+                items={agentLogs}
+                loadError={data.loadErrors.audit}
+                onRetry={() => void onRefresh()}
+                empty={<EmptyState icon={ClipboardList} title="No audit events for this agent yet." body="Registration, heartbeat, revoke, and update actions appear after lifecycle activity." />}
+              />
+            ) : <RoleRestrictedNotice title="The audit trail is not available for your role." />}
           </CardContent>
         </Card>
       ) : null}

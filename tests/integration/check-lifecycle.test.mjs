@@ -1,37 +1,48 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
-import { getStore } from '../../src/store.mjs';
 import { getTargetDetail } from '../../src/services/targetDetail.mjs';
+import {
+  archiveTestPolicy,
+  createTestPolicy,
+  patchTestPolicy,
+} from '../../src/services/testPolicies.mjs';
 import { freshStore } from '../helpers/reset.mjs';
 
 const ctx = { tenantId: 'ten_demo', userId: 'usr_admin', role: 'admin' };
+const checkId = 'dns.authoritative_response.safe';
 
 describe('check enable/disable lifecycle (FT-CRUD-CHK-01)', () => {
   afterEach(() => freshStore());
 
-  it('enabling and disabling checks updates checks_applied on target detail', async () => {
+  it('binding, pausing, and archiving a policy is reflected in checks_applied on target detail', async () => {
     freshStore();
-    const store = getStore();
-    store.checkCatalog = CHECK_CATALOG.map((check) => ({
-      ...check,
-      id: check.check_id,
-      default_enabled: false,
-      enabled_groups: [],
-    }));
-
-    const checkId = 'dns.authoritative_response.safe';
     const before = await getTargetDetail(ctx, 'tgt_1');
     assert.equal(before.error, undefined);
-    assert.equal(before.checks_applied.length, 0);
+    assert.equal(before.checks_applied.some((row) => row.check_id === checkId), false);
 
-    const catalog = store.checkCatalog.find((check) => check.check_id === checkId);
-    catalog.enabled_groups = ['tg_1'];
+    const policy = createTestPolicy(ctx, {
+      target_group_id: 'tg_1',
+      target_id: 'tgt_1',
+      check_id: checkId,
+      cadence: 'manual',
+    });
+    assert.equal(policy.error, undefined, JSON.stringify(policy));
+
     const enabled = await getTargetDetail(ctx, 'tgt_1');
-    assert.ok(enabled.checks_applied.some((row) => row.check_id === checkId));
+    const bound = enabled.checks_applied.find((row) => row.check_id === checkId);
+    assert.ok(bound);
+    assert.equal(bound.policy_id, policy.id);
+    assert.equal(bound.binding_scope, 'target');
 
-    catalog.enabled_groups = [];
+    const paused = patchTestPolicy(ctx, policy.id, { enabled: false });
+    assert.equal(paused.error, undefined, JSON.stringify(paused));
+    const pausedDetail = await getTargetDetail(ctx, 'tgt_1');
+    const pausedRow = pausedDetail.checks_applied.find((row) => row.check_id === checkId);
+    assert.ok(pausedRow);
+    assert.notEqual(pausedRow.policy_state, 'active');
+
+    assert.deepEqual(archiveTestPolicy(ctx, policy.id), { archived: true, id: policy.id });
     const disabled = await getTargetDetail(ctx, 'tgt_1');
-    assert.equal(disabled.checks_applied.length, 0);
+    assert.equal(disabled.checks_applied.some((row) => row.check_id === checkId), false);
   });
 });

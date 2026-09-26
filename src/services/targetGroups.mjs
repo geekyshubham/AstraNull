@@ -5,6 +5,7 @@ import {
   targetValidationResponse,
 } from '../contracts/targetManagement.mjs';
 import { newId } from '../lib/ids.mjs';
+import { csvImportRejected, validateTargetImportRows } from '../lib/targetCsvImport.mjs';
 import {
   isCurrentSuccessfulProviderSnapshot,
   isProviderVerifiedDnsEvidence,
@@ -262,6 +263,7 @@ export function getTargetGroup(ctx, id) {
   );
   return {
     ...g,
+    ownership_status: ownershipSummaryFromTargetStates(targets.map((target) => target.verification_state)),
     targets,
     target_count: targets.length,
     runs_recent: runsRecent,
@@ -383,6 +385,58 @@ export function addTarget(ctx, groupId, body = {}) {
   });
   persistStore();
   return record;
+}
+
+export function importTargets(ctx, groupId, rows = []) {
+  const store = getStore();
+  const group = store.targetGroups.find(
+    (candidate) => candidate.id === groupId && candidate.tenant_id === ctx.tenantId && !isArchivedTargetGroup(candidate),
+  );
+  if (!group) return null;
+  const existingKeys = new Set(
+    store.targets
+      .filter((target) => target.tenant_id === ctx.tenantId && target.target_group_id === groupId && !isArchivedTarget(target))
+      .map((target) => targetDedupeKey(target)),
+  );
+  const { accepted, errors } = validateTargetImportRows(rows, existingKeys);
+  if (errors.length) return csvImportRejected(errors);
+
+  const now = new Date().toISOString();
+  const created = accepted.map(({ row, normalized, expected_behavior: expectedBehavior }) => {
+    const record = {
+      id: newId('target'),
+      tenant_id: ctx.tenantId,
+      target_group_id: groupId,
+      kind: normalized.kind,
+      value: normalized.value,
+      normalized_value: normalized.normalized_value,
+      expected_behavior: expectedBehavior ?? null,
+      created_at: now,
+    };
+    store.targets.push(record);
+    audit({
+      tenant_id: ctx.tenantId,
+      actor_user_id: ctx.userId,
+      actor_role: ctx.role,
+      action: 'target.added',
+      resource_type: 'target',
+      resource_id: record.id,
+      metadata: { target_group_id: groupId, changed_fields: ['kind', 'value', 'expected_behavior'], import_source: 'csv', csv_row: row },
+    });
+    return record;
+  });
+  group.ownership_status = 'unverified';
+  audit({
+    tenant_id: ctx.tenantId,
+    actor_user_id: ctx.userId,
+    actor_role: ctx.role,
+    action: 'target.csv_imported',
+    resource_type: 'target_group',
+    resource_id: groupId,
+    metadata: { created_count: created.length, target_ids: created.map((target) => target.id) },
+  });
+  persistStore();
+  return { created, errors: [] };
 }
 
 export function patchTargetGroup(ctx, id, body = {}) {

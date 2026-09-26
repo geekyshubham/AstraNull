@@ -66,3 +66,58 @@ Port data and decision semantics, never upstream traffic behavior:
 No route, service, or probe obtains permission to target undeclared assets from this decision. The
 classifier remains pure metadata evaluation; customer declaration, ownership proof, signed jobs,
 rate bounds, and SOC gates continue to live in their existing control paths.
+
+## Amendment 1 (corpus output version 3): runtime decision-flow port
+
+### Context
+
+Version 2 ported the data but not how either tool decides. In production:
+
+- The signed outside-in path never gave cdncheck any addresses or CNAMEs, yet still reported
+  `cdn_detected: false`. The UI showed "CDN not detected" for targets that were never checked.
+- wafw00f block-page leaves were evaluated only when AstraNull's own heuristic said the marker
+  response was blocked. Upstream evaluates them against the attack response unconditionally.
+- Plugins were ranked by an AstraNull confidence score instead of the upstream checklist order.
+- The worker result sanitizer dropped every array, which removed provider lists and evidence.
+- The pinned transport's headers object exposed only `get()`, so header-name enumeration and
+  Set-Cookie splitting never ran.
+
+### Decision
+
+1. **wafw00f evaluation.** `attack=False` leaves read the baseline response (`self.rq`).
+   `attack=True` leaves read the scanner's existing benign combined-marker response
+   (`self.attackres`), falling back to the single-class marker responses when the budget excludes
+   it. A leaf is unknown only when its response was not captured.
+   - The checklist order comes from pinned `wafprio.py`. `best` is the first match in that order;
+     `all_matches` is the `-a` view.
+   - The response read cap is upstream `MAX_RESPONSE_SIZE` (100 KiB, in memory only).
+   - Set-Cookie uses requests' `", "` join/split.
+   - `genericdetect` runs in upstream order over already-captured snapshots: no-User-Agent
+     drift, then XSS / path / SQLi status drift, then Server header drift. A dropped connection
+     means connection-level blocking.
+2. **No new traffic.** AstraNull does not send wafw00f's payload strings. The benign markers,
+   request budget, pinning, and SOC/ownership controls are unchanged.
+3. **cdncheck.** The `cloud` category is ported (129,127 ranges, packed in
+   `edgeCloudRangeData.mjs`).
+   - The address check order is `cdn` → `waf` → `cloud`, and `CheckDNSResponse` order is
+     AAAA → A → CNAME. Both are read from pinned `cdncheck.go`, and a single `cdncheck` verdict
+     is reported alongside all typed matches.
+   - Signed jobs pass the worker's already-vetted A/AAAA addresses (no extra lookups), plus a
+     CNAME chain of up to 3 hops. Each hop is a counted, signed logical operation;
+     `waf.fingerprint.safe` is now capped at 13 HTTP + 3 DNS operations.
+   - CNAME matching stays a label-boundary suffix match. This is a strict superset of upstream
+     public-suffix TLD / SLD.TLD equality.
+4. **Evidence semantics.**
+   - `cdn_detected` and `cloud_hosted` are `null` when DNS was not observed, and the projection
+     reports that as inconclusive.
+   - The worker sanitizer allows a fixed list of bounded edge-evidence arrays and still drops
+     every other array.
+
+### Deliberate deviations from upstream
+
+| Upstream behavior | AstraNull | Why |
+|---|---|---|
+| Sends XSS/SQLi/LFI payload strings | Reuses bounded benign markers | No attack payloads against customer assets |
+| Follows redirects | Redirect expansion stays disabled | Every hop would need its own signed accounting and scope check |
+| Queries 1.1.1.1/8.8.8.8 | Worker resolver, vetted addresses | Connection pinning and egress policy |
+| Header-name regex treated as a literal key (Shieldon never matches) | Regex applied | Matches the upstream intent |

@@ -189,7 +189,7 @@ export function parseManifestSigningKey(
   manifest,
   { missingError = 'missing_signing_public_key', invalidError = 'invalid_signing_public_key' } = {},
 ) {
-  return parseEd25519SpkiDerBase64(manifest.signing?.public_key_der_base64, {
+  return parseEd25519SpkiDerBase64(manifest?.signing?.public_key_der_base64, {
     missingError,
     invalidError,
   });
@@ -304,6 +304,19 @@ export function isAgentInRollout(agent, release) {
   return bucket < pct;
 }
 
+export function isWellFormedRelease(release) {
+  return Boolean(release)
+    && typeof release.id === 'string'
+    && typeof release.version === 'string'
+    && release.manifest !== null
+    && typeof release.manifest === 'object'
+    && !Array.isArray(release.manifest);
+}
+
+export function toPublicReleaseList(releases) {
+  return (releases ?? []).filter(isWellFormedRelease).map(toPublicRelease);
+}
+
 export function toPublicRelease(release) {
   const signingKey = parseManifestSigningKey(release.manifest);
   return {
@@ -354,8 +367,8 @@ export function decideAgentUpdatePoll(agent, releases, latestStatusForRelease) {
   }
 
   const actives = releases
-    .filter((r) => r.state === 'active')
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    .filter((r) => r.state === 'active' && isWellFormedRelease(r))
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
 
   for (const release of actives) {
     if (!isAgentInRollout(agent, release)) continue;

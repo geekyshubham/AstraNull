@@ -114,7 +114,9 @@ describe('readiness scoring', () => {
     resetStoreForTests(boostedStore);
 
     const boosted = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(boosted.score, 80);
+    assert.equal(boosted.score, 90);
+    assert.equal(factor(boosted, 'soc_readiness').score, WEIGHT_SOC_GOVERNANCE);
+    assert.match(factor(boosted, 'soc_readiness').detail, /hsr_demo_approved: authorization pack accepted/);
     assert.equal(factor(boosted, 'coverage').score, 40);
     assert.equal(factor(boosted, 'verdicts').score, WEIGHT_VERDICTS);
     assert.equal(factor(boosted, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
@@ -148,7 +150,7 @@ describe('readiness scoring', () => {
 
     resetStoreForTests(penalizedStore);
     const penalized = computeReadiness(PORTAL_DEMO_IDS.tenantId);
-    assert.equal(penalized.score, 55);
+    assert.equal(penalized.score, 65);
     assert.equal(factor(penalized, 'verdicts').score, 0);
     assert.equal(factor(penalized, 'evidence_freshness').score, WEIGHT_EVIDENCE_FRESHNESS);
   });

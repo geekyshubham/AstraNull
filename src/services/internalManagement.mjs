@@ -144,6 +144,42 @@ export function listApprovalRequests(filters = {}) {
   return items;
 }
 
+export function listSocHighScaleRequests(staffCtx, filters = {}) {
+  const store = getStore();
+  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 500);
+  const tenantNames = new Map(store.tenants.map((tenant) => [tenant.id, tenant.name]));
+  const items = (store.highScaleRequests ?? [])
+    .filter((request) => !filters.state || request.state === filters.state)
+    .filter((request) => !filters.tenant_id || request.tenant_id === filters.tenant_id)
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .slice(0, limit)
+    .map((request) => ({
+      id: request.id,
+      tenant_id: request.tenant_id,
+      tenant_name: tenantNames.get(request.tenant_id) ?? null,
+      target_group_id: request.target_group_id ?? null,
+      kind: 'high_scale',
+      state: request.state,
+      scheduled_window: request.scheduled_window ?? null,
+      created_at: request.created_at,
+      updated_at: request.updated_at ?? null,
+    }));
+  const tenants = [...store.tenants]
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(a.id).localeCompare(String(b.id)))
+    .map((tenant) => ({ tenant_id: tenant.id, name: tenant.name }));
+  auditInternal({
+    staff_id: staffCtx.staffId ?? staffCtx.userId,
+    staff_role: staffCtx.staffRole ?? staffCtx.role,
+    tenant_id: null,
+    action: 'staff.soc.high_scale_queue_viewed',
+    resource_type: 'high_scale_request',
+    resource_id: null,
+    reason: null,
+    metadata: { request_count: items.length, state_filter: filters.state ?? null, tenant_filter: filters.tenant_id ?? null },
+  });
+  return { items, tenants };
+}
+
 export function decideApprovalRequest(staffCtx, id, body) {
   const store = getStore();
   const record = store.internalApprovalRequests.find((r) => r.id === id);

@@ -13,8 +13,14 @@ import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environmen
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../lib/route-params';
 // @ts-ignore Plain ESM keeps these UI decisions directly executable by node:test.
-import { apiErrorCode, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
-import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
+import { apiErrorCode, edgeDetectionLockedReason, edgeDetectionReasonExplanation, isActiveDnsChallenge, isLoaScopeEligible, isSignedLoaState, parseOptionalPort, targetDeclarationProvenanceLabel, targetDisplayValue } from '../lib/target-detail.mjs';
+import type { DataItem, PortalConfig, PortalData, PortalDataset, Session } from '../lib/types';
+import { canStartRun } from '../lib/run-permissions.mjs';
+import { canReadDataset } from '../lib/dataset-access.mjs';
+import { isScanActive, isScanScheduled, scanDisplayName, scanStatusLabel, validationScansPathForGroup } from '../lib/validation-scan.mjs';
+import { ValidationScanLauncher, type ScanLauncherMode } from '../components/runs/validation-scan-launcher';
+import { ValidationScansTable } from '../components/runs/validation-scans-table';
+import { TargetCsvImportButton } from '../components/targets/target-csv-import';
 import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { VerifyChip, resolveTargetVerificationProvenance } from '../lib/verify-chip';
 import { emptyStateFromApi, PortalLoadingSkeleton } from '../lib/empty-from-api';
@@ -481,6 +487,8 @@ function edgeStatusSummary(state: DataItem) {
   }
   if (status === 'not_detected') return 'The signed worker completed successfully and explicitly reported no WAF or CDN fingerprint.';
   if (status === 'detected') return 'The signed worker observed one or more positive edge fingerprints.';
+  const explanation = edgeDetectionReasonExplanation(getString(state, ['reason'], ''));
+  if (explanation) return explanation;
   return `${humanizeLabel(getString(state, ['reason'], 'edge_signature_incomplete'))}. The available evidence cannot support a detection or no-match result.`;
 }
 
@@ -651,7 +659,7 @@ export function TargetGroupDetailView({
   data: PortalData;
   config: PortalConfig;
   session: Session;
-  onRefresh: () => Promise<void>;
+  onRefresh: (datasets?: readonly PortalDataset[]) => Promise<void>;
   loading: boolean;
   loadError: string;
 }) {
@@ -686,6 +694,11 @@ export function TargetGroupDetailView({
   const [selectedPolicyTargetId, setSelectedPolicyTargetId] = useState('');
   const [ruleQuery, setRuleQuery] = useState('');
   const [ruleLimit, setRuleLimit] = useState(12);
+  const [scanLauncher, setScanLauncher] = useState<{ mode: ScanLauncherMode; scan: DataItem | null } | null>(null);
+  const [showAllScans, setShowAllScans] = useState(false);
+  const [groupScanState, setGroupScanState] = useState<{ groupId: string; items: DataItem[]; meta: DataItem | null; error: string }>(
+    { groupId: '', items: [], meta: null, error: '' }
+  );
 
   const onRefreshRef = useRef(onRefresh);
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
@@ -698,6 +711,15 @@ export function TargetGroupDetailView({
   const policyItems = Array.isArray(data.testPolicies) ? data.testPolicies as DataItem[] : [];
   const relatedRuns = Array.isArray(entity.runs_recent) ? entity.runs_recent as DataItem[] : [];
   const relatedFindings = Array.isArray(entity.findings_on_group) ? entity.findings_on_group as DataItem[] : [];
+  const groupScansLoaded = groupScanState.groupId === entityId;
+  const groupScans = groupScansLoaded
+    ? groupScanState.items
+    : data.validationScans.filter((scan) => getString(scan, ['target_group_id'], '') === entityId);
+  const groupScansMeta = groupScansLoaded ? groupScanState.meta : data.validationScansMeta;
+  const groupScansError = groupScansLoaded ? groupScanState.error : data.loadErrors.validationScans;
+  const upcomingScans = groupScans.filter((scan) => isScanScheduled(scan) || isScanActive(scan));
+  const visibleScans = showAllScans ? groupScans : upcomingScans;
+  const canStartScan = canStartRun(session.role);
   const groupMeta = entity.meta && typeof entity.meta === 'object' && !Array.isArray(entity.meta) ? entity.meta as DataItem : null;
   const targetCount = String(entity.target_count ?? targets.length);
   const loaState = getString(entity, ['loa_state', 'loa_status'], getString(entity.loa as DataItem | undefined, ['state'], 'required'));
@@ -753,7 +775,7 @@ export function TargetGroupDetailView({
   );
   const wafEdgeDetectionEnabled = data.deploymentFeatures?.waf_posture === true;
 
-  const verifiedTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
+  const ownershipProvenTargetCount = targets.filter((target) => canRunTest(targetVerificationState(target))).length;
   const loaScopeTargetCount = targets.filter((target) => isLoaScopeEligible(targetVerificationState(target))).length;
 
   // Every displayed challenge is bound to the domain the operator explicitly selected.
@@ -829,6 +851,31 @@ export function TargetGroupDetailView({
   }, [config, session, entityId, entity.updated_at]);
 
   useEffect(() => {
+    let cancelled = false;
+    requestJson(config, session, validationScansPathForGroup(entityId))
+      .then((payload) => {
+        if (cancelled) return;
+        const body = payload as { items?: unknown; meta?: unknown };
+        setGroupScanState({
+          groupId: entityId,
+          items: Array.isArray(body?.items) ? body.items as DataItem[] : [],
+          meta: body?.meta && typeof body.meta === 'object' ? body.meta as DataItem : null,
+          error: '',
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setGroupScanState({
+          groupId: entityId,
+          items: [],
+          meta: null,
+          error: err instanceof Error ? err.message : 'Could not load validation scans for this group.',
+        });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, entityId, data.validationScans]);
+
+  useEffect(() => {
     setSelectedDnsTargetId('');
     setDnsChallenge(null);
     setDnsVerifyResult(null);
@@ -854,10 +901,11 @@ export function TargetGroupDetailView({
     const loadedConnectors = (Array.isArray(data.connectors) ? (data.connectors as DataItem[]) : [])
       .filter((connector) => DNS_INVENTORY_PROVIDERS.has(getString(connector, ['provider'], '').toLowerCase()));
     setConnectors(loadedConnectors);
+    const connectorsReadable = canReadDataset(session, 'connectors');
     setConnectorsMeta(loadedConnectors.length === 0
-      ? { empty_reason: 'No DNS provider integration is configured for this tenant.' }
+      ? { empty_reason: connectorsReadable ? 'No DNS provider integration is configured for this tenant.' : 'DNS provider integrations are not available for your role.' }
       : null);
-  }, [data.connectors]);
+  }, [data.connectors, session]);
 
   // §7.2 optional background polling: re-check a pending challenge every 30s until resolved,
   // capped at 15 minutes. This functional network timer does not create visual motion.
@@ -1714,13 +1762,17 @@ export function TargetGroupDetailView({
                 className={runnable ? undefined : 'is-locked'}
                 disabled={!id || !runnable || busy === `edge-detect-${id}` || removing}
                 title={runnable
-                  ? 'Queue bounded WAF/CDN detection through the signed probe-worker path'
-                  : 'Verify ownership before detecting the edge'}
+                  ? 'Queue bounded WAF/CDN detection (wafw00f + cdncheck). Only signed probe-worker results count as edge evidence; simulation runs never do.'
+                  : edgeDetectionLockedReason(targetVerificationState(item))}
+                aria-describedby={runnable || !id ? undefined : `edge-lock-${id}`}
                 loading={busy === `edge-detect-${id}`}
                 onClick={() => void runEdgeDetection(item)}
               >
                 Detect edge
               </Button>
+            ) : null}
+            {wafEdgeDetectionEnabled && !runnable && id ? (
+              <span id={`edge-lock-${id}`} className="sr-only">{edgeDetectionLockedReason(targetVerificationState(item))}</span>
             ) : null}
             <Button
               size="sm"
@@ -1908,6 +1960,7 @@ export function TargetGroupDetailView({
           </div>
         </div>
         <div className="tg-head-actions">
+          {canStartScan ? <Button size="sm" onClick={() => setScanLauncher({ mode: 'create', scan: null })}><Activity size={14} /> Start validation scan</Button> : null}
           <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
           <Button size="sm" variant="secondary" onClick={() => openOnboardModal('cloud')}><Bot size={14} /> Import DNS zones</Button>
           {groupEnvironmentId ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('environment-detail', groupEnvironmentId)}>Environment</AnchorButton> : null}
@@ -1923,7 +1976,7 @@ export function TargetGroupDetailView({
         <CardHeader>
           <div>
             <CardTitle>Ownership verification</CardTitle>
-            <CardDescription>Aggregate target evidence returned by the ownership ladder API. Incomplete proof keeps bounded validation fail closed.</CardDescription>
+            <CardDescription>Each step counts targets whose current proof is exactly that level, so stronger proof (agent, user) is not also counted under DNS. Group status is the weakest target's current proof. Incomplete proof keeps bounded validation fail closed.</CardDescription>
           </div>
           <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
         </CardHeader>
@@ -1947,7 +2000,7 @@ export function TargetGroupDetailView({
                     <span className="vl-num" aria-hidden="true">{done ? <Check size={13} strokeWidth={2.6} /> : index + 1}</span>
                     <div className="vl-body">
                       <strong>{getString(step, ['label'], 'Step')}</strong>
-                      <span className="vl-meta">{getString(step, ['count'], '0')} of {getString(step, ['total'], '0')}</span>
+                      <span className="vl-meta">{getString(step, ['count'], '0')} of {getString(step, ['total'], '0')} currently at this level</span>
                     </div>
                   </li>
                 );
@@ -1962,7 +2015,7 @@ export function TargetGroupDetailView({
         <div className="kpi-cell">
           <div className="kpi-label">Targets</div>
           <div className="kpi-value">{targetCount}</div>
-          <div className="kpi-delta">{verifiedTargetCount} verified · {Math.max(0, targets.length - verifiedTargetCount)} unverified</div>
+          <div className="kpi-delta" title="Ownership proven means current DNS, provider, agent, or user proof; the same rule gates bounded runs.">{ownershipProvenTargetCount} ownership proven (runnable) · {Math.max(0, targets.length - ownershipProvenTargetCount)} locked</div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">Ownership</div>
@@ -2154,7 +2207,10 @@ export function TargetGroupDetailView({
             <CardTitle>Declared targets</CardTitle>
             <CardDescription>Customer-declared scope only. Verify each target before any check can run.</CardDescription>
           </div>
-          <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
+          <div className="row-actions">
+            <TargetCsvImportButton config={config} session={session} targetGroupId={entityId} onImported={() => onRefresh()} />
+            <Button size="sm" onClick={() => openOnboardModal()}><Plus size={14} /> Add target</Button>
+          </div>
         </CardHeader>
         <CardContent>
           {edgeDetection ? (
@@ -2422,6 +2478,41 @@ export function TargetGroupDetailView({
       </Card>
       </div>
 
+      <Card className="validation-scans-card">
+        <CardHeader>
+          <div>
+            <CardTitle>Validation scans</CardTitle>
+            <CardDescription>Multi-check scans for this group, one bounded child run at a time. Scheduled scans stay editable until they dispatch.</CardDescription>
+          </div>
+          <div className="row-end-actions">
+            <Badge tone="muted">{upcomingScans.length} scheduled or active</Badge>
+            <Button size="sm" variant="ghost" aria-pressed={showAllScans} onClick={() => setShowAllScans((value) => !value)}>
+              {showAllScans ? 'Show scheduled and active only' : `Show all (${groupScans.length})`}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="stack-tight">
+          <ValidationScansTable
+            scans={visibleScans}
+            meta={groupScans.length === 0 ? groupScansMeta : null}
+            emptyFallback={groupScans.length === 0 ? 'No validation scans have been created for this target group yet.' : 'No scheduled or active scans for this group. Show all to review completed history.'}
+            loadError={groupScansError}
+            onRetry={() => void onRefresh(['validationScans'])}
+            canManage={canStartScan}
+            config={config}
+            session={session}
+            showScope
+            onEdit={(scan) => setScanLauncher({ mode: 'edit', scan })}
+            onReschedule={(scan) => setScanLauncher({ mode: 'reschedule', scan })}
+            onCancelled={(scan) => {
+              setError('');
+              setMessage(`Scan ${scanDisplayName(scan)} is ${scanStatusLabel(getString(scan, ['status'], '')).toLowerCase()}.`);
+              void onRefresh(['validationScans']);
+            }}
+          />
+        </CardContent>
+      </Card>
+
       {/* (7) Findings on this group — Target column deep-links target detail. */}
       <Card>
         <CardHeader><CardTitle>Findings on this group</CardTitle></CardHeader>
@@ -2437,6 +2528,27 @@ export function TargetGroupDetailView({
           <DataTable columns={runColumns} items={relatedRuns} empty={emptyStateFromApi({ icon: Activity, meta: groupMeta ? { empty_reason: getString(groupMeta, ['runs_empty_reason'], '') } : null, actionHref: '#runs', actionLabel: 'Open test runs' })} />
         </CardContent>
       </Card>
+
+      <ValidationScanLauncher
+        open={Boolean(scanLauncher)}
+        mode={scanLauncher?.mode ?? 'create'}
+        scan={scanLauncher?.scan ?? null}
+        config={config}
+        session={session}
+        checks={checks}
+        targetGroups={data.targetGroups}
+        fixedTargetGroup={entity}
+        initialTargets={targets}
+        onClose={() => setScanLauncher(null)}
+        onScheduled={(scan, mode) => {
+          setScanLauncher(null);
+          setError('');
+          setMessage(mode === 'edit'
+            ? `Scan ${scanDisplayName(scan)} updated. Scheduled for ${formatDate(scan.scheduled_for)}.`
+            : `Scan ${scanDisplayName(scan)} scheduled for ${formatDate(scan.scheduled_for)}.`);
+          void onRefresh(['validationScans']);
+        }}
+      />
 
       {inventoryProvider ? (
         <DetailModal title={`Provider inventory · ${inventoryProvider}`} onClose={() => setInventoryProvider(null)} error={error}>

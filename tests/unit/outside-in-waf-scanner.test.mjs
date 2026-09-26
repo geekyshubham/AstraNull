@@ -80,10 +80,10 @@ function mockResponse(status, headers = {}) {
   });
 
 describe('outside-in WAF scanner', () => {
-  it('waf.fingerprint.safe maps to outside_in_waf_scan with 13-request budget', () => {
+  it('waf.fingerprint.safe maps to outside_in_waf_scan with 13 HTTP + 3 CNAME operations', () => {
     const check = getCheckById('waf.fingerprint.safe');
     assert.equal(check.probe_profile.kind, 'outside_in_waf_scan');
-    assert.equal(check.probe_profile.max_requests, 13);
+    assert.equal(check.probe_profile.max_requests, 16);
     assert.equal(check.probe_profile.require_agent_for_protected, true);
     assert.equal(check.probe_profile.follow_redirects, false);
   });

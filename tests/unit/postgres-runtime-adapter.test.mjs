@@ -54,6 +54,8 @@ import {
 } from '../../src/persistence/postgres/serviceAdapters.mjs';
 import { POSTGRES_EVENTS_SERVICE_METHODS } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
 import { TEST_POLICY_REPOSITORY_METHODS } from '../../src/persistence/postgres/testPolicyServiceAdapters.mjs';
+import { VALIDATION_SCAN_REPOSITORY_METHODS } from '../../src/persistence/postgres/validationScanRepository.mjs';
+import { POSTGRES_VALIDATION_SCAN_SERVICE_METHODS } from '../../src/persistence/postgres/validationScanServiceAdapters.mjs';
 import {
   POSTGRES_WAF_COVERAGE_ROLLUP_SERVICE_METHODS,
   WAF_COVERAGE_ROLLUP_REPOSITORY_METHODS,
@@ -276,6 +278,13 @@ function createHarness(overrides = {}) {
         }
         return repo;
       }
+      if (key === 'validationScans') {
+        const repo = {};
+        for (const method of VALIDATION_SCAN_REPOSITORY_METHODS) {
+          repo[method] = async () => null;
+        }
+        return repo;
+      }
       return { key };
     };
   }
@@ -338,6 +347,7 @@ describe('postgres runtime adapter', () => {
       'internalManagement',
       'portalRevamp',
       'testPolicies',
+      'validationScans',
     ]);
     assert.equal(getDefaultPostgresMigrationsDir(), path.join(ROOT, 'db', 'migrations'));
   });
@@ -400,6 +410,9 @@ describe('postgres runtime adapter', () => {
     }
     for (const method of POSTGRES_VALIDATION_TEST_RUNS_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.testRuns[method], 'function', method);
+    }
+    for (const method of POSTGRES_VALIDATION_SCAN_SERVICE_METHODS) {
+      assert.equal(typeof runtime.services.validationScans[method], 'function', method);
     }
     for (const method of POSTGRES_VALIDATION_EVIDENCE_SERVICE_METHODS) {
       assert.equal(typeof runtime.services.evidence[method], 'function', method);
@@ -685,3 +698,18 @@ describe('postgres runtime adapter', () => {
     await runtime.close();
   });
 });
+
+describe('postgres runtime scan probe config', () => {
+  it('derives hook-driven scan advancement config from the validated env loader and fails closed', async () => {
+    const { scanRuntimeConfigFromEnv } = await import('../../src/persistence/postgres/runtime.mjs');
+    const missing = scanRuntimeConfigFromEnv({ NODE_ENV: 'production' });
+    assert.deepEqual(missing, { probeMode: 'signed-worker', probeWorkerSecret: null, probeConfigError: 'probe_worker_secret_too_short' });
+    const invalidMode = scanRuntimeConfigFromEnv({ ASTRANULL_PROBE_MODE: 'bogus' });
+    assert.equal(invalidMode.probeMode, 'signed-worker');
+    assert.equal(invalidMode.probeWorkerSecret, null);
+    const secret = 'probe-worker-secret-at-least-32-chars';
+    const ok = scanRuntimeConfigFromEnv({ NODE_ENV: 'production', ASTRANULL_PROBE_WORKER_SECRET: `${secret}\n` });
+    assert.deepEqual(ok, { probeMode: 'signed-worker', probeWorkerSecret: secret, probeConfigError: null });
+  });
+});
+

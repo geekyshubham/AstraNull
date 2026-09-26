@@ -1789,7 +1789,7 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
       };
     },
 
-    async createConnector(ctx, body) {
+    async createConnector(ctx, body, options = {}) {
       if (!await wafRepo.isConnectorFeatureEnabled(ctx)) {
         return { error: 'connectors_feature_disabled', status: 404 };
       }
@@ -1826,6 +1826,9 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           created_at: now,
           updated_at: now,
         };
+        if (options.validateOnly === true) {
+          return { valid: true, connector: { provider, name, status: record.status, secret_id: secretId } };
+        }
         const connector = await wafRepo.createConnector(ctx, record);
         await auditRepo.appendAuditEvent({
           tenant_id: ctx.tenantId,

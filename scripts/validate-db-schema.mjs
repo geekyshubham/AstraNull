@@ -84,6 +84,8 @@ const REQUIRED_TABLES = [
   'test_runs',
   'test_policies',
   'test_policy_dispatches',
+  'validation_scans',
+  'validation_scan_steps',
   'loa_signatures',
   'events',
   'verdicts',
@@ -144,8 +146,14 @@ const REQUIRED_COLUMNS = [
   [/CREATE TABLE test_runs[\s\S]*?safety_constraints/m, 'test_runs.safety_constraints'],
   [/CREATE TABLE test_runs[\s\S]*?created_by/m, 'test_runs.created_by'],
   [/CREATE TABLE test_runs[\s\S]*?policy_dispatch_id/m, 'test_runs.policy_dispatch_id'],
+  [/CREATE TABLE test_runs[\s\S]*?scan_id/m, 'test_runs.scan_id'],
+  [/CREATE TABLE test_runs[\s\S]*?scan_step_id/m, 'test_runs.scan_step_id'],
+  [/CREATE TABLE validation_scans[\s\S]*?occurrence_key/m, 'validation_scans.occurrence_key'],
+  [/CREATE TABLE validation_scans[\s\S]*?lease_expires_at/m, 'validation_scans.lease_expires_at'],
+  [/CREATE TABLE validation_scan_steps[\s\S]*?request_snapshot/m, 'validation_scan_steps.request_snapshot'],
   [/CREATE TABLE test_policies[\s\S]*?target_id/m, 'test_policies.target_id'],
   [/CREATE TABLE events[\s\S]*?producer_kind/m, 'events.producer_kind'],
+  [/CREATE TABLE events[\s\S]*?ingested_at/m, 'events.ingested_at'],
   [/astranull_test_policies_exact_target_compat_trigger/m, 'test_policies exact-target compatibility trigger'],
   [/astranull_test_runs_exact_active_target_trigger/m, 'test_runs exact active-target trigger'],
   [/astranull_probe_jobs_exact_active_target_trigger/m, 'probe_jobs exact active-target trigger'],
@@ -248,6 +256,17 @@ const REQUIRED_INDEXES = [
   'target_verifications_latest',
   'uniq_test_runs_policy_dispatch',
   'uniq_test_policies_active_group_target_check',
+  'uniq_test_runs_scan_step',
+  'uniq_validation_scans_occurrence',
+  'idx_validation_scans_due',
+  'idx_validation_scans_runnable',
+  'idx_validation_scans_tenant_group_created',
+  'uniq_active_validation_scan_per_group',
+  'uniq_validation_scan_steps_run',
+  'idx_validation_scan_steps_scan',
+  'idx_audit_tenant_resource',
+  'idx_audit_tenant_metadata_scan_id',
+  'idx_audit_tenant_metadata_test_run_id',
   'loa_signatures_active_tenant_group',
   'idx_waf_assets_tenant_group_url',
   'idx_external_asset_candidates_approval_queue',
@@ -298,6 +317,8 @@ const TENANT_RLS_TABLES = [
   'test_runs',
   'test_policies',
   'test_policy_dispatches',
+  'validation_scans',
+  'validation_scan_steps',
   'loa_signatures',
   'probe_jobs',
   'agent_jobs',
@@ -357,6 +378,9 @@ const REQUIRED_MIGRATION_FILES = [
   '0051_reciprocal_ownership_probe_jobs.sql',
   '0052_target_edge_detections.sql',
   '0053_target_edge_detection_provenance.sql',
+  '0054_validation_scans.sql',
+  '0055_validation_scan_activity_indexes.sql',
+  '0056_platform_scope_soc_high_scale_reads.sql',
 ];
 
 const RECIPROCAL_OWNERSHIP_SQL_REQUIREMENTS = [
@@ -488,6 +512,8 @@ export const TENANT_PARENT_UNIQUE_KEYS = [
   'bootstrap_tokens_tenant_id_id_key',
   'agents_tenant_id_id_key',
   'test_runs_tenant_id_id_key',
+  'validation_scans_tenant_id_id_key',
+  'validation_scan_steps_tenant_id_id_key',
   'verdicts_tenant_id_id_key',
   'events_tenant_id_id_key',
   'high_scale_requests_tenant_id_id_key',
@@ -530,6 +556,10 @@ export const TENANT_CONSISTENT_FK_CONSTRAINTS = [
   'fk_agents_bootstrap_token_tenant',
   'fk_test_runs_target_group_tenant',
   'fk_test_runs_target_tenant',
+  'fk_test_runs_scan_tenant',
+  'fk_validation_scans_target_group_tenant',
+  'fk_validation_scan_steps_scan_tenant',
+  'fk_validation_scan_steps_test_run_tenant',
   'fk_agent_jobs_agent_tenant',
   'fk_agent_jobs_test_run_tenant',
   'fk_agent_jobs_target_tenant',
@@ -757,6 +787,8 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
       'user_password_resets',
       'password_recovery_delivery_outbox',
       'test_policy_dispatches',
+      'validation_scans',
+      'validation_scan_steps',
       'loa_signatures',
     ]) {
       errors.push(assertPattern(`migration:${table}`, combinedMigration, new RegExp(`CREATE TABLE(?: IF NOT EXISTS)? ${table}\\b`, 'i')));
@@ -764,6 +796,9 @@ export function validateDbSchema({ schemaSql, migrationSqls = [] } = {}) {
     errors.push(assertPattern('migration:test_runs_policy_dispatch_id', combinedMigration, /test_runs[\s\S]*?policy_dispatch_id/m));
     errors.push(assertPattern('migration:uniq_test_runs_policy_dispatch', combinedMigration, /uniq_test_runs_policy_dispatch/));
     errors.push(assertPattern('migration:fk_test_runs_policy_dispatch_tenant', combinedMigration, /fk_test_runs_policy_dispatch_tenant/));
+    errors.push(assertPattern('migration:test_runs_scan_step_id', combinedMigration, /test_runs[\s\S]*?scan_step_id/m));
+    errors.push(assertPattern('migration:uniq_test_runs_scan_step', combinedMigration, /uniq_test_runs_scan_step/));
+    errors.push(assertPattern('migration:uniq_active_validation_scan_per_group', combinedMigration, /uniq_active_validation_scan_per_group/));
     errors.push(assertPattern('migration:target_groups_deleted_at', combinedMigration, /target_groups[\s\S]*?deleted_at/m));
     errors.push(assertPattern('migration:target_groups_deleted_by', combinedMigration, /target_groups[\s\S]*?deleted_by/m));
     errors.push(assertPattern('migration:rls', combinedMigration, /ALTER TABLE tenants ENABLE ROW LEVEL SECURITY/));

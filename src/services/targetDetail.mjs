@@ -3,6 +3,12 @@ import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification
 import { getStore } from '../store.mjs';
 import { getTargetEdgeDetection } from './targetEdgeDetectionStore.mjs';
 import { presentTargetEdgeDetection } from '../lib/edgeDetectionPresenter.mjs';
+import {
+  boundCheckRows,
+  edgeDetectionRequestRow,
+  latestRunsByCheck,
+  recentRunRow,
+} from '../lib/targetDetailRows.mjs';
 
 function toIso(value) {
   if (value == null) return value;
@@ -136,30 +142,34 @@ function buildWafPosture(ctx, target) {
   };
 }
 
-function buildChecksApplied(targetGroupId) {
-  const enabled = (getStore().checkCatalog ?? []).filter((check) =>
-    (check.enabled_groups ?? []).includes(targetGroupId)
-    || check.default_enabled,
+function targetRunsWithVerdicts(ctx, targetId) {
+  const store = getStore();
+  const runs = (store.testRuns ?? []).filter(
+    (run) => run.target_id === targetId && run.tenant_id === ctx.tenantId,
   );
-  return enabled.slice(0, 10).map((check) => ({
-    check_id: check.id,
-    cadence: check.cadence ?? 'daily',
-    last_verdict: check.last_verdict ?? 'unknown',
-    last_ran_at: toIso(check.last_ran_at ?? check.updated_at),
-  }));
+  const runIds = new Set(runs.map((run) => run.id));
+  const verdictsByRunId = new Map();
+  for (const verdict of store.verdicts ?? []) {
+    if (verdict.tenant_id !== ctx.tenantId || !runIds.has(verdict.test_run_id)) continue;
+    const previous = verdictsByRunId.get(verdict.test_run_id);
+    if (!previous || String(verdict.created_at ?? '') > String(previous.created_at ?? '')) {
+      verdictsByRunId.set(verdict.test_run_id, verdict);
+    }
+  }
+  return { runs, verdictForRun: (run) => verdictsByRunId.get(run.id) ?? null };
 }
 
-function buildRunsRecent(targetId, limit = 5) {
-  return (getStore().testRuns ?? [])
-    .filter((run) => run.target_id === targetId)
+function buildChecksApplied(ctx, target, latestByCheck) {
+  const policies = (getStore().testPolicies ?? []).filter((policy) => policy.tenant_id === ctx.tenantId);
+  return boundCheckRows(target, policies, latestByCheck);
+}
+
+function buildRunsRecent(runs, verdictForRun, limit = 5) {
+  return runs
+    .slice()
     .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)))
     .slice(0, limit)
-    .map((run) => ({
-      run_id: run.id,
-      policy_id: run.policy_id ?? run.test_policy_id ?? null,
-      verdict: run.verdict ?? run.status ?? 'unknown',
-      started_at: toIso(run.started_at ?? run.created_at),
-    }));
+    .map((run) => recentRunRow(run, verdictForRun(run)));
 }
 
 function buildFindings(targetId, query = {}) {
@@ -234,7 +244,8 @@ export function getTargetDetail(ctx, targetId, query = {}) {
   const verification = latestVerificationState(targetId);
   const { findings, next_cursor } = buildFindings(targetId, query);
   const allFindings = (getStore().findings ?? []).filter((f) => f.target_id === targetId);
-  const runs = (getStore().testRuns ?? []).filter((run) => run.target_id === targetId);
+  const { runs, verdictForRun } = targetRunsWithVerdicts(ctx, targetId);
+  const latestByCheck = latestRunsByCheck(runs, verdictForRun);
 
   const payload = {
     target: {
@@ -254,8 +265,9 @@ export function getTargetDetail(ctx, targetId, query = {}) {
       ? null
       : buildWafPosture(ctx, target),
     edge_detection: presentTargetEdgeDetection(getTargetEdgeDetection(ctx.tenantId, target.id)),
-    checks_applied: buildChecksApplied(target.target_group_id),
-    runs_recent: buildRunsRecent(targetId, Number(query.runs_limit) || 5),
+    edge_detection_request: edgeDetectionRequestRow(latestByCheck),
+    checks_applied: buildChecksApplied(ctx, target, latestByCheck),
+    runs_recent: buildRunsRecent(runs, verdictForRun, Number(query.runs_limit) || 5),
     findings,
     loa: buildLoa(ctx, target.target_group_id),
     counts: {
@@ -279,7 +291,7 @@ export function getTargetDetail(ctx, targetId, query = {}) {
       : 'No findings are scoped to this target yet.',
     checks_empty_reason: checksList.length
       ? null
-      : 'No checks are bound to this target group policy yet.',
+      : 'No customer-runnable checks are bound to this target by a test policy yet.',
     waf_empty_reason: payload.waf_posture
       ? null
       : 'No WAF posture asset is linked to this target.',

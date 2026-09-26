@@ -36,14 +36,14 @@ function postgresRuntimeConfig(overrides = {}) {
   };
 }
 
-function listenPostgresServer(services, runtimeHealth, runtimeConfigOverrides = {}) {
+async function listenPostgresServer(services, runtimeHealth, runtimeConfigOverrides = {}) {
   const server = createServer({
     env: { ...process.env, ASTRANULL_NO_PERSIST: '1' },
     runtimeConfig: postgresRuntimeConfig(runtimeConfigOverrides),
     services,
     runtimeHealth,
   });
-  server.listen(0);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
   return { server, baseUrl: `http://127.0.0.1:${port}` };
 }
@@ -77,7 +77,7 @@ describe('createServer postgres mode — route wiring', () => {
         return { id: 'ten_demo', name: 'Demo' };
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: fakeTenants,
     }));
 
@@ -92,7 +92,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for /v1/subscription/current when no service is injected', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { async getCurrentTenant() { return { id: 'ten_demo', name: 'Demo' }; } },
     }));
 
@@ -132,7 +132,7 @@ describe('createServer postgres mode — route wiring', () => {
         };
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({ subscriptions }));
+    ({ server, baseUrl } = await listenPostgresServer({ subscriptions }));
 
     const res = await request(baseUrl, 'GET', '/v1/subscription/current', {
       headers: demoHeaders('admin'),
@@ -207,7 +207,7 @@ describe('createServer postgres mode — route wiring', () => {
       async decideApprovalRequest() { return null; },
       async listInternalAudit() { return []; },
     };
-    ({ server, baseUrl } = listenPostgresServer({ internalManagement, signupIntake: internalManagement }));
+    ({ server, baseUrl } = await listenPostgresServer({ internalManagement, signupIntake: internalManagement }));
 
     const created = await request(baseUrl, 'POST', '/v1/signup-requests', {
       body: {
@@ -241,7 +241,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('fails closed for internal admin routes in Postgres mode when service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({}));
+    ({ server, baseUrl } = await listenPostgresServer({}));
     const res = await request(baseUrl, 'GET', '/internal/admin/signup-requests', {
       headers: staffHeaders('internal_admin'),
     });
@@ -255,7 +255,7 @@ describe('createServer postgres mode — route wiring', () => {
         throw new Error('must_not_dispatch');
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({ internalManagement }));
+    ({ server, baseUrl } = await listenPostgresServer({ internalManagement }));
     const res = await request(baseUrl, 'GET', '/internal/admin/overview', {
       headers: demoHeaders('admin'),
     });
@@ -265,7 +265,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('lists high-scale requests via injected highScale service without dev store', async () => {
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       highScale: {
         async listHighScaleRequests(ctx) {
@@ -287,7 +287,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('denies missing tenant:read before GET /v1/state wiring check', async () => {
     let stateCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       state: {
         async getState() {
@@ -322,7 +322,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for GET /v1/placement/reviews when placement service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -366,7 +366,7 @@ describe('createServer postgres mode — route wiring', () => {
         };
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       placement: placementSvc,
     }));
@@ -380,7 +380,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for GET /v1/state when state service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -391,7 +391,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for GET /v1/observability when state service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -432,7 +432,7 @@ describe('createServer postgres mode — route wiring', () => {
         };
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       state: stateSvc,
     }));
@@ -485,7 +485,7 @@ describe('createServer postgres mode — route wiring', () => {
         };
       },
     };
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       state: stateSvc,
     }));
@@ -502,7 +502,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('returns postgres_route_not_wired for GET /v1/audit-log when listAuditEntries is missing', async () => {
     const auditEvents = [];
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       audit: {
         async appendAuditEvent(entry) {
@@ -535,7 +535,7 @@ describe('createServer postgres mode — route wiring', () => {
       tenants: [],
       auditLog: [{ id: 'aud_dev', tenant_id: 'ten_demo', action: 'dev.only' }],
     });
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       audit: {
         async listAuditEntries(ctx, options) {
@@ -556,7 +556,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for /v1/secrets when secretVault service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -572,7 +572,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for report routes when reports service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -621,7 +621,7 @@ describe('createServer postgres mode — route wiring', () => {
     };
 
     resetStoreForTests({ tenants: [], reports: [] });
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       reports,
       audit: { appendAuditEvent: async (e) => auditEvents.push(e) },
@@ -685,7 +685,7 @@ describe('createServer postgres mode — route wiring', () => {
     };
 
     resetStoreForTests({ tenants: [], encryptedSecrets: [] });
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         secretVault,
@@ -720,7 +720,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for POST /v1/events when events service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -740,7 +740,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for notification routes when notifications service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -772,7 +772,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('denies viewer before notification route wiring check', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -824,7 +824,7 @@ describe('createServer postgres mode — route wiring', () => {
     };
 
     resetStoreForTests({ tenants: [], notificationRules: [{ id: 'nrule_dev', tenant_id: 'ten_demo' }] });
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       notifications,
     }));
@@ -865,7 +865,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for agent update routes when agentUpdates service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -888,7 +888,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('denies viewer before agent update route wiring check', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -955,7 +955,7 @@ describe('createServer postgres mode — route wiring', () => {
       agentUpdateReleases: [{ id: 'aup_dev', tenant_id: 'ten_demo' }],
       agentUpdateTrustKeys: [{ id: 'aup_dev_key', tenant_id: 'ten_demo' }],
     });
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       agentUpdates,
       agentAuth: {
@@ -1013,7 +1013,7 @@ describe('createServer postgres mode — route wiring', () => {
     };
 
     resetStoreForTests({ tenants: [], events: [], ingestedEventIds: {} });
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       events,
     }));
@@ -1030,7 +1030,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for production release evidence when service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -1041,7 +1041,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for test policies when service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
     }));
 
@@ -1065,7 +1065,7 @@ describe('createServer postgres mode — route wiring', () => {
       target_count: 1,
     };
     const calls = [];
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       testPolicies: {
         async listTestPolicies(ctx) {
@@ -1132,7 +1132,7 @@ describe('createServer postgres mode — route wiring', () => {
       created_at: '2026-07-02T00:00:00.000Z',
       created_by: 'usr_admin',
     };
-    ({ server, baseUrl } = listenPostgresServer({
+    ({ server, baseUrl } = await listenPostgresServer({
       tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
       productionReleaseEvidence: {
         async recordProductionReleaseEvidence(ctx, body) {
@@ -1209,7 +1209,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for WAF routes when wafPosture service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       { tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) } },
       undefined,
       {
@@ -1224,7 +1224,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for drift-scans when wafDrift service is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { listWafAssets: async () => [] },
@@ -1249,7 +1249,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ wafAssets: [{ id: 'waf_dev_only', tenant_id: 'ten_demo' }] });
     const calls = [];
     const wafItems = [{ id: 'waf_pg_1', tenant_id: 'ten_demo', status: 'unknown' }];
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: {
@@ -1287,7 +1287,7 @@ describe('createServer postgres mode — route wiring', () => {
         summary: { policy_mode: 'block' },
       },
     ];
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: {
@@ -1326,7 +1326,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ wafActionItems: [{ id: 'ai_dev_only', tenant_id: 'ten_demo' }] });
     const pgItems = [{ id: 'ai_pg_1', tenant_id: 'ten_demo', status: 'open' }];
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { async listWafAssets() { return []; } },
@@ -1352,7 +1352,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for action-items when actionItems is missing but wafPosture exists', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { async listWafAssets() { return []; } },
@@ -1368,7 +1368,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for CVE pipeline when cvePipeline is missing but wafPosture exists', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { async listWafAssets() { return []; } },
@@ -1384,7 +1384,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for supply-chain when supplyChainRisk is missing but wafPosture exists', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { async listWafAssets() { return []; } },
@@ -1400,7 +1400,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_waf_orchestrator_unavailable when wafOrchestrator is missing', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafPosture: { async listWafAssets() { return []; } },
@@ -1438,7 +1438,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ wafValidationPlans: [{ id: 'plan_dev_only', tenant_id: 'ten_demo' }] });
     const pgPlans = [{ id: 'plan_pg_1', tenant_id: 'ten_demo', state: 'draft' }];
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1465,7 +1465,7 @@ describe('createServer postgres mode — route wiring', () => {
   it('handles GET /v1/waf/validation-plans/scheduled via injected wafOrchestrator', async () => {
     const scheduled = [{ id: 'plan_sched_1', tenant_id: 'ten_demo', state: 'scheduled' }];
     let calls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1489,7 +1489,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('handles POST /v1/waf/validation-plans via injected wafOrchestrator', async () => {
     const plan = { id: 'plan_new_1', tenant_id: 'ten_demo', state: 'draft' };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1515,7 +1515,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('handles POST /v1/waf/validation-plans/:id/cancel via injected wafOrchestrator', async () => {
     const cancelled = { id: 'plan_cancel_1', tenant_id: 'ten_demo', state: 'cancelled' };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1543,7 +1543,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('handles POST /v1/waf/baselines/:id/approve via injected wafOrchestrator', async () => {
     const approval = { baseline_id: 'bl_1', approval_id: 'appr_1' };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1570,7 +1570,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('handles POST /v1/waf/drift-events/:id/retest via injected wafOrchestrator', async () => {
     const retest = { id: 'rt_1', tenant_id: 'ten_demo', drift_event_id: 'drf_1', status: 'requested' };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1606,7 +1606,7 @@ describe('createServer postgres mode — route wiring', () => {
         { test_run_id: 'run_delegate_1', probe_job_id: 'pjob_delegate_1', scenario_id: 'marker' },
       ],
     };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1651,7 +1651,7 @@ describe('createServer postgres mode — route wiring', () => {
       ],
     };
     let completeCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1685,7 +1685,7 @@ describe('createServer postgres mode — route wiring', () => {
 
   it('denies viewer before POST /v1/waf/validation-plans/:id/execute calls injected service', async () => {
     let executeCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1724,7 +1724,7 @@ describe('createServer postgres mode — route wiring', () => {
       continuation_required: true,
     };
     let executeCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         wafOrchestrator: {
@@ -1767,7 +1767,7 @@ describe('createServer postgres mode — route wiring', () => {
     ];
     for (const { error, status } of lifecycleCases) {
       let executeCalls = 0;
-      ({ server, baseUrl } = listenPostgresServer(
+      ({ server, baseUrl } = await listenPostgresServer(
         {
           tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
           wafOrchestrator: {
@@ -1802,7 +1802,7 @@ describe('createServer postgres mode — route wiring', () => {
   });
 
   it('returns postgres_route_not_wired for discovery when externalDiscovery is missing and feature is enabled', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       { tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) } },
       undefined,
       { featureFlags: discoveryFeatureFlags },
@@ -1818,7 +1818,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ cvePipelineItems: [{ id: 'cve_dev_only', tenant_id: 'ten_demo' }] });
     const pgItems = [{ id: 'cve_pg_1', tenant_id: 'ten_demo', stage: 'triage' }];
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         cvePipeline: {
@@ -1846,7 +1846,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ supplyChainRisks: [{ id: 'risk_dev_only', tenant_id: 'ten_demo' }] });
     const pgRisks = [{ id: 'risk_pg_1', tenant_id: 'ten_demo', state: 'open' }];
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         supplyChainRisk: {
@@ -1874,7 +1874,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ supplyChainRisks: [{ id: 'risk_dev_only', tenant_id: 'ten_demo' }] });
     const pgRisk = { id: 'risk_pg_1', tenant_id: 'ten_demo', phase: 'AP1_ticket_workflow' };
     let getCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         supplyChainRisk: {
@@ -1903,7 +1903,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ discoveryEntities: [{ id: 'ent_dev_only', tenant_id: 'ten_demo' }] });
     const pgEntities = [{ id: 'ent_pg_1', tenant_id: 'ten_demo', kind: 'hostname' }];
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         externalDiscovery: {
@@ -1931,7 +1931,7 @@ describe('createServer postgres mode — route wiring', () => {
     resetStoreForTests({ wafActionItems: [{ id: 'ai_dev_only', tenant_id: 'ten_demo' }] });
     const patched = { action_item: { id: 'ai_pg_1', tenant_id: 'ten_demo', status: 'closed' } };
     let patchCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) },
         actionItems: {
@@ -1989,7 +1989,7 @@ describe('createServer postgres mode — probe worker routes', () => {
   }
 
   it('returns postgres_route_not_wired when probeJobs service is missing after worker auth', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       { tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) } },
       undefined,
       {
@@ -2006,7 +2006,7 @@ describe('createServer postgres mode — probe worker routes', () => {
   });
 
   it('rejects probe worker requests without x-probe-tenant-id in postgres mode', async () => {
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         probeJobs: {
           listPendingProbeJobsForWorker: async () => [],
@@ -2036,7 +2036,7 @@ describe('createServer postgres mode — probe worker routes', () => {
       probeJobs: [{ id: 'pjob_dev_only', status: 'pending', tenant_id: 'ten_demo' }],
     });
     let listCalls = 0;
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         probeJobs: {
           async listPendingProbeJobsForWorker(ctx) {
@@ -2070,7 +2070,7 @@ describe('createServer postgres mode — probe worker routes', () => {
 
   it('passes tenant context to maybeFinalizeRunAfterProbeIngest after probe result ingest', async () => {
     const finalizeCalls = [];
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       {
         probeJobs: {
           listPendingProbeJobsForWorker: async () => [],
@@ -2120,7 +2120,7 @@ describe('createServer postgres mode — readiness', () => {
       healthCalls += 1;
       return { ok: true, persistence: 'postgres' };
     };
-    ({ server, baseUrl } = listenPostgresServer(
+    ({ server, baseUrl } = await listenPostgresServer(
       { tenants: { getCurrentTenant: async () => ({ id: 'ten_demo' }) } },
       runtimeHealth,
     ));

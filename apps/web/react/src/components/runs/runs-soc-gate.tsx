@@ -689,6 +689,7 @@ export function RunsPageHeadActions({
   onRefresh,
   onRequestSoc,
   onStartSafeRun,
+  onStartScan,
   refreshBusy,
   safeRunBusy,
   safeRunDisabled
@@ -696,6 +697,7 @@ export function RunsPageHeadActions({
   onRefresh: () => void;
   onRequestSoc: () => void;
   onStartSafeRun: () => void;
+  onStartScan?: () => void;
   refreshBusy?: boolean;
   safeRunBusy?: boolean;
   safeRunDisabled?: boolean;
@@ -715,6 +717,7 @@ export function RunsPageHeadActions({
         onClick={onStartSafeRun}
       >Open vector library</Button>
       {safeRunDisabledReason ? <span className="sr-only" id="safe-run-disabled-reason">{safeRunDisabledReason}</span> : null}
+      {onStartScan ? <Button size="sm" onClick={onStartScan}>Start validation scan</Button> : null}
     </>
   );
 }

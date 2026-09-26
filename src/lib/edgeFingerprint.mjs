@@ -1,12 +1,18 @@
 /**
- * Metadata-only edge fingerprint classifier backed by pinned wafw00f + cdncheck data.
+ * Edge fingerprint classifier: a faithful runtime port of wafw00f's plugin evaluation and
+ * cdncheck's address/CNAME lookup over pinned upstream data.
  *
- * Safety invariants:
- * - this module sends no traffic and performs no DNS lookup;
- * - block-page matcher leaves are unavailable unless `blockResponse === true`;
- * - unavailable leaves use three-valued evaluation, so NOT/compound logic cannot promote them;
- * - response values are bounded in memory and never included in classification output;
- * - CNAME result types come from pinned cdncheck code, never provider-name inference.
+ * wafw00f parity: each plugin's decision tree is evaluated in upstream checklist order
+ * (`wafprio.py`). `attack=False` leaves read the normal response and `attack=True` leaves read
+ * the central attack response, exactly as `self.rq` / `self.attackres` do upstream. A leaf whose
+ * response was never captured is unknown, so compound NOT logic cannot promote missing evidence.
+ *
+ * cdncheck parity: addresses are checked cdn -> waf -> cloud, AAAA before A, then CNAME suffixes.
+ * CNAME matching is a label-boundary suffix match, a strict superset of upstream's public-suffix
+ * TLD / SLD.TLD equality. Types come from pinned cdncheck code, never provider-name inference.
+ *
+ * This module sends no traffic and performs no DNS lookup. Response values are bounded in memory
+ * and never included in classification output.
  */
 
 import { isIP } from 'node:net';
@@ -18,9 +24,13 @@ import {
   EDGE_CNAME_RULES,
   EDGE_CORPUS_STATS,
   EDGE_SIGNATURE_CORPUS_MANIFEST,
+  WAF_VENDOR_PRIORITY,
+  WAFW00F_ENGINE,
+  CDNCHECK_ENGINE,
 } from './data/edgeSignatureData.mjs';
+import { CLOUD_ADDRESS_RANGES_PACKED } from './data/edgeCloudRangeData.mjs';
 
-export { EDGE_CORPUS_STATS, EDGE_SIGNATURE_CORPUS_MANIFEST };
+export { EDGE_CORPUS_STATS, EDGE_SIGNATURE_CORPUS_MANIFEST, WAFW00F_ENGINE, CDNCHECK_ENGINE };
 
 export const EDGE_SIGNATURE_CORPUS_VERSION = String(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version);
 
@@ -31,7 +41,7 @@ const FINGERPRINT_ENUMERATED_HEADERS_MAX = 128;
 const FINGERPRINT_SET_COOKIE_VALUE_MAX_LENGTH = 512;
 const FINGERPRINT_SET_COOKIE_VALUES_MAX = 16;
 const FINGERPRINT_SET_COOKIE_TOTAL_MAX_LENGTH = 4096;
-const FINGERPRINT_BODY_MAX_LENGTH = 8192;
+export const FINGERPRINT_BODY_MAX_LENGTH = WAFW00F_ENGINE.max_response_bytes;
 const FINGERPRINT_REASON_MAX_LENGTH = 256;
 const FINGERPRINT_ADDRESS_VALUES_MAX = 64;
 const FINGERPRINT_CNAME_VALUES_MAX = 64;
@@ -139,8 +149,14 @@ function getCompiledCorpus() {
     };
   }
 
+  const priority = WAF_VENDOR_PRIORITY.filter((key) => Object.hasOwn(vendors, key));
+  if (priority.length !== Object.keys(vendors).length) {
+    throw new Error('generated wafw00f priority does not cover every vendor');
+  }
+
   compiledCorpus = Object.freeze({
     vendors: Object.freeze(vendors),
+    priority: Object.freeze(priority),
     exactHeaderNames: Object.freeze(exactHeaderNames),
     regexHeaderNames: Object.freeze(regexHeaderNames),
     hasCookieMatchers,
@@ -295,21 +311,40 @@ function normalizeSetCookieEvidence(evidence, headerEntries) {
       if (normalized) candidates.push(`${normalized}=`);
     }
   }
-  return boundSetCookieValues(candidates);
+  const bounded = boundSetCookieValues(candidates);
+  // requests joins repeated Set-Cookie headers with ", " and wafw00f re-splits on ", ", so a
+  // piece may begin mid-attribute (for example inside an Expires date). Match that exactly.
+  return bounded.length ? bounded.join(', ').split(', ') : [];
 }
 
 function normalizeResponseEvidence(evidence) {
-  const headerEntries = normalizeHeaderEntries(evidence.headerEntries);
+  const record = evidence && typeof evidence === 'object' ? evidence : {};
+  const headerEntries = normalizeHeaderEntries(record.headerEntries);
   return {
     headerEntries,
-    setCookieValues: normalizeSetCookieEvidence(evidence, headerEntries),
-    bodyText: evidence.bodyText
-      ? String(evidence.bodyText).slice(0, FINGERPRINT_BODY_MAX_LENGTH)
+    setCookieValues: normalizeSetCookieEvidence(record, headerEntries),
+    bodyText: record.bodyText
+      ? String(record.bodyText).slice(0, FINGERPRINT_BODY_MAX_LENGTH)
       : '',
-    statusCode: Number.isInteger(evidence.statusCode) ? evidence.statusCode : null,
-    statusReason: String(evidence.statusReason ?? '').slice(0, FINGERPRINT_REASON_MAX_LENGTH),
-    blockResponse: evidence.blockResponse === true,
+    statusCode: Number.isInteger(record.statusCode) ? record.statusCode : null,
+    statusReason: String(record.statusReason ?? '').slice(0, FINGERPRINT_REASON_MAX_LENGTH),
   };
+}
+
+/**
+ * `{ normal, attack }` mirrors wafw00f's `self.rq` / `self.attackres`. The legacy flat shape is
+ * one normal response whose attack view exists only when `blockResponse === true`.
+ */
+function normalizeWafEvidence(evidence = {}) {
+  const input = evidence && typeof evidence === 'object' ? evidence : {};
+  if ('normal' in input || 'attack' in input) {
+    return {
+      normal: input.normal ? normalizeResponseEvidence(input.normal) : null,
+      attack: input.attack ? normalizeResponseEvidence(input.attack) : null,
+    };
+  }
+  const flat = normalizeResponseEvidence(input);
+  return { normal: flat, attack: input.blockResponse === true ? flat : null };
 }
 
 function headerEntriesMatch(headerEntries, compiledHeader, pattern) {
@@ -322,8 +357,9 @@ function headerEntriesMatch(headerEntries, compiledHeader, pattern) {
   return false;
 }
 
-function evaluateSignal(signature, evidence) {
-  if (signature.tier === 'block_page' && !evidence.blockResponse) return MATCH_UNKNOWN;
+function evaluateSignal(signature, responses) {
+  const evidence = signature.tier === 'block_page' ? responses.attack : responses.normal;
+  if (!evidence) return MATCH_UNKNOWN;
   if (signature.signal === 'header') {
     return headerEntriesMatch(
       evidence.headerEntries,
@@ -412,11 +448,12 @@ function vendorConfidence(matchedSignals) {
 }
 
 /**
- * Evaluate faithful wafw00f decision trees against one bounded evidence object.
- * Block-page leaves are unknown—not false—without explicit block evidence, preventing NOT or
- * mixed expressions from turning missing block evidence into a positive match.
+ * Evaluate every pinned wafw00f plugin (the `-a/--findall` view) in upstream checklist order.
+ * `best` is the first match in that order: the single WAF wafw00f reports without `-a`.
  *
  * @param {{
+ *   normal?: object|null,
+ *   attack?: object|null,
  *   headerEntries?: { name: string, value: string }[],
  *   setCookieHeaders?: string[],
  *   cookieNames?: string[],
@@ -424,17 +461,18 @@ function vendorConfidence(matchedSignals) {
  *   statusCode?: number,
  *   statusReason?: string,
  *   blockResponse?: boolean,
- * }} evidence
+ * }} evidence either `{ normal, attack }` response evidence or the legacy flat shape
  */
 export function classifyWafVendorsFromResponseEvidence(evidence = {}) {
-  const { vendors } = getCompiledCorpus();
-  const normalized = normalizeResponseEvidence(evidence);
+  const { vendors, priority } = getCompiledCorpus();
+  const responses = normalizeWafEvidence(evidence);
   const matches = [];
 
-  for (const [vendorKey, vendor] of Object.entries(vendors)) {
-    if (evaluateMatcher(vendor.matcher, vendor.signatures, normalized) !== MATCH_TRUE) continue;
+  for (const [order, vendorKey] of priority.entries()) {
+    const vendor = vendors[vendorKey];
+    if (evaluateMatcher(vendor.matcher, vendor.signatures, responses) !== MATCH_TRUE) continue;
     const matchedSignals = vendor.signatures
-      .filter((signature) => evaluateSignal(signature, normalized) === MATCH_TRUE)
+      .filter((signature) => evaluateSignal(signature, responses) === MATCH_TRUE)
       .map(matchedSignalDescriptor);
     // A constant/absence-only path is never sufficient evidence, even if future upstream syntax
     // makes such a decision tree representable.
@@ -444,17 +482,33 @@ export function classifyWafVendorsFromResponseEvidence(evidence = {}) {
       name: vendor.name,
       confidence: vendorConfidence(matchedSignals),
       matched_signals: matchedSignals,
+      checklist_order: order,
       corpus: 'wafw00f',
     });
   }
 
-  matches.sort((a, b) => b.confidence - a.confidence || a.vendor.localeCompare(b.vendor));
   let conflicting = false;
   if (matches.length >= 2) {
-    const rival = matches.find((match) => match.vendor !== matches[0].vendor);
-    if (rival && matches[0].confidence - rival.confidence <= 0.2) conflicting = true;
+    const strongest = Math.max(...matches.map((match) => match.confidence));
+    conflicting = matches.filter((match) => strongest - match.confidence <= 0.2).length >= 2;
   }
-  return { matches, best: matches[0] ?? null, conflicting_vendor_signals: conflicting };
+  return {
+    matches,
+    best: matches[0] ?? null,
+    conflicting_vendor_signals: conflicting,
+    attack_response_evaluated: responses.attack !== null,
+  };
+}
+
+/** wafw00f's `buildResultRecord` split of "Firewall (Manufacturer)". */
+export function splitWafw00fName(name) {
+  const text = String(name ?? '');
+  const open = text.indexOf('(');
+  if (open < 0) return { firewall: text.trim(), manufacturer: '' };
+  return {
+    firewall: text.slice(0, open).trim(),
+    manufacturer: text.slice(open + 1).replace(')', '').trim(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +587,34 @@ function cidrToInterval(cidr) {
   return { version: parsed.version, start: base, end: base + size - 1n };
 }
 
+const ADDRESS_FAMILIES = Object.freeze(CDNCHECK_ENGINE.check_order);
 const addressIndexCache = new Map();
+
+function sortAndPack(list) {
+  list.sort((a, b) => (
+    a.start < b.start ? -1
+      : a.start > b.start ? 1
+        : a.end < b.end ? -1
+          : a.end > b.end ? 1
+            : a.provider < b.provider ? -1
+              : a.provider > b.provider ? 1 : 0
+  ));
+  let maxSpan = null;
+  for (const row of list) {
+    const span = row.end - row.start;
+    if (maxSpan === null || span > maxSpan) maxSpan = span;
+  }
+  return { rows: list, starts: list.map((row) => row.start), maxSpan };
+}
+
+// IPv4 intervals use Number (exact below 2^53) so the ~93k cloud ranges index without BigInt.
+function pushInterval(rows, interval, provider) {
+  if (interval.version === 4) {
+    rows.v4.push({ start: Number(interval.start), end: Number(interval.end), provider });
+  } else {
+    rows.v6.push({ start: interval.start, end: interval.end, provider });
+  }
+}
 
 function buildAddressIndex(group) {
   const rows = { v4: [], v6: [] };
@@ -541,36 +622,48 @@ function buildAddressIndex(group) {
     for (const cidr of ranges ?? []) {
       const interval = cidrToInterval(cidr);
       if (!interval) throw new Error(`invalid generated CIDR ${provider}:${cidr}`);
-      rows[interval.version === 4 ? 'v4' : 'v6'].push({
-        start: interval.start,
-        end: interval.end,
-        provider,
-      });
+      pushInterval(rows, interval, provider);
     }
   }
-  const pack = (list) => {
-    list.sort((a, b) => (
-      a.start < b.start ? -1
-        : a.start > b.start ? 1
-          : a.end < b.end ? -1
-            : a.end > b.end ? 1
-              : a.provider < b.provider ? -1
-                : a.provider > b.provider ? 1 : 0
-    ));
-    const maxSpan = list.reduce(
-      (max, row) => (row.end - row.start > max ? row.end - row.start : max),
-      0n,
-    );
-    return { rows: list, starts: list.map((row) => row.start), maxSpan };
-  };
-  return { v4: pack(rows.v4), v6: pack(rows.v6) };
+  return { v4: sortAndPack(rows.v4), v6: sortAndPack(rows.v6) };
+}
+
+function unpackFamily(encoded, version, provider, rows) {
+  const bytes = Buffer.from(String(encoded ?? ''), 'hex');
+  const width = version === 4 ? 4 : 16;
+  let offset = 0;
+  while (offset < bytes.length) {
+    const prefix = bytes[offset];
+    const kept = Math.ceil(prefix / 8);
+    if (prefix > width * 8 || offset + 1 + kept > bytes.length) {
+      throw new Error(`invalid packed cloud range for ${provider}`);
+    }
+    let base = 0n;
+    for (let index = 0; index < width; index += 1) {
+      base = (base << 8n) | BigInt(index < kept ? bytes[offset + 1 + index] : 0);
+    }
+    const hostBits = BigInt(width * 8 - prefix);
+    const start = (base >> hostBits) << hostBits;
+    pushInterval(rows, { version, start, end: start + (1n << hostBits) - 1n }, provider);
+    offset += 1 + kept;
+  }
+}
+
+function buildPackedAddressIndex(packed) {
+  const rows = { v4: [], v6: [] };
+  for (const [provider, families] of Object.entries(packed ?? {})) {
+    unpackFamily(families.v4, 4, provider, rows);
+    unpackFamily(families.v6, 6, provider, rows);
+  }
+  return { v4: sortAndPack(rows.v4), v6: sortAndPack(rows.v6) };
 }
 
 function getAddressIndex(family) {
   const cached = addressIndexCache.get(family);
   if (cached) return cached;
-  const group = family === 'cdn' ? CDN_ADDRESS_RANGES : WAF_ADDRESS_RANGES;
-  const index = buildAddressIndex(group);
+  const index = family === 'cloud'
+    ? buildPackedAddressIndex(CLOUD_ADDRESS_RANGES_PACKED)
+    : buildAddressIndex(family === 'cdn' ? CDN_ADDRESS_RANGES : WAF_ADDRESS_RANGES);
   addressIndexCache.set(family, index);
   return index;
 }
@@ -580,12 +673,13 @@ function lookupAddress(family, ip) {
   if (!parsed) return [];
   const { rows, starts, maxSpan } = getAddressIndex(family)[parsed.version === 4 ? 'v4' : 'v6'];
   if (rows.length === 0) return [];
+  const value = parsed.version === 4 ? Number(parsed.value) : parsed.value;
   let low = 0;
   let high = starts.length - 1;
   let index = -1;
   while (low <= high) {
     const middle = (low + high) >> 1;
-    if (starts[middle] <= parsed.value) {
+    if (starts[middle] <= value) {
       index = middle;
       low = middle + 1;
     } else {
@@ -593,25 +687,25 @@ function lookupAddress(family, ip) {
     }
   }
   const providers = new Set();
-  const floor = parsed.value - maxSpan;
+  const floor = value - maxSpan;
   for (let cursor = index; cursor >= 0; cursor -= 1) {
     const row = rows[cursor];
     // Rows are ordered by start. Once start is below value-maxSpan, no earlier interval can
     // reach the value; testing `row.end` here would incorrectly skip an earlier wider overlap.
     if (row.start < floor) break;
-    if (parsed.value >= row.start && parsed.value <= row.end) providers.add(row.provider);
+    if (value >= row.start && value <= row.end) providers.add(row.provider);
   }
   return [...providers].sort().map((provider) => ({ family, provider }));
 }
 
-/** Metadata-only classification for resolved edge/origin IP values. */
+/** Every cdncheck address family (cdn, waf, cloud) containing each resolved IP. */
 export function classifyEdgeByAddress(ips) {
   const list = (Array.isArray(ips) ? ips : [ips]).slice(0, FINGERPRINT_ADDRESS_VALUES_MAX);
   const hits = [];
   for (const ip of list) {
     const value = String(ip ?? '').trim();
     if (!value) continue;
-    hits.push(...lookupAddress('cdn', value), ...lookupAddress('waf', value));
+    for (const family of ADDRESS_FAMILIES) hits.push(...lookupAddress(family, value));
   }
   const seen = new Set();
   return hits.filter((hit) => {
@@ -622,16 +716,20 @@ export function classifyEdgeByAddress(ips) {
   });
 }
 
+function normalizedHost(raw) {
+  return String(raw ?? '').trim().toLowerCase().replace(/\.$/, '');
+}
+
 /**
- * Metadata-only CNAME classification. `type` is the explicit pinned cdncheck CheckSuffix result
- * (`waf` at the pinned revision), even for provider names commonly associated with CDNs.
+ * CNAME classification. `type` is the explicit pinned cdncheck CheckSuffix result (`waf` at the
+ * pinned revision), even for provider names commonly associated with CDNs.
  */
 export function classifyEdgeByCnameChain(cnames) {
   const list = (Array.isArray(cnames) ? cnames : [cnames]).slice(0, FINGERPRINT_CNAME_VALUES_MAX);
   const hits = [];
   const seen = new Set();
   for (const raw of list) {
-    const host = String(raw ?? '').trim().toLowerCase().replace(/\.$/, '');
+    const host = normalizedHost(raw);
     if (!host || isIP(host)) continue;
     for (const rule of EDGE_CNAME_RULES) {
       for (const suffix of rule.suffixes ?? []) {
@@ -639,11 +737,41 @@ export function classifyEdgeByCnameChain(cnames) {
         const key = `${rule.type}:${rule.provider}:${suffix}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        hits.push({ provider: rule.provider, type: rule.type, suffix });
+        hits.push({ provider: rule.provider, type: rule.type, suffix, host });
       }
     }
   }
   return hits;
+}
+
+/**
+ * cdncheck `CheckDNSResponse`: first AAAA hit, then first A hit (each checked cdn -> waf ->
+ * cloud), then the first CNAME suffix hit. Returns the single verdict cdncheck would print.
+ */
+export function classifyCdncheckVerdict({ resolvedIps = [], cnameChain = [] } = {}) {
+  const ips = (Array.isArray(resolvedIps) ? resolvedIps : []).slice(0, FINGERPRINT_ADDRESS_VALUES_MAX)
+    .map((ip) => String(ip ?? '').trim())
+    .filter(Boolean);
+  const byFamily = {
+    aaaa: ips.filter((ip) => isIP(ip) === 6),
+    a: ips.filter((ip) => isIP(ip) === 4),
+  };
+  for (const recordType of CDNCHECK_ENGINE.dns_response_order) {
+    if (recordType === 'cname') {
+      const hit = classifyEdgeByCnameChain(Array.isArray(cnameChain) ? cnameChain : [])[0];
+      if (hit) {
+        return { matched: true, provider: hit.provider, item_type: hit.type, source: 'cname', value: hit.host };
+      }
+      continue;
+    }
+    for (const ip of byFamily[recordType] ?? []) {
+      for (const family of ADDRESS_FAMILIES) {
+        const hit = lookupAddress(family, ip)[0];
+        if (hit) return { matched: true, provider: hit.provider, item_type: family, source: recordType, value: ip };
+      }
+    }
+  }
+  return { matched: false, provider: null, item_type: null, source: null, value: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -664,31 +792,69 @@ function providersForFamily(family, vendorMatches, addressMatches, cnameMatches)
   return [...providers].sort();
 }
 
-/** Combine bounded response evidence with caller-supplied DNS metadata. */
+/**
+ * Combine response evidence with DNS metadata.
+ *
+ * `dnsObserved` states whether the caller actually resolved the target. Without it the CDN and
+ * cloud answers are `null` (not checked) instead of a misleading `false`.
+ *
+ * @param {object} input response evidence (see classifyWafVendorsFromResponseEvidence) plus
+ *   `resolvedIps`, `cnameChain` (queried host first), `dnsObserved`, and optional
+ *   `genericDetection` from the wafw00f generic pass
+ */
 export function classifyEdgeFingerprint(input = {}) {
   const vendorResult = classifyWafVendorsFromResponseEvidence(input);
-  const addressMatches = classifyEdgeByAddress((input.resolvedIps ?? []).filter(Boolean));
-  const cnameMatches = classifyEdgeByCnameChain((input.cnameChain ?? []).filter(Boolean));
+  const resolvedIps = (input.resolvedIps ?? []).filter(Boolean);
+  const cnameChain = (input.cnameChain ?? []).filter(Boolean);
+  const dnsObserved = typeof input.dnsObserved === 'boolean'
+    ? input.dnsObserved
+    : resolvedIps.length > 0 || cnameChain.length > 0;
+  const addressMatches = classifyEdgeByAddress(resolvedIps);
+  const cnameMatches = classifyEdgeByCnameChain(cnameChain);
+  const generic = input.genericDetection && typeof input.genericDetection === 'object'
+    ? {
+        found: input.genericDetection.found === true,
+        reason_code: input.genericDetection.reason_code ?? null,
+        reason: input.genericDetection.reason ?? null,
+      }
+    : null;
 
   // Provider lists are derived only from typed source evidence: wafw00f vendor matches,
   // cdncheck address families, and cdncheck's explicit CNAME type. Names never imply a family.
   const cdnProviders = providersForFamily('cdn', vendorResult.matches, addressMatches, cnameMatches);
   const wafProviders = providersForFamily('waf', vendorResult.matches, addressMatches, cnameMatches);
-  const cdnDetected = cdnProviders.length > 0;
-  const wafPresent = wafProviders.length > 0;
+  const cloudProviders = providersForFamily('cloud', [], addressMatches, []);
+  const best = vendorResult.best;
+  const bestName = best ? splitWafw00fName(best.name) : null;
 
   return {
     corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
     metadata_only: true,
-    waf_present: wafPresent,
+    waf_present: wafProviders.length > 0,
     waf_providers: wafProviders,
-    cdn_detected: cdnDetected,
+    waf_generic_detected: !best && generic?.found === true,
+    cdn_detected: dnsObserved ? cdnProviders.length > 0 : null,
     cdn_providers: cdnProviders,
+    cloud_hosted: dnsObserved ? cloudProviders.length > 0 : null,
+    cloud_providers: cloudProviders,
+    dns_observed: dnsObserved,
     vendor_matches: vendorResult.matches,
-    best_vendor: vendorResult.best,
+    best_vendor: best,
     conflicting_vendor_signals: vendorResult.conflicting_vendor_signals,
+    attack_response_evaluated: vendorResult.attack_response_evaluated,
     address_matches: addressMatches,
     cname_matches: cnameMatches,
+    wafw00f: {
+      detected: Boolean(best) || generic?.found === true,
+      firewall: best ? bestName.firewall : generic?.found ? 'Generic' : 'None',
+      manufacturer: best ? bestName.manufacturer : generic?.found ? 'Unknown' : 'None',
+      plugin: best?.vendor ?? null,
+      all_matches: vendorResult.matches.map((match) => match.vendor),
+      generic,
+    },
+    cdncheck: dnsObserved
+      ? classifyCdncheckVerdict({ resolvedIps, cnameChain })
+      : null,
   };
 }
 

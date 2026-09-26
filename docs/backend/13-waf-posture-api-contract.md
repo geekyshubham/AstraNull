@@ -155,7 +155,7 @@ Dev-json routes are implemented in `src/server.mjs`. Postgres mode wires persist
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
 | GET | `/v1/connectors` | `waf:connector_read` | filters | `{ items }`. |
-| POST | `/v1/connectors` | `waf:connector_write` | `{ provider, name, secret_id?, config }` | `201 { connector }`. |
+| POST | `/v1/connectors` | `waf:connector_write` | `{ provider, name, secret_id?, config, validate_only? }` | `201 { connector }`; `validate_only: true` → `200 { valid, connector }` with no write. Feature gate: runtime `isConnectorsEnabledForTenant` is authoritative; Postgres `tenant_connector_features` is reconciled to it on connector routes and `GET /v1/tenant/deployment-features`. |
 | POST | `/v1/connectors/:id/validate` | `waf:connector_write` | - | `{ status, capabilities, redacted_errors? }`. |
 | POST | `/v1/connectors/:id/poll` | `waf:connector_write` | `{ snapshot_kinds? }` | `202 { poll_job }`. |
 | GET | `/v1/connectors/:id/snapshots` | `waf:connector_read` | filters | `{ items }`. |

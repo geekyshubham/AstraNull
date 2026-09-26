@@ -20,6 +20,8 @@ type AppShellProps = {
   onRefresh: () => void;
   /** Dev-headers only: show role switcher for local RBAC previews. */
   showRoleSwitcher?: boolean;
+  accessNotice?: string;
+  onDismissAccessNotice?: () => void;
   children: ReactNode;
 };
 
@@ -109,6 +111,8 @@ export function AppShell({
   onRoleChange,
   onRefresh,
   showRoleSwitcher = false,
+  accessNotice = '',
+  onDismissAccessNotice,
   children
 }: AppShellProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
@@ -386,6 +390,16 @@ export function AppShell({
             <Button type="button" variant="secondary" size="sm" onClick={onRefresh}>
               Retry
             </Button>
+          </div>
+        ) : null}
+        {accessNotice ? (
+          <div className="form-banner info route-access-notice" role="status" aria-live="polite">
+            <span>{accessNotice}</span>
+            {onDismissAccessNotice ? (
+              <Button type="button" variant="ghost" size="sm" onClick={onDismissAccessNotice}>
+                Dismiss
+              </Button>
+            ) : null}
           </div>
         ) : null}
         <RouteTransition routeKey={route}>{children}</RouteTransition>

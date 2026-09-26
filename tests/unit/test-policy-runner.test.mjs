@@ -11,6 +11,7 @@ import {
   resolveTestPolicyRunnerConfig,
   resolveTestPolicySchedulerIntervalSeconds,
   runPostgresTestPolicies,
+  runScheduledCompanionJobs,
   summarizePolicyDispatch,
 } from '../../scripts/test-policy-runner.mjs';
 
@@ -272,5 +273,38 @@ describe('test policy operator runner', () => {
     assert.equal(summary.artifact_type, 'test_policy_scheduler_runtime_run');
     assert.equal(summary.due_count, 1);
     assert.equal(JSON.stringify(summary).includes('database URL'), true);
+  });
+});
+
+describe('scheduled companion jobs (hosted single-VM tick)', () => {
+  const env = {
+    NODE_ENV: 'test',
+    ASTRANULL_DATABASE_URL: 'postgres://x@localhost/x',
+    ASTRANULL_PROBE_MODE: 'signed-worker',
+    ASTRANULL_PROBE_WORKER_SECRET: randomBytes(32).toString('hex'),
+  };
+
+  it('runs the sweeper and scan runner for the same tenant scope and isolates failures', async () => {
+    const calls = [];
+    const ok = await runScheduledCompanionJobs(env, { tenantIds: ['ten_a', 'ten_b'], dryRun: false }, {
+      sweep: async (_env, cfg) => { calls.push(['sweep', cfg.tenantIds]); return { totals: { errors: 0 } }; },
+      scans: async (_env, cfg) => { calls.push(['scans', cfg.tenantIds]); return { exitCode: 0 }; },
+    });
+    assert.deepEqual(ok, { sweep: 'ok', scans: 'ok', exitCode: 0 });
+    assert.deepEqual(calls, [['sweep', ['ten_a', 'ten_b']], ['scans', ['ten_a', 'ten_b']]]);
+
+    const failed = await runScheduledCompanionJobs(env, { tenantIds: ['ten_a'], dryRun: false }, {
+      sweep: async () => { throw new Error('boom'); },
+      scans: async () => ({ exitCode: 0 }),
+    });
+    assert.deepEqual(failed, { sweep: 'failed', scans: 'ok', exitCode: 1 });
+  });
+
+  it('does nothing in dry-run mode', async () => {
+    const result = await runScheduledCompanionJobs(env, { tenantIds: ['ten_a'], dryRun: true }, {
+      sweep: async () => assert.fail('sweep must not run'),
+      scans: async () => assert.fail('scans must not run'),
+    });
+    assert.equal(result.exitCode, 0);
   });
 });

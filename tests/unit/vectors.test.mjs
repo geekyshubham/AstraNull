@@ -424,7 +424,7 @@ describe('vector catalog', () => {
         http2_frame_probe: 4,
         http3_control_probe: 1,
         waf_inspection_limit_probe: 6,
-        outside_in_waf_scan: 13,
+        outside_in_waf_scan: 16,
       },
     );
   });

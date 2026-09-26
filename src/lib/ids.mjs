@@ -28,6 +28,8 @@ const PREFIX = {
   tv: 'tv',
   loa: 'loa',
   art: 'art',
+  scan: 'scan',
+  step: 'step',
 };
 
 export function newId(kind) {

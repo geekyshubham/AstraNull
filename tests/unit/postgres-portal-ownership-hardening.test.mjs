@@ -274,7 +274,10 @@ describe('postgres portal audited transaction boundary', () => {
       if (sql.includes('FROM loa_signatures')) return 'loa';
       if (sql.includes('COUNT(*) FILTER')) return 'finding-counts';
       if (sql.includes('FROM findings')) return 'findings';
+      if (sql.includes('DISTINCT ON (r.check_id)')) return 'latest-runs-by-check';
       if (sql.includes('FROM test_runs')) return 'runs';
+      if (sql.includes('FROM test_policies')) return 'policies';
+      if (sql.includes('FROM target_verification_current')) return 'current-verification';
       if (sql.includes('SELECT * FROM waf_assets')) return 'waf-asset';
       if (sql.includes('FROM agents')) return 'agent-binding';
       if (sql.includes('FROM waf_posture_snapshots')) return 'waf-snapshot';
@@ -335,6 +338,9 @@ describe('postgres portal audited transaction boundary', () => {
       'findings',
       'finding-counts',
       'runs',
+      'policies',
+      'latest-runs-by-check',
+      'current-verification',
       'waf-asset',
       'agent-binding',
       'waf-snapshot',

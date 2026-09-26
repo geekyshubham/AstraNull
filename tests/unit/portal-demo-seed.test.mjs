@@ -3,6 +3,11 @@ import '../helpers/dev-data-dir.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildPortalDemoStore, PORTAL_DEMO_IDS } from '../fixtures/portal-demo/seed.mjs';
+import { rebaseDemoStoreTimestamps } from '../../scripts/seed-dev-portal-demo.mjs';
+import { validateManifest, verifyDetachedManifestSignature } from '../../src/lib/agentUpdates.mjs';
+import { listAgentUpdateReleases } from '../../src/services/agentUpdates.mjs';
+import { transitionHighScale } from '../../src/services/highScale.mjs';
+import { resetStoreForTests } from '../../src/store.mjs';
 
 describe('portal demo seed fixture', () => {
   it('fills every major portal surface for ten_demo', () => {
@@ -56,5 +61,34 @@ describe('portal demo seed fixture', () => {
       assert.equal(record.target_id, run.target_id);
       assert.equal(record.check_id, run.check_id);
     }
+  });
+
+  it('seeds a signed agent update release whose signer is an active trust key', () => {
+    const store = buildPortalDemoStore();
+    resetStoreForTests(store);
+    const [release] = store.agentUpdateReleases;
+    assert.equal(validateManifest(release.manifest, release.version), null);
+    assert.equal(verifyDetachedManifestSignature(release.manifest, release.signature), null);
+
+    const items = listAgentUpdateReleases({ tenantId: PORTAL_DEMO_IDS.tenantId });
+    assert.equal(items.length, 1);
+    const trustKey = store.agentUpdateTrustKeys.find((key) => key.status === 'active');
+    assert.equal(items[0].signing_fingerprint_sha256, trustKey.fingerprint_sha256);
+  });
+
+  it('lets SOC schedule the approved demo request inside its governed window', () => {
+    const now = new Date();
+    resetStoreForTests(rebaseDemoStoreTimestamps(buildPortalDemoStore(), now));
+    const result = transitionHighScale(
+      { tenantId: PORTAL_DEMO_IDS.tenantId, userId: 'usr_soc', role: 'soc' },
+      'hsr_demo_approved',
+      'schedule',
+      {
+        window_start: new Date(now.getTime() - 60_000).toISOString(),
+        window_end: new Date(now.getTime() + 3_600_000).toISOString(),
+      },
+    );
+    assert.equal(result.error, undefined, JSON.stringify(result));
+    assert.equal(result.state, 'scheduled');
   });
 });

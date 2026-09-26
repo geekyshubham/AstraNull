@@ -20,6 +20,7 @@ import {
 import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId } from '../lib/route-params';
+import { apiErrorMessage } from '../lib/error-messages';
 import { formatDate, formatNumber } from '../lib/utils';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
@@ -685,8 +686,7 @@ function buildSocExecutionTimeline(requests: DataItem[]): SocTimelineRow[] {
 
 type SocCrossTenantRow = { id: string; tenantId: string; kind: string; state: string; requestedAt: string };
 
-// Staff SOC surface only. Cross-tenant governed requests come from the staff approval queue
-// (`data.internalApprovalRequests`, fetched for staff sessions), filtered to high-scale kinds.
+// Staff SOC surface only: rows come from GET /internal/admin/soc/high-scale-requests (staff:soc:read, audited).
 function isHighScaleApprovalKind(kind: string) {
   return kind.trim().toLowerCase().startsWith('high_scale');
 }
@@ -1003,7 +1003,7 @@ export function NotificationsPage({
                 <Button type="button" size="sm" variant="ghost" disabled={busy !== ''} onClick={(clickEvent) => {
                   const form = clickEvent.currentTarget.closest('form');
                   if (form instanceof HTMLFormElement) previewRuleFromForm(form);
-                }}>Send test event (dry-run)</Button>
+                }}>Preview rule (no send)</Button>
               </div>
             </form>
           </CardContent>
@@ -1640,6 +1640,36 @@ export function SocConsolePage({
     ? session.principal === 'staff' && isStaffSocRole(session)
     : session.role === 'soc' && session.principal !== 'staff';
   const effectiveSocTenant = executionTenantId || String(session.tenant_id ?? '').trim();
+  const [socQueue, setSocQueue] = useState<{ items: DataItem[]; tenants: DataItem[]; error: string }>({ items: [], tenants: [], error: '' });
+  const [socQueueRevision, setSocQueueRevision] = useState(0);
+  const staffIdentity = `${session.principal ?? ''}:${session.staff_id ?? ''}:${session.staff_role ?? ''}:${session.access_token ?? ''}`;
+
+  useEffect(() => {
+    if (!staffSocSurface || !isSoc) return undefined;
+    let cancelled = false;
+    requestJson(config, session, '/internal/admin/soc/high-scale-requests')
+      .then((payload) => {
+        if (cancelled) return;
+        const body = (payload ?? {}) as { items?: unknown; tenants?: unknown };
+        setSocQueue({
+          items: Array.isArray(body.items) ? (body.items as DataItem[]) : [],
+          tenants: Array.isArray(body.tenants) ? (body.tenants as DataItem[]) : [],
+          error: ''
+        });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setSocQueue({ items: [], tenants: [], error: apiErrorMessage(err, 'Cross-tenant high-scale requests could not be loaded.') });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staffSocSurface, isSoc, staffIdentity, socQueueRevision]);
+
+  async function refreshSocConsole() {
+    setSocQueueRevision((value) => value + 1);
+    await onRefresh();
+  }
 
   async function applyExecutionTenant(tenantId: string) {
     const nextTenant = tenantId.trim();
@@ -1826,7 +1856,7 @@ export function SocConsolePage({
   const goNoGoGates = buildSocGoNoGoGates(data.highScale, { killSwitchActive, runningCount, openFindings: openFindingsCount });
   const providerContactRows = buildProviderContactRows(data.highScale);
   const executionTimeline = buildSocExecutionTimeline(data.highScale);
-  const crossTenantHighScale = staffSocSurface ? buildSocCrossTenantRows(data.internalApprovalRequests) : [];
+  const crossTenantHighScale = staffSocSurface ? buildSocCrossTenantRows(socQueue.items) : [];
   const executionTenantMissing = staffSocSurface && !effectiveSocTenant;
   const activateKillSwitchReason = executionTenantMissing
     ? 'Select an execution tenant before activating the kill switch.'
@@ -1846,13 +1876,14 @@ export function SocConsolePage({
     crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—')
   ).size;
   const tenantSelectOptions = useMemo(() => {
+    const names = new Map(socQueue.tenants.map((tenant) => [getString(tenant, ['tenant_id'], ''), getString(tenant, ['name'], '')]));
     const fromCross = crossTenantHighScale.map((row) => row.tenantId).filter((id) => id && id !== '—');
-    const ids = [...new Set([...fromCross, effectiveSocTenant].filter(Boolean))];
+    const ids = [...new Set([...fromCross, ...names.keys(), effectiveSocTenant].filter(Boolean))];
     return [
       { value: '', label: 'Select execution tenant…' },
-      ...ids.map((id) => ({ value: id, label: id }))
+      ...ids.map((id) => ({ value: id, label: names.get(id) ? `${names.get(id)} (${id})` : id }))
     ];
-  }, [crossTenantHighScale, effectiveSocTenant]);
+  }, [crossTenantHighScale, effectiveSocTenant, socQueue.tenants]);
 
   if (!isSoc) {
     return (
@@ -2009,15 +2040,15 @@ export function SocConsolePage({
         <Card>
           <CardHeader>
             <CardTitle>Cross-tenant execution</CardTitle>
-            <CardDescription>Governed high-scale requests across all customer tenants, sourced from the staff approval queue. Open a request for the full lifecycle workspace.</CardDescription>
+            <CardDescription>Governed high-scale requests across all customer tenants, read from the audited staff SOC queue. Open a request for the full lifecycle workspace.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
               columns={socCrossTenantColumns}
               items={crossTenantHighScale}
               getRowId={(item) => `${item.tenantId}:${item.id}`}
-              loadError={data.loadErrors.internalApprovalRequests}
-              onRetry={() => void onRefresh()}
+              loadError={socQueue.error}
+              onRetry={() => void refreshSocConsole()}
               empty={<EmptyState icon={Users} title="No cross-tenant high-scale requests." body="Governed requests across tenants appear here after intake and authorization-pack review." />}
             />
           </CardContent>

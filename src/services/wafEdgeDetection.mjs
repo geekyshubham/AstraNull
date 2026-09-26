@@ -116,8 +116,10 @@ function projectWorkerResult(run, events) {
     detection: {
       waf: projection.waf,
       cdn: projection.cdn,
+      cloud: projection.cloud,
       ...(projection.waf_providers.length ? { waf_providers: projection.waf_providers } : {}),
       ...(projection.cdn_providers.length ? { cdn_providers: projection.cdn_providers } : {}),
+      ...(projection.cloud_providers.length ? { cloud_providers: projection.cloud_providers } : {}),
       ...(projection.confidence ? { confidence: projection.confidence } : {}),
       ...(projection.conflicting_vendor_signals ? { conflicting_vendor_signals: true } : {}),
       ...(projection.corpus_version ? { corpus_version: projection.corpus_version } : {}),

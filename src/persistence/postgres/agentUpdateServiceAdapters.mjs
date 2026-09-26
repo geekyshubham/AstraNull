@@ -6,6 +6,7 @@ import {
   parseEd25519SpkiDerBase64,
   parseManifestSigningKey,
   toPublicRelease,
+  toPublicReleaseList,
   toPublicTrustKey,
   validateAgentUpdateStatusBody,
   validateDetachedSignature,
@@ -256,7 +257,7 @@ export function createPostgresAgentUpdateServices(repositories, options = {}) {
 
     async listAgentUpdateReleases(ctx) {
       const items = await repo.listReleases(ctx);
-      return items.map(toPublicRelease);
+      return toPublicReleaseList(items);
     },
 
     async requestAgentUpdateRollback(ctx, releaseId) {

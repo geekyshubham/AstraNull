@@ -219,6 +219,13 @@ export const DETAIL_ROUTE_ITEMS: NavItem[] = [
     icon: Activity
   },
   {
+    id: 'scan-detail',
+    label: 'Validation scan',
+    group: 'validation',
+    description: 'Live step progress, bounded request and response metadata, requests sent, verdicts, and the metadata-only activity log for one validation scan.',
+    icon: Activity
+  },
+  {
     id: 'finding-detail',
     label: 'Finding detail',
     group: 'validation',

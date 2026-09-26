@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
   isConnectorsEnabledForTenant,
+  loadProbeDispatchConfig,
   loadRuntimeConfig,
+  probeDispatchReady,
   resolveAgentIdentityMode,
+  resolveProbeDispatchConfig,
   resolveHighScaleAdapterMode,
   resolvePersistenceMode,
   resolveProbeMode,
@@ -290,3 +293,33 @@ describe('production persistence fail-closed', () => {
     assert.throws(() => resolveAgentIdentityMode(), /bearer is not permitted/);
   });
 });
+
+describe('probe dispatch config for background scan advancement', () => {
+  it('returns a trimmed validated secret and never throws for missing or weak signing material', () => {
+    const ok = resolveProbeDispatchConfig({ NODE_ENV: 'production', ASTRANULL_PROBE_WORKER_SECRET: `  ${TEST_PROBE_SECRET}  ` });
+    assert.deepEqual(ok, { probeMode: 'signed-worker', probeWorkerSecret: TEST_PROBE_SECRET, error: null, message: null });
+    assert.equal(probeDispatchReady(ok), true);
+
+    const missing = resolveProbeDispatchConfig({ NODE_ENV: 'production' });
+    assert.equal(missing.probeMode, 'signed-worker');
+    assert.equal(missing.probeWorkerSecret, null);
+    assert.equal(missing.error, 'probe_worker_secret_too_short');
+    assert.equal(probeDispatchReady(missing), false);
+
+    const weak = resolveProbeDispatchConfig({ NODE_ENV: 'production', ASTRANULL_PROBE_WORKER_SECRET: 'q'.repeat(48) });
+    assert.equal(weak.error, 'hmac_secret_low_entropy');
+    assert.equal(JSON.stringify(weak).includes('qqqq'), false);
+
+    assert.equal(resolveProbeDispatchConfig({ ASTRANULL_PROBE_MODE: 'bogus' }).error, 'invalid_probe_mode');
+    assert.deepEqual(resolveProbeDispatchConfig({ NODE_ENV: 'development' }), {
+      probeMode: 'simulation', probeWorkerSecret: null, error: null, message: null,
+    });
+  });
+
+  it('loadProbeDispatchConfig throws the same message as runtime config loading', () => {
+    assert.throws(() => loadProbeDispatchConfig({ NODE_ENV: 'production' }), /must be at least 32 characters/);
+    assert.equal(probeDispatchReady({ probeMode: 'signed-worker', probeWorkerSecret: ' padded ' }), false);
+    assert.equal(probeDispatchReady({ probeMode: 'simulation' }), true);
+  });
+});
+

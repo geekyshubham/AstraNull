@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import {
   apiErrorMessage,
+  configurationErrorMessage,
   humanizeErrorCode,
   publicApiErrorCode,
   publicApiErrorMessage,
@@ -35,6 +36,22 @@ describe('portal error humanizer', () => {
       'A run is already in progress for this target group. Cancel or finalize it before starting another.',
     );
     assert.doesNotMatch(banner, /concurrent_run_blocked/);
+  });
+
+  it('maps known 5xx configuration codes to fixed actionable copy without server text', () => {
+    const err = Object.assign(new Error('Service is temporarily unavailable. Try again shortly.'), {
+      status: 503,
+      payload: { error: 'encryption_not_configured', message: 'internal detail host=db-7' },
+    });
+    const banner = apiErrorMessage(err, 'Action failed.');
+    assert.match(banner, /ASTRANULL_SECRET_ENCRYPTION_KEY/);
+    assert.doesNotMatch(banner, /db-7|encryption_not_configured/);
+    assert.equal(configurationErrorMessage({ error: 'unknown_failure' }), '');
+    const generic = Object.assign(new Error('Something went wrong on the server. Try again.'), {
+      status: 500,
+      payload: { error: 'boom', message: 'stack trace' },
+    });
+    assert.equal(apiErrorMessage(generic, 'Action failed.'), 'Something went wrong on the server. Try again.');
   });
 
   it('never lets a snake_case code reach a banner, mapped or not', () => {

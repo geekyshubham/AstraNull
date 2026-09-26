@@ -378,14 +378,14 @@ describe('react portal route access', () => {
     const bootStart = APP_SOURCE.indexOf('async function boot()');
     const bootEnd = APP_SOURCE.indexOf("boot().catch", bootStart);
     const boot = APP_SOURCE.slice(bootStart, bootEnd);
-    const fallback = boot.indexOf('fallbackRouteForPrincipal(nextSession.principal)');
+    const fallback = boot.indexOf('fallbackRouteForSession(nextSession)');
     const authorize = boot.indexOf('canAccessRoute(nextSession.role, requestedBootRoute');
     const redirect = boot.indexOf('window.history.replaceState');
     const route = boot.indexOf('setRoute(bootRoute)');
     const hydrate = boot.indexOf('await refresh(nextConfig, nextSession, bootRoute)');
     const reveal = boot.indexOf('setLoading(false)');
 
-    assert.ok(fallback >= 0, 'boot must select an authorized principal-specific fallback');
+    assert.ok(fallback >= 0, 'boot must select an authorized role-specific fallback');
     assert.ok(fallback < authorize, 'the fallback must be available to the route authorization decision');
     assert.ok(authorize < redirect, 'authorization must decide whether the hash is replaced');
     assert.ok(redirect < route, 'an unauthorized deep-link must point at its authorized fallback before route state changes');

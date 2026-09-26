@@ -56,6 +56,7 @@ import * as targetDetail from './services/targetDetail.mjs';
 import * as remediation from './services/remediation.mjs';
 import * as testPolicies from './services/testPolicies.mjs';
 import * as testRuns from './services/testRuns.mjs';
+import * as validationScans from './services/validationScans.mjs';
 import * as vectorLibrary from './services/vectorLibrary.mjs';
 import * as tokens from './services/tokens.mjs';
 import * as serviceAccounts from './services/serviceAccounts.mjs';
@@ -70,6 +71,13 @@ import * as productionReleaseEvidence from './services/productionReleaseEvidence
 import * as custodyVerification from './services/custodyVerification.mjs';
 import * as evidenceSnapshotSigning from './services/evidenceSnapshotSigning.mjs';
 import * as wafPosture from './services/wafPosture.mjs';
+import {
+  csvImportRejected,
+  extractMultipartField,
+  parseTargetCsv,
+  TARGET_CSV_MAX_BYTES,
+  TARGET_CSV_MULTIPART_OVERHEAD_BYTES,
+} from './lib/targetCsvImport.mjs';
 import * as wafOffensive from './services/wafOffensive.mjs';
 import * as wafOrchestrator from './services/wafOrchestrator.mjs';
 import {
@@ -123,6 +131,7 @@ function defaultServiceDeps() {
     agents,
     agentAuth: { requireAgentAuth },
     testRuns,
+    validationScans,
     vectors: vectorLibrary,
     evidence,
     findings: {
@@ -236,6 +245,19 @@ function blockWafFeatureDisabled(runtimeConfig, path, res) {
   if (runtimeConfig.featureFlags.wafPostureEnabled === true) return false;
   json(res, 404, { error: 'waf_feature_disabled' });
   return true;
+}
+
+async function reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx) {
+  if (runtimeConfig.persistenceMode !== 'postgres' || !ctx.tenantId) return;
+  const waf = serviceDeps.wafPosture;
+  if (typeof waf?.isConnectorFeatureEnabled !== 'function'
+    || typeof waf?.setConnectorFeatureState !== 'function') return;
+  const desired = isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId);
+  if (await waf.isConnectorFeatureEnabled(ctx) === desired) return;
+  await waf.setConnectorFeatureState(
+    { ...ctx, userId: 'runtime-config-connector-sync', role: 'system' },
+    desired,
+  );
 }
 
 function blockConnectorFeatureDisabled(runtimeConfig, ctx, path, res) {
@@ -510,6 +532,12 @@ function blockTestPolicyRoute(serviceDeps, method, res) {
   };
   const methodName = methodNameByHttpMethod[method];
   if (typeof serviceDeps.testPolicies?.[methodName] === 'function') return false;
+  respondPostgresRouteNotWired(res);
+  return true;
+}
+
+function blockValidationScanRoute(serviceDeps, methodName, res) {
+  if (typeof serviceDeps.validationScans?.[methodName] === 'function') return false;
   respondPostgresRouteNotWired(res);
   return true;
 }
@@ -831,6 +859,9 @@ export function createServer(options = {}) {
   const runtimeHealth = options.runtimeHealth ?? options.persistenceRuntime?.health;
   if (runtimeConfig.persistenceMode !== 'postgres') {
     seedIfEmpty();
+    validationScans.configureValidationScanRuntime(runtimeConfig);
+  } else {
+    serviceDeps.validationScans?.configureValidationScanRuntime?.(runtimeConfig);
   }
 
   const rateLimiter = runtimeConfig.rateLimit.disabled
@@ -1264,6 +1295,11 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (method === 'GET' && path === '/v1/tenant/deployment-features') {
     const gate = requirePermission(ctx, 'tenant:read');
     if (!gate.ok) return json(res, gate.status, gate.body);
+    try {
+      await reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx);
+    } catch (err) {
+      console.warn(`connector feature projection sync failed: ${redactDatabaseUrlInMessage(err)}`);
+    }
     return json(res, 200, getTenantDeploymentFeatures(ctx, runtimeConfig));
   }
   if (method === 'GET' && path === '/v1/subscription/current') {
@@ -1419,6 +1455,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   }
 
   if (blockWafFeatureDisabled(runtimeConfig, path, res)) return;
+  if (isConnectorRoute(path)) await reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx);
   if (blockConnectorFeatureDisabled(runtimeConfig, ctx, path, res)) return;
   if (blockPostgresWafOrchestratorRoute(runtimeConfig, serviceDeps, path, res)) return;
   if (blockPostgresWafPostureRoute(runtimeConfig, serviceDeps, path, res)) return;
@@ -1794,9 +1831,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (method === 'POST' && path === '/v1/connectors') {
     const gate = requirePermission(ctx, 'waf:connector_write');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
-    const result = await wafSvc.createConnector(ctx, body);
+    const { validate_only: validateOnly, ...body } = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await wafSvc.createConnector(ctx, body, { validateOnly: validateOnly === true });
     if (result.error) return json(res, result.status ?? 400, result);
+    if (validateOnly === true) return json(res, 200, { valid: true, connector: result.connector });
     return json(res, 201, { connector: result.connector });
   }
   const connectorValidateMatch = path.match(/^\/v1\/connectors\/([^/]+)\/validate$/);
@@ -2381,10 +2419,45 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (!gate.ok) return json(res, gate.status, gate.body);
     if (blockPostgresPortalRevampRoute(runtimeConfig, serviceDeps, path, method, res)) return;
     const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    if (body?.connector_id) {
+      if (!isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId)) {
+        return json(res, 404, { error: 'connector_feature_disabled' });
+      }
+      await reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx);
+    }
     const bulkImportFn = serviceDeps.targetGroups.bulkImportTargets ?? targetGroups.bulkImportTargets;
     const result = await bulkImportFn(ctx, tgBulkImportMatch[1], body);
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 201, result);
+  }
+  const tgCsvImportMatch = path.match(/^\/v1\/target-groups\/([^/]+)\/targets:csv$/);
+  if (tgCsvImportMatch && method === 'POST') {
+    const gate = requirePermission(ctx, 'target_group:write');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    const importFn = serviceDeps.targetGroups?.importTargets
+      ?? (runtimeConfig.persistenceMode === 'postgres' ? null : targetGroups.importTargets);
+    if (typeof importFn !== 'function') return respondPostgresRouteNotWired(res);
+    const contentType = String(req.headers['content-type'] ?? '');
+    let csvText;
+    if (/^multipart\/form-data/i.test(contentType)) {
+      const field = extractMultipartField(
+        await readBodyText(req, TARGET_CSV_MAX_BYTES + TARGET_CSV_MULTIPART_OVERHEAD_BYTES),
+        contentType,
+      );
+      if (field.error) return json(res, field.status, { ...field, created: [], errors: [] });
+      csvText = field.value;
+    } else if (/^text\/csv/i.test(contentType)) {
+      csvText = await readBodyText(req, TARGET_CSV_MAX_BYTES);
+    } else {
+      csvText = (await readJsonBody(req, TARGET_CSV_MAX_BYTES * 2))?.csv;
+    }
+    const parsed = parseTargetCsv(csvText);
+    if (parsed.error) return json(res, parsed.status, parsed);
+    if (parsed.errors.length) return json(res, 422, csvImportRejected(parsed.errors));
+    const result = await importFn(ctx, tgCsvImportMatch[1], parsed.rows);
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, { created: result.created, errors: [] });
   }
   const tgtMatch = path.match(/^\/v1\/target-groups\/([^/]+)\/targets$/);
   if (tgtMatch && method === 'POST') {
@@ -2897,6 +2970,74 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     if (result.error) return json(res, result.status ?? 400, result);
     return json(res, 200, result);
   }
+  if (path === '/v1/validation-scans' && method === 'POST') {
+    const gate = requirePermission(ctx, 'test_run:start');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'createValidationScan', res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await serviceDeps.validationScans.createValidationScan(ctx, body, runtimeConfig);
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 201, result);
+  }
+  if (path === '/v1/validation-scans' && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'listValidationScans', res)) return;
+    const result = await serviceDeps.validationScans.listValidationScans(ctx, {
+      target_group_id: url.searchParams.get('target_group_id') ?? undefined,
+      status: url.searchParams.get('status') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+      runtimeConfig,
+    });
+    return json(res, 200, result);
+  }
+  const scanMatch = path.match(/^\/v1\/validation-scans\/([^/]+)$/);
+  if (scanMatch && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'getValidationScan', res)) return;
+    const result = await serviceDeps.validationScans.getValidationScan(ctx, scanMatch[1], { runtimeConfig });
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
+  if (scanMatch && method === 'PATCH') {
+    const gate = requirePermission(ctx, 'test_run:start');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'patchValidationScan', res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await serviceDeps.validationScans.patchValidationScan(ctx, scanMatch[1], body, { runtimeConfig });
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 400, result);
+    return json(res, 200, result);
+  }
+  const scanCancel = path.match(/^\/v1\/validation-scans\/([^/]+)\/cancel$/);
+  if (scanCancel && method === 'POST') {
+    const gate = requirePermission(ctx, 'test_run:start');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'cancelValidationScan', res)) return;
+    const body = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes);
+    const result = await serviceDeps.validationScans.cancelValidationScan(ctx, scanCancel[1], {
+      reason: body?.reason,
+      cancel_series: body?.cancel_series === true,
+      runtimeConfig,
+    });
+    if (!result) return json(res, 404, { error: 'not_found' });
+    if (result.error) return json(res, result.status ?? 409, result);
+    return json(res, 200, result);
+  }
+  const scanActivity = path.match(/^\/v1\/validation-scans\/([^/]+)\/activity$/);
+  if (scanActivity && method === 'GET') {
+    const gate = requirePermission(ctx, 'test_run:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (blockValidationScanRoute(serviceDeps, 'getValidationScanActivity', res)) return;
+    const result = await serviceDeps.validationScans.getValidationScanActivity(ctx, scanActivity[1], {
+      after: url.searchParams.get('after') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+      runtimeConfig,
+    });
+    if (!result) return json(res, 404, { error: 'not_found' });
+    return json(res, 200, result);
+  }
   if (path === '/v1/test-runs' && method === 'POST') {
     const gate = requirePermission(ctx, 'test_run:start');
     if (!gate.ok) return json(res, gate.status, gate.body);
@@ -2952,7 +3093,10 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (runCancel && method === 'POST') {
     const gate = requirePermission(ctx, 'test_run:start');
     if (!gate.ok) return json(res, gate.status, gate.body);
-    const result = await serviceDeps.testRuns.cancelTestRun(ctx, runCancel[1]);
+    const cancelBody = await readJsonBody(req, runtimeConfig.maxJsonBodyBytes).catch(() => ({}));
+    const result = await serviceDeps.testRuns.cancelTestRun(ctx, runCancel[1], {
+      reason: cancelBody && typeof cancelBody === 'object' ? cancelBody.reason : undefined,
+    });
     if (!result) return json(res, 404, { error: 'not_found' });
     if (result.error) return json(res, result.status ?? 409, { error: result.error });
     return json(res, 200, result.run);
@@ -3653,6 +3797,20 @@ async function handleInternalAdminApi(req, res, url, ctx, runtimeConfig, options
         kind: url.searchParams.get('kind') ?? undefined,
       }),
     });
+  }
+
+  if (method === 'GET' && path === '/internal/admin/soc/high-scale-requests') {
+    const gate = requireStaffPermission(ctx, 'staff:soc:read');
+    if (!gate.ok) return json(res, gate.status, gate.body);
+    if (typeof managementService.listSocHighScaleRequests !== 'function') {
+      return json(res, 503, { error: 'postgres_internal_admin_not_wired' });
+    }
+    const result = await managementService.listSocHighScaleRequests(ctx, {
+      state: url.searchParams.get('state') ?? undefined,
+      tenant_id: url.searchParams.get('tenant_id') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+    });
+    return json(res, 200, { items: result.items, count: result.items.length, tenants: result.tenants });
   }
 
   const approvalDecision = path.match(/^\/internal\/admin\/approval-requests\/([^/]+)\/decision$/);

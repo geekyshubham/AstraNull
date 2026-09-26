@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   apiErrorCode,
+  edgeDetectionLockedReason,
+  edgeDetectionReasonExplanation,
+  edgeFamilyProviderSummary,
   isActiveDnsChallenge,
   isLoaScopeEligible,
   isSignedLoaState,
@@ -96,6 +99,27 @@ describe('target-detail truthfulness helpers', () => {
   });
 });
 
+describe('target-detail edge presentation helpers', () => {
+  it('labels non-asserted providers coherently instead of hiding the asserted one as none reported', () => {
+    assert.deepEqual(edgeFamilyProviderSummary('cloudflare', ['cloudflare']), { label: 'Other providers', value: 'None' });
+    assert.deepEqual(edgeFamilyProviderSummary('cloudflare', ['cloudflare', 'fastly']), { label: 'Other providers', value: 'fastly' });
+    assert.deepEqual(edgeFamilyProviderSummary('', ['akamai', 'fastly']), { label: 'Reported providers', value: 'akamai, fastly' });
+    assert.deepEqual(edgeFamilyProviderSummary('', []), { label: 'Reported providers', value: 'None reported' });
+  });
+
+  it('explains simulation-mode edge results with the signed-worker runbook pointer', () => {
+    assert.match(edgeDetectionReasonExplanation('simulation_not_detection'), /Simulation mode/);
+    assert.match(edgeDetectionReasonExplanation('simulation_not_detection'), /operator-local-runbook\.md "Real probe results locally"/);
+    assert.equal(edgeDetectionReasonExplanation('made_up_reason'), '');
+    assert.equal(edgeDetectionReasonExplanation(''), '');
+  });
+
+  it('explains why Detect edge is locked using the reported ownership state', () => {
+    assert.match(edgeDetectionLockedReason('pending'), /ownership is pending/);
+    assert.match(edgeDetectionLockedReason(''), /ownership is unverified/);
+  });
+});
+
 describe('target-detail React contract', () => {
   it('uses explicit check selection and never treats catalog timestamps as target history', () => {
     assert.match(DETAIL_SOURCE, /check_id: effectiveSelectedRunCheckId/);
@@ -117,5 +141,13 @@ describe('target-detail React contract', () => {
     assert.match(DETAIL_SOURCE, /uniqueRecentRuns/);
     assert.match(DETAIL_SOURCE, /label: 'Lifecycle'/);
     assert.match(DETAIL_SOURCE, /label: 'Verdict'/);
+  });
+
+  it('backs recent-run verdicts with API evidence ids and surfaces the latest edge request', () => {
+    assert.doesNotMatch(DETAIL_SOURCE, /hasEvidenceBackedVerdict\(item, \[\]\)/);
+    assert.match(DETAIL_SOURCE, /evidence_ids: run\.evidence_ids/);
+    assert.match(DETAIL_SOURCE, /\/v1\/waf\/edge-detection\//);
+    assert.match(DETAIL_SOURCE, /edgeDetectionReasonExplanation/);
+    assert.doesNotMatch(DETAIL_SOURCE, /edgeFamilyProviders\(/);
   });
 });

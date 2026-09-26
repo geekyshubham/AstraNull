@@ -15,7 +15,8 @@ import {
   saveSession,
   sessionIdentity
 } from './lib/api';
-import { getRouteFromLocation } from './lib/navigation';
+import { getRouteFromLocation, ROUTE_BY_ID } from './lib/navigation';
+import { staffHomeRoute } from './lib/portal-auth-policy.mjs';
 import { createPayloadCommitGate, runGenerationKeyedPayload } from './lib/payload-commit-generation.mjs';
 import { canAccessRoute } from './lib/route-access';
 import { getRouteTenantId } from './lib/route-params';
@@ -53,8 +54,16 @@ function sessionForRoute(session: Session, route: RouteId): Session {
   return { ...session, tenant_id: tenantId || undefined };
 }
 
-function fallbackRouteForPrincipal(principal: Session['principal']): RouteId {
-  return principal === 'staff' ? 'admin' : 'dashboard';
+function fallbackRouteForSession(session: Pick<Session, 'principal' | 'staff_role'>): RouteId {
+  return session.principal === 'staff' ? staffHomeRoute(session) : 'dashboard';
+}
+
+function routeDeniedNotice(deniedRoute: RouteId, fallbackRoute: RouteId, session: Pick<Session, 'principal' | 'role' | 'staff_role'>) {
+  if (deniedRoute === 'not-found' || deniedRoute === fallbackRoute) return '';
+  const deniedLabel = ROUTE_BY_ID.get(deniedRoute)?.label ?? deniedRoute;
+  const fallbackLabel = ROUTE_BY_ID.get(fallbackRoute)?.label ?? fallbackRoute;
+  const role = (session.principal === 'staff' ? session.staff_role : session.role) ?? 'current';
+  return `${deniedLabel} is not available for the ${role} role. Showing ${fallbackLabel} instead.`;
 }
 
 export default function App() {
@@ -65,12 +74,19 @@ export default function App() {
   const [data, setData] = useState<PortalData>(EMPTY_PORTAL_DATA);
   const [loading, setLoading] = useState(true);
   const [hydratingRoute, setHydratingRoute] = useState<RouteId | null>(null);
+  const [accessNotice, setAccessNotice] = useState('');
   const bootStarted = useRef(false);
   const lastHydratedRoute = useRef<RouteId | null>(null);
   const payloadCommitGate = useRef(createPayloadCommitGate(route));
   payloadCommitGate.current.activate(route);
 
   const activeSession = useMemo(() => session ?? {}, [session]);
+
+  useEffect(() => {
+    if (!accessNotice) return undefined;
+    const timer = window.setTimeout(() => setAccessNotice(''), 8000);
+    return () => window.clearTimeout(timer);
+  }, [accessNotice]);
 
   const refresh = useCallback(async (
     nextConfig: PortalConfig | null,
@@ -149,13 +165,14 @@ export default function App() {
       if (nextSession) resetReauthGuard();
       if (!isPublicOnlyPath(window.location.pathname) && nextSession) {
         const requestedBootRoute = getRouteFromLocation();
-        const fallbackRoute = fallbackRouteForPrincipal(nextSession.principal);
+        const fallbackRoute = fallbackRouteForSession(nextSession);
         const bootRoute = canAccessRoute(nextSession.role, requestedBootRoute, {
           principal: nextSession.principal,
           staffRole: nextSession.staff_role,
         }) ? requestedBootRoute : fallbackRoute;
         if (bootRoute !== requestedBootRoute) {
           window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${fallbackRoute}`);
+          setAccessNotice(routeDeniedNotice(requestedBootRoute, fallbackRoute, nextSession));
         }
         setRoute(bootRoute);
         await refresh(nextConfig, nextSession, bootRoute);
@@ -182,8 +199,9 @@ export default function App() {
         principal: stored?.principal ?? activeSession.principal,
         staffRole: stored?.staff_role ?? activeSession.staff_role,
       };
-      const fallbackRoute = fallbackRouteForPrincipal(accessContext.principal);
+      const fallbackRoute = fallbackRouteForSession({ principal: accessContext.principal, staff_role: accessContext.staffRole });
       if (!canAccessRoute(role, nextRoute, accessContext)) {
+        setAccessNotice(routeDeniedNotice(nextRoute, fallbackRoute, { principal: accessContext.principal, role, staff_role: accessContext.staffRole }));
         payloadCommitGate.current.activate(fallbackRoute);
         window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
         if (lastHydratedRoute.current !== fallbackRoute) setHydratingRoute(fallbackRoute);
@@ -219,7 +237,8 @@ export default function App() {
       principal: activeSession.principal,
       staffRole: activeSession.staff_role,
     })) {
-      const fallbackRoute = fallbackRouteForPrincipal(activeSession.principal);
+      const fallbackRoute = fallbackRouteForSession(activeSession);
+      setAccessNotice(routeDeniedNotice(route, fallbackRoute, activeSession));
       payloadCommitGate.current.activate(fallbackRoute);
       window.location.replace(`${window.location.pathname}${window.location.search}#${fallbackRoute}`);
       setRoute(fallbackRoute);
@@ -293,6 +312,8 @@ export default function App() {
       onRoleChange={handleRoleChange}
       onRefresh={() => void handleRefresh()}
       showRoleSwitcher={config.authMode === 'dev-headers' && activeSession.principal !== 'staff'}
+      accessNotice={accessNotice}
+      onDismissAccessNotice={() => setAccessNotice('')}
     >
       <RouteView
         route={route}

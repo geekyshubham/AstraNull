@@ -18,6 +18,8 @@ export const KUBERNETES_WORKER_MANIFESTS = Object.freeze([
   'waf-drift-runner.yaml',
   'connector-poll-runner.yaml',
   'notification-retry-scheduler.yaml',
+  'validation-scan-runner.yaml',
+  'collection-window-sweeper.yaml',
 ]);
 export const KUBERNETES_WORKER_SUPPORT_MANIFESTS = Object.freeze([
   'worker-rbac.yaml',
@@ -26,7 +28,11 @@ export const KUBERNETES_WORKER_RELEASE_MANIFESTS = Object.freeze([
   ...KUBERNETES_WORKER_MANIFESTS,
   ...KUBERNETES_WORKER_SUPPORT_MANIFESTS,
 ]);
-export const KUBERNETES_WORKER_IMAGE_COUNT = 5;
+export const KUBERNETES_WORKER_IMAGE_COUNT = 7;
+export const KUBERNETES_SCAN_STEP_STARTING_MANIFESTS = Object.freeze([
+  'validation-scan-runner.yaml',
+  'collection-window-sweeper.yaml',
+]);
 export const DEFAULT_KUBERNETES_WORKER_SOURCE_DIR = path.join(
   ROOT,
   'ops',
@@ -96,6 +102,16 @@ function assertCronJobRuntimeHardening(source, name) {
     if (!/^\s{10}serviceAccountName:\s*astranull-worker\s*$/m.test(document)) {
       throw new Error(`${name} Pods must use the explicit zero-permission worker service account.`);
     }
+  }
+}
+
+function assertProbeSigningEnv(source, name) {
+  if (!KUBERNETES_SCAN_STEP_STARTING_MANIFESTS.includes(name)) return;
+  if (!/^\s+- name: ASTRANULL_PROBE_MODE\s*\n\s+value:\s*"signed-worker"\s*$/m.test(source)) {
+    throw new Error(`${name} can start validation scan steps and must set ASTRANULL_PROBE_MODE to signed-worker.`);
+  }
+  if (!/^\s+- name: ASTRANULL_PROBE_WORKER_SECRET\s*\n\s+valueFrom:\s*\n\s+secretKeyRef:\s*\n\s+name:\s*astranull-worker-env\s*\n\s+key:\s*ASTRANULL_PROBE_WORKER_SECRET\s*$/m.test(source)) {
+    throw new Error(`${name} can start validation scan steps and must read ASTRANULL_PROBE_WORKER_SECRET from the worker secret.`);
   }
 }
 
@@ -388,6 +404,7 @@ export function validateKubernetesWorkerManifestSources(
   for (const name of KUBERNETES_WORKER_MANIFESTS) {
     const source = readUtf8(path.join(sourceDir, name));
     assertCronJobRuntimeHardening(source, name);
+    assertProbeSigningEnv(source, name);
     const refs = imageReferences(source);
     if (refs.length === 0 || refs.some((ref) => ref !== expected)) {
       throw new Error(`${name} must use only the worker repository and exact-digest release placeholders.`);
@@ -420,6 +437,7 @@ export function validateRenderedKubernetesWorkerManifests(
   for (const name of KUBERNETES_WORKER_MANIFESTS) {
     const source = readUtf8(path.join(directory, name));
     assertCronJobRuntimeHardening(source, name);
+    assertProbeSigningEnv(source, name);
     const refs = imageReferences(source);
     if (refs.length === 0) throw new Error(`${name} has no worker image reference.`);
     for (const ref of refs) {

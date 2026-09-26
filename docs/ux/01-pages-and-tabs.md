@@ -119,6 +119,17 @@ Wizard panels surface **placement confidence** hints (from readiness diagnostics
 | Evidence | Immutable event IDs, logs, screenshots, approvals, artifacts. |
 | Raw Events | Filtered debug view for advanced users. |
 
+## Validation scan detail (`#scan-detail?id=`)
+
+| Section | Details shown |
+|---|---|
+| Header | Scan name or id, status, scope, target group link, Stop control for `test_run:start` roles. |
+| Progress | Steps complete, running, deferred; scheduled time, next eligible time, abort or cancel reason. |
+| Steps | Per check and target: status, bounded request metadata, response metadata, requests sent, verdict, child run link. |
+| Activity | Chronological metadata-only feed of scan audit entries, child run audit entries, and child run events. |
+
+Validation scans are launched from Test Runs and from target group detail; the scheduled list lives on both pages.
+
 ## Findings tabs
 
 | Tab | Details shown |

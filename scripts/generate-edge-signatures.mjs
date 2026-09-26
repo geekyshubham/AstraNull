@@ -12,6 +12,7 @@
  *     --wafw00f <wafw00f clone at the pinned commit> \
  *     --cdncheck <cdncheck clone at the pinned commit> \
  *     [--out src/lib/data/edgeSignatureData.mjs] \
+ *     [--cloud-out src/lib/data/edgeCloudRangeData.mjs] \
  *     [--manifest src/lib/data/edgeSignatureData.manifest.json]
  */
 
@@ -27,12 +28,13 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const EDGE_CORPUS_OUTPUT_VERSION = 2;
-export const EDGE_CORPUS_MANIFEST_VERSION = 1;
+export const EDGE_CORPUS_OUTPUT_VERSION = 3;
+export const EDGE_CORPUS_MANIFEST_VERSION = 2;
 export const WAFW00F_COMMIT = '69fbe3956bba47a172cf87e40e9037535d32a130';
 export const CDNCHECK_COMMIT = 'dac12984ef12fa5663c2b7591d0a304ef27c659b';
 
 const GENERATED_MODULE_PATH = 'src/lib/data/edgeSignatureData.mjs';
+const GENERATED_CLOUD_MODULE_PATH = 'src/lib/data/edgeCloudRangeData.mjs';
 const GENERATOR_PATH = 'scripts/generate-edge-signatures.mjs';
 
 const compareCodeUnits = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
@@ -42,13 +44,53 @@ const PINNED_INPUTS = Object.freeze({
     pluginCount: 172,
     pluginTreeSha256: '44f4379d119d7cd688b2b8f68e5a1cd9e5bcf150491f46cb438d8a71f223b002',
     licenseSha256: 'fdaaf8393afcbab5a0db158ae742e76ec3803a7c72af19489f5bd521d3db08ea',
+    wafprioSha256: '91f396bb667b3e15ecf64461a096cc35b3e266fe5a822f406bbf4afcd079bb50',
+    requestEngineSha256: '7c8b5187ff34324588654b82e6c22ea05f2b6d7a13d93f98730596342d79136b',
   }),
   cdncheck: Object.freeze({
     sourcesDataSha256: '4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3',
     cnameImplementationSha256: '37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a',
+    engineSha256: '94ace4a1b96fc70be7c603e8e4cb3f3e2c563e86700e32c904364b0fcf5694ec',
     licenseSha256: 'cbcdaab87df3175107aa28915bd253cebdd618a49c9ac5d6c669c0b1cbebcacb',
   }),
 });
+
+/**
+ * Reads only the response-size cap and the plugin priority list from pinned wafw00f sources via
+ * `ast`. Nothing is imported or run.
+ */
+const PYTHON_ENGINE_EXTRACTOR = String.raw`
+import ast
+import json
+import sys
+
+def constant(node, context):
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+        return constant(node.left, context) * constant(node.right, context)
+    value = ast.literal_eval(node)
+    return value
+
+def module_assignments(path):
+    tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+    out = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            out[node.targets[0].id] = node.value
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+                    out[node.name + "." + item.targets[0].id] = item.value
+    return out
+
+evillib_path, prio_path = sys.argv[1], sys.argv[2]
+evillib = module_assignments(evillib_path)
+prio = module_assignments(prio_path)
+result = {
+    "max_response_bytes": constant(evillib["MAX_RESPONSE_SIZE"], "MAX_RESPONSE_SIZE"),
+    "priority": constant(prio["wafdetectionsprio"], "wafdetectionsprio"),
+}
+print(json.dumps(result))
+`;
 
 const PYTHON_AST_EXTRACTOR = String.raw`
 import ast
@@ -310,8 +352,8 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const args = { out: GENERATED_MODULE_PATH };
-  const valueFlags = new Set(['--wafw00f', '--cdncheck', '--out', '--manifest']);
+  const args = { out: GENERATED_MODULE_PATH, cloudOut: GENERATED_CLOUD_MODULE_PATH };
+  const valueFlags = new Set(['--wafw00f', '--cdncheck', '--out', '--cloud-out', '--manifest']);
   for (let index = 2; index < argv.length; index += 1) {
     const key = argv[index];
     if (!valueFlags.has(key)) fail(`unknown argument ${key}`);
@@ -321,6 +363,7 @@ function parseArgs(argv) {
     if (key === '--wafw00f') args.wafw00f = value;
     if (key === '--cdncheck') args.cdncheck = value;
     if (key === '--out') args.out = value;
+    if (key === '--cloud-out') args.cloudOut = value;
     if (key === '--manifest') args.manifest = value;
   }
   if (!args.wafw00f || !args.cdncheck) {
@@ -488,7 +531,46 @@ function loadWafSignatures(clonePath) {
   if (extracted.pluginCount !== pluginFiles.length) {
     fail(`wafw00f filesystem has ${pluginFiles.length} plugins but extractor emitted ${extracted.pluginCount}`);
   }
-  return { ...extracted, treeHash, pluginInventory };
+  const engine = extractWafEngine(clonePath, extracted.vendors);
+  return { ...extracted, treeHash, pluginInventory, engine };
+}
+
+function extractWafEngine(clonePath, vendors, { python = process.env.PYTHON || 'python3' } = {}) {
+  const evillibPath = path.join(clonePath, 'wafw00f', 'lib', 'evillib.py');
+  const prioPath = path.join(clonePath, 'wafw00f', 'wafprio.py');
+  requireHash('wafw00f lib/evillib.py', readFileSync(evillibPath), PINNED_INPUTS.wafw00f.requestEngineSha256);
+  requireHash('wafw00f wafprio.py', readFileSync(prioPath), PINNED_INPUTS.wafw00f.wafprioSha256);
+  const result = spawnSync(python, ['-c', PYTHON_ENGINE_EXTRACTOR, evillibPath, prioPath], {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error) fail(`could not run ${python}: ${result.error.message}`);
+  if (result.status !== 0) fail(result.stderr.trim() || `${python} engine extraction exited ${result.status}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch (error) {
+    fail(`invalid engine extractor output: ${error.message}`);
+  }
+  if (!Number.isInteger(parsed.max_response_bytes) || parsed.max_response_bytes <= 0) {
+    fail('wafw00f engine MAX_RESPONSE_SIZE is not a positive integer');
+  }
+  const keyByName = new Map(Object.entries(vendors).map(([key, vendor]) => [vendor.name, key]));
+  if (keyByName.size !== Object.keys(vendors).length) fail('wafw00f plugin NAME values are not unique');
+  const priority = [];
+  for (const name of parsed.priority ?? []) {
+    const key = keyByName.get(name);
+    if (!key) fail(`wafprio entry ${JSON.stringify(name)} does not name a pinned plugin`);
+    if (priority.includes(key)) fail(`wafprio entry ${JSON.stringify(name)} is duplicated`);
+    priority.push(key);
+  }
+  // main.py appends plugins missing from wafprio in unordered set order; sort for determinism.
+  const unprioritized = Object.keys(vendors).filter((key) => !priority.includes(key)).sort(compareCodeUnits);
+  return {
+    maxResponseBytes: parsed.max_response_bytes,
+    priority: [...priority, ...unprioritized],
+    unprioritized,
+  };
 }
 
 function validateCidr(cidr, context) {
@@ -567,24 +649,117 @@ function loadEdgeRanges(clonePath) {
   }
   const cdnRanges = normalizeRangeGroup(data.cdn, 'cdn');
   const wafRanges = normalizeRangeGroup(data.waf, 'waf');
+  const cloudRanges = normalizeRangeGroup(data.cloud, 'cloud');
   const cnameType = readCnameType(clonePath);
   const cnameRules = normalizeCnameRules(data.common, cnameType);
+  const engine = readCdncheckEngine(clonePath);
   const countRanges = (group) => Object.values(group).reduce((sum, values) => sum + values.length, 0);
   const cnameSuffixes = cnameRules.reduce((sum, rule) => sum + rule.suffixes.length, 0);
   return {
     cdnRanges,
     wafRanges,
+    cloudRanges,
     cnameRules,
     cnameType,
+    engine,
     report: {
       cdnProviders: Object.keys(cdnRanges).length,
       wafProviders: Object.keys(wafRanges).length,
+      cloudProviders: Object.keys(cloudRanges).length,
       cnameProviders: cnameRules.length,
       cdnRanges: countRanges(cdnRanges),
       wafRanges: countRanges(wafRanges),
+      cloudRanges: countRanges(cloudRanges),
       cnameSuffixes,
     },
   };
+}
+
+function readCdncheckEngine(clonePath) {
+  const source = readFileSync(path.join(clonePath, 'cdncheck.go'));
+  requireHash('cdncheck cdncheck.go', source, PINNED_INPUTS.cdncheck.engineSha256);
+  const text = source.toString('utf8');
+  const listFor = (name) => {
+    const block = text.match(new RegExp(`var ${name} = \\[\\]string\\{([^}]*)\\}`));
+    if (!block) fail(`cdncheck.go does not declare ${name}`);
+    const values = [...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    if (values.length === 0) fail(`cdncheck.go ${name} is empty`);
+    return values;
+  };
+  const checkOrder = [...text.matchAll(/c\.(cdn|waf|cloud)\.Match\(ip\); err == nil && matched && value != ""/g)]
+    .map((match) => match[1]);
+  if (checkOrder.join(',') !== 'cdn,waf,cloud') {
+    fail(`cdncheck Check order changed: ${JSON.stringify(checkOrder)}`);
+  }
+  const aaaaIndex = text.indexOf('dnsResponse.AAAA != nil');
+  const aIndex = text.indexOf('dnsResponse.A != nil');
+  const cnameIndex = text.indexOf('dnsResponse.CNAME != nil');
+  if (!(aaaaIndex > 0 && aaaaIndex < aIndex && aIndex < cnameIndex)) {
+    fail('cdncheck CheckDNSResponse order is not AAAA, A, CNAME');
+  }
+  return {
+    resolvers: listFor('DefaultResolvers'),
+    ipv6Resolvers: listFor('IPv6Resolvers'),
+    checkOrder,
+    dnsResponseOrder: ['aaaa', 'a', 'cname'],
+  };
+}
+
+/**
+ * Pack CIDRs as hex of [prefix, ...network bytes truncated to ceil(prefix/8)] records, grouped by
+ * address family. Hex keeps the literal to [0-9a-f], so it can never spell a safety-check pattern.
+ */
+function packRanges(ranges) {
+  const families = { v4: [], v6: [] };
+  for (const cidr of ranges) {
+    const [address, prefixText] = cidr.split('/');
+    const prefix = Number(prefixText);
+    const version = isIP(address);
+    const bytes = version === 4 ? address.split('.').map(Number) : ipv6Bytes(address);
+    const kept = Math.ceil(prefix / 8);
+    families[version === 4 ? 'v4' : 'v6'].push(Buffer.from([prefix, ...bytes.slice(0, kept)]));
+  }
+  return {
+    v4: Buffer.concat(families.v4).toString('hex'),
+    v6: Buffer.concat(families.v6).toString('hex'),
+    count: ranges.length,
+  };
+}
+
+function ipv6Bytes(address) {
+  const [head, tail = ''] = address.toLowerCase().split('::');
+  const expand = (text) => (text ? text.split(':') : []).flatMap((group) => {
+    if (group.includes('.')) {
+      const octets = group.split('.').map(Number);
+      return [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]];
+    }
+    return [Number.parseInt(group, 16)];
+  });
+  const headGroups = expand(head);
+  const tailGroups = expand(tail);
+  const groups = address.includes('::')
+    ? [...headGroups, ...Array(8 - headGroups.length - tailGroups.length).fill(0), ...tailGroups]
+    : headGroups;
+  if (groups.length !== 8 || groups.some((group) => !Number.isInteger(group) || group < 0 || group > 0xffff)) {
+    fail(`cannot pack IPv6 range ${address}`);
+  }
+  return groups.flatMap((group) => [group >> 8, group & 0xff]);
+}
+
+function renderCloudModule(ranges) {
+  const packed = Object.fromEntries(Object.entries(ranges.cloudRanges)
+    .map(([provider, values]) => [provider, packRanges(values)]));
+  return `/**
+ * cdncheck \`cloud\` address ranges, packed. GENERATED — do not edit by hand.
+ * Regenerate with \`node scripts/generate-edge-signatures.mjs\`.
+ *
+ * Each family string is hex of repeated records: [prefix length, network bytes truncated to
+ * ceil(prefix / 8)]. MIT, Copyright (c) 2021 ProjectDiscovery, Inc.;
+ * complete notice: THIRD_PARTY_NOTICES/cdncheck-MIT.txt.
+ */
+
+export const CLOUD_ADDRESS_RANGES_PACKED = Object.freeze(${JSON.stringify(packed, null, 2)});
+`;
 }
 
 function countWafSignatures(vendors) {
@@ -595,13 +770,15 @@ function countWafSignatures(vendors) {
   };
 }
 
-function renderModule({ vendors, wafReport, ranges, generatorSha256 }) {
+function renderModule({ vendors, wafReport, ranges, generatorSha256, cloudModuleSha256 }) {
   const manifest = {
     output_version: EDGE_CORPUS_OUTPUT_VERSION,
-    format: 'astranull-edge-signature-corpus-v2',
+    format: 'astranull-edge-signature-corpus-v3',
     generator: GENERATOR_PATH,
     generator_sha256: generatorSha256,
     output_manifest: 'src/lib/data/edgeSignatureData.manifest.json',
+    cloud_module: GENERATED_CLOUD_MODULE_PATH,
+    cloud_module_sha256: cloudModuleSha256,
     sources: {
       wafw00f: {
         repository: 'https://github.com/EnableSecurity/wafw00f',
@@ -613,19 +790,19 @@ function renderModule({ vendors, wafReport, ranges, generatorSha256 }) {
         plugin_files: wafReport.pluginCount,
         matcher_calls: wafReport.matcherCallCount,
         license_sha256: PINNED_INPUTS.wafw00f.licenseSha256,
+        wafprio_sha256: PINNED_INPUTS.wafw00f.wafprioSha256,
+        request_engine_sha256: PINNED_INPUTS.wafw00f.requestEngineSha256,
       },
       cdncheck: {
         repository: 'https://github.com/projectdiscovery/cdncheck',
         commit: CDNCHECK_COMMIT,
         license: 'MIT',
         license_notice: 'THIRD_PARTY_NOTICES/cdncheck-MIT.txt',
-        ported_categories: ['cdn', 'waf', 'common'],
-        excluded_categories: [{
-          category: 'cloud',
-          reason: 'general hosting ranges are not edge-protection evidence',
-        }],
+        ported_categories: ['cdn', 'waf', 'cloud', 'common'],
+        excluded_categories: [],
         sources_data_sha256: PINNED_INPUTS.cdncheck.sourcesDataSha256,
         cname_implementation_sha256: PINNED_INPUTS.cdncheck.cnameImplementationSha256,
+        engine_sha256: PINNED_INPUTS.cdncheck.engineSha256,
         license_sha256: PINNED_INPUTS.cdncheck.licenseSha256,
         cname_item_type: ranges.cnameType,
       },
@@ -660,6 +837,22 @@ export const WAF_ADDRESS_RANGES = Object.freeze(${JSON.stringify(ranges.wafRange
  */
 export const EDGE_CNAME_RULES = Object.freeze(${JSON.stringify(ranges.cnameRules, null, 2)});
 
+/** wafw00f checklist order: \`wafprio.py\` first, then remaining plugins (sorted). */
+export const WAF_VENDOR_PRIORITY = Object.freeze(${JSON.stringify(wafReport.engine.priority, null, 2)});
+
+/** wafw00f response-evaluation constants read from lib/evillib.py. */
+export const WAFW00F_ENGINE = Object.freeze(${JSON.stringify({
+    max_response_bytes: wafReport.engine.maxResponseBytes,
+  }, null, 2)});
+
+/** cdncheck lookup semantics read from cdncheck.go. */
+export const CDNCHECK_ENGINE = Object.freeze(${JSON.stringify({
+    resolvers: ranges.engine.resolvers,
+    ipv6_resolvers: ranges.engine.ipv6Resolvers,
+    check_order: ranges.engine.checkOrder,
+    dns_response_order: ranges.engine.dnsResponseOrder,
+  }, null, 2)});
+
 export const EDGE_CORPUS_STATS = Object.freeze({
   waf_plugins_total: ${wafReport.pluginCount},
   waf_plugins_supported: ${Object.keys(vendors).length},
@@ -669,19 +862,22 @@ export const EDGE_CORPUS_STATS = Object.freeze({
   block_page_signatures: ${stats.blockPage},
   cdn_providers: ${ranges.report.cdnProviders},
   waf_range_providers: ${ranges.report.wafProviders},
+  cloud_providers: ${ranges.report.cloudProviders},
   cname_providers: ${ranges.report.cnameProviders},
   cdn_ranges: ${ranges.report.cdnRanges},
   waf_ranges: ${ranges.report.wafRanges},
+  cloud_ranges: ${ranges.report.cloudRanges},
   cname_suffixes: ${ranges.report.cnameSuffixes},
 });
 `;
 }
 
-function renderOutputManifest({ body, waf, ranges, generatorSha256 }) {
+function renderOutputManifest({ body, cloudBody, waf, ranges, generatorSha256 }) {
   const outputSha256 = sha256(body);
+  const cloudSha256 = sha256(cloudBody);
   const manifest = {
     manifest_version: EDGE_CORPUS_MANIFEST_VERSION,
-    format: 'astranull-edge-signature-corpus-manifest-v1',
+    format: 'astranull-edge-signature-corpus-manifest-v2',
     output_version: EDGE_CORPUS_OUTPUT_VERSION,
     generator: {
       path: GENERATOR_PATH,
@@ -697,6 +893,11 @@ function renderOutputManifest({ body, waf, ranges, generatorSha256 }) {
         matcher_calls: waf.matcherCallCount,
         supported_plugins: Object.keys(waf.vendors).length,
         unsupported_plugins: 0,
+        engine_inputs: [
+          { path: 'wafw00f/lib/evillib.py', sha256: PINNED_INPUTS.wafw00f.requestEngineSha256 },
+          { path: 'wafw00f/wafprio.py', sha256: PINNED_INPUTS.wafw00f.wafprioSha256 },
+        ],
+        unprioritized_plugins: waf.engine.unprioritized,
         license: {
           path: 'LICENSE',
           sha256: PINNED_INPUTS.wafw00f.licenseSha256,
@@ -706,14 +907,12 @@ function renderOutputManifest({ body, waf, ranges, generatorSha256 }) {
       cdncheck: {
         repository: 'https://github.com/projectdiscovery/cdncheck',
         commit: CDNCHECK_COMMIT,
-        ported_categories: ['cdn', 'waf', 'common'],
-        excluded_categories: [{
-          category: 'cloud',
-          reason: 'general hosting ranges are not edge-protection evidence',
-        }],
+        ported_categories: ['cdn', 'waf', 'cloud', 'common'],
+        excluded_categories: [],
         inputs: [
           { path: 'sources_data.json', sha256: PINNED_INPUTS.cdncheck.sourcesDataSha256 },
           { path: 'other.go', sha256: PINNED_INPUTS.cdncheck.cnameImplementationSha256 },
+          { path: 'cdncheck.go', sha256: PINNED_INPUTS.cdncheck.engineSha256 },
           { path: 'LICENSE.md', sha256: PINNED_INPUTS.cdncheck.licenseSha256 },
         ],
         cname_item_type: ranges.cnameType,
@@ -724,16 +923,16 @@ function renderOutputManifest({ body, waf, ranges, generatorSha256 }) {
         },
       },
     },
-    output: {
-      path: GENERATED_MODULE_PATH,
-      sha256: outputSha256,
-      bytes: Buffer.byteLength(body),
-    },
+    outputs: [
+      { path: GENERATED_MODULE_PATH, sha256: outputSha256, bytes: Buffer.byteLength(body) },
+      { path: GENERATED_CLOUD_MODULE_PATH, sha256: cloudSha256, bytes: Buffer.byteLength(cloudBody) },
+    ],
   };
   return {
     manifest,
     body: `${JSON.stringify(manifest, null, 2)}\n`,
     outputSha256,
+    cloudSha256,
   };
 }
 
@@ -741,15 +940,18 @@ export function generateEdgeSignatureCorpus({ wafw00f, cdncheck }) {
   const waf = loadWafSignatures(path.resolve(wafw00f));
   const ranges = loadEdgeRanges(path.resolve(cdncheck));
   const generatorSha256 = sha256(readFileSync(fileURLToPath(import.meta.url)));
+  const cloudBody = renderCloudModule(ranges);
   const body = renderModule({
     vendors: waf.vendors,
     wafReport: waf,
     ranges,
     generatorSha256,
+    cloudModuleSha256: sha256(cloudBody),
   });
-  const outputManifest = renderOutputManifest({ body, waf, ranges, generatorSha256 });
+  const outputManifest = renderOutputManifest({ body, cloudBody, waf, ranges, generatorSha256 });
   return {
     body,
+    cloudBody,
     manifest: outputManifest.body,
     report: {
       plugins: waf.pluginCount,
@@ -758,6 +960,7 @@ export function generateEdgeSignatureCorpus({ wafw00f, cdncheck }) {
       ...ranges.report,
       cnameType: ranges.cnameType,
       outputSha256: outputManifest.outputSha256,
+      cloudSha256: outputManifest.cloudSha256,
     },
   };
 }
@@ -765,21 +968,24 @@ export function generateEdgeSignatureCorpus({ wafw00f, cdncheck }) {
 function main() {
   try {
     const args = parseArgs(process.argv);
-    const { body, manifest, report } = generateEdgeSignatureCorpus(args);
+    const { body, cloudBody, manifest, report } = generateEdgeSignatureCorpus(args);
     const outPath = path.resolve(args.out);
+    const cloudPath = path.resolve(args.cloudOut);
     const manifestPath = path.resolve(args.manifest);
-    mkdirSync(path.dirname(outPath), { recursive: true });
-    mkdirSync(path.dirname(manifestPath), { recursive: true });
+    for (const target of [outPath, cloudPath, manifestPath]) mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(outPath, body);
+    writeFileSync(cloudPath, cloudBody);
     writeFileSync(manifestPath, manifest);
     console.log('generate-edge-signatures: ok');
     console.log(`  wafw00f plugins ported : ${report.plugins}/${report.plugins}`);
     console.log(`  matcher calls ported   : ${report.matcherCalls}/${report.matcherCalls}`);
     console.log(`  passive / block-page   : ${report.passive} / ${report.blockPage}`);
-    console.log(`  cdn / waf ranges       : ${report.cdnRanges} / ${report.wafRanges}`);
+    console.log(`  cdn / waf / cloud      : ${report.cdnRanges} / ${report.wafRanges} / ${report.cloudRanges}`);
     console.log(`  cname suffixes / type  : ${report.cnameSuffixes} / ${report.cnameType}`);
     console.log(`  output SHA-256         : ${report.outputSha256}`);
+    console.log(`  cloud SHA-256          : ${report.cloudSha256}`);
     console.log(`  wrote                  : ${path.relative(process.cwd(), outPath)}`);
+    console.log(`  wrote                  : ${path.relative(process.cwd(), cloudPath)}`);
     console.log(`  manifest               : ${path.relative(process.cwd(), manifestPath)}`);
   } catch (error) {
     console.error(error.message);

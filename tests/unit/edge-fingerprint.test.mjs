@@ -247,6 +247,7 @@ describe('cdncheck address and CNAME semantics', () => {
   it('classifies IPv4 and IPv6 CDN ranges', () => {
     assert.deepEqual(classifyEdgeByAddress('108.138.5.5'), [
       { family: 'cdn', provider: 'cloudfront' },
+      { family: 'cloud', provider: 'aws' },
     ]);
     assert.deepEqual(classifyEdgeByAddress('2a04:4e40::1'), [
       { family: 'cdn', provider: 'fastly' },
@@ -259,10 +260,11 @@ describe('cdncheck address and CNAME semantics', () => {
     assert.deepEqual(classifyEdgeByAddress('::ffff:6c8a:505'), ipv4);
   });
 
-  it('exposes overlapping CDN and WAF address types independently', () => {
+  it('exposes overlapping CDN, WAF, and cloud address types independently', () => {
     assert.deepEqual(classifyEdgeByAddress('185.143.232.1'), [
       { family: 'cdn', provider: 'arvancloud' },
       { family: 'waf', provider: 'arvancloud' },
+      { family: 'cloud', provider: 'arvancloud' },
     ]);
   });
 
@@ -275,10 +277,10 @@ describe('cdncheck address and CNAME semantics', () => {
 
   it('returns explicit upstream WAF type for CNAME-only Akamai and CloudFront', () => {
     assert.deepEqual(classifyEdgeByCnameChain('shop.akamaiedge.net'), [
-      { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net' },
+      { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net', host: 'shop.akamaiedge.net' },
     ]);
     assert.deepEqual(classifyEdgeByCnameChain('assets.cloudfront.net'), [
-      { provider: 'amazon', type: 'waf', suffix: 'cloudfront.net' },
+      { provider: 'amazon', type: 'waf', suffix: 'cloudfront.net', host: 'assets.cloudfront.net' },
     ]);
 
     for (const [host, provider] of [
@@ -296,8 +298,8 @@ describe('cdncheck address and CNAME semantics', () => {
 
   it('preserves every typed provider for duplicate common suffixes', () => {
     assert.deepEqual(classifyEdgeByCnameChain('asset.edgesuite.net'), [
-      { provider: 'akamai', type: 'waf', suffix: 'edgesuite.net' },
-      { provider: 'edgecast', type: 'waf', suffix: 'edgesuite.net' },
+      { provider: 'akamai', type: 'waf', suffix: 'edgesuite.net', host: 'asset.edgesuite.net' },
+      { provider: 'edgecast', type: 'waf', suffix: 'edgesuite.net', host: 'asset.edgesuite.net' },
     ]);
     const result = classifyEdgeFingerprint({ cnameChain: ['asset.edgesuite.net'] });
     assert.equal(result.waf_present, true);
@@ -327,9 +329,14 @@ describe('combined edge fingerprint', () => {
     assert.equal(result.cdn_detected, true);
     assert.deepEqual(result.cdn_providers, ['cloudfront']);
     assert.equal(result.best_vendor.vendor, 'cloudflare');
-    assert.deepEqual(result.address_matches, [{ family: 'cdn', provider: 'cloudfront' }]);
+    assert.deepEqual(result.address_matches, [
+      { family: 'cdn', provider: 'cloudfront' },
+      { family: 'cloud', provider: 'aws' },
+    ]);
+    assert.deepEqual(result.cloud_providers, ['aws']);
+    assert.equal(result.cloud_hosted, true);
     assert.deepEqual(result.cname_matches, [
-      { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net' },
+      { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net', host: 'example.com.akamaiedge.net' },
     ]);
   });
 

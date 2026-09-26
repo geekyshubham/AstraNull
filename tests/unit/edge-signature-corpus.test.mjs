@@ -12,7 +12,11 @@ import {
   EDGE_SIGNATURE_CORPUS_MANIFEST,
   WAF_ADDRESS_RANGES,
   WAF_VENDOR_SIGNATURES,
+  WAF_VENDOR_PRIORITY,
+  WAFW00F_ENGINE,
+  CDNCHECK_ENGINE,
 } from '../../src/lib/data/edgeSignatureData.mjs';
+import { CLOUD_ADDRESS_RANGES_PACKED } from '../../src/lib/data/edgeCloudRangeData.mjs';
 import {
   EDGE_SIGNATURE_CORPUS_VERSION,
   extractFingerprintHeaderEntries,
@@ -73,28 +77,38 @@ function sha256File(relativePath) {
 
 describe('edge signature corpus provenance and inventory', () => {
   it('embeds exact commits, inputs, generator bytes, output hash, notices, and versions', () => {
-    assert.equal(EDGE_SIGNATURE_CORPUS_VERSION, '2');
-    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version, 2);
-    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.format, 'astranull-edge-signature-corpus-v2');
+    assert.equal(EDGE_SIGNATURE_CORPUS_VERSION, '3');
+    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.output_version, 3);
+    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.format, 'astranull-edge-signature-corpus-v3');
     assert.equal(
       EDGE_SIGNATURE_CORPUS_MANIFEST.output_manifest,
       'src/lib/data/edgeSignatureData.manifest.json',
     );
 
-    assert.equal(OUTPUT_MANIFEST.manifest_version, 1);
-    assert.equal(OUTPUT_MANIFEST.format, 'astranull-edge-signature-corpus-manifest-v1');
-    assert.equal(OUTPUT_MANIFEST.output_version, 2);
+    assert.equal(OUTPUT_MANIFEST.manifest_version, 2);
+    assert.equal(OUTPUT_MANIFEST.format, 'astranull-edge-signature-corpus-manifest-v2');
+    assert.equal(OUTPUT_MANIFEST.output_version, 3);
     assert.equal(OUTPUT_MANIFEST.generator.path, 'scripts/generate-edge-signatures.mjs');
     assert.equal(OUTPUT_MANIFEST.generator.sha256, sha256File(OUTPUT_MANIFEST.generator.path));
     assert.equal(
       EDGE_SIGNATURE_CORPUS_MANIFEST.generator_sha256,
       OUTPUT_MANIFEST.generator.sha256,
     );
-    assert.equal(OUTPUT_MANIFEST.output.path, 'src/lib/data/edgeSignatureData.mjs');
-    assert.equal(OUTPUT_MANIFEST.output.sha256, sha256File(OUTPUT_MANIFEST.output.path));
+    assert.deepEqual(
+      OUTPUT_MANIFEST.outputs.map((output) => output.path),
+      ['src/lib/data/edgeSignatureData.mjs', 'src/lib/data/edgeCloudRangeData.mjs'],
+    );
+    for (const output of OUTPUT_MANIFEST.outputs) {
+      assert.equal(output.sha256, sha256File(output.path));
+      assert.equal(
+        output.bytes,
+        readFileSync(new URL(`../../${output.path}`, import.meta.url)).byteLength,
+      );
+    }
+    assert.equal(EDGE_SIGNATURE_CORPUS_MANIFEST.cloud_module, 'src/lib/data/edgeCloudRangeData.mjs');
     assert.equal(
-      OUTPUT_MANIFEST.output.bytes,
-      readFileSync(new URL(`../../${OUTPUT_MANIFEST.output.path}`, import.meta.url)).byteLength,
+      EDGE_SIGNATURE_CORPUS_MANIFEST.cloud_module_sha256,
+      sha256File('src/lib/data/edgeCloudRangeData.mjs'),
     );
 
     const { wafw00f, cdncheck } = EDGE_SIGNATURE_CORPUS_MANIFEST.sources;
@@ -104,18 +118,20 @@ describe('edge signature corpus provenance and inventory', () => {
     assert.equal(cdncheck.sources_data_sha256, '4a7482b64ded7a611e11eadda6730cc8df159942c16713f17bbfecdb8a7cd2a3');
     assert.equal(cdncheck.cname_implementation_sha256, '37182c8c3bc5a6182f2ced734d00fb252c5b0ae08cf284bd0437f44bc305244a');
     assert.equal(cdncheck.cname_item_type, 'waf');
-    assert.deepEqual(cdncheck.ported_categories, ['cdn', 'waf', 'common']);
-    assert.deepEqual(cdncheck.excluded_categories, [{
-      category: 'cloud',
-      reason: 'general hosting ranges are not edge-protection evidence',
-    }]);
+    assert.deepEqual(cdncheck.ported_categories, ['cdn', 'waf', 'cloud', 'common']);
+    assert.deepEqual(cdncheck.excluded_categories, []);
     assert.equal(OUTPUT_MANIFEST.sources.cdncheck.commit, cdncheck.commit);
-    assert.deepEqual(OUTPUT_MANIFEST.sources.cdncheck.ported_categories, ['cdn', 'waf', 'common']);
-    assert.deepEqual(OUTPUT_MANIFEST.sources.cdncheck.excluded_categories, cdncheck.excluded_categories);
+    assert.deepEqual(OUTPUT_MANIFEST.sources.cdncheck.ported_categories, ['cdn', 'waf', 'cloud', 'common']);
+    assert.deepEqual(OUTPUT_MANIFEST.sources.cdncheck.excluded_categories, []);
     assert.deepEqual(OUTPUT_MANIFEST.sources.cdncheck.inputs, [
       { path: 'sources_data.json', sha256: cdncheck.sources_data_sha256 },
       { path: 'other.go', sha256: cdncheck.cname_implementation_sha256 },
+      { path: 'cdncheck.go', sha256: cdncheck.engine_sha256 },
       { path: 'LICENSE.md', sha256: cdncheck.license_sha256 },
+    ]);
+    assert.deepEqual(OUTPUT_MANIFEST.sources.wafw00f.engine_inputs, [
+      { path: 'wafw00f/lib/evillib.py', sha256: wafw00f.request_engine_sha256 },
+      { path: 'wafw00f/wafprio.py', sha256: wafw00f.wafprio_sha256 },
     ]);
 
     assert.equal(sha256File(wafw00f.license_notice), wafw00f.license_sha256);
@@ -158,9 +174,11 @@ describe('edge signature corpus provenance and inventory', () => {
       block_page_signatures: 330,
       cdn_providers: 16,
       waf_range_providers: 3,
+      cloud_providers: 12,
       cname_providers: 32,
       cdn_ranges: 2462,
       waf_ranges: 1071,
+      cloud_ranges: 129127,
       cname_suffixes: 103,
     });
     assert.equal(Object.keys(WAF_VENDOR_SIGNATURES).length, 172);
@@ -170,6 +188,27 @@ describe('edge signature corpus provenance and inventory', () => {
     assert.equal(countEntries(CDN_ADDRESS_RANGES), 2462);
     assert.equal(countEntries(WAF_ADDRESS_RANGES), 1071);
     assert.equal(EDGE_CNAME_RULES.reduce((sum, rule) => sum + rule.suffixes.length, 0), 103);
+    assert.equal(
+      Object.values(CLOUD_ADDRESS_RANGES_PACKED).reduce((sum, provider) => sum + provider.count, 0),
+      129127,
+    );
+  });
+
+  it('packs cloud ranges as hex-only literals', () => {
+    for (const [provider, families] of Object.entries(CLOUD_ADDRESS_RANGES_PACKED)) {
+      assert.match(families.v4, /^(?:[0-9a-f]{2})*$/, `${provider} v4`);
+      assert.match(families.v6, /^(?:[0-9a-f]{2})*$/, `${provider} v6`);
+    }
+  });
+
+  it('orders every vendor by the pinned wafprio checklist with no gaps or duplicates', () => {
+    assert.equal(WAF_VENDOR_PRIORITY.length, 172);
+    assert.equal(new Set(WAF_VENDOR_PRIORITY).size, 172);
+    assert.deepEqual([...WAF_VENDOR_PRIORITY].sort(), Object.keys(WAF_VENDOR_SIGNATURES).sort());
+    assert.deepEqual(OUTPUT_MANIFEST.sources.wafw00f.unprioritized_plugins, []);
+    assert.equal(WAFW00F_ENGINE.max_response_bytes, 100 * 1024);
+    assert.deepEqual(CDNCHECK_ENGINE.check_order, ['cdn', 'waf', 'cloud']);
+    assert.deepEqual(CDNCHECK_ENGINE.dns_response_order, ['aaaa', 'a', 'cname']);
   });
 
   it('includes all four formerly omitted compound plugins as supported ports', () => {

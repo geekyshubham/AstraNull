@@ -55,6 +55,16 @@ function assertSecretVaultRepositories(repositories) {
  *   connectorEncryptionKey?: Buffer | null,
  * }} [options]
  */
+function encryptionNotConfigured(purpose) {
+  return purpose === 'connector'
+    ? {
+        error: 'connector_encryption_not_configured',
+        status: 503,
+        message: 'Connector secret encryption key is not configured.',
+      }
+    : { error: 'encryption_not_configured', status: 503, message: 'Secret encryption key is not configured.' };
+}
+
 export function createPostgresSecretVaultServices(repositories, options = {}) {
   assertSecretVaultRepositories(repositories);
   const secretVaultRepo = repositories.secretVault;
@@ -79,13 +89,7 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
       if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {
         return { error: 'invalid_request', status: 400, message: 'plaintext is required.' };
       }
-      if (!encryptionKey) {
-        return {
-          error: 'encryption_not_configured',
-          status: 503,
-          message: 'Secret encryption key is not configured.',
-        };
-      }
+      if (!encryptionKey) return encryptionNotConfigured(purpose);
 
       const id = newIdFn('secret');
       const now = nowFn().toISOString();
@@ -126,13 +130,7 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
       const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
       if (!record) return null;
       const encryptionKey = keyForPurpose(record.purpose, key);
-      if (!encryptionKey) {
-        return {
-          error: 'encryption_not_configured',
-          status: 503,
-          message: 'Secret encryption key is not configured.',
-        };
-      }
+      if (!encryptionKey) return encryptionNotConfigured(record.purpose);
 
       const plaintext = body.plaintext;
       if (plaintext === undefined || plaintext === null || String(plaintext).length === 0) {
@@ -175,13 +173,7 @@ export function createPostgresSecretVaultServices(repositories, options = {}) {
       const record = await secretVaultRepo.getEncryptedSecretById(ctx, id);
       if (!record) return null;
       const encryptionKey = keyForPurpose(record.purpose, key);
-      if (!encryptionKey) {
-        return {
-          error: 'encryption_not_configured',
-          status: 503,
-          message: 'Secret encryption key is not configured.',
-        };
-      }
+      if (!encryptionKey) return encryptionNotConfigured(record.purpose);
 
       const plaintext = decryptSecret(record.envelope, encryptionKey, buildSecretAad(record));
       await auditRepo.appendAuditEvent({

@@ -299,23 +299,58 @@ const METADATA_DENY_KEYS = new Set([
   'log_line',
 ]);
 
+const METADATA_ARRAY_ITEMS_MAX = 16;
+const METADATA_ARRAY_STRING_MAX = 253;
+const METADATA_ALLOWED_ARRAY_PATHS = new Set([
+  'dns_cname_chain',
+  'dns_resolved_ips',
+  'edge_signature.waf_providers',
+  'edge_signature.cdn_providers',
+  'edge_signature.cloud_providers',
+  'edge_signature.address_matches',
+  'edge_signature.cname_matches',
+  'edge_signature.vendor_matches',
+  'edge_signature.vendor_matches.matched_signals',
+  'edge_signature.best_vendor.matched_signals',
+  'edge_signature.wafw00f.all_matches',
+]);
+
+function sanitizeMetadataScalar(value) {
+  if (typeof value === 'string') return value.slice(0, METADATA_ARRAY_STRING_MAX);
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  return undefined;
+}
+
 export function sanitizeProbeMetadata(metadata) {
   if (metadata == null || typeof metadata !== 'object' || Array.isArray(metadata)) {
     return {};
   }
-  function walk(value) {
-    if (value == null || typeof value !== 'object' || Array.isArray(value)) {
-      return value;
+  function walkArray(values, path) {
+    const out = [];
+    for (const item of values.slice(0, METADATA_ARRAY_ITEMS_MAX)) {
+      if (item != null && typeof item === 'object') {
+        if (Array.isArray(item)) continue;
+        const nested = walk(item, path);
+        if (Object.keys(nested).length > 0) out.push(nested);
+        continue;
+      }
+      const scalar = sanitizeMetadataScalar(item);
+      if (scalar !== undefined) out.push(scalar);
     }
+    return out;
+  }
+  function walk(value, path = '') {
     const out = {};
     for (const [key, child] of Object.entries(value)) {
       if (METADATA_DENY_KEYS.has(key)) continue;
+      const childPath = path ? `${path}.${key}` : key;
       if (child != null && typeof child === 'object') {
-        if (Array.isArray(child)) continue;
-        const nested = walk(child);
-        if (nested != null && typeof nested === 'object' && Object.keys(nested).length > 0) {
-          out[key] = nested;
+        if (Array.isArray(child)) {
+          if (METADATA_ALLOWED_ARRAY_PATHS.has(childPath)) out[key] = walkArray(child, childPath);
+          continue;
         }
+        const nested = walk(child, childPath);
+        if (Object.keys(nested).length > 0) out[key] = nested;
       } else {
         out[key] = child;
       }
@@ -1337,6 +1372,7 @@ export async function executeProbeForJob(job, deps = {}) {
   });
   const executionDeps = {
     ...deps,
+    resolveCnameFn: deps.resolveCnameFn ?? dns.resolveCname,
     rawResolve4Fn,
     rawResolve6Fn,
     resolve4Fn: (...args) => resolveWithAccounting('a', rawResolve4Fn, args),

@@ -393,11 +393,12 @@ Any UI panel that reads a field NOT listed in the response below is a spec viola
     "origin_bypass": { "state": "not_exposed", "last_checked_at": "..." },
     "raw_context_yaml": "asset_id: wa_...\nvendor: cloudflare\n..."
   } | null,
+  "edge_detection_request": { "test_run_id": "run_...", "run_status": "verdicted", "started_at": "...", "completed_at": "..." } | null,
   "checks_applied": [
-    { "check_id": "chk_l7_rate", "cadence": "hourly", "last_verdict": "pass", "last_ran_at": "..." }
+    { "check_id": "origin.leak_scan.safe", "policy_id": "pol_...", "policy_state": "active", "binding_scope": "target" | "target_group", "cadence": "daily", "last_verdict": "pass" | "unknown", "last_run_id": "run_..." | null, "last_ran_at": "..." | null }
   ],
   "runs_recent": [
-    { "run_id": "run_...", "policy_id": "pol_...", "verdict": "pass", "started_at": "...", "agent_id": "agt_..." }
+    { "run_id": "run_...", "policy_id": "pol_..." | null, "check_id": "...", "status": "verdicted", "verdict": "pass" | "unknown", "verdict_id": "evidence_..." | null, "evidence_ids": ["evt_..."], "started_at": "...", "completed_at": "..." | null }
   ],
   "findings": [
     { "id": "fnd_...", "severity": "s2", "title": "...", "state": "open", "opened_at": "...", "owner_group": "edge-sre" }
@@ -406,6 +407,8 @@ Any UI panel that reads a field NOT listed in the response below is a spec viola
   "counts": { "runs_total": 0, "findings_open": 0, "findings_closed": 0 }
 }
 ```
+
+`checks_applied` lists customer-runnable, kind-compatible checks bound by non-archived test policies on the target (target-scoped wins over group-wide); `last_verdict` is set only when the latest run's verdict record cites evidence. `runs_recent[].verdict` comes only from the run's verdict record (never from run status) and `evidence_ids` are that record's citations. `edge_detection_request` is the latest `waf.fingerprint.safe` run for the target; its outcome is read from `GET /v1/waf/edge-detection/:id`. Both dev JSON and Postgres build these rows with `src/lib/targetDetailRows.mjs`; Postgres reads verification state from `target_verification_current`.
 
 ### 4.2 `GET /v1/findings/:id/evidence` — full shape
 

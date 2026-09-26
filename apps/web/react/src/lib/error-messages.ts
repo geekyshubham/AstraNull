@@ -8,8 +8,11 @@
  * so no `snake_case` token can ever reach a user.
  */
 
+import { SCAN_ERROR_COPY } from './validation-scan.mjs';
+
 /** Written copy for codes whose bare name tells the user nothing about what to do next. */
 const KNOWN_ERROR_COPY: Record<string, string> = {
+  ...SCAN_ERROR_COPY,
   concurrent_run_blocked:
     'A run is already in progress for this target group. Cancel or finalize it before starting another.',
   not_found: 'That record no longer exists. Refresh and try again.',
@@ -22,6 +25,24 @@ const KNOWN_ERROR_COPY: Record<string, string> = {
   payload_too_large: 'That upload is larger than the request limit.',
   internal_error: 'Something went wrong on our side. Try again, and quote the correlation id if it persists.'
 };
+
+/** Fixed operator copy for known deployment-configuration 5xx codes; server-authored text is never shown. */
+const CONFIGURATION_ERROR_COPY: Record<string, string> = {
+  encryption_not_configured:
+    'The secret vault is not configured on this deployment. An operator must set ASTRANULL_SECRET_ENCRYPTION_KEY (local dev: restart `npm run dev:api` to use the generated key under .data/).',
+  connector_encryption_not_configured:
+    'Connector credentials cannot be stored: an operator must set ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY on this deployment.',
+  postgres_internal_admin_not_wired: 'Staff administration is not wired for this deployment mode. Contact the platform operator.',
+  governed_adapter_not_configured: 'No governed high-scale execution adapter is configured on this deployment. SOC must configure the adapter before start.',
+  kms_signing_not_configured: 'Evidence snapshot signing (KMS) is not configured on this deployment. Contact the platform operator.'
+};
+
+export function configurationErrorMessage(payload: unknown): string {
+  const code = payload && typeof payload === 'object'
+    ? String((payload as { error?: unknown }).error ?? '').trim()
+    : '';
+  return CONFIGURATION_ERROR_COPY[code] ?? '';
+}
 
 /** Sentence-cases a raw code so an unmapped one still reads as prose. */
 function humanizeUnknownCode(code: string): string {
@@ -50,6 +71,8 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   // requestJson/getJson already replace 5xx response text with fixed safe copy on
   // Error.message. Never re-open the attached raw payload at presentation time.
   if (Number(apiError?.status) >= 500) {
+    const configurationCopy = configurationErrorMessage(payload);
+    if (configurationCopy) return configurationCopy;
     return err instanceof Error && err.message.trim() ? err.message : fallback;
   }
   if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message;

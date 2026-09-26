@@ -13,11 +13,13 @@ import { classifyWafProductFromSignals } from './wafProductCatalog.mjs';
 import { pinnedFetch } from './pinnedHttpRequest.mjs';
 import {
   EDGE_SIGNATURE_CORPUS_VERSION,
+  FINGERPRINT_BODY_MAX_LENGTH,
   classifyEdgeFingerprint,
   extractFingerprintHeaderEntries,
 } from './edgeFingerprint.mjs';
 
 const MAX_BODY_READ_BYTES = 8192;
+const FINGERPRINT_BODY_READ_BYTES = FINGERPRINT_BODY_MAX_LENGTH;
 const BLOCK_STATUSES = new Set([401, 403, 406, 429, 503]);
 const CHALLENGE_HEADERS = ['cf-mitigated', 'x-waf-block', 'x-bot-challenge', 'x-sucuri-block'];
 const CLASS_MARKER_FAMILIES = Object.freeze({
@@ -204,8 +206,51 @@ function dedupeHeaderEntries(entries) {
 function fingerprintInputs(res, bodyText) {
   return {
     fingerprint_header_entries: res ? extractFingerprintHeaderEntries(res) : [],
-    fingerprint_body_text: String(bodyText ?? '').slice(0, MAX_BODY_READ_BYTES),
+    fingerprint_body_text: String(bodyText ?? '').slice(0, FINGERPRINT_BODY_READ_BYTES),
+    fingerprint_status_reason: String(res?.statusText ?? '').slice(0, 256),
   };
+}
+
+function wafw00fResponseEvidence(snapshot) {
+  if (!snapshot || snapshot.connection_dropped) return null;
+  return {
+    headerEntries: snapshot.fingerprint_header_entries ?? [],
+    cookieNames: snapshot.cookie_names ?? [],
+    bodyText: snapshot.fingerprint_body_text ?? '',
+    statusCode: snapshot.status_code,
+    statusReason: snapshot.fingerprint_status_reason ?? '',
+  };
+}
+
+const WAFW00F_GENERIC_REASONS = Object.freeze({
+  connection_level_blocking: 'Blocking is being done at connection/packet level.',
+  server_header_changed: 'The server header is different when an attack is detected.',
+  status_code_changed: 'The server returns a different response code when an attack string is used.',
+  no_user_agent_response_changed: "The response was different when the request wasn't made from a browser.",
+});
+
+/**
+ * wafw00f `genericdetect` decision order over snapshots this scanner already captured:
+ * no-User-Agent drift, then XSS, path-traversal, and SQLi status drift, then Server header drift
+ * on the combined response. Any dropped connection is connection-level blocking.
+ */
+export function wafw00fGenericDetection({ baseline, noUserAgent, xss, pathTraversal, sqli, combined } = {}) {
+  const found = (reasonCode) => ({
+    found: true,
+    reason_code: reasonCode,
+    reason: WAFW00F_GENERIC_REASONS[reasonCode],
+  });
+  if (!baseline) return { found: false, reason_code: null, reason: null };
+  const captured = [baseline, noUserAgent, xss, pathTraversal, sqli, combined].filter(Boolean);
+  if (captured.some((snapshot) => snapshot.connection_dropped)) return found('connection_level_blocking');
+  if (noUserAgent && noUserAgent.status_code !== baseline.status_code) return found('no_user_agent_response_changed');
+  for (const snapshot of [xss, pathTraversal, sqli]) {
+    if (snapshot && snapshot.status_code !== baseline.status_code) return found('status_code_changed');
+  }
+  if (combined && (combined.server_header ?? '') !== (baseline.server_header ?? '')) {
+    return found('server_header_changed');
+  }
+  return { found: false, reason_code: null, reason: null };
 }
 
 function responseSnapshot(res, bodyText = '') {
@@ -723,7 +768,7 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
       redirect: 'manual',
       signal: controller.signal,
     });
-    const bodyText = await readBoundedResponseBody(res);
+    const bodyText = await readBoundedResponseBody(res, FINGERPRINT_BODY_READ_BYTES);
     return { res, bodyText, error: null };
   } catch (err) {
     if (
@@ -819,6 +864,12 @@ export async function runOutsideInWafScan(options = {}) {
   );
   const phasesDropped = phasesPlanned.filter((phase) => !plannedPhases.has(phase));
 
+  const suppliedIps = Array.isArray(options.resolvedIps)
+    ? options.resolvedIps.map((ip) => String(ip ?? '').trim()).filter(Boolean)
+    : [];
+  const suppliedCnameChain = Array.isArray(options.cnameChain)
+    ? options.cnameChain.map((name) => normalizeDnsHostname(name)).filter(Boolean)
+    : [];
   const [initialDnsHints, tlsHints] = collectNetworkHints
     ? await Promise.all([
         hostname
@@ -835,8 +886,9 @@ export async function runOutsideInWafScan(options = {}) {
   let redirectHops = 0;
   let finalUrlHostname = null;
   let dnsChainHint = initialDnsHints.dns_chain ?? null;
-  const dnsCnameChain = [...(initialDnsHints.cname_chain ?? [])];
-  const dnsResolvedIps = [...(initialDnsHints.resolved_ips ?? [])];
+  const dnsCnameChain = [...new Set([...(initialDnsHints.cname_chain ?? []), ...suppliedCnameChain])];
+  const dnsResolvedIps = [...new Set([...(initialDnsHints.resolved_ips ?? []), ...suppliedIps])];
+  const dnsObserved = collectNetworkHints || suppliedIps.length > 0 || suppliedCnameChain.length > 0;
 
   async function runGetPhase(phase, requestUrl, headers) {
     if (requestsSent >= budget) return null;
@@ -1098,27 +1150,25 @@ export async function runOutsideInWafScan(options = {}) {
     ? attackSnapshot
     : baseline;
 
-  const attackBlocked = Boolean(attackSnapshot
-    && !attackSnapshot.connection_dropped
-    && (attackSnapshot.block_page_signature_id || BLOCK_STATUSES.has(attackSnapshot.status_code)));
   // Structured chain data straight from the resolver. Re-splitting the display string lost IPv6
   // addresses and mislabelled every non-IP token as a CNAME.
   const resolvedIps = dnsResolvedIps;
   const cnameChain = dnsCnameChain;
+  const genericDetection = wafw00fGenericDetection({
+    baseline,
+    noUserAgent,
+    xss,
+    pathTraversal,
+    sqli,
+    combined,
+  });
   const edgeSignature = classifyEdgeFingerprint({
-    headerEntries: dedupeHeaderEntries([
-      ...(baseline?.fingerprint_header_entries ?? []),
-      ...(signalSource?.fingerprint_header_entries ?? []),
-    ]),
-    cookieNames: [...new Set([
-      ...(baseline?.cookie_names ?? []),
-      ...(signalSource?.cookie_names ?? []),
-    ])],
-    bodyText: attackSnapshot?.fingerprint_body_text ?? '',
-    statusCode: attackBlocked ? attackSnapshot.status_code : null,
-    blockResponse: attackBlocked,
+    normal: wafw00fResponseEvidence(baseline),
+    attack: wafw00fResponseEvidence(combined ?? sqli ?? xss ?? pathTraversal),
     resolvedIps,
     cnameChain,
+    dnsObserved,
+    genericDetection,
   });
 
   const vendorClassification = classifyWafProductFromSignals({
@@ -1189,8 +1239,15 @@ export async function runOutsideInWafScan(options = {}) {
     edge_signature: {
       waf_present: edgeSignature.waf_present,
       waf_providers: edgeSignature.waf_providers,
+      waf_generic_detected: edgeSignature.waf_generic_detected,
       cdn_detected: edgeSignature.cdn_detected,
       cdn_providers: edgeSignature.cdn_providers,
+      cloud_hosted: edgeSignature.cloud_hosted,
+      cloud_providers: edgeSignature.cloud_providers,
+      dns_observed: edgeSignature.dns_observed,
+      attack_response_evaluated: edgeSignature.attack_response_evaluated,
+      wafw00f: edgeSignature.wafw00f,
+      cdncheck: edgeSignature.cdncheck,
       conflicting_vendor_signals: edgeSignature.conflicting_vendor_signals,
       best_vendor: edgeSignature.best_vendor
         ? {
@@ -1206,7 +1263,7 @@ export async function runOutsideInWafScan(options = {}) {
         confidence: match.confidence,
         matched_signals: match.matched_signals,
       })),
-      ...(collectNetworkHints
+      ...(dnsObserved
         ? {
             address_matches: edgeSignature.address_matches,
             cname_matches: edgeSignature.cname_matches,
@@ -1216,11 +1273,15 @@ export async function runOutsideInWafScan(options = {}) {
     edge_signature_corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
     network_hints_collected: collectNetworkHints,
     redirect_following_enabled: followRedirects,
+    ...(dnsObserved
+      ? {
+          dns_cname_chain: dnsCnameChain,
+          dns_resolved_ips: dnsResolvedIps,
+        }
+      : {}),
     ...(collectNetworkHints
       ? {
           dns_chain_hint: dnsChainHint,
-          dns_cname_chain: dnsCnameChain,
-          dns_resolved_ips: dnsResolvedIps,
           tls_protocol_hint: tlsHints.tls_protocol_hint ?? null,
           tls_cipher_hint: tlsHints.tls_cipher_hint ?? null,
         }

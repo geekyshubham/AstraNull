@@ -25,7 +25,10 @@ import { isWithinPolicySafeWindow } from '../contracts/testPolicyManagement.mjs'
 import { isTrustedProducerEvent } from '../lib/trustedEventProvenance.mjs';
 import { validateHostSniTargetBinding } from '../lib/probeJobs.mjs';
 import { createProbeJob } from './probeCoordinator.mjs';
+import { probeDispatchReady } from '../config.mjs';
 import { computeReadiness } from './readiness.mjs';
+import { notifyRunTerminal } from './runTerminalHooks.mjs';
+import { normalizeCancelReason, withCheckSection } from '../contracts/validationScanManagement.mjs';
 import { isArchivedTarget, isArchivedTargetGroup } from './targetGroups.mjs';
 import {
   countCustomerRunnableRunsLastHour,
@@ -114,7 +117,7 @@ function rejectObservation(ctx, tenantId, agentId, reason, error, status, resour
 }
 
 export function listChecks() {
-  return customerSelectableChecks(getStore().checkCatalog ?? []);
+  return customerSelectableChecks(getStore().checkCatalog ?? []).map(withCheckSection);
 }
 
 export function listTestRuns(ctx, options = {}) {
@@ -295,6 +298,33 @@ function validatePolicyBinding(ctx, body, group, check, options = {}) {
   return { policy };
 }
 
+function validateScanBinding(ctx, body, group, check, options = {}) {
+  const dispatch = options.scanDispatch;
+  if (!dispatch) return { scan: null, step: null };
+  if (options.policyDispatch || String(body.policy_id ?? '').trim()) {
+    return { error: 'conflicting_dispatch_context', status: 409 };
+  }
+  const scan = (getStore().validationScans ?? []).find(
+    (row) => row.id === dispatch.scan_id && row.tenant_id === ctx.tenantId,
+  );
+  if (!scan || !['pending', 'running'].includes(scan.status)) return { error: 'scan_dispatch_invalid', status: 409 };
+  const reference = dispatch.now ? new Date(dispatch.now) : new Date();
+  if (!scan.lease_token
+    || scan.lease_token !== dispatch.lease_token
+    || (scan.lease_expires_at && new Date(scan.lease_expires_at) <= reference)) {
+    return { error: 'scan_dispatch_invalid', status: 409 };
+  }
+  const step = (scan.steps ?? []).find((row) => row.id === dispatch.step_id);
+  if (!step
+    || step.status !== 'starting'
+    || step.check_id !== check.check_id
+    || scan.target_group_id !== group.id
+    || step.target_id !== body.target_id) {
+    return { error: 'scan_dispatch_invalid', status: 409 };
+  }
+  return { scan, step };
+}
+
 function revalidateBeforeDispatch(ctx, body, check, initialTarget, probeWillLeaveThisHost, options = {}) {
   const group = getStore().targetGroups.find(
     (candidate) => candidate.id === body.target_group_id
@@ -467,12 +497,21 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
   );
   if (!target) return { error: 'target_not_found', status: 404 };
 
+  const scanBinding = validateScanBinding(ctx, body, group, check, options);
+  if (scanBinding.error) return scanBinding;
   const policyBinding = validatePolicyBinding(ctx, body, group, check, options);
   if (policyBinding.error) return policyBinding;
   const policyDispatchId = options.policyDispatch?.dispatch_id ?? null;
   if (policyDispatchId) {
     const existingRun = getStore().testRuns.find(
       (run) => run.tenant_id === ctx.tenantId && run.policy_dispatch_id === policyDispatchId,
+    );
+    if (existingRun) return { run: getTestRun(ctx, existingRun.id), idempotent_replay: true };
+  }
+  const scanStepId = scanBinding.step?.id ?? null;
+  if (scanStepId) {
+    const existingRun = getStore().testRuns.find(
+      (run) => run.tenant_id === ctx.tenantId && run.scan_step_id === scanStepId,
     );
     if (existingRun) return { run: getTestRun(ctx, existingRun.id), idempotent_replay: true };
   }
@@ -624,6 +663,18 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     return finalValidation;
   }
 
+  const leavesHost = !isOpsReadinessProbeKind(check) && (runtimeConfig.probeMode ?? 'simulation') === 'signed-worker';
+  if (leavesHost && !probeDispatchReady(runtimeConfig)) {
+    return denySafeStart(
+      ctx,
+      'test_run.probe_signing_unavailable',
+      targetGroupId,
+      { check_id: check.check_id, target_group_id: targetGroupId, scan_id: scanBinding.scan?.id ?? null },
+      'probe_signing_unavailable',
+      503,
+    );
+  }
+
   const safetyConstraints = effectiveSafetyConstraints(check, group);
   const runId = newId('run');
   const run = {
@@ -633,6 +684,8 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     target_id: target.id,
     policy_id: policyBinding.policy?.id ?? null,
     policy_dispatch_id: options.policyDispatch?.dispatch_id ?? null,
+    scan_id: scanBinding.scan?.id ?? null,
+    scan_step_id: scanStepId,
     check_id: check.check_id,
     vector_family: check.vector_family,
     safety_class: check.safety_class ?? check.risk_class,
@@ -655,7 +708,7 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
     action: 'test_run.started',
     resource_type: 'test_run',
     resource_id: runId,
-    metadata: { check_id: check.check_id, policy_id: run.policy_id },
+    metadata: { check_id: check.check_id, policy_id: run.policy_id, scan_id: run.scan_id, scan_step_id: run.scan_step_id },
   });
 
   const probeMode = runtimeConfig.probeMode ?? 'simulation';
@@ -670,7 +723,19 @@ export function startTestRun(ctx, body, runtimeConfig = { probeMode: 'simulation
       getStore().testRuns.pop();
       return denyEventCap(ctx, run, { phase: 'probe_job' });
     }
-    probeJob = createProbeJob(ctx, run, check, target, body.probe_profile, runtimeConfig);
+    try {
+      probeJob = createProbeJob(ctx, run, check, target, body.probe_profile, runtimeConfig);
+    } catch {
+      getStore().testRuns.splice(getStore().testRuns.indexOf(run), 1);
+      return denySafeStart(
+        ctx,
+        'test_run.dispatch_failed',
+        targetGroupId,
+        { check_id: check.check_id, scan_id: run.scan_id, reason: 'probe_job_dispatch_failed' },
+        'probe_job_dispatch_failed',
+        503,
+      );
+    }
     run.correlation.nonce_hash = probeJob.nonce_hash;
     run.awaiting_external_probe = true;
     probe = { nonce: probeJob.nonce, nonce_hash: probeJob.nonce_hash, external_result: null };
@@ -1056,6 +1121,7 @@ function finalizeOpsReadinessVerdict(run, probe) {
   });
 
   computeReadiness(run.tenant_id);
+  notifyRunTerminal(run, { reason: 'verdicted' });
   return verdict;
 }
 
@@ -1175,24 +1241,51 @@ function finalizeVerdictIfReady(run, agent, options = {}) {
   }
 
   computeReadiness(run.tenant_id);
+  notifyRunTerminal(run, { reason: 'verdicted' });
   return verdict;
+}
+
+function revokeDispatchedJobsForRun(run) {
+  const cancelledProbeJobIds = [];
+  const cancelledAgentJobIds = [];
+  for (const job of getStore().probeJobs) {
+    if (job.tenant_id !== run.tenant_id || job.test_run_id !== run.id) continue;
+    if (job.ownership_verification_id) continue;
+    if (!['pending', 'leased'].includes(job.status)) continue;
+    job.status = 'cancelled';
+    job.completed_at = run.completed_at;
+    cancelledProbeJobIds.push(job.id);
+  }
+  for (const job of getStore().agentJobs ?? []) {
+    if (job.tenant_id !== run.tenant_id || job.test_run_id !== run.id) continue;
+    if (!['pending', 'acked'].includes(job.status)) continue;
+    job.status = 'cancelled';
+    job.cancelled_at = run.completed_at;
+    cancelledAgentJobIds.push(job.id);
+  }
+  return { cancelledProbeJobIds, cancelledAgentJobIds };
 }
 
 export function autoCancelActiveSafeRunsForKillSwitch(ctx, reason) {
   const cancelledRunIds = [];
+  const cancelledRuns = [];
   for (const run of getStore().testRuns) {
     if (run.tenant_id !== ctx.tenantId) continue;
     if (!CANCELLABLE_STATUSES.has(run.status)) continue;
     run.status = 'cancelled';
     run.completed_at = new Date().toISOString();
     run.cancelled_by_kill_switch = true;
-    for (const job of getStore().probeJobs) {
-      if (job.tenant_id !== ctx.tenantId || job.test_run_id !== run.id) continue;
-      if (job.ownership_verification_id) continue;
-      if (!['pending', 'leased'].includes(job.status)) continue;
-      job.status = 'cancelled';
-      job.completed_at = run.completed_at;
-    }
+    const revoked = revokeDispatchedJobsForRun(run);
+    run.summary = {
+      ...(run.summary ?? {}),
+      cancellation: {
+        reason: reason ?? 'kill_switch',
+        by: ctx.userId,
+        role: ctx.role,
+        source: 'kill_switch',
+        scan_id: run.scan_id ?? null,
+      },
+    };
     audit({
       tenant_id: ctx.tenantId,
       actor_user_id: ctx.userId,
@@ -1200,15 +1293,24 @@ export function autoCancelActiveSafeRunsForKillSwitch(ctx, reason) {
       action: 'test_run.kill_switch_auto_cancel',
       resource_type: 'test_run',
       resource_id: run.id,
-      metadata: { reason: reason ?? null, check_id: run.check_id, target_group_id: run.target_group_id },
+      metadata: {
+        reason: reason ?? null,
+        check_id: run.check_id,
+        target_group_id: run.target_group_id,
+        scan_id: run.scan_id ?? null,
+        cancelled_probe_job_ids: revoked.cancelledProbeJobIds,
+        cancelled_agent_job_ids: revoked.cancelledAgentJobIds,
+      },
     });
     cancelledRunIds.push(run.id);
+    cancelledRuns.push(run);
   }
   if (cancelledRunIds.length) persistStore();
+  for (const run of cancelledRuns) notifyRunTerminal(run, { reason: 'kill_switch' });
   return cancelledRunIds;
 }
 
-export function cancelTestRun(ctx, id) {
+export function cancelTestRun(ctx, id, options = {}) {
   const run = getStore().testRuns.find((r) => r.id === id && r.tenant_id === ctx.tenantId);
   if (!run) return null;
   if (!CANCELLABLE_STATUSES.has(run.status)) {
@@ -1224,15 +1326,21 @@ export function cancelTestRun(ctx, id) {
     persistStore();
     return { error: 'not_cancellable', status: 409 };
   }
+  const reason = normalizeCancelReason(options.reason);
+  const source = options.source ?? 'user';
   run.status = 'cancelled';
   run.completed_at = new Date().toISOString();
-  for (const job of getStore().probeJobs) {
-    if (job.tenant_id !== ctx.tenantId || job.test_run_id !== run.id) continue;
-    if (job.ownership_verification_id) continue;
-    if (!['pending', 'leased'].includes(job.status)) continue;
-    job.status = 'cancelled';
-    job.completed_at = run.completed_at;
-  }
+  const revoked = revokeDispatchedJobsForRun(run);
+  run.summary = {
+    ...(run.summary ?? {}),
+    cancellation: {
+      reason,
+      by: ctx.userId,
+      role: ctx.role,
+      source,
+      scan_id: options.scan_id ?? run.scan_id ?? null,
+    },
+  };
   audit({
     tenant_id: ctx.tenantId,
     actor_user_id: ctx.userId,
@@ -1240,7 +1348,19 @@ export function cancelTestRun(ctx, id) {
     action: 'test_run.cancelled',
     resource_type: 'test_run',
     resource_id: id,
+    metadata: {
+      reason,
+      cancelled_by: ctx.userId,
+      cancelled_by_role: ctx.role,
+      source,
+      check_id: run.check_id,
+      target_group_id: run.target_group_id,
+      scan_id: options.scan_id ?? run.scan_id ?? null,
+      cancelled_probe_job_ids: revoked.cancelledProbeJobIds,
+      cancelled_agent_job_ids: revoked.cancelledAgentJobIds,
+    },
   });
   persistStore();
+  notifyRunTerminal(run, { reason: 'cancelled', source });
   return { run };
 }

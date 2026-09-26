@@ -386,6 +386,21 @@ Optional: disable file persistence during tests:
 ASTRANULL_NO_PERSIST=1 npm start
 ```
 
+### Real probe results locally (signed worker)
+
+`npm run dev:api` uses in-process probe simulation, so WAF/CDN edge detection reports
+`simulation_not_detection` (inconclusive) by design. To get real wafw00f/cdncheck results, run
+the API in signed-worker mode and start the reference worker against it. Both need the same
+secret (32+ characters, from your shell, never committed):
+
+```bash
+export ASTRANULL_PROBE_WORKER_SECRET="$(openssl rand -hex 32)"
+npm run dev:api:signed                                  # terminal 1, port 3001
+ASTRANULL_PROBE_TENANT_ID=ten_demo npm run probe-worker:dev   # terminal 2
+```
+
+Only run detection against targets you own and have verified in the target group.
+
 ### Developer validation auth (UI)
 
 The sidebar sets compatibility headers ( **not valid for production** ):

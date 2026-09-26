@@ -30,6 +30,7 @@ import {
 } from './outsideInWafAgentEvidence.mjs';
 import {
   BENIGN_CLASS_MARKERS,
+  OUTSIDE_IN_SCAN_DEFAULT_BUDGET,
   readBoundedResponseBody,
   runOutsideInWafScan,
 } from './outsideInWafScanner.mjs';
@@ -437,6 +438,37 @@ async function resolve4(host, deps) {
     if (isAuthoritativeDnsNegative(error)) return [];
     throw error;
   }
+}
+
+export const OUTSIDE_IN_CNAME_HOPS_MAX = 3;
+
+/**
+ * cdncheck-style CNAME chain for the vetted host. Each hop is one counted logical operation;
+ * ENODATA/ENOTFOUND ends the chain and any other resolver failure leaves the chain as observed.
+ */
+async function resolveCnameChain(host, deps, maxHops) {
+  const fn = deps.resolveCnameFn ?? dns.resolveCname;
+  const chain = [String(host ?? '').trim().toLowerCase().replace(/\.$/, '')];
+  let lookups = 0;
+  while (lookups < maxHops) {
+    if (typeof deps.remainingJobTimeoutMs === 'function' && deps.remainingJobTimeoutMs() <= 0) break;
+    lookups += 1;
+    let next = null;
+    try {
+      const answers = await withinRemainingProbeTime(
+        startProbeIoAttempt(deps, 'dns_cname', () => fn(chain[chain.length - 1])),
+        { constraints: { timeout_ms: DEFAULT_PROBE_TIMEOUT_MS } },
+        deps,
+      );
+      next = String(answers?.[0] ?? '').trim().toLowerCase().replace(/\.$/, '');
+    } catch (error) {
+      if (isOperationBudgetError(error)) throw error;
+      break;
+    }
+    if (!next || chain.includes(next)) break;
+    chain.push(next);
+  }
+  return { chain, lookups };
 }
 
 async function resolve6(host, deps) {
@@ -1675,7 +1707,12 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     }
     pinnedDirectIp = directDestination.addresses[0];
   }
-  const budget = resolveProbeRequestBudget(job);
+  const totalBudget = resolveProbeRequestBudget(job);
+  const cnameHopBudget = Math.max(0, Math.min(OUTSIDE_IN_CNAME_HOPS_MAX, totalBudget - OUTSIDE_IN_SCAN_DEFAULT_BUDGET));
+  const cnameResult = net.isIP(primaryHost ?? '') === 0 && cnameHopBudget > 0
+    ? await resolveCnameChain(primaryHost, primaryDeps, cnameHopBudget)
+    : { chain: [], lookups: 0 };
+  const budget = totalBudget - cnameResult.lookups;
   const agentObservations = Array.isArray(deps.agentObservations) ? deps.agentObservations : [];
   const nonceHash = job.nonce_hash ?? null;
   const domXssValidation = resolveDomXssValidation({ agents: agentObservations, nonceHash });
@@ -1692,6 +1729,8 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     url,
     hostname,
     directIp: pinnedDirectIp,
+    resolvedIps: primaryDestination.addresses,
+    cnameChain: cnameResult.chain,
     budget,
     timeoutMs: remainingProbeTimeoutMs(job, deps),
     // Signed outside-in jobs authorize only the statically planned, pre-reserved HTTP probes.
@@ -1723,7 +1762,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
   });
 
   if (remainingProbeTimeoutMs(job, deps) <= 0) {
-    return deadlineOutcome(job, kind, deps, scan.requests_sent ?? 0, {
+    return deadlineOutcome(job, kind, deps, (scan.requests_sent ?? 0) + cnameResult.lookups, {
       phases_completed: Array.isArray(scan.phases) ? scan.phases.length : 0,
     });
   }
@@ -1735,7 +1774,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
         withKind(job, kind, { ...scan, duration_ms: durationMs }),
         job.check_id,
       ),
-      requests_sent: scan.requests_sent ?? 0,
+      requests_sent: (scan.requests_sent ?? 0) + cnameResult.lookups,
       duration_ms: durationMs,
     };
   }
@@ -1753,6 +1792,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
       duration_ms: durationMs,
       scenario_family: 'fingerprint',
       ...scan,
+      dns_cname_lookups: cnameResult.lookups,
     }),
     { agents: agentObservations, nonceHash },
   );
@@ -1760,7 +1800,7 @@ export async function probeOutsideInWafScan(job, deps = {}) {
   return {
     external_result: external,
     metadata: enrichProbeMetadataWithWafCatalog(enrichedScan, job.check_id),
-    requests_sent: scan.requests_sent ?? 0,
+    requests_sent: (scan.requests_sent ?? 0) + cnameResult.lookups,
     duration_ms: durationMs,
   };
 }

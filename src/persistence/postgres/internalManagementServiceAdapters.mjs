@@ -34,6 +34,7 @@ export const INTERNAL_MANAGEMENT_REPOSITORY_METHODS = Object.freeze([
   'listApprovalRequests',
   'decideApprovalRequest',
   'getApprovalRequest',
+  'listSocHighScaleRequests',
   'listInternalAudit',
   'listBreakGlassActivations',
   'saveBreakGlassActivation',
@@ -57,6 +58,7 @@ export const POSTGRES_INTERNAL_MANAGEMENT_SERVICE_METHODS = Object.freeze([
   'disableTenantUser',
   'listApprovalRequests',
   'decideApprovalRequest',
+  'listSocHighScaleRequests',
   'listInternalAudit',
   'appendInternalAudit',
   'listBreakGlassActivations',
@@ -443,6 +445,14 @@ export function createPostgresInternalManagementServices(repositories) {
     },
 
     listApprovalRequests: (filters) => repo.listApprovalRequests(filters),
+    async listSocHighScaleRequests(ctx, filters = {}) {
+      const result = await repo.listSocHighScaleRequests(filters);
+      await repo.appendInternalAudit(auditEntry(ctx, 'staff.soc.high_scale_queue_viewed', {
+        resource_type: 'high_scale_request',
+        metadata: { request_count: result.items.length, state_filter: filters.state ?? null, tenant_filter: filters.tenant_id ?? null },
+      }));
+      return result;
+    },
 
     async decideApprovalRequest(ctx, id, body) {
       const existing = await repo.getApprovalRequest(id);

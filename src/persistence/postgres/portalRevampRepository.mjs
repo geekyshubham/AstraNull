@@ -8,6 +8,12 @@ import {
 } from '../../lib/cursorPagination.mjs';
 import { newId } from '../../lib/ids.mjs';
 import { presentTargetEdgeDetection } from '../../lib/edgeDetectionPresenter.mjs';
+import {
+  WAF_EDGE_DETECTION_CHECK_ID,
+  boundCheckRows,
+  edgeDetectionRequestRow,
+  recentRunRow,
+} from '../../lib/targetDetailRows.mjs';
 import { withTenantContext } from './tenantContext.mjs';
 
 /** Durable edge-detection columns. Label-only evidence; the table holds no raw header/body data. */
@@ -923,10 +929,54 @@ export function createPortalRevampRepository(pool) {
         );
         bump();
         const runs = await client.query(
-          `SELECT id, policy_id, check_id, status, started_at, created_at
-           FROM test_runs WHERE tenant_id = $1 AND target_id = $2
-           ORDER BY COALESCE(started_at, created_at) DESC LIMIT $3`,
+          `SELECT r.id, r.policy_id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at,
+                  v.id AS verdict_id, v.verdict, v.evidence_ids,
+                  COUNT(*) OVER () AS runs_total
+           FROM test_runs r
+           LEFT JOIN LATERAL (
+             SELECT id, verdict, evidence_ids FROM verdicts
+             WHERE tenant_id = r.tenant_id AND test_run_id = r.id
+             ORDER BY created_at DESC, id DESC LIMIT 1
+           ) v ON TRUE
+           WHERE r.tenant_id = $1 AND r.target_id = $2
+           ORDER BY COALESCE(r.started_at, r.created_at) DESC LIMIT $3`,
           [ctx.tenantId, targetId, Number(query.runs_limit) || 5],
+        );
+        bump();
+        const policies = await client.query(
+          `SELECT id, tenant_id, target_group_id, target_id, check_id, cadence, state, enabled, archived_at
+           FROM test_policies
+           WHERE tenant_id = $1 AND target_group_id = $2
+             AND (target_id IS NULL OR target_id = $3)
+             AND archived_at IS NULL AND state <> 'archived'
+           ORDER BY created_at, id`,
+          [ctx.tenantId, target.target_group_id, targetId],
+        );
+        const latestCheckIds = [
+          ...new Set([WAF_EDGE_DETECTION_CHECK_ID, ...policies.rows.map((row) => row.check_id)]),
+        ];
+        bump();
+        const latestRuns = await client.query(
+          `SELECT DISTINCT ON (r.check_id)
+                  r.id, r.check_id, r.status, r.started_at, r.created_at, r.completed_at,
+                  v.id AS verdict_id, v.verdict, v.evidence_ids
+           FROM test_runs r
+           LEFT JOIN LATERAL (
+             SELECT id, verdict, evidence_ids FROM verdicts
+             WHERE tenant_id = r.tenant_id AND test_run_id = r.id
+             ORDER BY created_at DESC, id DESC LIMIT 1
+           ) v ON TRUE
+           WHERE r.tenant_id = $1 AND r.target_id = $2 AND r.check_id = ANY($3::text[])
+           ORDER BY r.check_id, COALESCE(r.started_at, r.created_at) DESC, r.id DESC`,
+          [ctx.tenantId, targetId, latestCheckIds],
+        );
+        bump();
+        const currentVerification = await client.query(
+          `SELECT state, source_kind, source_ref
+           FROM target_verification_current
+           WHERE tenant_id = $1 AND target_id = $2
+           LIMIT 1`,
+          [ctx.tenantId, targetId],
         );
         bump();
         const wafAsset = await client.query(
@@ -981,7 +1031,7 @@ export function createPortalRevampRepository(pool) {
         // Re-reverse the DESC-capped verification rows back into ASC order so both the
         // history array and `latest` (the final element) keep their original semantics.
         const verificationRows = verifications.rows.slice().reverse();
-        const latest = verificationRows[verificationRows.length - 1];
+        const latest = currentVerification.rows[0] ?? verificationRows[verificationRows.length - 1];
 
         // The limit+1th row, if present, only signals that another page exists; it is
         // trimmed off before mapping so the emitted page size matches the request.
@@ -1011,12 +1061,14 @@ export function createPortalRevampRepository(pool) {
         const snapshotRow = wafSnapshot.rows[0] ?? null;
         const assetRow = wafAsset.rows[0] ?? null;
         const connectorRow = wafConnector.rows[0] ?? null;
-        const runsRecent = runs.rows.map((run) => ({
-          run_id: run.id,
-          policy_id: run.policy_id ?? null,
-          verdict: run.status ?? 'unknown',
-          started_at: toIso(run.started_at ?? run.created_at),
-        }));
+        const verdictOf = (row) => (row.verdict_id
+          ? { id: row.verdict_id, verdict: row.verdict, evidence_ids: row.evidence_ids }
+          : null);
+        const runsRecent = runs.rows.map((run) => recentRunRow(run, verdictOf(run)));
+        const latestByCheck = new Map(
+          latestRuns.rows.map((row) => [row.check_id, { run: row, verdict: verdictOf(row) }]),
+        );
+        const checksApplied = boundCheckRows(target, policies.rows, latestByCheck);
         const wafPosture = assetRow
           ? {
               asset_id: assetRow.id,
@@ -1073,7 +1125,8 @@ export function createPortalRevampRepository(pool) {
           },
           waf_posture: wafPosture,
           edge_detection: presentTargetEdgeDetection(edgeDetection.rows[0] ?? null),
-          checks_applied: [],
+          edge_detection_request: edgeDetectionRequestRow(latestByCheck),
+          checks_applied: checksApplied,
           runs_recent: runsRecent,
           findings: findingsPage,
           findings_next_cursor: findingsNextCursor,
@@ -1087,7 +1140,7 @@ export function createPortalRevampRepository(pool) {
               }
             : null,
           counts: {
-            runs_total: runs.rows.length,
+            runs_total: Number(runs.rows[0]?.runs_total ?? 0),
             // Sourced from the aggregate, not the page: these are per-target totals and
             // must not shrink just because the findings read is now bounded.
             findings_open: Number(findingCounts.rows[0]?.open_count ?? 0),
@@ -1101,7 +1154,9 @@ export function createPortalRevampRepository(pool) {
           findings_empty_reason: findingsPage.length
             ? null
             : 'No findings are scoped to this target yet.',
-          checks_empty_reason: 'No checks are bound to this target group policy yet.',
+          checks_empty_reason: checksApplied.length
+            ? null
+            : 'No customer-runnable checks are bound to this target by a test policy yet.',
           waf_empty_reason: wafPosture
             ? null
             : 'No WAF posture asset is linked to this target.',

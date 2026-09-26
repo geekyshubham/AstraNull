@@ -1593,12 +1593,12 @@
         <code class="check-id">waf.fingerprint.safe</code>
         <span class="badge safe">safe</span>
       </header>
-      <p class="desc">Bounded outside-in scan using pre-reserved, destination-pinned HTTP only: WAF fingerprint, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.</p>
+      <p class="desc">Bounded outside-in scan: wafw00f plugin evaluation over destination-pinned benign HTTP probes, cdncheck CDN/WAF/cloud classification from the vetted addresses and a counted CNAME chain, benign SQLi/XSS/path-traversal marker checks, optional origin bypass, posture report.</p>
       <dl>
         <dt>What we detect</dt>
         <dd>WAF vendor fingerprint, benign SQLi/XSS/path markers blocked or not, evasion bypass, posture label.</dd>
         <dt>How we detect</dt>
-        <dd>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints. Max 13 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
+        <dd>Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints. Max 16 request(s), timeout ≤ 5000ms. Verdict primarily from outside probe metadata.</dd>
         <dt>Probe kind</dt>
         <dd><code>outside_in_waf_scan</code></dd>
         <dt>Exhausted resource</dt>

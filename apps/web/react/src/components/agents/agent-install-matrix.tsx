@@ -160,7 +160,7 @@ export function AgentInstallMatrix({
           </div>
         ) : (
           <div className="form-banner neutral" role="status" aria-live="polite">
-            Agent download preparation is unavailable. {resolution.reason}
+            Agent download preparation is unavailable. {resolution.reason} Bootstrap token creation does not depend on signed updates or trust keys and remains available.
           </div>
         )}
         <div className="callout info" role="note">

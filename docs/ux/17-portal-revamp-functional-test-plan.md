@@ -212,6 +212,7 @@ Playwright against a full stack (API + web) seeded with the baseline fixture. Ea
 - **FT-E2E-05 Findings triage:** filter to Closed → sort by SLA → paginate → open a closed finding → confirm remediation shows `resolved`.
 - **FT-E2E-06 Archive/restore:** archive a target group → confirm it leaves the active list → restore → confirm it returns.
 - **FT-E2E-07 Billing + settings:** open Billing → open Settings → change a retention value → confirm it persists on reload (FT-PRV-01 path from the UI).
+- **FT-E2E-08 Validation scan:** open target group detail → Start validation scan → select checks by section (SOC-gated and E5 absent) → exact target → review → start → `#scan-detail` shows steps advancing with request, response, requests sent, and verdict → activity log grows → Stop → status `cancelled`, pending steps `skipped`; then schedule a recurring scan → it appears in the scheduled list → edit → dispatch when due (in-process test helper) → same live view → cancel series. Auditor session sees no Start, Stop, Edit, or Cancel. Spec: `tests/e2e/journeys/portal-validation-scan.spec.mjs`.
 
 ## 10. State-coverage tests — `tests/e2e/states/*`
 

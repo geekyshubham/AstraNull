@@ -274,6 +274,7 @@ describe('dev store migration', () => {
       findingRemediations: [],
       signupQueueEvents: [],
       probeJobs: [],
+      validationScans: [],
       testRuns: [],
       events: [],
       verdicts: [],

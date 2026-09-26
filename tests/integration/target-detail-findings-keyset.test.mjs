@@ -353,6 +353,31 @@ describeMaybe('target detail findings keyset pagination', () => {
     });
   });
 
+  it('reports the full per-target runs_total, not the runs page size', async () => {
+    await withEphemeralPostgres(async (pool) => {
+      await seedFindingsFixture(pool);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(`SELECT set_config('app.tenant_id', $1, true)`, [IDS.tenantId]);
+        for (const runId of ['run_total_a', 'run_total_b', 'run_total_c']) {
+          await client.query(
+            `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status)
+             VALUES ($1, $2, $3, $4, 'waf.fingerprint.safe', 'verdicted')`,
+            [runId, IDS.tenantId, IDS.targetGroupId, IDS.targetId],
+          );
+        }
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+      const repo = createPortalRevampRepository(pool);
+      const bundle = await repo.getTargetDetailBundle(CTX, IDS.targetId, { runs_limit: 1 });
+      assert.equal(bundle.runs_recent.length, 1);
+      assert.equal(bundle.counts.runs_total, 3);
+    });
+  });
+
   it('accepts a legacy id-only cursor without crashing or restarting the ordering', async () => {
     await withEphemeralPostgres(async (pool) => {
       await seedFindingsFixture(pool);
@@ -460,7 +485,7 @@ describeMaybe('target detail findings keyset pagination', () => {
       await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 }, {
         queryCounter: plain,
       });
-      assert.equal(plain.count, 10, 'target lookup + nine sequential detail reads');
+      assert.equal(plain.count, 13, 'target lookup + twelve sequential detail reads');
 
       const page1 = await repo.getTargetDetailBundle(CTX, IDS.targetId, { findings_limit: 5 });
       const legacy = { count: 0 };
@@ -470,7 +495,7 @@ describeMaybe('target detail findings keyset pagination', () => {
         { findings_limit: 5, findings_cursor: encodeCursor({ id: page1.findings.at(-1).id }) },
         { queryCounter: legacy },
       );
-      assert.equal(legacy.count, 11, 'legacy cursor adds one indexed resolution lookup');
+      assert.equal(legacy.count, 14, 'legacy cursor adds one indexed resolution lookup');
     });
   });
 });

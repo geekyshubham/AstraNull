@@ -8,6 +8,7 @@ import path from 'node:path';
 import { describe, it, beforeEach } from 'node:test';
 import { buildAgentPackage } from '../../scripts/package-agent.mjs';
 import { CHECK_CATALOG } from '../../src/contracts/checks.mjs';
+import { parseManifestSigningKey } from '../../src/lib/agentUpdates.mjs';
 import {
   createAgentUpdateRelease,
   createAgentUpdateTrustKey,
@@ -200,6 +201,21 @@ describe('agent update releases', () => {
     assert.equal(listAgentUpdateReleases(adminCtx).length, 1);
     assert.deepEqual(ok.release.distribution, distributionForVersion('2.0.0'));
     assert.deepEqual(ok.release.rollback.distribution, distributionForVersion('1.0.0'));
+  });
+
+  it('skips malformed stored release rows instead of failing the list or poll', () => {
+    const ok = createAgentUpdateRelease(adminCtx, trustedReleaseBody(adminCtx));
+    assert.ok(ok.release);
+    getStore().agentUpdateReleases.push(
+      { id: 'aurel_legacy', tenant_id: 'ten_demo', version: '0.1.0', state: 'active', status: 'published' },
+      { id: 'aurel_null_manifest', tenant_id: 'ten_demo', version: '0.1.1', state: 'active', manifest: null },
+    );
+    const items = listAgentUpdateReleases(adminCtx);
+    assert.deepEqual(items.map((item) => item.id), [ok.release.id]);
+    const poll = pollAgentUpdate({ id: 'agt_x', tenant_id: 'ten_demo', version: '1.0.0' });
+    assert.notEqual(poll.update?.release_id, 'aurel_legacy');
+    assert.notEqual(poll.update?.release_id, 'aurel_null_manifest');
+    assert.equal(parseManifestSigningKey(undefined).error, 'missing_signing_public_key');
   });
 
   it('rejects missing or invalid detached signatures and unsafe artifacts', () => {

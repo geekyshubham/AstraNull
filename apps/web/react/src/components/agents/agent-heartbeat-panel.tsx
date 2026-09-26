@@ -91,12 +91,14 @@ export function AgentHeartbeatPanel({
   agent,
   agentId,
   audit,
+  auditRestricted = false,
   onRefresh,
   refreshing
 }: {
   agent: DataItem;
   agentId: string;
   audit: DataItem[];
+  auditRestricted?: boolean;
   onRefresh: () => void | Promise<void>;
   refreshing?: boolean;
 }) {
@@ -249,7 +251,9 @@ export function AgentHeartbeatPanel({
             <p className="muted hb-trace-empty row" role="status">
               <Activity size={16} aria-hidden="true" />
               <span>
-                No matching heartbeat audit events are available. The trace is not synthesized from agent status.
+                {auditRestricted
+                  ? 'Heartbeat audit events are not available for your role. The trace is not synthesized from agent status.'
+                  : 'No matching heartbeat audit events are available. The trace is not synthesized from agent status.'}
               </span>
             </p>
           ) : (
