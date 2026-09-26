@@ -103,6 +103,23 @@ describe('createServer postgres mode — route wiring', () => {
     assert.equal(res.json.error, 'postgres_route_not_wired');
   });
 
+  it('fails closed on WAF offensive routes instead of touching the dev JSON store', async () => {
+    ({ server, baseUrl } = await listenPostgresServer(
+      { tenants: { async getCurrentTenant() { return { id: 'ten_demo', name: 'Demo' }; } } },
+      undefined,
+      { featureFlags: { wafPostureEnabled: true, externalDiscoveryEnabled: false } },
+    ));
+    for (const [method, path, headers] of [
+      ['GET', '/v1/waf/offensive-requests', demoHeaders('admin')],
+      ['GET', '/v1/waf/offensive-requests/wof_x', demoHeaders('admin')],
+      ['POST', '/internal/soc/waf-offensive/wof_x/start', demoHeaders('soc')],
+    ]) {
+      const res = await request(baseUrl, method, path, { headers, body: method === 'POST' ? {} : undefined });
+      assert.notEqual(res.status, 500, `${method} ${path}`);
+      if (res.status !== 403 && res.status !== 404) assert.equal(res.json.error, 'postgres_route_not_wired', `${method} ${path}`);
+    }
+  });
+
   it('serves /v1/subscription/current through the injected Postgres subscription service', async () => {
     let summaryCtx = null;
     const subscriptions = {

@@ -310,6 +310,15 @@ function blockPostgresWafCvePipelineRoute(runtimeConfig, serviceDeps, path, res)
   return true;
 }
 
+// ponytail: WAF offensive requests have no Postgres repository yet; fail closed instead of
+// falling through to the dev JSON store (which 500s on read-only production filesystems).
+function blockPostgresWafOffensiveRoute(runtimeConfig, serviceDeps, path, res) {
+  if (runtimeConfig.persistenceMode !== 'postgres' || serviceDeps.wafOffensive) return false;
+  if (!path.startsWith('/v1/waf/offensive-requests') && !path.startsWith('/internal/soc/waf-offensive/')) return false;
+  respondPostgresRouteNotWired(res);
+  return true;
+}
+
 function blockPostgresWafSupplyChainRoute(runtimeConfig, serviceDeps, path, res) {
   if (runtimeConfig.persistenceMode !== 'postgres') return false;
   if (!isWafSupplyChainRoute(path)) return false;
@@ -1463,6 +1472,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
   if (blockPostgresWafActionItemsRoute(runtimeConfig, serviceDeps, path, res)) return;
   if (blockPostgresWafCvePipelineRoute(runtimeConfig, serviceDeps, path, res)) return;
   if (blockPostgresWafSupplyChainRoute(runtimeConfig, serviceDeps, path, res)) return;
+  if (blockPostgresWafOffensiveRoute(runtimeConfig, serviceDeps, path, res)) return;
   const wafSvc = resolveWafPostureService(runtimeConfig, serviceDeps);
   const cveSvc = resolveCvePipelineService(runtimeConfig, serviceDeps);
   const supplyChainSvc = resolveSupplyChainRiskService(runtimeConfig, serviceDeps);
