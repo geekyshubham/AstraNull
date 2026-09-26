@@ -49,6 +49,10 @@ const FINGERPRINT_CNAME_VALUES_MAX = 64;
 const SINGLE_SIGNAL_CONFIDENCE = 0.45;
 const EXTRA_SIGNAL_CONFIDENCE = 0.2;
 const MAX_VENDOR_CONFIDENCE = 0.95;
+const ADDRESS_RANGE_CONFIDENCE = 0.7;
+const CNAME_SUFFIX_CONFIDENCE = 0.65;
+const GENERIC_BEHAVIOR_CONFIDENCE = 0.45;
+const LAYER_AGREEMENT_BOOST = 0.1;
 
 const MATCH_TRUE = 1;
 const MATCH_FALSE = 0;
@@ -437,6 +441,26 @@ function matchedSignalDescriptor(signature) {
   return { signal: signature.signal, tier: signature.tier };
 }
 
+function matchedSignalIdentity(signal) {
+  return JSON.stringify([
+    signal.signal,
+    signal.tier,
+    signal.header ?? null,
+    signal.status ?? null,
+    signal.value ?? null,
+  ]);
+}
+
+function vendorMatchesConflict(left, right) {
+  const leftSignals = new Set(left.matched_signals.map(matchedSignalIdentity));
+  const rightSignals = new Set(right.matched_signals.map(matchedSignalIdentity));
+  const shared = [...leftSignals].filter((signal) => rightSignals.has(signal));
+  if (shared.length === 0) return false;
+  const leftHasIndependentSignal = [...leftSignals].some((signal) => !rightSignals.has(signal));
+  const rightHasIndependentSignal = [...rightSignals].some((signal) => !leftSignals.has(signal));
+  return !leftHasIndependentSignal || !rightHasIndependentSignal;
+}
+
 function vendorConfidence(matchedSignals) {
   if (matchedSignals.length === 0) return 0;
   const blockSignals = matchedSignals.filter((signal) => signal.tier === 'block_page').length;
@@ -490,12 +514,16 @@ export function classifyWafVendorsFromResponseEvidence(evidence = {}) {
   let conflicting = false;
   if (matches.length >= 2) {
     const strongest = Math.max(...matches.map((match) => match.confidence));
-    conflicting = matches.filter((match) => strongest - match.confidence <= 0.2).length >= 2;
+    const contenders = matches.filter((match) => strongest - match.confidence <= 0.2);
+    conflicting = contenders.some((left, index) => (
+      contenders.slice(index + 1).some((right) => vendorMatchesConflict(left, right))
+    ));
   }
   return {
     matches,
     best: matches[0] ?? null,
     conflicting_vendor_signals: conflicting,
+    stacked_vendor_signals: matches.length > 1 && !conflicting,
     attack_response_evaluated: responses.attack !== null,
   };
 }
@@ -792,6 +820,134 @@ function providersForFamily(family, vendorMatches, addressMatches, cnameMatches)
   return [...providers].sort();
 }
 
+function addLayer(layerMap, {
+  family,
+  provider,
+  displayName = '',
+  source,
+  confidence,
+  matchedSignalCount = 0,
+  conflicting = false,
+}) {
+  const normalizedFamily = String(family ?? '').trim().toLowerCase();
+  const normalizedProvider = String(provider ?? '').trim();
+  if (!normalizedFamily || !normalizedProvider || !source) return;
+  const key = `${normalizedFamily}\u0000${normalizedProvider}`;
+  const layer = layerMap.get(key) ?? {
+    family: normalizedFamily,
+    provider: normalizedProvider,
+    display_name: String(displayName ?? '').trim(),
+    sources: [],
+    source_confidences: [],
+    matched_signal_count: 0,
+    conflicting: false,
+  };
+  if (!layer.display_name && displayName) layer.display_name = String(displayName).trim();
+  if (!layer.sources.includes(source)) {
+    layer.sources.push(source);
+    layer.source_confidences.push(Number(confidence) || 0);
+  }
+  layer.matched_signal_count += Math.max(0, Number(matchedSignalCount) || 0);
+  layer.conflicting ||= conflicting;
+  layerMap.set(key, layer);
+}
+
+/**
+ * Preserve independently observed edge layers instead of collapsing every signal into one vendor.
+ * Source agreement boosts only the same provider/family pair; a different provider remains a
+ * separate possible layer. Provider family comes exclusively from corpus typing.
+ */
+export function buildEdgeLayers({
+  vendorMatches = [],
+  addressMatches = [],
+  cnameMatches = [],
+  genericWafDetected = false,
+  conflictingVendorSignals = false,
+} = {}) {
+  const layerMap = new Map();
+  for (const match of vendorMatches) {
+    addLayer(layerMap, {
+      family: 'waf',
+      provider: match.vendor,
+      displayName: splitWafw00fName(match.name).firewall,
+      source: 'response_fingerprint',
+      confidence: match.confidence,
+      matchedSignalCount: match.matched_signals?.length,
+      conflicting: conflictingVendorSignals,
+    });
+  }
+  for (const match of addressMatches) {
+    addLayer(layerMap, {
+      family: match.family,
+      provider: match.provider,
+      source: 'address_range',
+      confidence: ADDRESS_RANGE_CONFIDENCE,
+    });
+  }
+  for (const match of cnameMatches) {
+    addLayer(layerMap, {
+      family: match.type,
+      provider: match.provider,
+      source: 'cname_suffix',
+      confidence: CNAME_SUFFIX_CONFIDENCE,
+    });
+  }
+  if (genericWafDetected && ![...layerMap.values()].some((layer) => layer.family === 'waf')) {
+    addLayer(layerMap, {
+      family: 'waf',
+      provider: 'generic',
+      displayName: 'WAF (vendor unknown)',
+      source: 'corroborated_generic_behavior',
+      confidence: GENERIC_BEHAVIOR_CONFIDENCE,
+    });
+  }
+
+  const familyOrder = new Map([['cdn', 0], ['waf', 1], ['cloud', 2]]);
+  return [...layerMap.values()].map((layer) => {
+    const strongest = Math.max(...layer.source_confidences);
+    const confidence = Math.min(
+      MAX_VENDOR_CONFIDENCE,
+      strongest + Math.max(0, layer.sources.length - 1) * LAYER_AGREEMENT_BOOST,
+    );
+    const { source_confidences: _private, ...publicLayer } = layer;
+    return {
+      ...publicLayer,
+      confidence: Number(confidence.toFixed(3)),
+      evidence_consistency: layer.conflicting
+        ? 'conflict'
+        : layer.sources.length > 1 ? 'agreement' : 'single_source',
+    };
+  }).sort((left, right) => (
+    (familyOrder.get(left.family) ?? 9) - (familyOrder.get(right.family) ?? 9)
+      || right.confidence - left.confidence
+      || left.provider.localeCompare(right.provider)
+  ));
+}
+
+function ambiguousCnameEvidence(cnameMatches) {
+  const providersByEvidence = new Map();
+  for (const match of cnameMatches) {
+    const key = `${match.type}\u0000${match.host}\u0000${match.suffix}`;
+    const providers = providersByEvidence.get(key) ?? new Set();
+    providers.add(match.provider);
+    providersByEvidence.set(key, providers);
+  }
+  return [...providersByEvidence.values()].some((providers) => providers.size > 1);
+}
+
+function combinedEdgeConfidence(layers, hasConflict) {
+  if (!layers.length) return { confidence: 0, evidence_consistency: 'no_match' };
+  const strongest = Math.max(...layers.map((layer) => layer.confidence));
+  return {
+    confidence: Number((hasConflict ? strongest * 0.65 : strongest).toFixed(3)),
+    evidence_consistency: hasConflict
+      ? 'conflict'
+      : layers.some((layer) => layer.evidence_consistency === 'agreement')
+        ? 'agreement'
+        : layers.length > 1 ? 'multiple_layers' : 'single_source',
+  };
+}
+
 /**
  * Combine response evidence with DNS metadata.
  *
@@ -804,8 +960,10 @@ function providersForFamily(family, vendorMatches, addressMatches, cnameMatches)
  */
 export function classifyEdgeFingerprint(input = {}) {
   const vendorResult = classifyWafVendorsFromResponseEvidence(input);
-  const resolvedIps = (input.resolvedIps ?? []).filter(Boolean);
-  const cnameChain = (input.cnameChain ?? []).filter(Boolean);
+  const resolvedIps = (Array.isArray(input.resolvedIps) ? input.resolvedIps : [input.resolvedIps])
+    .filter(Boolean);
+  const cnameChain = (Array.isArray(input.cnameChain) ? input.cnameChain : [input.cnameChain])
+    .filter(Boolean);
   const dnsObserved = typeof input.dnsObserved === 'boolean'
     ? input.dnsObserved
     : resolvedIps.length > 0 || cnameChain.length > 0;
@@ -814,6 +972,7 @@ export function classifyEdgeFingerprint(input = {}) {
   const generic = input.genericDetection && typeof input.genericDetection === 'object'
     ? {
         found: input.genericDetection.found === true,
+        corroborated: input.genericDetection.corroborated === true,
         reason_code: input.genericDetection.reason_code ?? null,
         reason: input.genericDetection.reason ?? null,
       }
@@ -826,13 +985,24 @@ export function classifyEdgeFingerprint(input = {}) {
   const cloudProviders = providersForFamily('cloud', [], addressMatches, []);
   const best = vendorResult.best;
   const bestName = best ? splitWafw00fName(best.name) : null;
+  const genericWafDetected = !best && generic?.found === true && generic.corroborated === true;
+  const conflictingProviderSignals = vendorResult.conflicting_vendor_signals
+    || ambiguousCnameEvidence(cnameMatches);
+  const layers = buildEdgeLayers({
+    vendorMatches: vendorResult.matches,
+    addressMatches,
+    cnameMatches,
+    genericWafDetected,
+    conflictingVendorSignals: vendorResult.conflicting_vendor_signals,
+  });
+  const confidence = combinedEdgeConfidence(layers, conflictingProviderSignals);
 
   return {
     corpus_version: EDGE_SIGNATURE_CORPUS_VERSION,
     metadata_only: true,
-    waf_present: wafProviders.length > 0,
+    waf_present: wafProviders.length > 0 || genericWafDetected,
     waf_providers: wafProviders,
-    waf_generic_detected: !best && generic?.found === true,
+    waf_generic_detected: genericWafDetected,
     cdn_detected: dnsObserved ? cdnProviders.length > 0 : null,
     cdn_providers: cdnProviders,
     cloud_hosted: dnsObserved ? cloudProviders.length > 0 : null,
@@ -841,13 +1011,18 @@ export function classifyEdgeFingerprint(input = {}) {
     vendor_matches: vendorResult.matches,
     best_vendor: best,
     conflicting_vendor_signals: vendorResult.conflicting_vendor_signals,
+    conflicting_provider_signals: conflictingProviderSignals,
+    stacked_vendor_signals: vendorResult.stacked_vendor_signals,
+    layers,
+    confidence: confidence.confidence,
+    evidence_consistency: confidence.evidence_consistency,
     attack_response_evaluated: vendorResult.attack_response_evaluated,
     address_matches: addressMatches,
     cname_matches: cnameMatches,
     wafw00f: {
-      detected: Boolean(best) || generic?.found === true,
-      firewall: best ? bestName.firewall : generic?.found ? 'Generic' : 'None',
-      manufacturer: best ? bestName.manufacturer : generic?.found ? 'Unknown' : 'None',
+      detected: Boolean(best) || genericWafDetected,
+      firewall: best ? bestName.firewall : genericWafDetected ? 'Generic' : 'None',
+      manufacturer: best ? bestName.manufacturer : genericWafDetected ? 'Unknown' : 'None',
       plugin: best?.vendor ?? null,
       all_matches: vendorResult.matches.map((match) => match.vendor),
       generic,

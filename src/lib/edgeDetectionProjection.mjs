@@ -10,6 +10,8 @@
  * block-page bodies never reach this layer and must never be added to it.
  */
 
+import { buildEdgeLayers } from './edgeFingerprint.mjs';
+
 const MAX_LIST_ITEMS = 64;
 const MAX_EVIDENCE_VENDORS = 5;
 const MAX_EVIDENCE_MATCHES = 12;
@@ -39,6 +41,246 @@ function boundedList(value, limit = MAX_LIST_ITEMS) {
     if (text && !out.includes(text)) out.push(text);
   }
   return out;
+}
+
+
+function boundedConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : 0;
+}
+
+function boundedPortList(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, MAX_LIST_ITEMS)
+    .map(Number)
+    .filter((port) => Number.isInteger(port) && port >= 1 && port <= 65_535))]
+    .sort((left, right) => left - right);
+}
+
+function markerClassStatus(markerResults, family) {
+  const row = markerResults.find((entry) => (
+    entry?.family === family && entry?.variant === 'plain'
+  ));
+  if (!row) return 'not_tested';
+  if (boundedString(row.error_class) || row.inconclusive === true) return 'inconclusive';
+  if (row.blocked === true && row.allowed !== true) return 'blocked';
+  if (row.allowed === true && row.blocked !== true) return 'passed';
+  return 'inconclusive';
+}
+
+function groupedMarkerStatus(rows) {
+  if (!rows.length) return 'not_tested';
+  if (rows.some((row) => row.allowed === true && row.blocked !== true)) return 'bypass_observed';
+  if (rows.some((row) => (
+    boundedString(row.error_class)
+    || row.inconclusive === true
+    || row.blocked === row.allowed
+  ))) return 'inconclusive';
+  return rows.every((row) => row.blocked === true) ? 'blocked' : 'inconclusive';
+}
+
+/**
+ * Effectiveness is computed only from definitive, bounded marker outcomes. A transport failure is
+ * never a block, and a zero denominator is represented as null rather than a fictitious 0% score.
+ */
+export function assessWafEffectiveness({
+  wafPresent = null,
+  markerResults = [],
+  coverageComplete,
+  transportError = false,
+  inspectionLimitBypassSuspected,
+} = {}) {
+  const rows = (Array.isArray(markerResults) ? markerResults : [])
+    .slice(0, MAX_LIST_ITEMS)
+    .filter((row) => asRecord(row));
+  let blockedCount = 0;
+  let passedCount = 0;
+  let inconclusiveCount = 0;
+  for (const row of rows) {
+    const hasError = boundedString(row.error_class) || row.inconclusive === true;
+    if (!hasError && row.blocked === true && row.allowed !== true) blockedCount += 1;
+    else if (!hasError && row.allowed === true && row.blocked !== true) passedCount += 1;
+    else inconclusiveCount += 1;
+  }
+
+  const testedCount = blockedCount + passedCount;
+  const percentage = testedCount === 0
+    ? null
+    : Math.round((blockedCount / testedCount) * 10_000) / 100;
+  const requiredClassCoverageComplete = [
+    'sqli_marker',
+    'xss_marker',
+    'path_traversal_marker',
+  ].every((family) => ['blocked', 'passed'].includes(markerClassStatus(rows, family)));
+  let status = 'inconclusive';
+  if (!transportError && inconclusiveCount === 0) {
+    if (wafPresent === false) status = 'no_waf_detected';
+    else if (wafPresent === true && testedCount > 0) {
+      if (passedCount > 0) {
+        status = blockedCount === 0 && requiredClassCoverageComplete
+          ? 'present_but_not_effective'
+          : 'partially_effective';
+      } else if (requiredClassCoverageComplete) {
+        status = 'effective_for_tested_probes';
+      }
+    }
+  }
+
+  const labels = {
+    no_waf_detected: 'No WAF detected',
+    present_but_not_effective: 'Present but not effective',
+    effective_for_tested_probes: 'Effective for tested probes',
+    partially_effective: 'Partially effective',
+    inconclusive: 'Inconclusive',
+  };
+  const evasionRows = rows.filter((row) => row.variant && row.variant !== 'plain'
+    && row.family !== 'combined_marker');
+  return {
+    status,
+    label: labels[status],
+    attempted_count: rows.length,
+    tested_count: testedCount,
+    blocked_count: blockedCount,
+    passed_count: passedCount,
+    inconclusive_count: inconclusiveCount,
+    percentage: status === 'no_waf_detected' ? null : percentage,
+    coverage_complete: typeof coverageComplete === 'boolean' ? coverageComplete : null,
+    required_class_coverage_complete: requiredClassCoverageComplete,
+    per_class: {
+      sqli: markerClassStatus(rows, 'sqli_marker'),
+      xss: markerClassStatus(rows, 'xss_marker'),
+      path_traversal: markerClassStatus(rows, 'path_traversal_marker'),
+      evasion_variants: groupedMarkerStatus(evasionRows),
+      content_type_confusion: groupedMarkerStatus(
+        rows.filter((row) => row.family === 'content_type_confusion'),
+      ),
+      multipart_confusion: groupedMarkerStatus(
+        rows.filter((row) => row.family === 'multipart_confusion'),
+      ),
+      inspection_limit: inspectionLimitBypassSuspected === true
+        ? 'bypass_observed'
+        : inspectionLimitBypassSuspected === false ? 'no_bypass_observed' : 'not_tested',
+    },
+  };
+}
+
+function sanitizeLayers(edgeSignature) {
+  const source = Array.isArray(edgeSignature.layers)
+    ? edgeSignature.layers
+    : buildEdgeLayers({
+        vendorMatches: Array.isArray(edgeSignature.vendor_matches) ? edgeSignature.vendor_matches : [],
+        addressMatches: Array.isArray(edgeSignature.address_matches) ? edgeSignature.address_matches : [],
+        cnameMatches: Array.isArray(edgeSignature.cname_matches) ? edgeSignature.cname_matches : [],
+        genericWafDetected: edgeSignature.waf_generic_detected === true,
+        conflictingVendorSignals: edgeSignature.conflicting_vendor_signals === true,
+      });
+  return source.slice(0, MAX_LIST_ITEMS).flatMap((raw) => {
+    const layer = asRecord(raw);
+    const family = boundedString(layer?.family, 32).toLowerCase();
+    const provider = boundedString(layer?.provider);
+    if (!layer || !['cdn', 'waf', 'cloud'].includes(family) || !provider) return [];
+    return [{
+      family,
+      provider,
+      display_name: boundedString(layer.display_name, 200) || null,
+      sources: boundedList(layer.sources, 8),
+      confidence: boundedConfidence(layer.confidence),
+      evidence_consistency: boundedString(layer.evidence_consistency, 32) || 'single_source',
+      matched_signal_count: Math.max(0, Number(layer.matched_signal_count) || 0),
+      conflicting: layer.conflicting === true,
+    }];
+  });
+}
+
+function projectNetworkFirewall(metadata) {
+  const reported = asRecord(metadata.network_firewall);
+  const reportedDirect = asRecord(reported?.direct_origin_reachability);
+  const phaseAttempted = Array.isArray(metadata.scan_plan)
+    && metadata.scan_plan.includes('origin_bypass');
+  const attempted = reportedDirect
+    ? reportedDirect.status !== 'not_tested'
+    : phaseAttempted || metadata.origin_bypass_status_code != null;
+  const reachable = reportedDirect?.reachable === true
+    || metadata.direct_origin_reachable === true
+    || metadata.origin_bypass_confirmed === true;
+  const directStatus = reachable
+    ? 'exposed'
+    : reportedDirect?.status === 'no_exposure_observed'
+      ? 'no_exposure_observed'
+      : attempted ? 'inconclusive' : 'not_tested';
+  const direct = {
+    status: directStatus,
+    reachable,
+    application_bypass_confirmed: metadata.origin_bypass_confirmed === true
+      || reportedDirect?.application_bypass_confirmed === true,
+    status_code: Number.isInteger(reportedDirect?.status_code)
+      ? reportedDirect.status_code
+      : Number.isInteger(metadata.origin_bypass_status_code)
+        ? metadata.origin_bypass_status_code
+        : null,
+  };
+
+  const reportedPorts = asRecord(reported?.port_exposure);
+  const openPorts = boundedPortList(reportedPorts?.open_ports);
+  const portStatus = reportedPorts
+    ? boundedString(reportedPorts.status, 32) || 'inconclusive'
+    : 'not_tested';
+  const ports = {
+    status: portStatus,
+    open_ports: openPorts,
+    tested_count: Math.max(0, Number(reportedPorts?.tested_count) || 0),
+    reason: boundedString(reportedPorts?.reason, 120)
+      || (portStatus === 'not_tested' ? 'separate_bounded_port_scan_required' : null),
+  };
+  const status = direct.status === 'exposed' || ports.status === 'exposed'
+    ? 'exposed'
+    : direct.status === 'inconclusive' || ports.status === 'inconclusive'
+      ? 'inconclusive'
+      : direct.status === 'no_exposure_observed' || ports.status === 'no_exposure_observed'
+        ? 'no_exposure_observed'
+        : 'not_tested';
+  return { status, direct_origin_reachability: direct, port_exposure: ports };
+}
+
+function projectProtection(metadata, waf, effectiveness) {
+  const reported = boundedString(metadata.posture_status, 32).toLowerCase();
+  const hasError = boundedString(metadata.error_class)
+    || ['error', 'timeout'].includes(boundedString(metadata.external_result).toLowerCase());
+  let status = 'detected_only';
+  if (hasError || effectiveness.status === 'inconclusive') status = 'inconclusive';
+  else if (metadata.origin_bypass_confirmed === true
+    || ['present_but_not_effective', 'partially_effective'].includes(effectiveness.status)) {
+    status = 'underprotected';
+  } else if (waf.status === 'not_detected') status = 'unprotected';
+  else if (waf.status !== 'detected') status = 'inconclusive';
+  else if (reported === 'unprotected' || reported === 'underprotected') status = reported;
+  else if (effectiveness.status === 'effective_for_tested_probes') {
+    status = reported === 'protected' && metadata.agent_corroborated === true
+      ? 'protected'
+      : 'edge_protected';
+  }
+  const labels = {
+    protected: 'Protected with origin corroboration',
+    edge_protected: 'Effective at the edge; origin not corroborated',
+    underprotected: 'Underprotected',
+    unprotected: 'Unprotected',
+    detected_only: 'WAF detected; effectiveness not established',
+    inconclusive: 'Inconclusive',
+  };
+  const tiers = {
+    protected: 'external_and_origin_corroborated',
+    edge_protected: 'external_probe_only',
+    underprotected: 'external_probe_gap',
+    unprotected: 'absence_or_gap_observed',
+    detected_only: 'presence_only',
+    inconclusive: 'insufficient_evidence',
+  };
+  return {
+    status,
+    label: labels[status],
+    evidence_tier: tiers[status],
+    agent_corroborated: metadata.agent_corroborated === true,
+  };
 }
 
 /**
@@ -196,6 +438,9 @@ export function projectEdgeDetection(metadata = {}) {
   const cloudSignal = explicitEdgeBoolean([edgeSignature.cloud_hosted]);
 
   const conflictingVendorSignals = edgeSignature.conflicting_vendor_signals === true;
+  const conflictingProviderSignals = edgeSignature.conflicting_provider_signals === true
+    || conflictingVendorSignals;
+  const layers = sanitizeLayers(edgeSignature);
   const wafTypedMatch = findEdgeProviderMatch(edgeSignature, 'waf');
   const cdnTypedMatch = findEdgeProviderMatch(edgeSignature, 'cdn');
   const responseProvider = boundedString(meta.detected_vendor) || boundedString(bestVendor?.vendor);
@@ -215,31 +460,63 @@ export function projectEdgeDetection(metadata = {}) {
   const cloud = signalProjection(cloudSignal, cloudTypedMatch, 'provider');
 
   const positive = (wafSignal.value && !wafSignal.conflict)
-    || (cdnSignal.value && !cdnSignal.conflict);
+    || (cdnSignal.value && !cdnSignal.conflict)
+    || (cloudSignal.value && !cloudSignal.conflict);
   const completeNoMatch = wafSignal.observed && cdnSignal.observed
     && !wafSignal.conflict && !cdnSignal.conflict
     && !wafSignal.value && !cdnSignal.value;
-  const status = positive ? 'detected' : completeNoMatch ? 'not_detected' : 'inconclusive';
+  const baseStatus = positive ? 'detected' : completeNoMatch ? 'not_detected' : 'inconclusive';
+  const transportError = Boolean(boundedString(meta.error_class))
+    || ['error', 'timeout'].includes(boundedString(meta.external_result).toLowerCase());
+  const status = transportError ? 'inconclusive' : baseStatus;
+  const effectiveness = assessWafEffectiveness({
+    wafPresent: waf.status === 'detected' ? true : waf.status === 'not_detected' ? false : null,
+    markerResults: meta.marker_probes,
+    coverageComplete: meta.coverage_complete,
+    transportError,
+    inspectionLimitBypassSuspected: typeof meta.inspection_limit_bypass_suspected === 'boolean'
+      ? meta.inspection_limit_bypass_suspected
+      : undefined,
+  });
+  const protection = projectProtection(meta, waf, effectiveness);
+  const networkFirewall = projectNetworkFirewall(meta);
+  const layerConfidence = layers.length
+    ? Math.max(...layers.map((layer) => layer.confidence))
+    : boundedConfidence(bestVendor?.confidence);
+  const reportedConfidence = Number(edgeSignature.confidence);
+  const confidence = Number.isFinite(reportedConfidence)
+    ? boundedConfidence(reportedConfidence)
+    : Number((conflictingProviderSignals ? layerConfidence * 0.65 : layerConfidence).toFixed(3));
 
   return {
     status,
-    reason: status === 'not_detected'
-      ? 'completed_no_signature_match'
-      : status === 'inconclusive'
-        ? (wafSignal.conflict || cdnSignal.conflict
-          ? 'conflicting_edge_signals'
-          : 'edge_signature_incomplete')
-        : null,
+    reason: transportError
+      ? 'worker_result_error'
+      : status === 'not_detected'
+        ? 'completed_no_signature_match'
+        : status === 'inconclusive'
+          ? (wafSignal.conflict || cdnSignal.conflict
+            ? 'conflicting_edge_signals'
+            : 'edge_signature_incomplete')
+          : null,
     waf,
     cdn,
     cloud,
+    layers,
+    effectiveness,
+    protection,
+    network_firewall: networkFirewall,
     waf_providers: boundedList(edgeSignature.waf_providers),
     cdn_providers: boundedList(edgeSignature.cdn_providers),
     cloud_providers: boundedList(edgeSignature.cloud_providers),
     detected_vendor: responseProvider,
-    confidence: Number(bestVendor?.confidence) || 0,
+    confidence,
+    evidence_consistency: boundedString(edgeSignature.evidence_consistency, 32)
+      || (conflictingProviderSignals ? 'conflict' : layers.length > 1 ? 'multiple_layers' : 'single_source'),
     conflicting_vendor_signals: conflictingVendorSignals,
-    corpus_version: boundedString(meta.edge_signature_corpus_version),
+    conflicting_provider_signals: conflictingProviderSignals,
+    corpus_version: boundedString(meta.edge_signature_corpus_version)
+      || boundedString(edgeSignature.corpus_version),
     dns_cname_chain: boundedList(meta.dns_cname_chain, MAX_CHAIN_ITEMS),
     dns_resolved_ips: boundedList(meta.dns_resolved_ips, MAX_CHAIN_ITEMS),
     evidence: evidenceSummary(edgeSignature),
@@ -280,6 +557,12 @@ export function edgeDetectionRowFields(projection, { testRunId = null, observedA
       ...projection.evidence,
       cloud: projection.cloud,
       cloud_providers: projection.cloud_providers,
+      layers: projection.layers,
+      effectiveness: projection.effectiveness,
+      protection: projection.protection,
+      network_firewall: projection.network_firewall,
+      evidence_consistency: projection.evidence_consistency,
+      conflicting_provider_signals: projection.conflicting_provider_signals,
       dns_cname_chain: projection.dns_cname_chain,
       dns_resolved_ips: projection.dns_resolved_ips,
     },

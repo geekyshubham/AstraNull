@@ -15,9 +15,10 @@ const GLOSSARY = {
   Agent: 'Customer-deployed outbound observer (heartbeat, packet, mirror, log-tail, or canary). Correlates inside traffic with outside probes — not required for every check.',
   'default_expected_behavior': 'Per-check pass criteria from the catalog (e.g. must_block_before_origin). Verdict correlation uses this, not customer-declared target fields.',
   'probe_profile.kind': 'The bounded probe technique used (HTTP HEAD, TCP connect, DNS lookup, etc.).',
-  'external_result': 'Probe outcome: blocked, timeout, connected, or allowed.',
+  'Evidence tier': 'E1 is declaration-only, E2 is transport/observation-only, E3 is a bounded semantic-safe result, and E4 is SOC-governed.',
+  'external_result': 'Probe outcome: blocked, timeout, connected, error, or not_run. Error/not_run and signed execution timeouts cannot establish readiness.',
   'agent_observation': 'Metadata that the agent saw matching probe traffic at the observation point.',
-  'metadata_marker': 'Catalog-only simulation in dev/CI; production signed-worker may still dispatch a minimal stub unless a live probe kind is set.',
+  'metadata_marker': 'E1 declaration-only record. It performs zero network I/O and always remains inconclusive until customer evidence or a SOC-governed test exists.',
   'soc_gated': 'Not runnable from customer UI — requires SOC approval, authorization pack, and governed execution.',
   nonce_hash: 'Correlation token linking probe job to agent observation without sending raw payloads.',
   'direct_origin_ip': 'Legacy metadata candidate; normal signed jobs bind egress to the verified target and discard alternate destination values.',
@@ -52,6 +53,15 @@ const PROBE_KINDS = {
   graphql_posture_probe: 'Bounded GraphQL endpoint posture (no deep queries).',
   websocket_upgrade_posture: 'Single WebSocket upgrade request; classifies 101/403/426.',
   grpc_reflection_probe: 'One bounded TLS HTTP/2 gRPC health or reflection request; retains status metadata only.',
+  http_method_matrix: 'HEAD and OPTIONS only; reads the Allow policy and never executes advertised unsafe methods.',
+  header_size_probe: 'Baseline plus one bounded 8–16 KiB inert header to observe an explicit size rejection.',
+  slow_header_probe: 'One incomplete harmless header connection held for at most the signed timeout; no concurrent holds.',
+  http2_frame_probe: 'Bounded HTTP/2 SETTINGS read with optional ping/single reset according to the signed cap; HPACK mode uses SETTINGS only.',
+  http3_control_probe: 'One HTTPS HEAD reads Alt-Svc only; it does not establish QUIC control-stream or SETTINGS posture.',
+  waf_inspection_limit_probe: 'Baseline plus bounded inert marker variants; no verdict without a usable blocked baseline.',
+  waf_class_marker_probe: 'Bounded inert WAF class markers; no functional exploit payloads.',
+  waf_evasion_marker_probe: 'Bounded inert baseline/variant comparison for a named normalization transform.',
+  l7_resource_posture_probe: 'Tiny inert declared-shape requests; never sends resource-exhaustion payloads.',
   outside_in_waf_scan: 'Up to 13 pre-reserved, destination-pinned HTTP probes: WAF fingerprint, benign markers, evasion variants, origin bypass; no redirects or standalone DNS/TLS hints.',
 };
 
@@ -82,15 +92,21 @@ function esc(s) {
 
 function detectSummary(check) {
   const kind = check.probe_profile?.kind ?? 'none';
+  const tier = check.evidence_tier ?? (kind === 'none' ? 'E4' : 'E0');
   const maxReq = check.probe_profile?.max_requests ?? 1;
-  const parts = [PROBE_KINDS[kind] ?? `Probe kind: ${kind}`];
-  if (kind !== 'metadata_marker' && kind !== 'ops_readiness' && maxReq > 0) {
+  if (tier === 'E1') {
+    return 'E1 declared only. No live network I/O and no live-test verdict; customer-provided control evidence or a SOC-governed test is required.';
+  }
+  const parts = [`${tier}: ${PROBE_KINDS[kind] ?? `Probe kind: ${kind}`}`];
+  if (kind !== 'ops_readiness' && maxReq > 0) {
     parts.push(`Max ${maxReq} request(s), timeout ≤ ${check.probe_profile?.timeout_ms ?? 5000}ms.`);
   }
-  if ((check.evidence_required ?? []).includes('agent_observation')) {
+  if (tier === 'E2') {
+    parts.push('Observation only: this transport result remains inconclusive for readiness.');
+  } else if ((check.evidence_required ?? []).includes('agent_observation')) {
     parts.push('Correlates outside probe with agent observation when agent-assisted.');
   } else {
-    parts.push('Verdict primarily from outside probe metadata.');
+    parts.push('Verdict is limited to the bounded semantic fact described above.');
   }
   return parts.join(' ');
 }
@@ -151,6 +167,8 @@ function renderCheckCard(c) {
         <dd>${esc(detectSummary(c))}</dd>
         <dt>Probe kind</dt>
         <dd><code>${esc(c.probe_profile?.kind ?? 'none')}</code></dd>
+        <dt>Evidence tier</dt>
+        <dd><code>${esc(c.evidence_tier ?? (c.safety_class === 'soc_gated' ? 'E4' : 'E0'))}</code></dd>
         <dt>Exhausted resource</dt>
         <dd>${resourceLabel}${vectors ? ` <span class="muted">(registry: ${vectors})</span>` : ''}</dd>
         <dt>Default expected behavior</dt>
@@ -265,7 +283,7 @@ const html = `<!DOCTYPE html>
   <header class="page">
     <h1>AstraNull Check Library</h1>
     <p>Reference for every check in <code>CHECK_CATALOG</code> (${CHECK_CATALOG.length} entries).
-    Safe checks are customer-runnable with bounded probes. SOC-gated checks require authorization and SOC execution.
+    Safe checks use either signed bounded probes or explicit E1 declaration-only records; E1 never means live-tested. SOC-gated checks require authorization and SOC execution.
     Generated from the repo catalog — re-run <code>node scripts/generate-check-library-html.mjs</code> after catalog changes.</p>
   </header>
   <nav class="toc">
@@ -282,7 +300,7 @@ const html = `<!DOCTYPE html>
         <ol>
           <li><strong>Declare</strong> target group + target (FQDN/IP/URL).</li>
           <li><strong>Start test run</strong> — planner picks check, creates signed probe job(s).</li>
-          <li><strong>Probe worker</strong> executes bounded probe (<code>probe_profile</code>) against declared target only.</li>
+          <li><strong>Probe worker</strong> executes a bounded probe (<code>probe_profile</code>) against the declared target only, or records <code>not_run</code> with zero I/O for an E1 <code>metadata_marker</code>.</li>
           <li><strong>Agent</strong> (if deployed &amp; required) uploads metadata observation when local signal matches.</li>
           <li><strong>Correlation</strong> compares <code>external_result</code> + observation vs the check&apos;s <code>default_expected_behavior</code> → verdict + finding.</li>
         </ol>

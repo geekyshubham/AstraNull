@@ -18,6 +18,37 @@ export const OBSERVATION_ONLY_PROBE_KINDS = Object.freeze([
 
 const OBSERVATION_ONLY_PROBE_KIND_SET = new Set(OBSERVATION_ONLY_PROBE_KINDS);
 
+export const SEMANTIC_SAFE_PROBE_KINDS = Object.freeze([
+  'ops_readiness',
+  'origin_leak_scan',
+  'host_sni_bypass',
+  'port_scan_bounded',
+  'rate_limit_sequence',
+  'waf_enforcement_probe',
+  'dnssec_posture',
+  'dns_open_recursion',
+  'dns_failover_posture',
+  'dns_axfr_leak',
+  'tls_audit',
+  'cache_abuse_probe',
+  'api_surface_scan',
+  'cors_posture_probe',
+  'bot_challenge_probe',
+  'graphql_posture_probe',
+  'outside_in_waf_scan',
+  'grpc_reflection_probe',
+  'reflection_service_probe',
+  'header_size_probe',
+  'slow_header_probe',
+  'http2_frame_probe',
+  'waf_inspection_limit_probe',
+  'waf_class_marker_probe',
+  'waf_evasion_marker_probe',
+  'l7_resource_posture_probe',
+]);
+
+const SEMANTIC_SAFE_PROBE_KIND_SET = new Set(SEMANTIC_SAFE_PROBE_KINDS);
+
 export const EVIDENCE_TIERS = Object.freeze(['E0', 'E1', 'E2', 'E3', 'E4', 'E5']);
 
 export const EVIDENCE_TIER_LABELS = Object.freeze({
@@ -31,8 +62,10 @@ export const EVIDENCE_TIER_LABELS = Object.freeze({
 
 export function evidenceTierForProbeKind(kind) {
   if (kind === 'metadata_marker') return 'E1';
+  if (kind === 'not_run') return 'E0';
   if (OBSERVATION_ONLY_PROBE_KIND_SET.has(kind)) return 'E2';
-  return 'E3';
+  if (SEMANTIC_SAFE_PROBE_KIND_SET.has(kind)) return 'E3';
+  return 'E0';
 }
 
 export function evidenceTierForCheck(check) {
@@ -92,6 +125,7 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'waf.origin_bypass.safe',
   ]),
   http2_frame_probe: Object.freeze([
+    'l7.hpack_bomb.readiness',
     'l7.http2_continuation.readiness',
     'l7.http2_made_you_reset.readiness',
     'l7.http2_rapid_reset.validation',
@@ -145,7 +179,6 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'l7.elasticsearch_abuse.readiness',
     'l7.file_upload_abuse.readiness',
     'l7.health_check_flood.readiness',
-    'l7.hpack_bomb.readiness',
     'l7.http2_priority_abuse.readiness',
     'l7.http2_push_promise.readiness',
     'l7.http_pipelining.readiness',
@@ -153,18 +186,14 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'l7.http_range_abuse.readiness',
     'l7.json_xml_bomb.readiness',
     'l7.large_body_post.readiness',
-    'l7.low_and_slow.readiness',
     'l7.mqtt_broker_exposure.readiness',
     'l7.otp_sms_cost.readiness',
     'l7.qpack_bomb.readiness',
     'l7.redos.readiness',
     'l7.slow_post.readiness',
     'l7.slow_read.readiness',
-    'l7.slowloris.readiness',
     'l7.webhook_flood.readiness',
     'ops.attack_alert_coverage.readiness',
-    'origin.cdn_bypass.readiness',
-    'origin.dns_hostname_bypass.readiness',
     'pattern.adaptive_evasion.readiness',
     'pattern.carpet_bombing.readiness',
     'pattern.pulse_wave.readiness',
@@ -192,7 +221,11 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'ops.kill_switch_drill.safe',
     'ops.runbook_contact_validation.safe',
   ]),
-  origin_leak_scan: Object.freeze(['origin.leak_scan.safe']),
+  origin_leak_scan: Object.freeze([
+    'origin.cdn_bypass.readiness',
+    'origin.dns_hostname_bypass.readiness',
+    'origin.leak_scan.safe',
+  ]),
   outside_in_waf_scan: Object.freeze(['waf.fingerprint.safe']),
   port_scan_bounded: Object.freeze(['l3.firewall_exposure_scan.safe']),
   quic_reachability: Object.freeze([
@@ -233,7 +266,11 @@ const TAXONOMY_CHECK_IDS_BY_PROBE_KIND = Object.freeze({
     'reflect.stun_turn_exposure.safe',
     'reflect.tp240_amplification_exposure.safe',
   ]),
-  slow_header_probe: Object.freeze(['tls.slow_header_body_timeout.safe']),
+  slow_header_probe: Object.freeze([
+    'l7.low_and_slow.readiness',
+    'l7.slowloris.readiness',
+    'tls.slow_header_body_timeout.safe',
+  ]),
   tcp_connect: Object.freeze([
     'l3.basic_deny_rule.safe',
     'l3.forbidden_tcp_port.safe',

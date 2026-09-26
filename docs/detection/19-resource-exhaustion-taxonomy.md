@@ -44,7 +44,7 @@ Every `check_id` in `src/contracts/checks.mjs` carries derived `exhausted_resour
 | E4 | SOC governed | Mapped check has no customer probe profile and executes only through SOC governance. |
 | E5 | Monitor only | Non-probe operational or provider monitoring evidence. |
 
-Evidence tiers are **derived at build time from the probe profile and never hand-authored** on taxonomy entries. When one registry claim maps multiple checks, authoritative precedence is **E3 > E4 > E2 > E1 > E0**: a genuine semantic-safe result may establish bounded behavior, but an E1/E2 declaration or transport check cannot downgrade an E4 SOC-governed vector into safe validation. Supplemental declaration availability is retained separately as `metadata_available` and `metadata_check_ids`. The derived compatibility status is `implemented` for E3, `partial` for E1/E2, `soc_only` for E4, and `pending` for E0. E5 remains monitor-only and outside the probe-derived DDoS readiness result.
+Evidence tiers are **derived at build time from an explicit allowlist of probe kinds and never hand-authored** on taxonomy entries. Unknown and `not_run` kinds map to E0; they never inherit E3 by default. When one registry claim maps multiple checks, authoritative precedence is **E3 > E4 > E2 > E1 > E0**: a genuine semantic-safe result may establish bounded behavior, but an E1/E2 declaration or transport check cannot downgrade an E4 SOC-governed vector into safe validation. Supplemental declaration availability is retained separately as `metadata_available` and `metadata_check_ids`. The derived compatibility status is `implemented` for E3, `partial` for E1/E2, `soc_only` for E4, and `pending` for E0. E5 remains monitor-only and outside the probe-derived DDoS readiness result.
 
 `pending` / E0 is a legitimate recorded state. It means the catalog row is accounted for but no implementation establishes its fact yet. It must remain visible rather than being replaced by a no-op metadata check or a fabricated SOC suite.
 
@@ -59,16 +59,16 @@ Run `npm run vector:taxonomy:validate` for the current counts. In the current re
 | `soc_only` | SOC request marker only; no customer flood |
 | `pending` | Documented in taxonomy; no catalog check yet |
 
-The DDoS-scored registry currently contains 249 entries: 79 E3 / `implemented`, 84 E1–E2 / `partial`, 86 E4 / `soc_only`, and 0 E0 / `pending`. Five additional ATT entries use non-DDoS exhausted-resource families and are excluded from that scoring summary.
+The DDoS-scored registry currently contains 249 entries: 82 E3 / `implemented`, 81 E1–E2 / `partial`, 86 E4 / `soc_only`, and 0 E0 / `pending`. Five additional ATT entries use non-DDoS exhausted-resource families and are excluded from that scoring summary.
 
 ## How to read coverage numbers
 
 Catalog coverage and evidence coverage are separate measurements:
 
 - **Catalog accounting: 721/721 rows (100%)** — 680 are claimed by registry entries and 41 carry explicit outside-in exclusion reasons. There are 0 unclaimed rows and 0 duplicate claims.
-- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104 catalog rows, E2: 39, E3: 271, E4: 258, and E5: 8. With the 41 explicit outside-in exclusions, the complete 721-row library has E5: 49. Execution dispositions are 414 safe-validation available, 258 SOC-gated only, and 49 monitor-only. There are 0 E0 / `pending` rows.
+- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 102 catalog rows, E2: 39, E3: 273, E4: 258, and E5: 8. With the 41 explicit outside-in exclusions, the complete 721-row library has E5: 49. Execution dispositions are 414 safe-validation available, 258 SOC-gated only, and 49 monitor-only. There are 0 E0 / `pending` rows.
 
-The first number proves every catalog row has an accountable disposition. The second describes what evidence AstraNull can actually produce today; it must not be inferred from the first. Figures are from the current 2026-09-01 post-remediation validation snapshot. The [vector coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; its historical totals are not release accounting.
+The first number proves every catalog row has an accountable disposition. The second describes what evidence AstraNull can actually produce today; it must not be inferred from the first. Figures are from the current 2026-09-27 validator snapshot. The [vector coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; its historical totals are not release accounting.
 
 ## Monitor-only detection tier (the 41 outside-in exclusions)
 

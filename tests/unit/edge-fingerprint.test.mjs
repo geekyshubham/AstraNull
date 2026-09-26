@@ -210,16 +210,17 @@ describe('wafw00f response semantics', () => {
     assert.ok(shieldon.matched_signals.some((signal) => signal.header === '[Xx]-[Pp]rotected-[Bb]y'));
   });
 
-  it('flags conflicting independent vendor signals and rejects unrelated evidence', () => {
-    const conflicting = classifyWafVendorsFromResponseEvidence({
+  it('keeps independent vendor fingerprints as stacked layers and rejects unrelated evidence', () => {
+    const stacked = classifyWafVendorsFromResponseEvidence({
       headerEntries: [
         { name: 'server', value: 'cloudflare' },
         { name: 'x-dis-request-id', value: 'abc123' },
       ],
     });
-    assert.ok(vendorMatch(conflicting, 'cloudflare'));
-    assert.ok(vendorMatch(conflicting, 'dosarrest'));
-    assert.equal(conflicting.conflicting_vendor_signals, true);
+    assert.ok(vendorMatch(stacked, 'cloudflare'));
+    assert.ok(vendorMatch(stacked, 'dosarrest'));
+    assert.equal(stacked.conflicting_vendor_signals, false);
+    assert.equal(stacked.stacked_vendor_signals, true);
 
     const unrelated = classifyWafVendorsFromResponseEvidence({
       headerEntries: [{ name: 'content-type', value: 'text/html' }],
@@ -338,6 +339,87 @@ describe('combined edge fingerprint', () => {
     assert.deepEqual(result.cname_matches, [
       { provider: 'akamai', type: 'waf', suffix: 'akamaiedge.net', host: 'example.com.akamaiedge.net' },
     ]);
+  });
+
+  it('preserves CDN and multiple WAF providers as evidence-backed layers', () => {
+    const result = classifyEdgeFingerprint({
+      headerEntries: [
+        { name: 'server', value: 'cloudflare' },
+        { name: 'x-amz-id', value: 'request-1' },
+      ],
+      resolvedIps: ['108.138.5.5'],
+      cnameChain: ['edge.cloudflare.com'],
+    });
+
+    assert.deepEqual(result.waf_providers, ['awswaf', 'cloudflare']);
+    assert.deepEqual(result.cdn_providers, ['cloudfront']);
+    assert.equal(result.stacked_vendor_signals, true);
+    assert.equal(result.conflicting_provider_signals, false);
+    assert.deepEqual(
+      result.layers.map((layer) => [layer.family, layer.provider]),
+      [
+        ['cdn', 'cloudfront'],
+        ['waf', 'cloudflare'],
+        ['waf', 'awswaf'],
+        ['cloud', 'aws'],
+      ],
+    );
+    const cloudflare = result.layers.find((layer) => (
+      layer.family === 'waf' && layer.provider === 'cloudflare'
+    ));
+    assert.deepEqual(cloudflare.sources, ['response_fingerprint', 'cname_suffix']);
+    assert.equal(cloudflare.evidence_consistency, 'agreement');
+    assert.ok(cloudflare.confidence > result.layers.find((layer) => layer.provider === 'awswaf').confidence);
+    assert.equal(result.evidence_consistency, 'agreement');
+  });
+
+  it('boosts one layer only when header, IP-range, and CNAME evidence agree', () => {
+    const result = classifyEdgeFingerprint({
+      headerEntries: [{ name: 'server', value: 'cloudflare' }],
+      resolvedIps: ['104.16.1.1'],
+      cnameChain: ['edge.cloudflare.com'],
+    });
+    const layer = result.layers.find((entry) => (
+      entry.family === 'waf' && entry.provider === 'cloudflare'
+    ));
+    assert.deepEqual(layer.sources, [
+      'response_fingerprint',
+      'address_range',
+      'cname_suffix',
+    ]);
+    assert.equal(layer.evidence_consistency, 'agreement');
+    assert.equal(layer.confidence, 0.9);
+    assert.equal(result.confidence, 0.9);
+  });
+
+  it('discounts confidence when one CNAME suffix ambiguously maps to multiple providers', () => {
+    const result = classifyEdgeFingerprint({ cnameChain: ['asset.edgesuite.net'] });
+    assert.equal(result.conflicting_provider_signals, true);
+    assert.equal(result.evidence_consistency, 'conflict');
+    assert.ok(result.confidence < Math.max(...result.layers.map((layer) => layer.confidence)));
+    assert.deepEqual(result.waf_providers, ['akamai', 'edgecast']);
+  });
+
+  it('does not promote an uncorroborated generic status heuristic to WAF presence', () => {
+    const heuristic = classifyEdgeFingerprint({
+      genericDetection: { found: true, reason_code: 'status_code_changed' },
+      dnsObserved: true,
+    });
+    assert.equal(heuristic.waf_present, false);
+    assert.equal(heuristic.waf_generic_detected, false);
+    assert.equal(heuristic.wafw00f.detected, false);
+
+    const corroborated = classifyEdgeFingerprint({
+      genericDetection: {
+        found: true,
+        corroborated: true,
+        reason_code: 'status_code_changed',
+      },
+      dnsObserved: true,
+    });
+    assert.equal(corroborated.waf_present, true);
+    assert.equal(corroborated.waf_generic_detected, true);
+    assert.equal(corroborated.layers[0].provider, 'generic');
   });
 
   it('reports neither WAF nor CDN on plain origin evidence', () => {

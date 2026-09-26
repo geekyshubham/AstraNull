@@ -181,27 +181,27 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
     <div className="stack">
       <div className="kpi-row" aria-label="Observed WAF posture summary">
         <WafKpi
-          label="Protected"
+          label="Protection worked"
           value={protectedCount ?? '—'}
           note="Observed validation · agent-confirmed"
         />
         <WafKpi
-          label="Edge protected"
+          label="Blocked at edge only"
           value={edgeProtected ?? '—'}
           note="Observed at edge · internal corroboration absent"
         />
         <WafKpi
-          label="Underprotected"
+          label="Protection needs work"
           value={underprotected ?? '—'}
           note="Observed drift or policy exception"
         />
         <WafKpi
-          label="Unknown"
+          label="Not enough evidence"
           value={unknown ?? '—'}
           note="Insufficient observed evidence"
         />
         <WafKpi
-          label="Protection rate"
+          label="Fully validated"
           value={coveragePct ?? '—'}
           unit={coveragePct === null ? undefined : '%'}
           note="Observed validation · criticality weighted"
@@ -215,8 +215,8 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
 
       <section className="stack-tight" aria-labelledby="waf-vendor-coverage-title">
         <div className="stack-tight">
-          <h3 className="card-title" id="waf-vendor-coverage-title">Coverage by vendor</h3>
-          <p className="muted small">Per-vendor classifications come from connector metadata and observed validation; an unfilled bar segment is not evidence of protection.</p>
+          <h3 className="card-title" id="waf-vendor-coverage-title">Protection by provider</h3>
+          <p className="muted small">Provider names come from connector metadata. A detected provider or an unfilled bar segment is not proof that traffic was blocked.</p>
         </div>
         {vendors.length > 0 ? (
           vendors.map((row) => <VendorCoverageRow key={row.vendor} {...row} />)

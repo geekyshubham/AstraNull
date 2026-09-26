@@ -398,11 +398,16 @@ async function boundedFetch(url, options = {}, deps = {}) {
   }
 }
 
-function classifyFetchError(err) {
+function classifyFetchError(err, { reachability = false } = {}) {
   const name = err?.name ?? '';
   const code = err?.code ?? '';
   if (name === 'AbortError' || code === 'probe_job_deadline_exceeded') return 'timeout';
-  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH') return 'blocked';
+  if (
+    reachability
+    && (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH')
+  ) {
+    return 'blocked';
+  }
   return 'error';
 }
 
@@ -834,7 +839,7 @@ export async function probeHostSniBypass(job, deps = {}) {
   const durationMs = observedProbeDurationMs(deps);
   if (error) {
     return {
-      external_result: classifyFetchError(error),
+      external_result: classifyFetchError(error, { reachability: true }),
       metadata: withKind(job, kind, { error_class: error.code ?? error.name, protected_host: hostname, direct_ip: directIp, duration_ms: durationMs }),
       requests_sent: 1,
       duration_ms: durationMs,
@@ -1026,6 +1031,7 @@ export async function probeRateLimitSequence(job, deps = {}) {
   const maxSeq = resolveBoundedSequenceBudget(job, { ceiling: 5 });
   const statuses = [];
   let throttled = false;
+  let transportError = null;
   let requestsSent = 0;
 
   for (let i = 0; i < maxSeq; i += 1) {
@@ -1060,8 +1066,9 @@ export async function probeRateLimitSequence(job, deps = {}) {
       });
     }
     if (error) {
-      statuses.push(classifyFetchError(error));
-      continue;
+      transportError = error.code ?? error.name ?? 'probe_transport_error';
+      statuses.push(transportError);
+      break;
     }
     statuses.push(res.status);
     if (res.status === 429 || res.status === 403 || res.status === 503) throttled = true;
@@ -1069,11 +1076,12 @@ export async function probeRateLimitSequence(job, deps = {}) {
 
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: throttled ? 'blocked' : 'connected',
+    external_result: throttled ? 'blocked' : (transportError ? 'error' : 'connected'),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       status_sequence: statuses,
       throttled,
+      ...(transportError ? { error_class: transportError } : {}),
       rate_limit_enforced: throttled,
       probe_path: endpoint.probePath,
       http_method: method,
@@ -1195,6 +1203,7 @@ export async function probeHeaderSizeBoundary(job, deps = {}) {
   const budget = resolveBoundedSequenceBudget(job, { ceiling: 2 });
   let baselineStatus = null;
   let oversizeStatus = null;
+  let transportError = null;
   let requestsSent = 0;
 
   for (let index = 0; index < budget; index += 1) {
@@ -1224,15 +1233,22 @@ export async function probeHeaderSizeBoundary(job, deps = {}) {
         oversize_bytes: oversizeBytes,
       });
     }
-    const status = error ? 0 : res.status;
-    if (oversize) oversizeStatus = status;
-    else baselineStatus = status;
+    if (error) {
+      transportError = error.code ?? error.name ?? 'probe_transport_error';
+      break;
+    }
+    if (oversize) oversizeStatus = res.status;
+    else baselineStatus = res.status;
   }
 
-  const boundaryEnforced = [400, 413, 414, 431].includes(oversizeStatus);
+  const comparisonComplete = baselineStatus !== null && oversizeStatus !== null;
+  const boundaryEnforced = comparisonComplete
+    && [400, 413, 414, 431].includes(oversizeStatus);
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: boundaryEnforced ? 'blocked' : 'connected',
+    external_result: transportError
+      ? 'error'
+      : (comparisonComplete ? (boundaryEnforced ? 'blocked' : 'connected') : 'not_run'),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
@@ -1240,6 +1256,8 @@ export async function probeHeaderSizeBoundary(job, deps = {}) {
       oversize_status: oversizeStatus,
       oversize_bytes: oversizeBytes,
       boundary_enforced: boundaryEnforced,
+      comparison_complete: comparisonComplete,
+      ...(transportError ? { error_class: transportError } : {}),
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -1463,7 +1481,9 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
         error_class: errorClass,
         probe_path: endpoint.probePath,
         max_concurrent_streams: settings.maxConcurrentStreams ?? null,
+        header_table_size: settings.headerTableSize ?? null,
         max_header_list_size: settings.maxHeaderListSize ?? null,
+        settings_assertion: job.probe_profile?.settings_assertion ?? null,
         ping_rtt_ms: pingRttMs,
         reset_accepted: resetAccepted,
         rapid_reset_mitigation_hint: false,
@@ -1479,17 +1499,30 @@ export async function probeHttp2FrameBehavior(job, deps = {}) {
   }
 
   const maxConcurrentStreams = settings.maxConcurrentStreams ?? null;
+  const headerTableSize = settings.headerTableSize ?? null;
   const maxHeaderListSize = settings.maxHeaderListSize ?? null;
   const mitigationHint = Number.isSafeInteger(maxConcurrentStreams) && maxConcurrentStreams > 0;
+  const hpackLimitsAdvertised = Number.isSafeInteger(headerTableSize)
+    && headerTableSize >= 0
+    && Number.isSafeInteger(maxHeaderListSize)
+    && maxHeaderListSize > 0
+    && maxHeaderListSize < 0xffff_ffff;
+  const settingsAssertion = job.probe_profile?.settings_assertion ?? null;
+  const semanticResult = settingsAssertion === 'hpack_limits'
+    ? (hpackLimitsAdvertised ? 'blocked' : 'connected')
+    : (mitigationHint && continuationBoundAdvertised !== false ? 'blocked' : 'connected');
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: mitigationHint && continuationBoundAdvertised !== false ? 'blocked' : 'connected',
+    external_result: semanticResult,
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
       max_concurrent_streams: maxConcurrentStreams,
+      header_table_size: headerTableSize,
       max_header_list_size: maxHeaderListSize,
       enable_push: settings.enablePush ?? null,
+      settings_assertion: settingsAssertion,
+      hpack_limits_advertised: hpackLimitsAdvertised,
       ping_rtt_ms: pingRttMs,
       reset_accepted: resetAccepted,
       rapid_reset_mitigation_hint: mitigationHint,
@@ -1570,6 +1603,7 @@ export async function probeWafInspectionLimit(job, deps = {}) {
   let requestsSent = 0;
   let baselineStatus = null;
   let baselineBlocked = false;
+  let transportError = null;
   const variantResults = [];
 
   if (budget > 0) {
@@ -1585,11 +1619,16 @@ export async function probeWafInspectionLimit(job, deps = {}) {
     if (!baseline.attempted || isProbeDeadlineError(baseline.error, deps)) {
       return deadlineOutcome(job, kind, deps, requestsSent, { probe_path: endpoint.probePath, variants: variantResults });
     }
-    baselineStatus = baseline.error ? 0 : baseline.res.status;
-    baselineBlocked = blockedHttpStatus(baselineStatus);
+    if (baseline.error) {
+      transportError = baseline.error.code ?? baseline.error.name ?? 'probe_transport_error';
+    } else {
+      baselineStatus = baseline.res.status;
+      baselineBlocked = blockedHttpStatus(baselineStatus);
+    }
   }
 
   for (const variant of variants.slice(0, Math.max(0, budget - requestsSent))) {
+    if (transportError) break;
     if (remainingProbeTimeoutMs(job, deps) <= 0) {
       return deadlineOutcome(job, kind, deps, requestsSent, {
         probe_path: endpoint.probePath,
@@ -1614,7 +1653,17 @@ export async function probeWafInspectionLimit(job, deps = {}) {
         variants: variantResults,
       });
     }
-    const statusCode = error ? 0 : res.status;
+    if (error) {
+      transportError = error.code ?? error.name ?? 'probe_transport_error';
+      variantResults.push({
+        variant: variant.variant,
+        status_code: 0,
+        blocked: false,
+        error_class: transportError,
+      });
+      break;
+    }
+    const statusCode = res.status;
     variantResults.push({
       variant: variant.variant,
       status_code: statusCode,
@@ -1622,11 +1671,15 @@ export async function probeWafInspectionLimit(job, deps = {}) {
     });
   }
 
+  const successfulVariants = variantResults.filter((variant) => !variant.error_class);
   const inspectionLimitBypassSuspected = baselineBlocked
-    && variantResults.some((variant) => !variant.blocked && variant.status_code >= 200 && variant.status_code < 400);
+    && successfulVariants.some((variant) => !variant.blocked && variant.status_code >= 200 && variant.status_code < 400);
+  const comparisonComplete = baselineBlocked && successfulVariants.length > 0;
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: inspectionLimitBypassSuspected ? 'connected' : 'blocked',
+    external_result: inspectionLimitBypassSuspected
+      ? 'connected'
+      : (transportError ? 'error' : (comparisonComplete ? 'blocked' : 'not_run')),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       probe_path: endpoint.probePath,
@@ -1634,6 +1687,8 @@ export async function probeWafInspectionLimit(job, deps = {}) {
       baseline_blocked: baselineBlocked,
       inspection_limit_bypass_suspected: inspectionLimitBypassSuspected,
       fail_open_signal: inspectionLimitBypassSuspected,
+      comparison_complete: comparisonComplete,
+      ...(transportError ? { error_class: transportError } : {}),
       variants: variantResults,
       body_bytes: bodyBytes,
       form_field_count: formFieldCount,
@@ -1779,13 +1834,10 @@ export async function probeOutsideInWafScan(job, deps = {}) {
     };
   }
 
-  const external = scan.origin_bypass_confirmed
-    ? 'connected'
-    : scan.validation_failed
-      ? 'connected'
-      : scan.waf_detected
-        ? 'blocked'
-        : 'connected';
+  const external = ['blocked', 'connected', 'timeout', 'error', 'not_run']
+    .includes(scan.external_result)
+    ? scan.external_result
+    : scan.error_class ? 'error' : 'not_run';
 
   const enrichedScan = enrichOutsideInWafProbeMetadata(
     withKind(job, kind, {
@@ -2153,6 +2205,7 @@ export async function probeCacheAbuse(job, deps = {}) {
 
   deps = ensureProbeDeadline(job, deps);
   const observations = [];
+  let transportError = null;
   let requestsSent = 0;
   const maxObservations = resolveBoundedSequenceBudget(job, { ceiling: 3 });
   const urls = [
@@ -2177,14 +2230,16 @@ export async function probeCacheAbuse(job, deps = {}) {
     if (!attempted || isProbeDeadlineError(error, deps)) {
       return deadlineOutcome(job, kind, deps, requestsSent, { observations });
     }
-    if (res) {
-      observations.push({
-        cache_control: res.headers.get('cache-control'),
-        age: res.headers.get('age'),
-        x_cache: res.headers.get('x-cache') ?? res.headers.get('cf-cache-status'),
-        status: res.status,
-      });
+    if (error) {
+      transportError = error.code ?? error.name ?? 'probe_transport_error';
+      break;
     }
+    observations.push({
+      cache_control: res.headers.get('cache-control'),
+      age: res.headers.get('age'),
+      x_cache: res.headers.get('x-cache') ?? res.headers.get('cf-cache-status'),
+      status: res.status,
+    });
   }
 
   const durationMs = observedProbeDurationMs(deps);
@@ -2194,13 +2249,19 @@ export async function probeCacheAbuse(job, deps = {}) {
     && observations[0].x_cache === observations[1].x_cache
     && observations[0].x_cache === observations[2].x_cache;
 
+  const weaknessObserved = sensitive_cached || cache_key_weakness;
+  const comparisonComplete = observations.length === urls.length;
   return {
-    external_result: sensitive_cached || cache_key_weakness ? 'connected' : 'blocked',
+    external_result: weaknessObserved
+      ? 'connected'
+      : (transportError ? 'error' : (comparisonComplete ? 'blocked' : 'not_run')),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       observations,
       sensitive_cached,
       cache_key_weakness,
+      comparison_complete: comparisonComplete,
+      ...(transportError ? { error_class: transportError } : {}),
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -2225,6 +2286,7 @@ export async function probeApiSurfaceScan(job, deps = {}) {
   const budget = resolveProbeRequestBudget(job);
   const paths = (job.probe_profile?.paths ?? API_DOC_PATHS).slice(0, budget);
   const exposed_paths = [];
+  const path_errors = [];
   let requestsSent = 0;
 
   for (const path of paths) {
@@ -2239,18 +2301,26 @@ export async function probeApiSurfaceScan(job, deps = {}) {
     if (!attempted || isProbeDeadlineError(error, deps)) {
       return deadlineOutcome(job, kind, deps, requestsSent, { exposed_paths });
     }
-    if (res && res.status >= 200 && res.status < 400) {
+    if (error) {
+      path_errors.push({ path, error_class: error.code ?? error.name ?? 'probe_transport_error' });
+      continue;
+    }
+    if (res.status >= 200 && res.status < 400) {
       exposed_paths.push({ path, status: res.status });
     }
   }
 
   const durationMs = observedProbeDurationMs(deps);
   return {
-    external_result: exposed_paths.length ? 'connected' : 'blocked',
+    external_result: exposed_paths.length ? 'connected' : (path_errors.length ? 'error' : 'blocked'),
     metadata: withKind(job, kind, {
       duration_ms: durationMs,
       exposed_paths,
       exposure_count: exposed_paths.length,
+      path_errors,
+      ...(exposed_paths.length === 0 && path_errors.length > 0
+        ? { error_class: path_errors[0].error_class }
+        : {}),
       request_counting_basis: 'logical_operations',
     }),
     requests_sent: requestsSent,
@@ -2996,7 +3066,7 @@ export async function probeGrpcReflection(job, deps = {}) {
     return {
       external_result: deadlineFailed
         ? (requestsSent > 0 ? 'timeout' : 'error')
-        : classifyFetchError(error),
+        : classifyFetchError(error, { reachability: true }),
       metadata: withKind(job, kind, {
         error_class: deadlineFailed
           ? 'probe_job_deadline_exceeded'

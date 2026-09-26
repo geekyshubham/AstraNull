@@ -7,6 +7,7 @@ import {
   buildOutsideInPostureReport,
   buildOutsideInScanPlan,
   detectGenericWafPresence,
+  isBlockedOrChallenged,
   resolveOutsideInDnsHints,
   resolveOutsideInTlsHints,
   readBoundedResponseBody,
@@ -172,6 +173,8 @@ describe('outside-in WAF scanner', () => {
     assert.equal(fetchCalls[0], baseUrl);
     assert.equal(fetchCalls[1], 'https://edge.cdn.cloudflare.net/');
     assert.equal(outcome.requests_sent, 6);
+    assert.equal(fetchCalls.length, outcome.requests_sent);
+    assert.ok(fetchCalls.length <= 6);
   });
 
   it('omits network hints and does not follow redirects unless both are explicitly enabled', async () => {
@@ -224,12 +227,102 @@ describe('outside-in WAF scanner', () => {
     }
   });
 
-  it('detects generic WAF via status drift between baseline and marker probe', () => {
-    const baseline = { status_code: 200, server_header: 'nginx', connection_dropped: false };
-    const attack = { status_code: 403, server_header: 'nginx', connection_dropped: false };
+  it('keeps all three class markers in the combined request with unique parameter names', async () => {
+    const urls = [];
+    await runOutsideInWafScan({
+      url: 'https://combined.example.test/',
+      budget: 5,
+      timeoutMs: 1000,
+      fetchFn: async (requestUrl) => {
+        urls.push(String(requestUrl));
+        return mockResponse(200, { server: 'nginx' });
+      },
+    });
+    const combined = new URL(urls[1]);
+    assert.equal(combined.searchParams.size, 3);
+    assert.deepEqual(
+      new Set(combined.searchParams.values()),
+      new Set(Object.values(BENIGN_CLASS_MARKERS)),
+    );
+  });
+
+  it('does not infer a WAF from generic status drift alone', () => {
+    const baseline = {
+      status_code: 200,
+      server_header: 'nginx',
+      header_names: ['server'],
+      connection_dropped: false,
+    };
+    const attack = {
+      status_code: 403,
+      server_header: 'nginx',
+      header_names: ['server'],
+      connection_dropped: false,
+    };
     const result = detectGenericWafPresence({ baseline, attack, noUserAgent: baseline });
-    assert.equal(result.detected, true);
+    assert.equal(result.detected, false);
     assert.ok(result.reasons.includes('status_code_drift'));
+
+    const challenged = detectGenericWafPresence({
+      baseline,
+      attack: { ...attack, header_names: ['server', 'x-waf-block'] },
+      noUserAgent: baseline,
+    });
+    assert.equal(challenged.detected, true);
+    assert.equal(challenged.reason, 'waf_challenge_header');
+  });
+
+  it('treats unchanged origin 403/429 responses and transport failures as inconclusive', () => {
+    for (const status_code of [403, 429]) {
+      const baseline = {
+        status_code,
+        header_names: ['server'],
+        server_header: 'nginx',
+        connection_dropped: false,
+      };
+      assert.deepEqual(isBlockedOrChallenged({ ...baseline }, baseline), {
+        blocked: false,
+        challenged: false,
+        allowed: false,
+        inconclusive: true,
+      });
+    }
+    assert.deepEqual(isBlockedOrChallenged({
+      status_code: 0,
+      connection_dropped: true,
+      error_class: 'AbortError',
+    }), {
+      blocked: false,
+      challenged: false,
+      allowed: false,
+      inconclusive: true,
+      error_class: 'AbortError',
+    });
+  });
+
+  it('does not classify generic differential origin 403/429 responses as a WAF', async () => {
+    for (const status of [403, 429]) {
+      const baseUrl = `https://origin-${status}.example.test/`;
+      const outcome = await runOutsideInWafScan({
+        url: baseUrl,
+        budget: 5,
+        timeoutMs: 1000,
+        fetchFn: async (requestUrl, init) => {
+          const baseline = requestUrl === baseUrl
+            && init?.method === 'GET'
+            && init?.headers?.['User-Agent'];
+          return baseline
+            ? mockResponse(200, { server: 'nginx' })
+            : mockResponse(status, { server: 'nginx', __body: 'generic origin rejection' });
+        },
+      });
+      assert.equal(outcome.waf_detected, false, `status ${status}`);
+      assert.equal(outcome.edge_signature.waf_present, false, `status ${status}`);
+      assert.equal(outcome.block_page_signature_id, null, `status ${status}`);
+      assert.equal(outcome.block_page_fingerprint_hash, null, `status ${status}`);
+      assert.equal(outcome.waf_effectiveness.status, 'no_waf_detected', `status ${status}`);
+      assert.notEqual(outcome.posture_status, 'protected', `status ${status}`);
+    }
   });
 
   it('fingerprints Cloudflare but requires agent for Protected label', async () => {
@@ -330,6 +423,7 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.class_posture.xss, 'unknown');
     assert.equal(outcome.probe_validation_passed, false);
     assert.equal(outcome.posture_label, 'Unknown');
+    assert.equal(outcome.external_result, 'not_run');
   });
 
   it('flags evasion bypass when plain markers blocked but encoded allowed', async () => {
@@ -360,10 +454,15 @@ describe('outside-in WAF scanner', () => {
       url: 'https://api.example.test/',
       budget: 10,
       timeoutMs: 1000,
-      fetchFn: async (_url, init) => {
+      fetchFn: async (requestUrl, init) => {
         methods.push(init?.method ?? 'GET');
         contentTypes.push(init?.headers?.['Content-Type'] ?? null);
-        return mockResponse(403, { server: 'waf', __body: 'blocked' });
+        const baseline = requestUrl === 'https://api.example.test/'
+          && init?.method === 'GET'
+          && init?.headers?.['User-Agent'];
+        return baseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': 'baseline' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': 'blocked', __body: 'Cloudflare' });
       },
     });
     assert.ok(methods.includes('POST'));
@@ -381,13 +480,93 @@ describe('outside-in WAF scanner', () => {
       url: 'https://api.example.test/',
       budget: 10,
       timeoutMs: 1000,
-      fetchFn: async (_url, init) => {
-        if (init?.method === 'POST') return mockResponse(200, { server: 'nginx' });
-        return mockResponse(403, { server: 'nginx', __body: 'blocked' });
+      fetchFn: async (requestUrl, init) => {
+        if (init?.method === 'POST') return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
+        const baseline = requestUrl === 'https://api.example.test/'
+          && init?.headers?.['User-Agent'];
+        return baseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
       },
     });
     assert.equal(outcome.evasion_bypass_suspected, true);
     assert.ok(outcome.marker_probes.find((probe) => probe.family === 'content_type_confusion')?.allowed);
+  });
+
+  it('reports a detected WAF that passes every marker as present but not effective', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://monitor-only.example.test/',
+      budget: 8,
+      timeoutMs: 1000,
+      agentCorroborated: true,
+      fetchFn: async () => mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' }),
+    });
+
+    assert.equal(outcome.waf_detected, true);
+    assert.equal(outcome.waf_effectiveness.status, 'present_but_not_effective');
+    assert.equal(outcome.waf_effectiveness.percentage, 0);
+    assert.equal(outcome.posture_status, 'underprotected');
+    assert.notEqual(outcome.posture_label, 'Protected');
+  });
+
+  it('keeps no-WAF effectiveness unscored and handles a zero denominator', () => {
+    const noWaf = buildOutsideInPostureReport({
+      wafDetected: false,
+      markerResults: [{ family: 'sqli_marker', variant: 'plain', allowed: true, blocked: false }],
+    });
+    assert.equal(noWaf.waf_effectiveness.status, 'no_waf_detected');
+    assert.equal(noWaf.waf_effectiveness.percentage, null);
+
+    const noMarkers = buildOutsideInPostureReport({ wafDetected: true, markerResults: [] });
+    assert.equal(noMarkers.waf_effectiveness.status, 'inconclusive');
+    assert.equal(noMarkers.waf_effectiveness.tested_count, 0);
+    assert.equal(noMarkers.waf_effectiveness.percentage, null);
+  });
+
+  it('reports observed effectiveness math without rounding or denominator errors', () => {
+    const markerResults = Array.from({ length: 10 }, (_, index) => ({
+      family: index === 0 ? 'sqli_marker' : `variant_${index}`,
+      variant: index === 0 ? 'plain' : `v${index}`,
+      blocked: index < 9,
+      allowed: index === 9,
+    }));
+    const report = buildOutsideInPostureReport({ wafDetected: true, markerResults });
+    assert.equal(report.waf_effectiveness.status, 'partially_effective');
+    assert.equal(report.waf_effectiveness.blocked_count, 9);
+    assert.equal(report.waf_effectiveness.tested_count, 10);
+    assert.equal(report.waf_effectiveness.percentage, 90);
+  });
+
+  it('returns timeout and inconclusive effectiveness instead of treating failures as blocks', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://timeout.example.test/',
+      budget: 5,
+      timeoutMs: 10,
+      fetchFn: async () => {
+        throw Object.assign(new Error('timed out'), { name: 'AbortError' });
+      },
+    });
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.error_class, 'timeout');
+    assert.equal(outcome.posture_status, 'inconclusive');
+    assert.equal(outcome.waf_effectiveness.status, 'inconclusive');
+    assert.equal(outcome.waf_effectiveness.blocked_count, 0);
+    assert.equal(outcome.validation_passed, false);
+  });
+
+  it('does not turn a customer vendor hint into observed WAF detection', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://hint-only.example.test/',
+      budget: 5,
+      timeoutMs: 1000,
+      customerVendorHint: 'cloudflare',
+      fetchFn: async () => mockResponse(200, { server: 'nginx' }),
+    });
+
+    assert.equal(outcome.waf_detected, false);
+    assert.equal(outcome.detected_vendor, null);
+    assert.deepEqual(outcome.vendor_candidates, []);
   });
 
   it('reports underprotected when markers reach origin with 200', async () => {
@@ -424,6 +603,59 @@ describe('outside-in WAF scanner', () => {
 
     assert.equal(outcome.origin_bypass_confirmed, true);
     assert.equal(outcome.posture_label, 'Bypass Risk');
+  });
+
+  it('reports any direct-origin HTTP response as network reachability without inventing bypass', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://edge.example.test/',
+      budget: 13,
+      timeoutMs: 1000,
+      directIp: '198.51.100.7',
+      hostname: 'edge.example.test',
+      fetchFn: async (requestUrl, init) => {
+        const baseline = requestUrl === 'https://edge.example.test/'
+          && init?.headers?.['User-Agent'];
+        return baseline
+          ? mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' })
+          : mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'Cloudflare' });
+      },
+      originBypassFn: async () => ({
+        res: mockResponse(403, { server: 'origin-nginx' }),
+        error: null,
+      }),
+    });
+
+    assert.equal(outcome.direct_origin_reachable, true);
+    assert.equal(outcome.origin_bypass_confirmed, false);
+    assert.equal(outcome.network_firewall.status, 'exposed');
+    assert.equal(outcome.network_firewall.direct_origin_reachability.status_code, 403);
+    assert.equal(outcome.network_firewall.port_exposure.status, 'not_tested');
+  });
+
+  it('probeOutsideInWafScan preserves timeout instead of promoting WAF presence to blocked', async () => {
+    let calls = 0;
+    const outcome = await probeOutsideInWafScan({
+      check_id: 'waf.fingerprint.safe',
+      nonce_hash: 'sha256:timeout-proof',
+      constraints: { max_requests: 13, timeout_ms: 1000 },
+      probe_profile: { kind: 'outside_in_waf_scan', max_requests: 13 },
+      target: { kind: 'url', value: 'https://edge.example.test/' },
+    }, {
+      resolve4Fn: async () => ['203.0.113.10'],
+      resolve6Fn: async () => [],
+      fetchFn: async () => {
+        calls += 1;
+        if (calls === 1) return mockResponse(200, { server: 'cloudflare', 'cf-ray': '1' });
+        throw Object.assign(new Error('timed out'), { name: 'AbortError' });
+      },
+    });
+
+    assert.equal(outcome.external_result, 'timeout');
+    assert.equal(outcome.metadata.external_result, 'timeout');
+    assert.equal(outcome.metadata.error_class, 'timeout');
+    assert.equal(outcome.metadata.posture_status, 'inconclusive');
+    assert.equal(outcome.metadata.validation_passed, false);
+    assert.equal(outcome.metadata.probe_validation_passed, false);
   });
 
   it('probeOutsideInWafScan applies bound agent corroboration after scan', async () => {

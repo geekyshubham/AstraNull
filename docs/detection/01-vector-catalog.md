@@ -39,7 +39,7 @@ The DDoS resource families are `volumetric`, `packet_processing`, `state_exhaust
 | E4 | SOC governed: evidence is available only through an approved SOC workflow. |
 | E5 | Monitor only: evidence comes from monitoring rather than an outside-in probe. |
 
-Tiers are derived at build time from the probe profile and are never hand-authored on registry entries. `pending` / E0 is a legitimate recorded state: it makes missing implementation visible without pretending a declaration or liveness check proves protection.
+Tiers are derived at build time from an explicit allowlist of probe kinds and are never hand-authored on registry entries. Unknown or `not_run` kinds fail closed to E0 rather than inheriting E3. `pending` / E0 is a legitimate recorded state: it makes missing implementation visible without pretending a declaration or liveness check proves protection.
 
 ### Axis D — execution class
 
@@ -84,9 +84,9 @@ DDoS attacks are also classified by **what resource they exhaust** (bandwidth, p
 Catalog coverage and evidence coverage answer different questions:
 
 - **Catalog accounting: 721/721 rows (100%)** — 680 rows are claimed by a registry entry and 41 are explicitly out of outside-in scope; 0 are unclaimed and 0 are duplicated.
-- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 104, E2: 39, E3: 271, E4: 258, and E5: 8. With the 41 explicit outside-in exclusions, the complete library has E5: 49. Authoritative E4 outranks supplemental E1/E2 evidence, while genuine E3 semantic-safe evidence outranks E4. Execution dispositions are 414 safe-validation available, 258 SOC-gated only, and 49 monitor-only; there are 0 E0 / `pending` rows.
+- **Evidence coverage: 680/680 claimed rows (100%) have non-E0 evidence** — E1: 102, E2: 39, E3: 273, E4: 258, and E5: 8. With the 41 explicit outside-in exclusions, the complete library has E5: 49. Authoritative E4 outranks supplemental E1/E2 evidence, while genuine E3 semantic-safe evidence outranks E4. Execution dispositions are 414 safe-validation available, 258 SOC-gated only, and 49 monitor-only; there are 0 E0 / `pending` rows.
 
-Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the current 2026-09-01 post-remediation validator snapshot. The [coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; use the validator, not its historical totals, for release accounting.
+Catalog accounting therefore does not mean that every vector is implemented or empirically validated. These figures are the current 2026-09-27 validator snapshot. The [coverage audit](22-vector-coverage-audit-2026-09-01.md) is retained as a clearly labeled pre-remediation baseline for source-catalog methodology and defect history; use the validator, not its historical totals, for release accounting.
 
 ## Completion criteria
 

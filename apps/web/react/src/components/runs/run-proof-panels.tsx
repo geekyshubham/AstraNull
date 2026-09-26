@@ -7,6 +7,8 @@ import {
   normalizeVerdictKey,
   TRUTH_TABLE_ROWS,
 } from '../../lib/verdict-explanation';
+// @ts-ignore Plain ESM keeps terminology directly testable with node:test.
+import { plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { formatDate } from '../../lib/utils';
 
 const VERDICT_TRUTH_ROWS = [
@@ -75,7 +77,7 @@ export function TrafficPathPanel({
   const authenticatedObservationCount = events.filter(isAuthenticatedAgentObservationEvent).length;
   const noObservationCount = events.filter(isInternalControlPlaneNoObservationEvent).length;
   const statusLine = verdict
-    ? `Stored verdict: ${verdict}${confidence ? ` (${confidence})` : ''}. Evidence states reflect only trusted events passed to this panel.`
+    ? `${plainVerdictLabel(verdict)}. Technical verdict: ${verdict}${confidence ? ` (${confidence})` : ''}. Evidence states reflect only trusted events passed to this panel.`
     : 'No final verdict is recorded. Evidence states reflect only trusted events passed to this panel.';
 
   const internalEvidenceLabel = authenticatedObservationCount > 0
@@ -166,7 +168,8 @@ export function TruthTablePanel({ detail }: { detail: DataItem | null }) {
             return (
               <tr key={row.key} className={isCurrent ? 'truth-row truth-row--active' : 'truth-row'} aria-current={isCurrent ? 'true' : undefined}>
                 <td>
-                  <span className={`truth-outcome truth-outcome--${row.key}`}>{row.key}</span>
+                  <span className={`truth-outcome truth-outcome--${row.key}`}>{plainVerdictLabel(row.key)}</span>
+                  <code className="truth-key">{row.key}</code>
                   {isCurrent ? <span className="muted text-xs"> · current</span> : null}
                 </td>
                 <td>{row.description}</td>

@@ -7,11 +7,27 @@ function normalizeExternalResult(value) {
 
 function hasWafFingerprintHint(metadata) {
   const md = metadata ?? {};
+  const external = normalizeExternalResult(md.external_result);
+  const effectiveness = md.waf_effectiveness?.status ?? md.effectiveness?.status;
+  if (
+    md.simulation === 'SAFE_PROBE_SIMULATION'
+    || external === 'error'
+    || external === 'timeout'
+    || (typeof md.error_class === 'string' && md.error_class.trim())
+    || md.validation_failed === true
+    || md.probe_validation_passed === false
+    || (effectiveness && effectiveness !== 'effective_for_tested_probes')
+  ) return false;
+
+  const edgeSignature = md.edge_signature && typeof md.edge_signature === 'object'
+    ? md.edge_signature
+    : null;
   return Boolean(
     md.waf_fingerprint_detected === true
-    || (typeof md.block_page_fingerprint_hash === 'string' && md.block_page_fingerprint_hash.trim())
-    || (typeof md.waf_product_hint === 'string' && md.waf_product_hint.trim())
-    || (typeof md.detected_vendor === 'string' && md.detected_vendor.trim()),
+    || edgeSignature?.waf_present === true
+    || (typeof md.block_page_signature_id === 'string'
+      && /^block_sig_[a-z0-9_]+_v\d+$/.test(md.block_page_signature_id.trim())
+      && md.block_page_signature_id.trim() !== 'block_sig_generic_waf_v1'),
   );
 }
 
@@ -69,9 +85,12 @@ function matchingVerifiedExternalProbePass(scenario, corroboration) {
     if (evidence.request_id) {
       const linkedProbe = corroboration.probesById.get(String(evidence.request_id));
       if (!linkedProbe || linkedProbe.nonce_hash !== nonceHash) return false;
+      if (String(probe.id ?? '') !== String(evidence.request_id)) return false;
     }
-    if (evidence.test_run_id && probe.metadata?.test_run_id
-      && String(probe.metadata.test_run_id) !== String(evidence.test_run_id)) return false;
+    if (evidence.test_run_id) {
+      const probeRunId = probe.test_run_id ?? probe.metadata?.test_run_id;
+      if (String(probeRunId ?? '') !== String(evidence.test_run_id)) return false;
+    }
     if (evidence.probe_job_id && probe.metadata?.probe_job_id
       && String(probe.metadata.probe_job_id) !== String(evidence.probe_job_id)
       && String(probe.id) !== String(evidence.probe_job_id)) return false;

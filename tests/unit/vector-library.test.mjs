@@ -160,9 +160,9 @@ describe('721-vector library contract', () => {
     assert.deepEqual([...rowRunnableIds].sort(), matrix.runnable_safe_check_ids);
     assert.equal(matrix.summary.runnable_safe_check_count, matrix.runnable_safe_check_ids.length);
     assert.deepEqual(matrix.summary.evidence_capabilities, {
-      semantic_safe: 271,
+      semantic_safe: 273,
       soc_governed: 258,
-      declaration_only: 104,
+      declaration_only: 102,
       transport_only: 39,
       monitor_only: 49,
     });
@@ -172,9 +172,9 @@ describe('721-vector library contract', () => {
       monitor_only: 49,
     });
     assert.deepEqual(matrix.summary.evidence_execution_matrix, {
-      semantic_safe: { safe_validation_available: 271 },
+      semantic_safe: { safe_validation_available: 273 },
       soc_governed: { soc_gated_only: 258 },
-      declaration_only: { safe_validation_available: 104 },
+      declaration_only: { safe_validation_available: 102 },
       transport_only: { safe_validation_available: 39 },
       monitor_only: { monitor_only: 49 },
     });

@@ -33,6 +33,19 @@ function correlateObservationOnlyVerdict(probeKind, { externalOnly = false } = {
   };
 }
 
+function correlateProbeFailure(externalResult, probeKind, { externalOnly = false } = {}) {
+  const knownKindTimedOut = externalResult === 'timeout' && typeof probeKind === 'string';
+  if (!['error', 'not_run'].includes(externalResult) && !knownKindTimedOut) return null;
+  const resultLabel = externalResult === 'not_run' ? 'was not run' : `ended with ${externalResult}`;
+  return {
+    verdict: 'inconclusive',
+    confidence: externalOnly ? 'external_only' : 'low',
+    ...(externalOnly ? { placement: 'unverified', strengthen_hint: 'deploy_agent' } : {}),
+    explanation: `The ${probeKind ?? 'external'} probe ${resultLabel}; transport failure or an execution deadline cannot establish protection or exposure.`,
+    createsFinding: false,
+  };
+}
+
 export function correlateVerdict({
   externalResult,
   agentObserved,
@@ -45,6 +58,9 @@ export function correlateVerdict({
   if (isObservationOnlyProbeKind(probeKind)) {
     return correlateObservationOnlyVerdict(probeKind);
   }
+
+  const probeFailure = correlateProbeFailure(externalResult, probeKind);
+  if (probeFailure) return probeFailure;
 
   if (!agentOnline || !agentBound) {
     return {
@@ -145,6 +161,9 @@ export function correlateExternalOnlyVerdict({
   if (isObservationOnlyProbeKind(probeKind)) {
     return correlateObservationOnlyVerdict(probeKind, { externalOnly: true });
   }
+
+  const probeFailure = correlateProbeFailure(externalResult, probeKind, { externalOnly: true });
+  if (probeFailure) return probeFailure;
 
   const blocked = externalResult === 'blocked' || externalResult === 'timeout';
   const connected = externalResult === 'connected' || externalResult === 'allowed';

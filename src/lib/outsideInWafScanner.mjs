@@ -17,6 +17,7 @@ import {
   classifyEdgeFingerprint,
   extractFingerprintHeaderEntries,
 } from './edgeFingerprint.mjs';
+import { assessWafEffectiveness } from './edgeDetectionProjection.mjs';
 
 const MAX_BODY_READ_BYTES = 8192;
 const FINGERPRINT_BODY_READ_BYTES = FINGERPRINT_BODY_MAX_LENGTH;
@@ -136,10 +137,14 @@ const BLOCK_PAGE_SIGNATURE_RULES = Object.freeze([
 ]);
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const LOW_SPECIFICITY_BLOCK_PAGE_SIGNATURES = new Set(['block_sig_generic_waf_v1']);
 const MAX_BASELINE_REDIRECT_HOPS = 2;
 
+let markerParamSequence = 0;
+
 function randomParamName() {
-  return `p${createHash('sha256').update(String(Date.now())).digest('hex').slice(0, 8)}`;
+  markerParamSequence = (markerParamSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `p${markerParamSequence.toString(36)}`;
 }
 
 function hashBodySnippet(text) {
@@ -268,57 +273,116 @@ function responseSnapshot(res, bodyText = '') {
     };
   }
   const status = res.status ?? 0;
+  const blockPageSignatureId = matchBlockPageSignature(bodyText);
   return {
     status_code: status,
     status_code_class: status >= 500 ? '5xx' : status >= 400 ? '4xx' : status >= 300 ? '3xx' : '2xx',
     header_names: headerNamesFromResponse(res),
     cookie_names: cookieNamesFromResponse(res),
     server_header: headerValue(res, 'server'),
-    block_page_signature_id: matchBlockPageSignature(bodyText),
-    block_page_fingerprint_hash: hashBodySnippet(bodyText),
+    block_page_signature_id: blockPageSignatureId,
+    block_page_fingerprint_hash: blockPageSignatureId ? hashBodySnippet(bodyText) : null,
     connection_dropped: false,
     ...fingerprintInputs(res, bodyText),
   };
 }
 
+function challengeHeaderDelta(snapshot, baseline) {
+  const current = new Set(snapshot?.header_names ?? []);
+  const previous = new Set(baseline?.header_names ?? []);
+  return CHALLENGE_HEADERS.some((name) => current.has(name) && !previous.has(name));
+}
+
+function specificBlockPageDelta(snapshot, baseline) {
+  const signature = snapshot?.block_page_signature_id;
+  return Boolean(
+    signature
+    && !LOW_SPECIFICITY_BLOCK_PAGE_SIGNATURES.has(signature)
+    && signature !== baseline?.block_page_signature_id,
+  );
+}
+
 export function isBlockedOrChallenged(snapshot, baseline = null) {
-  if (!snapshot || snapshot.connection_dropped) return { blocked: true, challenged: false, allowed: false };
+  if (!snapshot || snapshot.connection_dropped || snapshot.error_class) {
+    return {
+      blocked: false,
+      challenged: false,
+      allowed: false,
+      inconclusive: true,
+      ...(snapshot?.error_class ? { error_class: snapshot.error_class } : {}),
+    };
+  }
   const status = snapshot.status_code;
-  if (BLOCK_STATUSES.has(status)) {
-    return { blocked: true, challenged: status === 403 || status === 401, allowed: false };
+  const headerChallenge = challengeHeaderDelta(snapshot, baseline);
+  const blockPage = specificBlockPageDelta(snapshot, baseline);
+  if (headerChallenge || blockPage) {
+    return { blocked: true, challenged: headerChallenge, allowed: false, inconclusive: false };
   }
-  if (status >= 300 && status < 400) {
-    return { blocked: true, challenged: true, allowed: false };
-  }
-  for (const name of CHALLENGE_HEADERS) {
-    if (snapshot.header_names.includes(name)) {
-      return { blocked: true, challenged: true, allowed: false };
+
+  if (baseline && !baseline.connection_dropped && !baseline.error_class) {
+    const repeatedBlockPage = Boolean(
+      snapshot.block_page_signature_id
+      && snapshot.block_page_signature_id === baseline.block_page_signature_id,
+    );
+    const repeatedChallenge = CHALLENGE_HEADERS.some((name) => (
+      snapshot.header_names?.includes(name) && baseline.header_names?.includes(name)
+    ));
+    const unchangedBlockedBaseline = baseline.status_code === status
+      && (BLOCK_STATUSES.has(status) || REDIRECT_STATUSES.has(status));
+    if (unchangedBlockedBaseline || repeatedBlockPage || repeatedChallenge) {
+      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
     }
   }
-  if (snapshot.block_page_signature_id) {
-    return { blocked: true, challenged: false, allowed: false };
+
+  if (BLOCK_STATUSES.has(status)) {
+    if (!baseline || baseline.connection_dropped || baseline.error_class) {
+      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
+    }
+    return {
+      blocked: baseline.status_code !== status,
+      challenged: baseline.status_code !== status && (status === 403 || status === 401),
+      allowed: false,
+      inconclusive: baseline.status_code === status,
+    };
+  }
+  if (status >= 300 && status < 400) {
+    if (!baseline || baseline.connection_dropped || baseline.status_code === status) {
+      return { blocked: false, challenged: false, allowed: false, inconclusive: true };
+    }
+    return { blocked: true, challenged: true, allowed: false, inconclusive: false };
   }
   if (baseline && baseline.status_code !== status) {
     const baselineOk = baseline.status_code >= 200 && baseline.status_code < 400;
     const probeOk = status >= 200 && status < 400;
     if (baselineOk !== probeOk || (baseline.server_header && snapshot.server_header
       && baseline.server_header !== snapshot.server_header)) {
-      return { blocked: true, challenged: false, allowed: false };
+      return { blocked: true, challenged: false, allowed: false, inconclusive: false };
     }
   }
   if (status >= 200 && status < 300) {
-    return { blocked: false, challenged: false, allowed: true };
+    return { blocked: false, challenged: false, allowed: true, inconclusive: false };
   }
-  return { blocked: false, challenged: false, allowed: false };
+  return { blocked: false, challenged: false, allowed: false, inconclusive: true };
 }
 
 export function detectGenericWafPresence({ baseline, attack, noUserAgent } = {}) {
   const reasons = [];
-  if (!baseline || baseline.connection_dropped) {
-    return { detected: true, reason: 'connection_dropped_on_baseline', reasons: ['connection_dropped_on_baseline'] };
+  const evidenceReasons = [];
+  if (!baseline || baseline.connection_dropped || baseline.error_class) {
+    return {
+      detected: false,
+      reason: null,
+      reasons: ['baseline_inconclusive'],
+      inconclusive: true,
+    };
   }
-  if (attack?.connection_dropped) {
-    return { detected: true, reason: 'connection_dropped_on_marker', reasons: ['connection_dropped_on_marker'] };
+  if (attack?.connection_dropped || attack?.error_class) {
+    return {
+      detected: false,
+      reason: null,
+      reasons: ['marker_inconclusive'],
+      inconclusive: true,
+    };
   }
   if (attack && baseline.status_code !== attack.status_code) reasons.push('status_code_drift');
   if (attack && baseline.server_header && attack.server_header
@@ -326,8 +390,39 @@ export function detectGenericWafPresence({ baseline, attack, noUserAgent } = {})
     reasons.push('server_header_drift');
   }
   if (noUserAgent && baseline.status_code !== noUserAgent.status_code) reasons.push('no_user_agent_drift');
-  if (attack?.block_page_signature_id) reasons.push('block_page_signature');
-  return { detected: reasons.length > 0, reason: reasons[0] ?? null, reasons };
+  if (challengeHeaderDelta(attack, baseline)) evidenceReasons.push('waf_challenge_header');
+  if (specificBlockPageDelta(attack, baseline)) evidenceReasons.push('waf_specific_block_page');
+  reasons.push(...evidenceReasons);
+  return {
+    detected: evidenceReasons.length > 0,
+    reason: evidenceReasons[0] ?? null,
+    reasons,
+    inconclusive: false,
+  };
+}
+
+function evidenceBackedVendorClassification(classification) {
+  const candidates = (classification?.candidates ?? []).flatMap((candidate) => {
+    const matchedSignals = (candidate.matched_signals ?? [])
+      .filter((signal) => signal !== 'customer_vendor_hint');
+    if (matchedSignals.length === 0) return [];
+    const declarationBoost = candidate.matched_signals?.includes('customer_vendor_hint') ? 0.1 : 0;
+    return [{
+      ...candidate,
+      confidence: Math.max(0, Number((candidate.confidence - declarationBoost).toFixed(3))),
+      matched_signals: matchedSignals,
+    }];
+  }).sort((left, right) => right.confidence - left.confidence);
+  const best = candidates[0] ?? null;
+  const rival = best ? candidates.find((candidate) => candidate.vendor !== best.vendor) : null;
+  return {
+    ...classification,
+    candidates,
+    best,
+    conflicting_vendor_signals: Boolean(
+      best && rival && best.confidence - rival.confidence <= 0.2,
+    ),
+  };
 }
 
 function recordMarkerResult(markerResults, entry) {
@@ -374,15 +469,21 @@ export function buildOutsideInPostureReport({
   domXssValidation = 'agent_required',
   edgeSignature = null,
   coverageComplete,
+  probeErrorsPresent = false,
 } = {}) {
   const anyMarkerAllowed = markerResults.some((m) => m.allowed === true);
+  const markerInconclusive = markerResults.some((marker) => (
+    marker.inconclusive === true || Boolean(marker.error_class)
+  ));
+  const probeInconclusive = probeErrorsPresent || markerInconclusive;
   const classMarkerResults = Object.values(CLASS_MARKER_FAMILIES).map(
     (family) => markerResults.find((row) => row.family === family && row.variant === 'plain'),
   );
   const classCoverageComplete = classMarkerResults.every(Boolean);
   const probeValidationPassed = classCoverageComplete
     && classMarkerResults.every((marker) => marker.blocked === true)
-    && !anyMarkerAllowed;
+    && !anyMarkerAllowed
+    && !probeInconclusive;
   const validationFailed = markerResults.length > 0 && (anyMarkerAllowed || evasionBypassSuspected);
 
   let validationPassed = probeValidationPassed && !evasionBypassSuspected;
@@ -390,8 +491,11 @@ export function buildOutsideInPostureReport({
     validationPassed = false;
   }
 
+  const effectiveWafDetected = wafDetected || genericWafDetected
+    || Boolean(vendorClassification?.best)
+    || edgeSignature?.waf_present === true;
   const posture = classifyWafPosture({
-    wafDetected: wafDetected || genericWafDetected,
+    wafDetected: effectiveWafDetected,
     validationPassed,
     validationFailed,
     originBypassConfirmed,
@@ -406,6 +510,9 @@ export function buildOutsideInPostureReport({
     && !reason_codes.includes('insufficient_validation_evidence')) {
     reason_codes.push('insufficient_validation_evidence');
   }
+  if (probeInconclusive && !validationFailed && !reason_codes.includes('probe_result_inconclusive')) {
+    reason_codes.push('probe_result_inconclusive');
+  }
 
   let posture_label = 'Unknown';
   let posture_status = posture.status;
@@ -416,10 +523,13 @@ export function buildOutsideInPostureReport({
   } else if (validationFailed) {
     posture_label = 'Underprotected';
     posture_status = 'underprotected';
+  } else if (probeInconclusive) {
+    posture_label = 'Inconclusive';
+    posture_status = 'inconclusive';
   } else if (validationPassed && agentCorroborated) {
     posture_label = 'Protected';
     posture_status = 'protected';
-  } else if (probeValidationPassed && (wafDetected || genericWafDetected) && !agentCorroborated) {
+  } else if (probeValidationPassed && effectiveWafDetected && !agentCorroborated) {
     posture_label = 'Edge protected · not internally validated';
     posture_status = 'edge_protected';
   } else if (posture.status === 'unprotected') {
@@ -436,6 +546,12 @@ export function buildOutsideInPostureReport({
   const corpusDetected = corpusWafPresent || edgeSignature?.cdn_detected === true;
   const wafConfidence = best?.confidence
     ?? (edgeBest ? Math.max(edgeBest.confidence, genericWafDetected ? 0.45 : 0) : (genericWafDetected ? 0.45 : 0));
+  const effectiveness = assessWafEffectiveness({
+    wafPresent: effectiveWafDetected,
+    markerResults,
+    coverageComplete,
+    transportError: probeErrorsPresent,
+  });
   const class_posture = Object.fromEntries(Object.entries(CLASS_MARKER_FAMILIES).map(([className, family]) => {
     const observation = markerResults.find((row) => row.family === family && row.variant === 'plain');
     const status = observation?.blocked === true
@@ -449,7 +565,7 @@ export function buildOutsideInPostureReport({
     posture_status,
     posture_label,
     reason_codes: [...new Set(reason_codes)],
-    waf_detected: wafDetected || genericWafDetected || Boolean(best) || corpusWafPresent,
+    waf_detected: effectiveWafDetected,
     waf_fingerprint_detected: Boolean(best) || wafDetected || genericWafDetected || Boolean(edgeBest),
     generic_waf_detected: genericWafDetected,
     detected_vendor: best?.vendor ?? edgeBest?.vendor ?? null,
@@ -468,11 +584,13 @@ export function buildOutsideInPostureReport({
     origin_bypass_confirmed: originBypassConfirmed,
     ...(typeof coverageComplete === 'boolean' ? { coverage_complete: coverageComplete } : {}),
     class_posture,
+    waf_effectiveness: effectiveness,
     marker_summary: {
       probes_sent: markerResults.length,
       blocked_count: markerResults.filter((m) => m.blocked).length,
       allowed_count: markerResults.filter((m) => m.allowed).length,
       challenged_count: markerResults.filter((m) => m.challenged).length,
+      inconclusive_count: markerResults.filter((m) => m.inconclusive || m.error_class).length,
       evasion_probes_sent: markerResults.filter((m) => String(m.variant ?? '') !== 'plain').length,
     },
   };
@@ -672,12 +790,18 @@ function resolveRedirectTarget(location, baseUrl) {
 /**
  * Baseline GET with optional manual redirect follow (bounded, baseline only).
  */
-async function runBaselineGet(url, headers, { followRedirects = false, timeoutMs, deps } = {}) {
+async function runBaselineGet(
+  url,
+  headers,
+  { followRedirects = false, timeoutMs, requestBudget = 1, deps } = {},
+) {
   let currentUrl = url;
   let redirectHops = 0;
+  let requestsSent = 0;
   let finalUrlHostname = null;
 
-  while (true) {
+  while (requestsSent < requestBudget) {
+    requestsSent += 1;
     const { res, bodyText, error } = await boundedRequest(
       currentUrl,
       { method: 'GET', headers },
@@ -695,10 +819,16 @@ async function runBaselineGet(url, headers, { followRedirects = false, timeoutMs
       const snapshot = error
         ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
         : responseSnapshot(res, bodyText);
-      return { snapshot, redirect_hops: redirectHops, final_url_hostname: finalUrlHostname };
+      return {
+        snapshot,
+        redirect_hops: redirectHops,
+        final_url_hostname: finalUrlHostname,
+        requests_sent: requestsSent,
+      };
     }
 
-    if (followRedirects && REDIRECT_STATUSES.has(res.status) && redirectHops < MAX_BASELINE_REDIRECT_HOPS) {
+    if (followRedirects && REDIRECT_STATUSES.has(res.status)
+      && redirectHops < MAX_BASELINE_REDIRECT_HOPS && requestsSent < requestBudget) {
       const nextUrl = resolveRedirectTarget(headerValue(res, 'location'), currentUrl);
       if (nextUrl && nextUrl !== currentUrl) {
         redirectHops += 1;
@@ -711,8 +841,16 @@ async function runBaselineGet(url, headers, { followRedirects = false, timeoutMs
       snapshot: responseSnapshot(res, bodyText),
       redirect_hops: redirectHops,
       final_url_hostname: finalUrlHostname,
+      requests_sent: requestsSent,
     };
   }
+
+  return {
+    snapshot: { ...responseSnapshot(null), error_class: 'request_budget_exhausted' },
+    redirect_hops: redirectHops,
+    final_url_hostname: finalUrlHostname,
+    requests_sent: requestsSent,
+  };
 }
 
 export async function readBoundedResponseBody(res, maxBytes = MAX_BODY_READ_BYTES) {
@@ -768,6 +906,11 @@ async function boundedRequest(url, { method = 'GET', headers = {}, body = null }
       redirect: 'manual',
       signal: controller.signal,
     });
+    if (!res || !Number.isInteger(res.status)) {
+      const error = new Error('invalid HTTP response from probe transport');
+      error.code = 'invalid_probe_response';
+      return { res: null, bodyText: '', error };
+    }
     const bodyText = await readBoundedResponseBody(res, FINGERPRINT_BODY_READ_BYTES);
     return { res, bodyText, error: null };
   } catch (err) {
@@ -852,6 +995,12 @@ export async function runOutsideInWafScan(options = {}) {
   let requestsSent = 0;
   const phaseLog = [];
   const markerResults = [];
+  const transportErrorClasses = [];
+
+  function recordTransportError(snapshot) {
+    const errorClass = String(snapshot?.error_class ?? '').trim();
+    if (errorClass && !transportErrorClasses.includes(errorClass)) transportErrorClasses.push(errorClass);
+  }
 
   const directIp = options.directIp ?? null;
   const hostname = options.hostname ?? (() => {
@@ -897,7 +1046,12 @@ export async function runOutsideInWafScan(options = {}) {
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
-    phaseLog.push({ phase, status_code: snapshot.status_code });
+    recordTransportError(snapshot);
+    phaseLog.push({
+      phase,
+      status_code: snapshot.status_code,
+      ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
+    });
     return snapshot;
   }
 
@@ -912,16 +1066,23 @@ export async function runOutsideInWafScan(options = {}) {
     if (requestsSent >= budget) {
       return { error_class: 'request_budget_exhausted', requests_sent: requestsSent, phases: phaseLog };
     }
-    requestsSent += 1;
     const baselineResult = await runBaselineGet(url, { ...DEFAULT_BROWSER_HEADERS }, {
       followRedirects,
       timeoutMs,
+      requestBudget: budget - requestsSent,
       deps,
     });
+    requestsSent += baselineResult.requests_sent;
     baseline = baselineResult.snapshot;
+    recordTransportError(baseline);
     redirectHops = baselineResult.redirect_hops;
     finalUrlHostname = baselineResult.final_url_hostname;
-    phaseLog.push({ phase: 'baseline', status_code: baseline.status_code, redirect_hops: redirectHops });
+    phaseLog.push({
+      phase: 'baseline',
+      status_code: baseline.status_code,
+      redirect_hops: redirectHops,
+      ...(baseline.error_class ? { error_class: baseline.error_class } : {}),
+    });
 
     if (
       followRedirects
@@ -1093,7 +1254,12 @@ export async function runOutsideInWafScan(options = {}) {
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
-    phaseLog.push({ phase: 'content_type_confusion', status_code: snapshot.status_code });
+    recordTransportError(snapshot);
+    phaseLog.push({
+      phase: 'content_type_confusion',
+      status_code: snapshot.status_code,
+      ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
+    });
     const contentTypeEval = snapshot.status_code >= 200 && snapshot.status_code < 300
       ? { blocked: false, challenged: false, allowed: true }
       : isBlockedOrChallenged(snapshot, baseline);
@@ -1121,7 +1287,12 @@ export async function runOutsideInWafScan(options = {}) {
     const snapshot = error
       ? { ...responseSnapshot(null), error_class: error.name ?? error.code ?? 'probe_failed' }
       : responseSnapshot(res, bodyText);
-    phaseLog.push({ phase: 'multipart_confusion', status_code: snapshot.status_code });
+    recordTransportError(snapshot);
+    phaseLog.push({
+      phase: 'multipart_confusion',
+      status_code: snapshot.status_code,
+      ...(snapshot.error_class ? { error_class: snapshot.error_class } : {}),
+    });
     const multipartEval = snapshot.status_code >= 200 && snapshot.status_code < 300
       ? { blocked: false, challenged: false, allowed: true }
       : isBlockedOrChallenged(snapshot, baseline);
@@ -1134,14 +1305,29 @@ export async function runOutsideInWafScan(options = {}) {
   }
 
   let originBypassConfirmed = false;
+  let directOriginReachable = false;
+  let originBypassAttempted = false;
   let originBypassStatus = null;
   if (plannedPhases.has('origin_bypass') && directIp && hostname
     && requestsSent < budget && typeof options.originBypassFn === 'function') {
     requestsSent += 1;
+    originBypassAttempted = true;
     const { res, error } = await options.originBypassFn({ directIp, hostname, timeoutMs, deps });
     originBypassStatus = error ? 0 : (res?.status ?? 0);
-    originBypassConfirmed = !error && originBypassStatus >= 200 && originBypassStatus < 400;
-    phaseLog.push({ phase: 'origin_bypass', status_code: originBypassStatus, bypass_signal: originBypassConfirmed });
+    directOriginReachable = !error && originBypassStatus >= 100;
+    originBypassConfirmed = directOriginReachable
+      && originBypassStatus >= 200 && originBypassStatus < 400;
+    if (error) {
+      const errorClass = error.name ?? error.code ?? 'origin_probe_failed';
+      if (!transportErrorClasses.includes(errorClass)) transportErrorClasses.push(errorClass);
+    }
+    phaseLog.push({
+      phase: 'origin_bypass',
+      status_code: originBypassStatus,
+      reachable: directOriginReachable,
+      bypass_signal: originBypassConfirmed,
+      ...(error ? { error_class: error.name ?? error.code ?? 'origin_probe_failed' } : {}),
+    });
   }
 
   const attackSnapshot = combined ?? sqli ?? xss ?? pathTraversal ?? baseline;
@@ -1154,14 +1340,17 @@ export async function runOutsideInWafScan(options = {}) {
   // addresses and mislabelled every non-IP token as a CNAME.
   const resolvedIps = dnsResolvedIps;
   const cnameChain = dnsCnameChain;
-  const genericDetection = wafw00fGenericDetection({
-    baseline,
-    noUserAgent,
-    xss,
-    pathTraversal,
-    sqli,
-    combined,
-  });
+  const genericDetection = {
+    ...wafw00fGenericDetection({
+      baseline,
+      noUserAgent,
+      xss,
+      pathTraversal,
+      sqli,
+      combined,
+    }),
+    corroborated: generic.detected,
+  };
   const edgeSignature = classifyEdgeFingerprint({
     normal: wafw00fResponseEvidence(baseline),
     attack: wafw00fResponseEvidence(combined ?? sqli ?? xss ?? pathTraversal),
@@ -1171,14 +1360,14 @@ export async function runOutsideInWafScan(options = {}) {
     genericDetection,
   });
 
-  const vendorClassification = classifyWafProductFromSignals({
+  const vendorClassification = evidenceBackedVendorClassification(classifyWafProductFromSignals({
     header_names: [...new Set([...(baseline?.header_names ?? []), ...(signalSource?.header_names ?? [])])],
     cookie_names: [...new Set([...(baseline?.cookie_names ?? []), ...(signalSource?.cookie_names ?? [])])],
     dns_chain: dnsChainHint ?? '',
     block_page_signature_id: attackSnapshot?.block_page_signature_id ?? baseline?.block_page_signature_id ?? null,
     customer_vendor_hint: options.customerVendorHint ?? null,
-    waf_present: generic.detected || Boolean(attackSnapshot?.block_page_signature_id),
-  });
+    waf_present: generic.detected || specificBlockPageDelta(attackSnapshot, baseline),
+  }));
 
   const vendorChainHints = (vendorClassification.candidates ?? []).slice(0, 3).map((candidate) => ({
     vendor: candidate.vendor,
@@ -1191,6 +1380,7 @@ export async function runOutsideInWafScan(options = {}) {
   const evasionBypassSuspected = detectEvasionBypass(markerResults);
   const phasesExecuted = phaseLog.map((entry) => entry.phase);
   const coverageComplete = phasesDropped.length === 0
+    && transportErrorClasses.length === 0
     && plan.every((entry) => phasesExecuted.includes(entry.phase));
   const posture = buildOutsideInPostureReport({
     wafDetected,
@@ -1205,16 +1395,39 @@ export async function runOutsideInWafScan(options = {}) {
     domXssValidation: options.domXssValidation ?? 'agent_required',
     edgeSignature,
     coverageComplete,
+    probeErrorsPresent: transportErrorClasses.length > 0,
   });
 
+  const networkFirewall = {
+    status: directOriginReachable
+      ? 'exposed'
+      : originBypassAttempted ? 'inconclusive' : 'not_tested',
+    direct_origin_reachability: {
+      status: directOriginReachable
+        ? 'exposed'
+        : originBypassAttempted ? 'inconclusive' : 'not_tested',
+      reachable: directOriginReachable,
+      application_bypass_confirmed: originBypassConfirmed,
+      status_code: originBypassStatus,
+    },
+    port_exposure: {
+      status: 'not_tested',
+      open_ports: [],
+      tested_count: 0,
+      reason: 'separate_bounded_port_scan_required',
+    },
+  };
   const durationMs = Date.now() - started;
-  const external_result = originBypassConfirmed || posture.validation_failed
-    ? 'connected'
-    : posture.validation_passed || (wafDetected && posture.probe_validation_passed)
-      ? 'blocked'
-      : wafDetected
+  const scanErrorClass = transportErrorClasses.find((value) => /abort|timeout|deadline/i.test(value))
+    ? 'timeout'
+    : transportErrorClasses[0] ?? null;
+  const external_result = scanErrorClass
+    ? (scanErrorClass === 'timeout' ? 'timeout' : 'error')
+    : originBypassConfirmed || posture.validation_failed
+      ? 'connected'
+      : posture.validation_passed || (wafDetected && posture.probe_validation_passed)
         ? 'blocked'
-        : 'connected';
+        : 'not_run';
 
   return {
     duration_ms: durationMs,
@@ -1233,7 +1446,10 @@ export async function runOutsideInWafScan(options = {}) {
     generic_waf_reasons: generic.reasons,
     marker_probes: markerResults,
     origin_bypass_confirmed: originBypassConfirmed,
+    direct_origin_reachable: directOriginReachable,
     origin_bypass_status_code: originBypassStatus,
+    network_firewall: networkFirewall,
+    ...(scanErrorClass ? { error_class: scanErrorClass } : {}),
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),
     ...(collectNetworkHints ? { vendor_chain_hints: vendorChainHints } : {}),
     edge_signature: {
@@ -1249,6 +1465,11 @@ export async function runOutsideInWafScan(options = {}) {
       wafw00f: edgeSignature.wafw00f,
       cdncheck: edgeSignature.cdncheck,
       conflicting_vendor_signals: edgeSignature.conflicting_vendor_signals,
+      conflicting_provider_signals: edgeSignature.conflicting_provider_signals,
+      stacked_vendor_signals: edgeSignature.stacked_vendor_signals,
+      layers: edgeSignature.layers,
+      confidence: edgeSignature.confidence,
+      evidence_consistency: edgeSignature.evidence_consistency,
       best_vendor: edgeSignature.best_vendor
         ? {
           vendor: edgeSignature.best_vendor.vendor,

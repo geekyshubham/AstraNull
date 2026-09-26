@@ -42,6 +42,7 @@ import {
   TargetGroupPicker,
 } from '../components/policies/target-group-picker';
 import { EmptyState } from '../components/ui/empty-state';
+import { EvidenceGuide } from '../components/ui/evidence-guide';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal, formatMutationSuccessMessage, renderFriendlyEmptyState, useConfirmModal } from '../lib/crud-ui';
 import { apiErrorMessage, humanizeErrorCode } from '../lib/error-messages';
@@ -52,6 +53,8 @@ import { AnchorButton, Button } from '../components/ui/button';
 import { Tabs } from '../components/ui/tabs';
 import { AnimatedNumber } from '../components/ui/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
+// @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
+import { dashboardReadinessMessage, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { canReadDataset, sessionHasPermission, staffSessionHasPermission } from '../lib/dataset-access.mjs';
@@ -674,59 +677,99 @@ function highScaleRequestLabel(data: PortalData, request: DataItem) {
   return targetGroupDisplayName(data, getString(request, ['target_group_id']));
 }
 
-type DashboardNextStep = { key: string; title: string; detail: string; href: string; tone: 'warn' | 'info' | 'success' };
+type DashboardNextStep = { key: string; title: string; detail: string; href: string; tone: UiBadgeTone };
+
+const DASHBOARD_FINDING_PRIORITY: Record<string, number> = {
+  s1: 0,
+  critical: 0,
+  s2: 1,
+  high: 1,
+  s3: 2,
+  medium: 2,
+  s4: 3,
+  low: 3,
+};
+
+function dashboardFindingFixLabel(finding: DataItem) {
+  const context = [
+    getString(finding, ['title', 'summary'], ''),
+    getString(finding, ['check_id'], ''),
+    getString(finding, ['vector_family', 'category'], ''),
+  ].join(' ').toLowerCase();
+  if (context.includes('origin') && (context.includes('bypass') || context.includes('direct'))) {
+    return 'Block direct access to the origin server';
+  }
+  if (context.includes('placement') || context.includes('misplaced')) return 'Fix inside-agent placement';
+  if (context.includes('waf') || context.includes('web firewall')) return 'Review web firewall blocking';
+  if (context.includes('dns')) return 'Review DNS protection';
+  if (context.includes('authorization') || context.includes('approval')) return 'Complete SOC authorization';
+  const title = getString(finding, ['title', 'summary'], 'evidence-backed finding');
+  return `Review ${title}`;
+}
 
 function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof resolveDashboardMetrics>): DashboardNextStep[] {
   const steps: DashboardNextStep[] = [];
   const activeGroups = data.targetGroups.filter((group) => group.archived_at == null);
-  if (!data.loadErrors.targetGroups && activeGroups.length === 0) {
+  const openFindings = data.findings
+    .filter((finding) => isFindingOpen(finding))
+    .sort((left, right) => {
+      const leftRank = DASHBOARD_FINDING_PRIORITY[getString(left, ['severity'], '').toLowerCase()] ?? 9;
+      const rightRank = DASHBOARD_FINDING_PRIORITY[getString(right, ['severity'], '').toLowerCase()] ?? 9;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return String(left.created_at ?? left.id ?? '').localeCompare(String(right.created_at ?? right.id ?? ''));
+    });
+
+  if (!data.loadErrors.findings) {
+    for (const finding of openFindings.slice(0, 3)) {
+      const findingId = getString(finding, ['id'], '');
+      const severity = getString(finding, ['severity'], 'unknown');
+      const detail = getString(finding, ['title', 'summary'], 'Review the evidence-backed gap.');
+      steps.push({
+        key: `finding-${findingId || steps.length}`,
+        title: dashboardFindingFixLabel(finding),
+        detail: `${formatSeverityLabel(severity)} · ${detail}`,
+        href: findingId ? buildDetailHref('finding-detail', findingId) : '#findings',
+        tone: ['s1', 'critical', 's2', 'high'].includes(severity.toLowerCase()) ? 'danger' : 'warn',
+      });
+    }
+  }
+  if (steps.length < 3 && !data.loadErrors.targetGroups && activeGroups.length === 0) {
     steps.push({
       key: 'declare-scope',
-      title: 'Declare your first target group',
+      title: 'Declare the services that need protection',
       detail: 'Add the business services you want to validate before any checks can run.',
       href: '#target-groups',
-      tone: 'info'
+      tone: 'info',
     });
   }
-  if (!data.loadErrors.agents && metrics.agentsOnline === 0 && data.agents.length === 0) {
-    steps.push({
-      key: 'install-agent',
-      title: 'Optionally add an observation agent',
-      detail: 'External validation works without an agent. Add one only when you want correlated internal or origin evidence.',
-      href: '#agents',
-      tone: 'info'
-    });
-  }
-  if (!data.loadErrors.findings && metrics.openFindings > 0) {
-    const topFinding = data.findings.find((finding) => isFindingOpen(finding));
-    const findingId = getString(topFinding ?? {}, ['id'], '');
-    steps.push({
-      key: 'triage-findings',
-      title: `Triage ${formatNumber(metrics.openFindings)} open finding${metrics.openFindings === 1 ? '' : 's'}`,
-      detail: topFinding ? getString(topFinding, ['title'], 'Review evidence-backed gaps.') : 'Review evidence-backed gaps.',
-      href: findingId ? buildDetailHref('finding-detail', findingId) : '#findings',
-      tone: 'warn'
-    });
-  }
-  if (!data.loadErrors.runs && !data.loadErrors.evidence && !data.runs.some((run) => hasEvidenceBackedVerdict(run, data.evidence))) {
+  if (steps.length < 3 && !data.loadErrors.runs && !data.loadErrors.evidence && !data.runs.some((run) => hasEvidenceBackedVerdict(run, data.evidence))) {
     steps.push({
       key: 'first-run',
-      title: 'Run validation',
-      detail: 'Complete at least one check to populate readiness evidence.',
+      title: 'Run the first bounded validation',
+      detail: 'Complete at least one safe check to create readiness evidence.',
       href: '#runs',
-      tone: 'info'
+      tone: 'info',
     });
   }
-  if (!data.loadErrors.highScale && data.highScale.some((request) => ['submitted', 'under_review'].includes(getString(request, ['state'])))) {
+  if (steps.length < 3 && !data.loadErrors.agents && metrics.agentsOnline === 0 && data.agents.length === 0) {
+    steps.push({
+      key: 'install-agent',
+      title: 'Add inside confirmation where it matters',
+      detail: 'External validation works without an agent. Add one only when you need internal or origin evidence.',
+      href: '#agents',
+      tone: 'info',
+    });
+  }
+  if (steps.length < 3 && !data.loadErrors.highScale && data.highScale.some((request) => ['submitted', 'under_review'].includes(getString(request, ['state'])))) {
     steps.push({
       key: 'high-scale-pack',
-      title: 'Finish high-scale authorization metadata',
-      detail: 'SOC review stays blocked until required authorization artifacts are uploaded.',
+      title: 'Complete the SOC authorization pack',
+      detail: 'SOC review stays blocked until the required authorization artifacts are uploaded.',
       href: '#runs',
-      tone: 'warn'
+      tone: 'warn',
     });
   }
-  return steps.slice(0, 5);
+  return steps.slice(0, 3);
 }
 
 function declaredEnvironmentComplete(data: PortalData) {
@@ -1075,6 +1118,11 @@ export function DashboardPage({
   const coveragePercent = data.loadErrors.targetGroups || data.loadErrors.runs || data.loadErrors.evidence || activeTargetGroups.length === 0
     ? null
     : Math.round((groupsWithEvidence / activeTargetGroups.length) * 100);
+  const highPriorityFindings = data.findings.filter(
+    (finding) =>
+      isFindingOpen(finding) &&
+      ['s1', 'critical', 's2', 'high'].includes(getString(finding, ['severity'], '').toLowerCase())
+  );
   const openFindingsAtS2 = data.findings.filter(
     (finding) =>
       isFindingOpen(finding) &&
@@ -1186,6 +1234,91 @@ export function DashboardPage({
   const correlatedChecks = correlatedFromPosture ?? correlatedCheckIds.size;
   const correlatedChecksUnavailable = correlatedFromPosture === null && Boolean(data.loadErrors.runs);
   const nextSteps = buildDashboardNextSteps(data, metrics);
+  const executiveReadiness = dashboardReadinessMessage({
+    score,
+    highPriorityFindings: highPriorityFindings.length,
+    coveragePercent,
+    dataUnavailable: Boolean(
+      data.error
+      || data.loadErrors.targetGroups
+      || data.loadErrors.runs
+      || data.loadErrors.evidence
+      || data.loadErrors.findings
+    ),
+  });
+  const ExecutiveReadinessIcon = executiveReadiness.tone === 'success' ? ShieldCheck : TriangleAlert;
+  const wafSummary = data.wafCoverageSummary;
+  const wafProtected = getOptionalNumber(wafSummary, ['protected']);
+  const wafEdgeProtected = getOptionalNumber(wafSummary, ['edge_protected']);
+  const wafUnderprotected = getOptionalNumber(wafSummary, ['underprotected']);
+  const wafCoveragePercent = getOptionalNumber(wafSummary, ['coverage_pct']);
+  let wafProtectionValue = 'Not measured';
+  let wafProtectionTone: UiBadgeTone = 'muted';
+  if (data.loadErrors.wafCoverageSummary) {
+    wafProtectionValue = 'Data unavailable';
+    wafProtectionTone = 'warn';
+  } else if (wafProtected !== null && wafProtected > 0) {
+    wafProtectionValue = `${formatNumber(wafProtected)} fully validated`;
+    wafProtectionTone = wafUnderprotected && wafUnderprotected > 0 ? 'warn' : 'success';
+  } else if (wafEdgeProtected !== null && wafEdgeProtected > 0) {
+    wafProtectionValue = `${formatNumber(wafEdgeProtected)} blocked at edge only`;
+    wafProtectionTone = 'warn';
+  } else if (wafUnderprotected !== null && wafUnderprotected > 0) {
+    wafProtectionValue = 'Protection needs work';
+    wafProtectionTone = 'danger';
+  } else if (wafSummary) {
+    wafProtectionValue = 'Not enough evidence';
+    wafProtectionTone = 'warn';
+  }
+  const byVendor = wafSummary?.by_vendor;
+  const reportedProviders = byVendor && typeof byVendor === 'object' && !Array.isArray(byVendor)
+    ? Object.keys(byVendor as Record<string, unknown>).filter(Boolean)
+    : [];
+  const namedProviders = reportedProviders.filter((provider) => provider.trim().toLowerCase() !== 'generic');
+  const reportedProviderValue = namedProviders.length > 0
+    ? `${namedProviders.slice(0, 2).join(', ')}${namedProviders.length > 2 ? ` +${namedProviders.length - 2}` : ''}`
+    : reportedProviders.length > 0 ? 'Provider name not reported' : 'No provider metadata';
+  const latestOriginRun = [...data.runs]
+    .filter((run) => hasEvidenceBackedVerdict(run, data.evidence))
+    .filter((run) => {
+      const checkId = getString(run, ['check_id'], '').toLowerCase();
+      const check = data.checks.find((item) => getString(item, ['check_id', 'id'], '') === getString(run, ['check_id'], ''));
+      return checkId.includes('origin') || getString(check ?? {}, ['vector_family'], '').toLowerCase() === 'origin';
+    })
+    .sort((left, right) => String(right.started_at ?? right.created_at ?? '').localeCompare(String(left.started_at ?? left.created_at ?? '')))[0] ?? null;
+  const originVerdict = latestOriginRun ? extractRunVerdictString(latestOriginRun) : '';
+  const originBucket = classifyCorrelationVerdict(originVerdict);
+  const originTone: UiBadgeTone = originBucket === 'pass' ? 'success' : originBucket === 'gap' ? 'danger' : originBucket === 'review' ? 'warn' : 'muted';
+  const protectionRows: Array<{ label: string; value: string; detail: string; tone: UiBadgeTone; icon: typeof Activity }> = [
+    {
+      label: 'Web firewall',
+      value: wafProtectionValue,
+      detail: wafCoveragePercent === null ? 'Fully validated share not reported.' : `${Math.round(wafCoveragePercent)}% of declared WAF assets are fully validated.`,
+      tone: wafProtectionTone,
+      icon: ShieldCheck,
+    },
+    {
+      label: 'CDN / edge providers',
+      value: reportedProviderValue,
+      detail: 'Reported provider metadata is not proof that traffic was blocked.',
+      tone: reportedProviders.length > 0 ? 'info' : 'muted',
+      icon: Cloud,
+    },
+    {
+      label: 'Origin firewall / access rules',
+      value: originVerdict ? plainVerdictLabel(originVerdict) : 'Not tested live',
+      detail: latestOriginRun ? `Latest evidence-backed direct-origin check: ${getString(latestOriginRun, ['id'], 'run')}.` : 'Run a bounded direct-origin check before drawing a conclusion.',
+      tone: originTone,
+      icon: Network,
+    },
+    {
+      label: 'Inside confirmation',
+      value: data.loadErrors.agents ? 'Data unavailable' : `${formatNumber(agentsOnline)}/${formatNumber(agentsTotalDisplay || agentsOnline)} agents online`,
+      detail: 'Agents strengthen evidence; they are not a protective control.',
+      tone: data.loadErrors.agents ? 'warn' : agentsOnline > 0 ? 'success' : 'muted',
+      icon: Bot,
+    },
+  ];
 
   function dashboardRunVerdict(run: DataItem): { label: string; tone: UiBadgeTone } {
     if (!hasEvidenceBackedVerdict(run, data.evidence)) {
@@ -1253,7 +1386,7 @@ export function DashboardPage({
   ];
 
   return (
-    <div className="content">
+    <div className="content dashboard-page">
       <PageHeader
         route="dashboard"
         eyebrow={tenantEyebrow}
@@ -1295,77 +1428,144 @@ export function DashboardPage({
               ) : null}
             </div>
           ) : null}
-          <div className="kpi-row">
-            <KpiCell
-              label="Readiness"
-              value={
-                <>
-                  {score ?? '—'}
-                  {score !== null ? <span className="unit">/100</span> : null}
-                </>
-              }
-              delta={readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : 'No prior cycle recorded'}
-              deltaVariant={
-                readinessDelta !== null && readinessDelta !== 0
-                  ? readinessDelta > 0
-                    ? 'up'
-                    : 'down'
-                  : undefined
-              }
-            />
-            <KpiCell
-              label="Coverage"
-              value={
-                <>
-                  {coveragePercent ?? '—'}
-                  {coveragePercent !== null ? <span className="unit">%</span> : null}
-                </>
-              }
-              delta={data.loadErrors.targetGroups ? 'Target group data unavailable' : `${formatNumber(metrics.targetGroups)} ${pluralize(metrics.targetGroups, 'target group')}`}
-            />
-            <KpiCell
-              label="Open findings"
-              value={data.loadErrors.findings ? '—' : formatNumber(metrics.openFindings)}
-              delta={data.loadErrors.findings ? 'Finding data unavailable' : `${formatNumber(openFindingsAtS2)} at Severity 2 (High)`}
-            />
-            <KpiCell
-              label="Agents healthy"
-              value={data.loadErrors.agents ? '—' : `${formatNumber(agentsOnline)}/${formatNumber(agentsTotalDisplay || agentsOnline)}`}
-              delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Status reported by the agents API'}
-            />
-            <KpiCell
-              label="Last run"
-              value={lastSafeRunValue}
-              delta={data.loadErrors.runs
-                ? 'Run history unavailable'
-                : lastRun
-                  ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount === null ? 'check count not recorded' : `${formatNumber(lastRunCheckCount)} ${pluralize(lastRunCheckCount, 'check')}`}`
-                  : 'No runs yet'}
-            />
-          </div>
+          <section className="executive-brief" aria-labelledby="executive-readiness-title">
+            <div className="executive-brief-grid">
+              <div className="executive-answer" data-tone={executiveReadiness.tone}>
+                <span className="executive-answer-icon" aria-hidden="true"><ExecutiveReadinessIcon size={20} /></span>
+                <div>
+                  <p className="executive-question">Are we ready for a DDoS attack?</p>
+                  <h2 id="executive-readiness-title">{executiveReadiness.headline}</h2>
+                  <p>{executiveReadiness.detail}</p>
+                  <div className="executive-proof-line">
+                    <span>{score === null ? <strong>Score unavailable</strong> : <><strong className="tabular-nums">{score}</strong><span>/100 readiness</span></>}</span>
+                    <span>{data.loadErrors.targetGroups || data.loadErrors.runs || data.loadErrors.evidence ? 'Evidence coverage unavailable' : `${formatNumber(groupsWithEvidence)} of ${formatNumber(activeTargetGroups.length)} declared services have evidence-backed results`}</span>
+                    <span>{`Protection snapshot: ${wafProtectionValue}`}</span>
+                    <span>{nextSteps[0] ? `First fix: ${nextSteps[0].title}` : 'No priority fix is backed by the loaded evidence'}</span>
+                  </div>
+                  {data.state?.readiness?.summary ? (
+                    <p className="executive-api-summary" title="Summary returned by GET /v1/state readiness.summary">{data.state.readiness.summary}</p>
+                  ) : null}
+                </div>
+              </div>
 
-          {nextSteps.length > 0 ? (
-            <Card className="card--dense">
-              <PanelCardHeader
-                title="Priority actions"
-                description="Evidence-backed next steps ranked from current findings, coverage, agents, and approval state."
-                trailing={<Badge tone="muted">{nextSteps.length} open</Badge>}
-              />
-              <CardContent>
-                <ul className="dashboard-link-list">
-                  {nextSteps.map((step) => (
-                    <li key={`${step.title}-${step.href}`}>
-                      <div className="dashboard-link-copy">
-                        <strong>{step.title}</strong>
-                        <span className="dashboard-link-meta"><Badge tone={step.tone}>{step.detail}</Badge></span>
-                      </div>
-                      <AnchorButton href={step.href} variant="secondary" size="sm">Open</AnchorButton>
-                    </li>
-                  ))}
+              <div className="executive-protection" aria-labelledby="executive-protection-title">
+                <div className="executive-section-head">
+                  <div>
+                    <h3 id="executive-protection-title">What is protecting us?</h3>
+                    <p>Reported controls and evidence limits</p>
+                  </div>
+                </div>
+                <ul className="executive-protection-list">
+                  {protectionRows.map((row) => {
+                    const ProtectionIcon = row.icon;
+                    return (
+                      <li key={row.label}>
+                        <span className="executive-protection-icon" aria-hidden="true"><ProtectionIcon size={16} /></span>
+                        <span className="executive-protection-copy">
+                          <strong>{row.label}</strong>
+                          <span>{row.detail}</span>
+                        </span>
+                        <Badge tone={row.tone} title={row.detail}>{row.value}</Badge>
+                      </li>
+                    );
+                  })}
                 </ul>
-              </CardContent>
-            </Card>
-          ) : null}
+                <div className="executive-effectiveness">
+                  <div>
+                    <strong>WAF effectiveness</strong>
+                    <span>{wafCoveragePercent === null ? 'Not measured' : `${Math.round(wafCoveragePercent)}% fully validated`}</span>
+                  </div>
+                  <div
+                    className="executive-effectiveness-track"
+                    role="img"
+                    aria-label={wafCoveragePercent === null ? 'WAF fully validated share not reported' : `${Math.round(wafCoveragePercent)} percent of declared WAF assets fully validated`}
+                  >
+                    <span style={{ width: `${Math.max(0, Math.min(100, wafCoveragePercent ?? 0))}%` }} />
+                  </div>
+                  <p>Coverage across declared assets, not a guarantee against untested attacks.</p>
+                </div>
+              </div>
+
+              <div className="executive-fixes" aria-labelledby="executive-fixes-title">
+                <div className="executive-section-head">
+                  <div>
+                    <h3 id="executive-fixes-title">Top fixes</h3>
+                    <p>Up to three actions backed by the evidence currently loaded</p>
+                  </div>
+                  <Badge tone={nextSteps.length > 0 ? 'warn' : 'success'}>{nextSteps.length} to review</Badge>
+                </div>
+                {nextSteps.length > 0 ? (
+                  <ol className="executive-fix-list">
+                    {nextSteps.map((step, index) => (
+                      <li key={step.key}>
+                        <span className="executive-fix-rank" data-tone={step.tone} aria-hidden="true">{index + 1}</span>
+                        <span className="executive-fix-copy">
+                          <strong>{step.title}</strong>
+                          <span>{step.detail}</span>
+                        </span>
+                        <AnchorButton href={step.href} variant="secondary" size="sm">Review</AnchorButton>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="executive-empty-fixes">No priority fix is backed by the loaded evidence. Keep scheduled validation current.</p>
+                )}
+              </div>
+            </div>
+            <EvidenceGuide compact />
+          </section>
+
+          <details className="dashboard-technical-disclosure technical-disclosure">
+            <summary><ListChecks size={16} aria-hidden="true" /> Engineering metrics and evidence counts</summary>
+            <div className="kpi-row">
+              <KpiCell
+                label="Readiness"
+                value={
+                  <>
+                    {score ?? '—'}
+                    {score !== null ? <span className="unit">/100</span> : null}
+                  </>
+                }
+                delta={readinessDelta !== null ? `${readinessDelta > 0 ? '+' : ''}${readinessDelta} vs last cycle` : 'No prior cycle recorded'}
+                deltaVariant={
+                  readinessDelta !== null && readinessDelta !== 0
+                    ? readinessDelta > 0
+                      ? 'up'
+                      : 'down'
+                    : undefined
+                }
+              />
+              <KpiCell
+                label="Coverage"
+                value={
+                  <>
+                    {coveragePercent ?? '—'}
+                    {coveragePercent !== null ? <span className="unit">%</span> : null}
+                  </>
+                }
+                delta={data.loadErrors.targetGroups ? 'Target group data unavailable' : `${formatNumber(metrics.targetGroups)} ${pluralize(metrics.targetGroups, 'target group')}`}
+              />
+              <KpiCell
+                label="Open findings"
+                value={data.loadErrors.findings ? '—' : formatNumber(metrics.openFindings)}
+                delta={data.loadErrors.findings ? 'Finding data unavailable' : `${formatNumber(openFindingsAtS2)} at Severity 2 (High)`}
+              />
+              <KpiCell
+                label="Agents healthy"
+                value={data.loadErrors.agents ? '—' : `${formatNumber(agentsOnline)}/${formatNumber(agentsTotalDisplay || agentsOnline)}`}
+                delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Status reported by the agents API'}
+              />
+              <KpiCell
+                label="Last run"
+                value={lastSafeRunValue}
+                delta={data.loadErrors.runs
+                  ? 'Run history unavailable'
+                  : lastRun
+                    ? `${getString(lastRun, ['id'], '—')} · ${lastRunCheckCount === null ? 'check count not recorded' : `${formatNumber(lastRunCheckCount)} ${pluralize(lastRunCheckCount, 'check')}`}`
+                    : 'No runs yet'}
+              />
+            </div>
+          </details>
 
           <div className="dash-grid dash-grid--masonry">
             <Card>

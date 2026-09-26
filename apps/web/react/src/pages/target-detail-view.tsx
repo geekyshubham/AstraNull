@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Check, FileCheck2, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
+import { Activity, Check, Cloud, FileCheck2, Network, Server, ShieldCheck, Target, TriangleAlert } from 'lucide-react';
 import { populateTargetDetail } from '../lib/target-detail-api';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
@@ -11,11 +11,14 @@ import type { DataItem, PortalConfig, Session } from '../lib/types';
 import { formatDate, formatSeverityLabel } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { EvidenceGuide } from '../components/ui/evidence-guide';
 import { emptyStateFromApi, readMetaAction } from '../lib/empty-from-api';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { requestJson } from '../lib/api';
 import { MetricCard } from './page-components';
+// @ts-ignore Plain ESM keeps evidence-conservative labels directly testable with node:test.
+import { evidenceModePresentation, evidenceTierInfo, plainProtectionLabel, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -55,9 +58,35 @@ const targetDetailStyles = `
 .target-detail-view .edge-chip-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .target-detail-view .edge-chain { margin: var(--space-2) 0 0; color: var(--fg-2); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .target-detail-view .edge-chain .edge-chain-label { color: var(--muted); margin-right: var(--space-2); }
+.target-detail-view .target-protection-lede { max-width: 78ch; margin: 0; color: var(--fg); font-size: var(--text-lg); line-height: 1.45; text-wrap: pretty; }
+.target-detail-view .target-protection-source { margin: var(--space-2) 0 0; color: var(--fg-2); font-size: var(--text-xs); }
+.target-detail-view .target-protection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: var(--space-5); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--border-soft); }
+.target-detail-view .target-protection-layer { display: flex; min-width: 0; flex-direction: column; gap: var(--space-3); padding: var(--space-4); background: var(--surface); }
+.target-detail-view .target-protection-layer-head { display: flex; align-items: center; gap: var(--space-2); color: var(--fg-2); }
+.target-detail-view .target-protection-layer-head strong { color: var(--fg); font-size: var(--text-sm); }
+.target-detail-view .target-protection-layer-value { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.target-detail-view .target-protection-layer-value > strong { color: var(--fg); font-size: var(--text-sm); line-height: 1.4; }
+.target-detail-view .technical-key { color: var(--fg-2); font-family: var(--font-mono); font-size: 10px; }
+.target-detail-view .target-protection-layer p { margin: 0; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
+.target-detail-view .waf-effectiveness { display: grid; grid-template-columns: minmax(180px, 0.75fr) minmax(0, 1.5fr); gap: var(--space-5); align-items: center; margin-top: var(--space-5); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.target-detail-view .waf-effectiveness-copy { display: flex; flex-direction: column; gap: var(--space-1); }
+.target-detail-view .waf-effectiveness-copy h3 { margin: 0; color: var(--fg); font-size: var(--text-sm); }
+.target-detail-view .waf-effectiveness-copy p { margin: 0; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
+.target-detail-view .effectiveness-scale { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+.target-detail-view .effectiveness-step { min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--fg-2); font-size: var(--text-xs); text-align: center; }
+.target-detail-view .effectiveness-step[aria-current="true"] { border-color: var(--border-strong); background: var(--surface-sunk); color: var(--fg); font-weight: 700; }
+.target-detail-view .evidence-mode-cell { display: flex; max-width: 28rem; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+.target-detail-view .evidence-mode-cell > span:last-child { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
+.target-detail-view .state-with-key { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+@media (max-width: 1100px) {
+  .target-detail-view .target-protection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 760px) {
   .target-detail-view .target-history-head { align-items: flex-start; flex-direction: column; }
   .target-detail-view .edge-family-grid { grid-template-columns: minmax(0, 1fr); }
+  .target-detail-view .target-protection-grid,
+  .target-detail-view .waf-effectiveness { grid-template-columns: minmax(0, 1fr); }
+  .target-detail-view .effectiveness-scale { grid-template-columns: minmax(0, 1fr); }
 }
 `;
 
@@ -79,8 +108,8 @@ function verificationTone(state: string): StatTone {
 
 function runOutcomeTone(value: string): StatTone {
   const key = value.trim().toLowerCase();
-  if (['pass', 'passed', 'complete', 'completed', 'succeeded'].includes(key)) return 'success';
-  if (['gap', 'fail', 'failed', 'error', 'cancelled'].includes(key)) return 'danger';
+  if (['pass', 'passed', 'protected', 'complete', 'completed', 'succeeded'].includes(key)) return 'success';
+  if (['gap', 'fail', 'failed', 'bypassable', 'penetrated', 'unprotected', 'error', 'cancelled'].includes(key)) return 'danger';
   if (['pending', 'planned', 'queued', 'running', 'collecting'].includes(key)) return 'info';
   return 'muted';
 }
@@ -88,6 +117,13 @@ function runOutcomeTone(value: string): StatTone {
 function formatTargetLabel(value: string, fallback = '—') {
   const trimmed = value.trim();
   if (!trimmed) return fallback;
+  const friendly: Record<string, string> = {
+    fqdn: 'Domain name',
+    cloud_baseline: 'Protected path baseline',
+    must_block_before_origin: 'Block before the origin server',
+  };
+  const key = trimmed.toLowerCase();
+  if (friendly[key]) return friendly[key];
   const label = trimmed.replace(/_/g, ' ');
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
@@ -103,6 +139,15 @@ function getString(item: DataItem | null | undefined, keys: string[], fallback =
 
 function asDataItem(value: unknown): DataItem | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as DataItem : null;
+}
+
+function getOptionalNumber(item: DataItem | null | undefined, keys: string[]) {
+  if (!item) return null;
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
 function dataItemList(value: unknown, maxItems = 8): DataItem[] {
@@ -142,6 +187,53 @@ function edgeConfidenceLabel(value: unknown) {
 function EdgeFamilyProviders({ family, providers }: { family: DataItem | null; providers: string[] }) {
   const summary = edgeFamilyProviderSummary(getString(family, ['provider'], ''), providers) as { label: string; value: string };
   return <><dt>{summary.label}</dt><dd>{summary.value}</dd></>;
+}
+
+function EvidenceModeCell({ item }: { item: DataItem }) {
+  const mode = evidenceModePresentation(item);
+  return (
+    <span className="evidence-mode-cell">
+      <Badge tone={mode.tone} title={`${mode.detail}${mode.code ? ` Technical tier ${mode.code}.` : ''}`}>
+        {mode.label}{mode.code ? ` · ${mode.code}` : ''}
+      </Badge>
+      <span>{mode.detail}</span>
+    </span>
+  );
+}
+
+function protectionStateTone(value: string): StatTone {
+  const key = value.trim().toLowerCase();
+  if (['protected', 'pass', 'passed', 'detected', 'not_exposed', 'active'].includes(key)) return 'success';
+  if (['underprotected', 'unprotected', 'fail', 'failed', 'exposed', 'bypassable', 'penetrated', 'error'].includes(key)) return 'danger';
+  if (['edge_protected', 'inconclusive', 'suspected', 'pending', 'degraded'].includes(key)) return 'warn';
+  return 'muted';
+}
+
+function ProtectionLayer({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  technicalState,
+  tone,
+}: {
+  icon: typeof Activity;
+  label: string;
+  value: string;
+  detail: string;
+  technicalState: string;
+  tone: StatTone;
+}) {
+  return (
+    <section className="target-protection-layer" aria-label={`${label}: ${value}`}>
+      <div className="target-protection-layer-head"><Icon size={16} aria-hidden="true" /><strong>{label}</strong></div>
+      <div className="target-protection-layer-value">
+        <Badge tone={tone} title={`${detail}${technicalState ? ` Technical state ${technicalState}.` : ''}`}>{value}</Badge>
+        {technicalState ? <code className="technical-key">{technicalState}</code> : null}
+      </div>
+      <p>{detail}</p>
+    </section>
+  );
 }
 
 /** Target-detail runs carry the verdict record's evidence ids beside the verdict text. */
@@ -201,13 +293,13 @@ function buildTargetVerificationLadder(
   return [
     {
       id: 'declared',
-      label: 'Declared',
+      label: 'Target declared',
       done: true,
       meta: targetDeclarationProvenanceLabel(target),
     },
     {
       id: 'ownership',
-      label: 'Ownership proof',
+      label: 'Ownership proven',
       done: ownershipDone,
       meta: ownershipDone
         ? transitionMeta(ownershipStates, method)
@@ -215,7 +307,7 @@ function buildTargetVerificationLadder(
     },
     {
       id: 'agent',
-      label: 'Agent verified',
+      label: 'Observed from inside',
       done: agentDone,
       meta: agentDone
         ? transitionMeta(['agent_verified'], 'Agent verification recorded')
@@ -223,7 +315,7 @@ function buildTargetVerificationLadder(
     },
     {
       id: 'confirmed',
-      label: 'User confirmed',
+      label: 'Owner confirmed',
       done: userDone,
       meta: userDone
         ? transitionMeta(['user_confirmed'], 'Authorized user confirmation recorded')
@@ -358,7 +450,7 @@ export function TargetDetailView({
           {hasTarget ? <span className="target-detail-id mono muted">{entityId}</span> : null}
           {hasTarget ? (
             <div className="detail-status-line">
-              <VerifyChip state={verificationState} provenance={provenance} />
+              <VerifyChip state={verificationState} provenance={provenance} label={plainVerificationLabel(verificationState)} />
               <span className="detail-status-sep" aria-hidden="true">·</span>
               <Badge tone={targetEligible ? 'success' : 'warn'} title={`Reported eligibility ${eligibility}; ownership ${verificationState}`}>{eligibilityDisplay}</Badge>
             </div>
@@ -417,9 +509,10 @@ export function TargetDetailView({
       const value = recentRunVerdict(item);
       const evidenceCount = Array.isArray(item.evidence_ids) ? item.evidence_ids.length : 0;
       return value
-        ? <Badge tone={runOutcomeTone(value)} title={`Verdict ${getString(item, ['verdict_id'], 'record')} cites ${evidenceCount} evidence record${evidenceCount === 1 ? '' : 's'}`}>{formatTargetLabel(value)}</Badge>
-        : <span className="muted">No verdict evidence</span>;
+        ? <Badge tone={runOutcomeTone(value)} title={`Technical verdict ${value}; ${getString(item, ['verdict_id'], 'record')} cites ${evidenceCount} evidence record${evidenceCount === 1 ? '' : 's'}`}>{plainVerdictLabel(value)}</Badge>
+        : <span className="muted">No evidence-backed result</span>;
     } },
+    { key: 'evidence', label: 'How it was checked', render: (item) => <EvidenceModeCell item={item} /> },
     { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
   ];
 
@@ -450,11 +543,15 @@ export function TargetDetailView({
       );
     } },
     { key: 'check', label: 'Bound check', render: (item) => <span className="mono">{getString(item, ['check_id', 'id'], 'Not reported')}</span> },
-    { key: 'scope', label: 'Bound by', render: (item) => <span className="muted small mono">{boundCheckScope(item)}</span> }
+    { key: 'scope', label: 'Bound by', render: (item) => <span className="muted small mono">{boundCheckScope(item)}</span> },
+    { key: 'evidence', label: 'Evidence level', render: (item) => <EvidenceModeCell item={item} /> }
   ];
 
   const verificationHistoryColumns: TableColumn<DataItem>[] = [
-    { key: 'state', label: 'Recorded state', render: (item) => <VerifyChip state={getString(item, ['state'], 'unknown')} provenance={`Recorded target verification transition ${getString(item, ['state'], 'unknown')}`} /> },
+    { key: 'state', label: 'Recorded state', render: (item) => {
+      const state = getString(item, ['state'], 'unknown');
+      return <VerifyChip state={state} provenance={`Recorded target verification transition ${state}`} label={plainVerificationLabel(state)} />;
+    } },
     { key: 'transitioned', label: 'Transitioned', render: (item) => item.transitioned_at ? formatDate(item.transitioned_at) : <span className="muted">Not reported</span> },
     { key: 'evidence', label: 'Evidence reference', render: (item) => <span className="mono">{verificationEvidenceReference(item)}</span> }
   ];
@@ -526,6 +623,112 @@ export function TargetDetailView({
     : targetEligible
       ? 'The target API explicitly reports eligible ownership state.'
       : 'The target API did not report an explicitly eligible ownership state, so validation remains locked.';
+  const apiProtectionSummary = getString(edgeDetection, ['plain_language_summary', 'protection_summary'], '')
+    || getString(wafPosture, ['plain_language_summary', 'protection_summary'], '');
+  const wafValidation = asDataItem(wafPosture?.validation);
+  const wafValidationVerdict = getString(wafValidation, ['verdict'], '');
+  const wafValidationRunId = getString(wafValidation, ['run_id'], '');
+  const wafPostureState = getString(wafPosture, ['posture', 'status'], '');
+  const wafLayerState = getString(edgeWaf, ['status'], wafPostureState || 'unknown');
+  const wafLayerProvider = getString(edgeWaf, ['provider'], getString(wafPosture, ['vendor'], ''));
+  const cdnLayerState = getString(edgeCdn, ['status'], 'unknown');
+  const cdnLayerProvider = getString(edgeCdn, ['provider'], '');
+  const cloudLayerState = getString(edgeCloud, ['status'], 'unknown');
+  const cloudLayerProvider = getString(edgeCloud, ['provider'], '');
+  const edgeNetworkFirewall = asDataItem(edgeDetection?.network_firewall);
+  const edgeDirectOrigin = asDataItem(edgeNetworkFirewall?.direct_origin_reachability);
+  const edgePortExposure = asDataItem(edgeNetworkFirewall?.port_exposure);
+  const originBypass = asDataItem(wafPosture?.origin_bypass);
+  const originLayerState = getString(edgeDirectOrigin, ['status'], getString(originBypass, ['state'], 'unknown'));
+  const originCheckedAt = edgeDirectOrigin ? edgeObservedAt : originBypass?.last_checked_at ?? null;
+  const openPorts = Array.isArray(edgePortExposure?.open_ports) ? edgePortExposure.open_ports.length : 0;
+  const edgeEffectiveness = asDataItem(edgeDetection?.effectiveness);
+  const edgeEffectivenessStatus = getString(edgeEffectiveness, ['status'], '');
+  const edgeEffectivenessTier = evidenceTierInfo(getString(edgeEffectiveness, ['evidence_tier'], ''));
+  const blockedProbeCount = getOptionalNumber(edgeEffectiveness, ['blocked_count']);
+  const testedProbeCount = getOptionalNumber(edgeEffectiveness, ['tested_count']);
+  const blockedProbePercent = getOptionalNumber(edgeEffectiveness, ['percentage']);
+  const hasEdgeEffectivenessScore = Boolean(
+    edgeEffectivenessStatus
+    && testedProbeCount !== null
+    && testedProbeCount > 0
+    && blockedProbeCount !== null
+  );
+  const fallbackProtectionSummary = wafValidationVerdict && wafValidationRunId
+    ? `${plainVerdictLabel(wafValidationVerdict)} in the linked WAF validation. This conclusion applies only to that tested scenario.`
+    : edgeDetection
+      ? edgeStatus === 'detected'
+        ? 'A live edge check detected one or more protection or hosting layers. Detection alone does not prove they blocked the test.'
+        : edgeStatus === 'not_detected'
+          ? 'The latest live edge check did not identify a WAF or CDN. This does not prove that no edge control exists.'
+          : 'The latest edge check did not produce enough evidence for a protection conclusion.'
+      : wafPosture
+        ? `Linked WAF posture is available: ${plainProtectionLabel(wafPostureState)}. Open the evidence below before treating it as a broad readiness claim.`
+        : 'Protection layers have not been tested live for this target yet.';
+  const protectionSummary = apiProtectionSummary || fallbackProtectionSummary;
+  const scoredEffectivenessLabel = hasEdgeEffectivenessScore
+    ? `${blockedProbeCount} of ${testedProbeCount} safe probes blocked${blockedProbePercent === null ? '' : ` (${Math.round(blockedProbePercent)}%)`}`
+    : '';
+  const wafEffectivenessLabel = scoredEffectivenessLabel
+    || (wafValidationVerdict && wafValidationRunId
+      ? plainVerdictLabel(wafValidationVerdict)
+      : wafLayerState === 'detected'
+        ? 'Detected, not tested for effectiveness'
+        : 'Not tested live');
+  const wafEffectivenessTone: StatTone = hasEdgeEffectivenessScore
+    ? edgeEffectivenessStatus === 'effective_for_tested_probes' ? 'success' : 'warn'
+    : wafValidationVerdict && wafValidationRunId
+      ? runOutcomeTone(wafValidationVerdict)
+      : wafLayerState === 'detected' ? 'warn' : 'muted';
+  const wafEffectivenessStep = hasEdgeEffectivenessScore
+    ? edgeEffectivenessStatus === 'effective_for_tested_probes' ? 2 : 1
+    : wafValidationVerdict && wafValidationRunId
+      ? ['pass', 'passed', 'protected', 'success'].includes(wafValidationVerdict.toLowerCase()) ? 2 : 1
+      : 0;
+  const wafEffectivenessSourceId = hasEdgeEffectivenessScore ? edgeTestRunId : wafValidationRunId;
+  const wafEffectivenessTechnicalState = hasEdgeEffectivenessScore ? edgeEffectivenessStatus : wafValidationVerdict;
+  const wafEffectivenessDetail = hasEdgeEffectivenessScore
+    ? `${edgeEffectivenessTier ? `${edgeEffectivenessTier.label} (${edgeEffectivenessTier.code}). ` : ''}Based on ${testedProbeCount} safe probes from ${edgeTestRunId || 'the returned edge result'}; untested scenarios are not covered.`
+    : wafValidationRunId
+      ? `Based on linked validation ${wafValidationRunId}; untested scenarios are not covered.`
+      : 'Detection alone cannot show whether the WAF blocked traffic.';
+  const effectivenessSteps = ['Not tested', 'Needs attention', 'Worked in tested scenario'];
+  const protectionLayers: Array<{ icon: typeof Activity; label: string; value: string; detail: string; technicalState: string; tone: StatTone }> = [
+    {
+      icon: ShieldCheck,
+      label: 'Web application firewall',
+      value: plainProtectionLabel(wafLayerState),
+      detail: wafLayerProvider ? `Provider reported as ${wafLayerProvider}.` : 'No WAF provider was asserted.',
+      technicalState: wafLayerState,
+      tone: protectionStateTone(wafLayerState),
+    },
+    {
+      icon: Network,
+      label: 'CDN / edge network',
+      value: plainProtectionLabel(cdnLayerState),
+      detail: cdnLayerProvider ? `Provider reported as ${cdnLayerProvider}.` : 'No CDN provider was asserted by a live edge result.',
+      technicalState: cdnLayerState === 'unknown' ? '' : cdnLayerState,
+      tone: protectionStateTone(cdnLayerState),
+    },
+    {
+      icon: Cloud,
+      label: 'Cloud hosting',
+      value: plainProtectionLabel(cloudLayerState),
+      detail: cloudLayerProvider ? `Hosting range matched ${cloudLayerProvider}; hosting is not proof of protection.` : 'Hosting was not asserted; hosting alone would not prove protection.',
+      technicalState: cloudLayerState === 'unknown' ? '' : cloudLayerState,
+      tone: protectionStateTone(cloudLayerState),
+    },
+    {
+      icon: Server,
+      label: 'Origin access / firewall',
+      value: plainProtectionLabel(originLayerState),
+      detail: originCheckedAt
+        ? `Last direct-path check: ${formatDate(originCheckedAt)}.${openPorts > 0 ? ` ${openPorts} exposed port${openPorts === 1 ? '' : 's'} reported.` : ''}`
+        : 'Direct-origin reachability and exposed ports were not reported as tested.',
+      technicalState: originLayerState === 'unknown' ? '' : originLayerState,
+      tone: protectionStateTone(originLayerState),
+    },
+  ];
 
   return (
     <div className="content target-detail-view">
@@ -538,13 +741,50 @@ export function TargetDetailView({
         </div>
       ) : null}
 
+      <Card className="target-protection-card" data-testid="target-protection-summary">
+        <CardHeader>
+          <div>
+            <CardTitle>Protection at a glance</CardTitle>
+            <CardDescription>What sits in front of this target, what was checked, and how strong the evidence is.</CardDescription>
+          </div>
+          <Badge
+            tone={apiProtectionSummary ? 'info' : wafValidationRunId ? 'success' : edgeDetection ? 'info' : 'warn'}
+            title={apiProtectionSummary ? 'Plain-language summary returned by the target-detail edge detection payload.' : 'Fallback summary derived only from returned target-detail evidence fields.'}
+          >
+            {apiProtectionSummary ? 'Summary from API' : wafValidationRunId ? 'Linked validation' : edgeDetection ? 'Live edge check' : 'Evidence limited'}
+          </Badge>
+        </CardHeader>
+        <CardContent>
+          <p className="target-protection-lede">{protectionSummary}</p>
+          <p className="target-protection-source">
+            {apiProtectionSummary ? 'The API supplied this wording.' : 'AstraNull generated this cautious fallback from the returned evidence fields.'}
+          </p>
+          <div className="target-protection-grid" aria-label="Detected and reported protection layers">
+            {protectionLayers.map((layer) => <ProtectionLayer key={layer.label} {...layer} />)}
+          </div>
+          <section className="waf-effectiveness" aria-labelledby="target-waf-effectiveness-title">
+            <div className="waf-effectiveness-copy">
+              <h3 id="target-waf-effectiveness-title">WAF effectiveness</h3>
+              <Badge tone={wafEffectivenessTone} title={wafEffectivenessSourceId ? `Evidence source ${wafEffectivenessSourceId}; technical state ${wafEffectivenessTechnicalState || 'not reported'}.` : 'No evidence-backed WAF effectiveness result was reported.'}>{wafEffectivenessLabel}</Badge>
+              <p>{wafEffectivenessDetail}</p>
+            </div>
+            <div className="effectiveness-scale" role="img" aria-label={`WAF effectiveness: ${wafEffectivenessLabel}`}>
+              {effectivenessSteps.map((label, index) => (
+                <span key={label} className="effectiveness-step" aria-current={index === wafEffectivenessStep ? 'true' : undefined}>{label}</span>
+              ))}
+            </div>
+          </section>
+          <EvidenceGuide compact />
+        </CardContent>
+      </Card>
+
       <Card className="target-verification-card">
         <CardHeader>
           <div>
             <CardTitle>Verification ladder</CardTitle>
             <CardDescription>Recorded ownership evidence for this exact target. Steps are not inferred from target-group membership or a missing transition.</CardDescription>
           </div>
-          <VerifyChip state={verificationState} provenance={provenance} strong />
+          <VerifyChip state={verificationState} provenance={provenance} strong label={plainVerificationLabel(verificationState)} />
         </CardHeader>
         <CardContent>
           <ol className="verify-ladder" aria-label="Target ownership verification ladder">
@@ -566,7 +806,8 @@ export function TargetDetailView({
             </div>
           </div>
           {verificationHistory.length > 0 ? (
-            <div className="target-history">
+            <details className="target-history technical-disclosure">
+              <summary>Show recorded verification transitions</summary>
               <div className="target-history-head">
                 <h3>Recorded verification transitions</h3>
                 <span className="muted small">Exact duplicate API rows removed · oldest to newest</span>
@@ -577,7 +818,7 @@ export function TargetDetailView({
                 getRowId={(item, index) => `${getString(item, ['state'], 'unknown')}-${getString(item, ['transitioned_at'], String(index))}-${index}`}
                 empty={<span className="muted">No verification transitions reported.</span>}
               />
-            </div>
+            </details>
           ) : null}
         </CardContent>
       </Card>
@@ -585,7 +826,7 @@ export function TargetDetailView({
       <div className="metric-grid four">
         <MetricCard label="Kind" value={kind} sub="Declared target type" icon={Target} tone="info" />
         <MetricCard label="Expected behavior" value={formatTargetLabel(getString(target, ['expected_behavior', 'expected'], '—'))} sub="Declared expectation" icon={Activity} tone="muted" />
-        <MetricCard label="Verification" value={formatTargetLabel(verificationState)} sub="Ownership signal from target API" icon={ShieldCheck} tone={verificationTone(verificationState)} />
+        <MetricCard label="Verification" value={plainVerificationLabel(verificationState)} sub="Ownership signal from target API" icon={ShieldCheck} tone={verificationTone(verificationState)} />
         <MetricCard label="Eligibility" value={eligibilityDisplay} sub={targetEligible ? 'Explicitly eligible for checks' : 'Validation locked (fail closed)'} icon={FileCheck2} tone={targetEligible ? 'success' : 'warn'} />
       </div>
 
@@ -605,7 +846,7 @@ export function TargetDetailView({
                 <tr><td className="muted">Kind</td><td><div className="kv"><span>{formatTargetLabel(kind)}</span></div></td></tr>
                 <tr><td className="muted">Declaration source</td><td><div className="kv"><span>{declarationProvenance}</span></div></td></tr>
                 <tr><td className="muted">Ownership method</td><td><div className="kv"><span className="mono">{ownershipMethod}</span></div></td></tr>
-                <tr><td className="muted">Ownership status</td><td><div className="kv"><VerifyChip state={verificationState} provenance={provenance} /></div></td></tr>
+                <tr><td className="muted">Ownership status</td><td><div className="kv"><VerifyChip state={verificationState} provenance={provenance} label={plainVerificationLabel(verificationState)} /></div></td></tr>
                 <tr><td className="muted">Target group</td><td><div className="kv"><DetailEntityLink route="target-group-detail" id={getString(target, ['target_group_id'], '')} /></div></td></tr>
                 <tr><td className="muted">Environment</td><td><div className="kv"><span className="mono">{getString(target, ['environment_id'], 'Not reported')}</span></div></td></tr>
                 <tr><td className="muted">Expected behavior</td><td><div className="kv"><span className="mono">{expectedBehavior}</span></div></td></tr>
@@ -627,15 +868,15 @@ export function TargetDetailView({
           <CardHeader><CardTitle>WAF posture</CardTitle><CardDescription>Linked per-target WAF asset returned by the target-detail API.</CardDescription></CardHeader>
           <CardContent>
             <div className="kpi-row">
-              <div className="kpi-cell"><div className="kpi-label">Posture</div><div className="kpi-value">{getString(wafPosture, ['posture', 'status'], '—')}</div></div>
-              <div className="kpi-cell"><div className="kpi-label">Drift</div><div className="kpi-value">{getString(wafPosture, ['drift_reason'], 'none')}</div></div>
-              <div className="kpi-cell"><div className="kpi-label">Validation</div><div className="kpi-value">{getString(wafPosture?.validation as DataItem | undefined, ['verdict'], '—')}</div></div>
-              <div className="kpi-cell"><div className="kpi-label">Connector</div><div className="kpi-value">{getString(wafPosture?.connector as DataItem | undefined, ['state'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Posture</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(wafPostureState)}</span><code className="technical-key">{wafPostureState || 'not_reported'}</code></div></div>
+              <div className="kpi-cell"><div className="kpi-label">Drift</div><div className="kpi-value state-with-key"><span>{wafPosture?.drift_reason ? 'Configuration changed' : 'No drift reported'}</span><code className="technical-key">{getString(wafPosture, ['drift_reason'], 'none')}</code></div></div>
+              <div className="kpi-cell"><div className="kpi-label">Validation result</div><div className="kpi-value state-with-key"><span>{wafValidationVerdict ? plainVerdictLabel(wafValidationVerdict) : 'Not reported'}</span>{wafValidationVerdict ? <code className="technical-key">{wafValidationVerdict}</code> : null}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Data connection</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(getString(wafPosture?.connector as DataItem | undefined, ['state'], 'unknown'))}</span><code className="technical-key">{getString(wafPosture?.connector as DataItem | undefined, ['state'], 'not_reported')}</code></div></div>
               <div className="kpi-cell"><div className="kpi-label">Fingerprint</div><div className="kpi-value mono" title={getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}>{getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}</div></div>
               <div className="kpi-cell"><div className="kpi-label">Marker rules</div><div className="kpi-value">{String(wafPosture?.marker_rules ?? '—')}</div></div>
               <div className="kpi-cell"><div className="kpi-label">Origin bypass</div><div className="kpi-value">{getString(wafPosture?.origin_bypass as DataItem | undefined, ['state'], '—')}</div></div>
             </div>
-            <p className="muted">{getString(wafPosture, ['notes'], getString(wafPosture, ['summary'], 'No WAF notes returned.'))}</p>
+            <p className="muted">{getString(wafPosture, ['plain_language_summary', 'protection_summary', 'notes', 'summary'], 'No additional WAF summary was returned.')}</p>
             <pre className="codeblock" tabIndex={0} role="region" aria-label="WAF posture technical details">{JSON.stringify({
               asset_id: getString(wafPosture, ['asset_id'], ''),
               vendor: getString(wafPosture, ['vendor'], ''),
@@ -661,7 +902,7 @@ export function TargetDetailView({
               tone={edgeStatusTone(edgeStatus)}
               title={`Edge detection status ${edgeStatus}${edgeReason ? ` · reason ${edgeReason}` : ''}`}
             >
-              {formatTargetLabel(edgeStatus)}
+              {plainProtectionLabel(edgeStatus)}
             </Badge>
           ) : showEdgeRequest ? (
             <Badge tone={edgeStatusTone(edgeRequestStatus)} title={`Latest detection request ${edgeRequestId}`}>{`Latest request: ${formatTargetLabel(edgeRequestStatus)}`}</Badge>
@@ -682,7 +923,7 @@ export function TargetDetailView({
           {edgeDetection ? (
             <>
               <div className="kpi-row">
-                <div className="kpi-cell"><div className="kpi-label">Overall</div><div className="kpi-value">{formatTargetLabel(edgeStatus)}</div></div>
+                <div className="kpi-cell"><div className="kpi-label">Overall</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(edgeStatus)}</span><code className="technical-key">{edgeStatus}</code></div></div>
                 <div className="kpi-cell"><div className="kpi-label">Confidence</div><div className="kpi-value">{edgeConfidence || 'Not reported'}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Corpus version</div><div className="kpi-value mono">{getString(edgeDetection, ['corpus_version'], 'Not reported')}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Observed</div><div className="kpi-value">{edgeObservedAt ? formatDate(edgeObservedAt) : 'Not reported'}</div></div>

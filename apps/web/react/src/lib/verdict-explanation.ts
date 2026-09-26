@@ -1,4 +1,6 @@
 import type { DataItem } from './types';
+// @ts-ignore Plain ESM keeps terminology directly testable with node:test.
+import { plainVerdictLabel } from './plain-language.mjs';
 
 export type VerdictExplanationField = { label: string; value: string };
 
@@ -253,7 +255,8 @@ export function buildVerdictExplanationFields(
     detail,
     events,
   });
-  const conclusion = `${getString(verdict, ['verdict'], '—')} · confidence ${getString(verdict, ['confidence'], '—')}. ${getString(verdict, ['explanation'], '')}`.trim();
+  const technicalVerdict = getString(verdict, ['verdict'], '—');
+  const conclusion = `${plainVerdictLabel(technicalVerdict)} (technical verdict: ${technicalVerdict}) · confidence ${getString(verdict, ['confidence'], '—')}. ${getString(verdict, ['explanation'], '')}`.trim();
 
   return [
     { label: 'External probe evidence', value: summarizeExternalProbeEvidence(probeEvents) },

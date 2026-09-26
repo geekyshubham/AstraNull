@@ -83,6 +83,7 @@ export function maxProbeRequestsForKind(kind) {
 }
 
 const ALLOWED_OPS_READINESS_SCENARIOS = new Set(['runbook_contacts', 'kill_switch_readiness']);
+const ALLOWED_HTTP2_SETTINGS_ASSERTIONS = new Set(['hpack_limits']);
 
 const ALLOWED_PROBE_KINDS = new Set(ALLOWED_PROBE_PROFILE_KINDS);
 export const MAX_PROBE_PROFILE_TIMEOUT_MS = 5000;
@@ -303,6 +304,7 @@ export function buildProbeProfile({
   oversize_header_bytes,
   marker_class,
   evasion_transform,
+  settings_assertion,
   ...capabilityFields
 } = {}) {
   if (!ALLOWED_PROBE_KINDS.has(kind)) {
@@ -382,6 +384,13 @@ export function buildProbeProfile({
   ) {
     profile.evasion_transform = evasion_transform;
   }
+  if (
+    kind === 'http2_frame_probe'
+    && typeof settings_assertion === 'string'
+    && ALLOWED_HTTP2_SETTINGS_ASSERTIONS.has(settings_assertion)
+  ) {
+    profile.settings_assertion = settings_assertion;
+  }
   applyWafSafeProbeMetadata(profile, {
     scenario_family,
     marker_type,
@@ -430,6 +439,16 @@ const DEFAULT_SOC_STOP_CONDITIONS = Object.freeze([
   'max_approved_duration',
 ]);
 
+const DECLARATION_ONLY_EVIDENCE_NOTICE =
+  'Declaration/readiness only: no live network probe is executed; customer-provided control evidence or a SOC-governed test is required for any readiness conclusion.';
+
+function declarationOnlyCopy(value) {
+  const copy = String(value ?? '').trim();
+  return copy.includes(DECLARATION_ONLY_EVIDENCE_NOTICE)
+    ? copy
+    : `${copy} ${DECLARATION_ONLY_EVIDENCE_NOTICE}`.trim();
+}
+
 function safeCheck(def) {
   const probe_profile = buildProbeProfile(
     def.probe_profile ?? { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000 },
@@ -441,22 +460,22 @@ function safeCheck(def) {
     max_concurrent_runs_per_target_group: 1,
     ...(def.safety_constraints ?? {}),
   };
+  const explanation_template = def.explanation_template
+    ?? 'Simulated probe metadata correlated with agent observation.';
+  const verdict_logic = def.verdict_logic
+    ?? 'Verdict when probe external_result and agent observation align with the check default_expected_behavior.';
   return {
     safety_class: 'safe',
     risk_class: 'safe',
     prerequisites: def.prerequisites ?? [],
     remediation_template: def.remediation_template ?? 'Review edge protection and agent placement for this vector.',
-    explanation_template: def.explanation_template ?? 'Simulated probe metadata correlated with agent observation.',
     supported_targets: def.supported_targets ?? ['fqdn'],
     required_customer_setup: def.required_customer_setup ?? [],
     evidence_required: def.evidence_required ?? ['probe_result', 'agent_observation'],
-    stop_conditions,
-    verdict_logic:
-      def.verdict_logic ??
-      'Verdict when probe external_result and agent observation align with the check default_expected_behavior.',
-    safety_constraints,
-    probe_profile,
     ...def,
+    description: def.description,
+    explanation_template,
+    verdict_logic,
     stop_conditions,
     safety_constraints,
     probe_profile,
@@ -2566,14 +2585,15 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'Slow Header Client Readiness (Safe)',
     vector_family: 'l7',
-    description: 'Header-drain timeout and concurrent-slow-client cap readiness posture metadata (no partial-header holds).',
+    description: 'One bounded connection sends an incomplete harmless HTTP header and observes whether the server closes it within the signed five-second window. It never opens concurrent holds and does not prove flood-scale capacity.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['header_timeout_declaration', 'slow_client_cap_declaration'],
-    evidence_required: ['probe_result', 'agent_observation'],
-    verdict_logic: 'Declared header-receive timeouts and slow-client caps must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    required_customer_setup: ['header_timeout_declaration', 'header_timeout_at_or_below_probe_window'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'Server closure within the signed window establishes the sampled header-receive timeout; a connection still open at the bound identifies a timeout gap for this sample only.',
+    explanation_template: 'One bounded partial-header connection measured edge close behavior; no concurrent slow-client load was generated.',
+    probe_profile: { kind: 'slow_header_probe', max_requests: 1, timeout_ms: 5000 },
+    safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -2612,16 +2632,17 @@ export const CHECK_CATALOG = [
   safeCheck({
     check_id: 'l7.low_and_slow.readiness',
     version: '1.0.0',
-    name: 'Low-and-Slow Client Policy (Safe)',
+    name: 'Low-and-Slow Header Timeout Sample (Safe)',
     vector_family: 'l7',
-    description: 'Combined low-rate/slow-client worker-queue protection posture metadata.',
+    description: 'One bounded incomplete-header connection measures only the slow-header timeout component of low-and-slow readiness. Worker-queue depth, low-rate request detection, and flood resilience still require customer evidence or a SOC-governed test.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['worker_queue_policy_declaration'],
-    evidence_required: ['probe_result', 'agent_observation'],
-    verdict_logic: 'Declared worker-queue depth caps and stall alerting must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    required_customer_setup: ['header_timeout_declaration', 'header_timeout_at_or_below_probe_window'],
+    evidence_required: ['probe_result'],
+    verdict_logic: 'Server closure within the signed five-second window establishes only the sampled slow-header timeout; it does not validate queue-depth or aggregate low-rate controls.',
+    explanation_template: 'One bounded partial-header connection measured a single low-and-slow control component; no queue pressure or sustained traffic was generated.',
+    probe_profile: { kind: 'slow_header_probe', max_requests: 1, timeout_ms: 5000 },
+    safety_constraints: { max_events: 3, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -3097,16 +3118,17 @@ export const CHECK_CATALOG = [
   safeCheck({
     check_id: 'l7.hpack_bomb.readiness',
     version: '1.0.0',
-    name: 'HPACK Decompression Limit Readiness (Safe)',
+    name: 'HPACK Advertised Limits Readiness (Safe)',
     vector_family: 'l7',
-    description: 'Declared HPACK table-size and decompression output caps readiness metadata.',
+    description: 'One bounded HTTP/2 connection reads negotiated HEADER_TABLE_SIZE and MAX_HEADER_LIST_SIZE settings. It sends no compressed-header bomb, stream pressure, ping, or reset frame.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['url', 'fqdn'],
-    required_customer_setup: ['hpack_limit_declaration'],
+    required_customer_setup: ['http2_enabled_endpoint', 'hpack_limit_declaration'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Declared HPACK decompression budgets must be present; absence raises a readiness finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    verdict_logic: 'Finite negotiated HPACK table and header-list bounds establish advertised limit posture only; absent or effectively unlimited bounds identify a configuration gap, not measured decompression resilience.',
+    explanation_template: 'A single HTTP/2 SETTINGS exchange recorded negotiated HPACK bounds without sending crafted header blocks.',
+    probe_profile: { kind: 'http2_frame_probe', max_requests: 1, timeout_ms: 5000, settings_assertion: 'hpack_limits' },
+    safety_constraints: { max_events: 1, max_duration_seconds: 90, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
     probe_simulation_profile: 'external_blocked',
   }),
@@ -3197,32 +3219,34 @@ export const CHECK_CATALOG = [
     version: '1.0.0',
     name: 'CDN Bypass Coverage Readiness (Safe)',
     vector_family: 'origin',
-    description: 'Declared CDN/shield coverage posture for all customer hostnames (metadata only; complements direct-origin probes).',
+    description: 'A bounded scan compares apex A/AAAA and edge HEAD evidence with a fixed 12-label hostname list. It detects observed DNS/edge divergence only; it does not claim complete hostname inventory coverage.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['fqdn', 'url'],
-    required_customer_setup: ['declared_cdn_hostnames'],
+    required_customer_setup: ['declared_apex_domain', 'declared_cdn_hostnames'],
     evidence_required: ['probe_result', 'agent_observation'],
-    verdict_logic: 'Every declared hostname must route through the declared shield; uncovered hostnames raise a readiness finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    verdict_logic: 'Observed fixed-label address divergence or DNS paths that do not match the edge raise a bounded CDN-bypass finding; no signal means only that this capped scan found no leak.',
+    explanation_template: 'Bounded apex/IPv6/fixed-prefix origin-leak evidence correlated with optional origin observation; coverage is not an exhaustive hostname inventory.',
+    probe_profile: { kind: 'origin_leak_scan', max_requests: 15, timeout_ms: 5000 },
+    safety_constraints: { max_events: 15, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
-    probe_simulation_profile: 'external_blocked',
+    probe_simulation_profile: 'external_connected',
   }),
   safeCheck({
     check_id: 'origin.dns_hostname_bypass.readiness',
     version: '1.0.0',
-    name: 'DNS Hostname Coverage Readiness (Safe)',
+    name: 'DNS Hostname Bypass Sample (Safe)',
     vector_family: 'origin',
-    description: 'Declared DNS alias/hostname inventory posture so shield coverage cannot be bypassed via unlisted names.',
+    description: 'A bounded fixed-prefix DNS scan compares common hostnames with the declared apex edge addresses. It can reveal sampled divergent names but cannot establish that an undeclared hostname does not exist.',
     required_agent_modes: ['heartbeat'],
     supported_targets: ['fqdn'],
-    required_customer_setup: ['declared_hostname_inventory'],
+    required_customer_setup: ['declared_apex_domain', 'declared_hostname_inventory'],
     evidence_required: ['probe_result'],
-    verdict_logic: 'Aliases pointing to unprotected origins raise a readiness finding.',
-    probe_profile: { kind: 'metadata_marker', max_requests: 1, timeout_ms: 5000, marker: 'astranull-safe-marker' },
-    safety_constraints: { max_events: 3, max_duration_seconds: 60, max_concurrent_runs_per_target_group: 1 },
+    verdict_logic: 'A sampled hostname resolving away from the apex edge raises a DNS-bypass finding; no divergence means only that the fixed 12-label scan found no signal.',
+    explanation_template: 'Bounded fixed-prefix DNS evidence reports observed divergence without claiming exhaustive alias discovery.',
+    probe_profile: { kind: 'origin_leak_scan', max_requests: 15, timeout_ms: 5000 },
+    safety_constraints: { max_events: 15, max_duration_seconds: 120, max_concurrent_runs_per_target_group: 1 },
     default_expected_behavior: 'must_block_before_origin',
-    probe_simulation_profile: 'external_blocked',
+    probe_simulation_profile: 'external_connected',
   }),
 
   // ===== DET-022: attack delivery-pattern readiness =====
@@ -3447,6 +3471,13 @@ export const CHECK_CATALOG = [
   {"check_id":"waf.http_routing_trust.posture","version":"1.0.0","name":"WAF HTTP Routing & Proxy-Trust Posture","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Posture-only record for WAF HTTP Routing & Proxy-Trust Posture. Forwarded-header/HTTPoxy/authority trust is an origin-declared config fact not observable by a stateless outside-in marker.","required_agent_modes":["heartbeat"],"supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","declared_proxy_trust_boundary"],"evidence_required":["agent_observation"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":1,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Declare and verify WAF HTTP Routing & Proxy-Trust Posture controls; no safe outside-in probe can establish this fact.","explanation_template":"Declared-configuration posture for WAF HTTP Routing & Proxy-Trust Posture.","probe_profile":{"kind":"metadata_marker","max_requests":1,"timeout_ms":5000,"marker":"astranull-safe-marker"},"probe_simulation_profile":"external_blocked"},
   {"check_id":"waf.jsonp_css_policy.posture","version":"1.0.0","name":"WAF JSONP & CSS-Injection Policy Posture","vector_family":"waf","safety_class":"safe","risk_class":"safe","description":"Posture-only record for WAF JSONP & CSS-Injection Policy Posture. JSONP-hijack and CSS-injection exposure is governed by declared CSP and content-type headers, not by a reliable outside-in signature.","required_agent_modes":["heartbeat"],"supported_targets":["url","fqdn"],"required_customer_setup":["declared_waf_asset","declared_content_security_policy"],"evidence_required":["agent_observation"],"stop_conditions":["max_events_reached","max_duration_elapsed","customer_cancel","tenant_kill_switch"],"safety_constraints":{"max_events":1,"max_duration_seconds":60,"max_concurrent_runs_per_target_group":1},"verdict_logic":"Posture-only: verdict reflects the declared configuration fact; no outside-in probe signal exists.","default_expected_behavior":"must_block_before_origin","prerequisites":[],"remediation_template":"Declare and verify WAF JSONP & CSS-Injection Policy Posture controls; no safe outside-in probe can establish this fact.","explanation_template":"Declared-configuration posture for WAF JSONP & CSS-Injection Policy Posture.","probe_profile":{"kind":"metadata_marker","max_requests":1,"timeout_ms":5000,"marker":"astranull-safe-marker"},"probe_simulation_profile":"external_blocked"},
 ];
+
+for (const check of CHECK_CATALOG) {
+  if (check.probe_profile?.kind !== 'metadata_marker') continue;
+  check.description = declarationOnlyCopy(check.description);
+  check.verdict_logic = declarationOnlyCopy(check.verdict_logic);
+  check.explanation_template = declarationOnlyCopy(check.explanation_template);
+}
 
 // DET-016: attach resource-exhaustion metadata (exhausted_resource, attack_vector_ids,
 // delivery_patterns, waf_vulnerability_ids, non_ddos_threat_ids) to every catalog entry,

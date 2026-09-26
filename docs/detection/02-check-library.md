@@ -26,11 +26,12 @@ Customer-runnable checks declare a **probe_profile** object alongside `probe_sim
 
 | Field | Rule |
 |---|---|
-| `kind` | One of the catalog allowlist in `ALLOWED_PROBE_PROFILE_KINDS` (`http_head`, `tcp_connect`, `dns_resolve`, `metadata_marker`, plus bounded capability probes such as `host_sni_bypass`, `origin_leak_scan`, `port_scan_bounded`, `rate_limit_sequence`, DNS/TLS/protocol posture probes, and WAF marker/fingerprint probes). |
+| `kind` | One of the catalog allowlist in `ALLOWED_PROBE_PROFILE_KINDS` (`http_head`, `tcp_connect`, `dns_resolve`, `metadata_marker`, plus bounded capability probes such as `host_sni_bypass`, `origin_leak_scan`, `port_scan_bounded`, `rate_limit_sequence`, DNS/TLS/protocol posture probes, and WAF marker/fingerprint probes). `metadata_marker` is E1 declaration/readiness only: it performs zero network I/O, yields no live-test verdict, and requires customer-provided control evidence or a SOC-governed test for a readiness conclusion. |
 | `max_requests` | `1` for most checks; up to `5` for low-rate sequences, `8-10` for bounded API/WAF scans, and `15` only for the fixed origin-leak or risky-port catalogs. |
 | `timeout_ms` | Bounded; must not exceed `5000` ms in the safe catalog. |
 | `marker` | Optional harmless label (for example `astranull-safe-marker`). |
 | `method` | `HEAD` only when `kind` is `http_head`. |
+| `settings_assertion` | Optional allowlisted semantic for `http2_frame_probe`; currently only `hpack_limits`, which performs one SETTINGS exchange and grades negotiated header-table/list bounds without ping, reset, or crafted compressed headers. |
 
 Orchestration copies the catalog profile into signed probe jobs. `canonicalJobSigningPayload()` includes `probe_profile`, so workers reject jobs if profile metadata is tampered after lease. API callers may override only benign keys such as `marker`; they cannot raise `max_requests` or `timeout_ms` above check values.
 

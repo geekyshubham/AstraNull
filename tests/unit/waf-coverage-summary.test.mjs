@@ -6,6 +6,17 @@ import {
 } from '../../src/lib/wafCoverageSummary.mjs';
 
 describe('WAF dashboard coverage summary', () => {
+  it('returns a finite zero percentage when there are no assets', () => {
+    const summary = computeWafCoverageSummaryRow({
+      assets: [],
+      currentSnapshotsByAsset: new Map(),
+      refreshedAt: '2026-08-31T00:00:00.000Z',
+    });
+    assert.equal(summary.assets_total, 0);
+    assert.equal(summary.coverage_pct, 0);
+    assert.equal(Number.isFinite(summary.coverage_pct), true);
+  });
+
   it('keeps edge-protected assets separate from full protected coverage', () => {
     const assets = [
       { id: 'asset_protected' },

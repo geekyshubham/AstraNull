@@ -104,7 +104,14 @@ function projectWorkerResult(run, events) {
       ...(errorClass ? { error_class: errorClass } : {}),
     };
   }
-  if (externalResult !== 'blocked' && externalResult !== 'connected') {
+  if (!['blocked', 'connected', 'not_run'].includes(externalResult)) {
+    return { status: 'inconclusive', reason: 'worker_result_incomplete', detection: null };
+  }
+  if (
+    externalResult === 'not_run'
+    && (!metadata.edge_signature || typeof metadata.edge_signature !== 'object'
+      || Array.isArray(metadata.edge_signature))
+  ) {
     return { status: 'inconclusive', reason: 'worker_result_incomplete', detection: null };
   }
 
@@ -117,6 +124,11 @@ function projectWorkerResult(run, events) {
       waf: projection.waf,
       cdn: projection.cdn,
       cloud: projection.cloud,
+      layers: projection.layers,
+      effectiveness: projection.effectiveness,
+      protection: projection.protection,
+      network_firewall: projection.network_firewall,
+      evidence_consistency: projection.evidence_consistency,
       ...(projection.waf_providers.length ? { waf_providers: projection.waf_providers } : {}),
       ...(projection.cdn_providers.length ? { cdn_providers: projection.cdn_providers } : {}),
       ...(projection.cloud_providers.length ? { cloud_providers: projection.cloud_providers } : {}),

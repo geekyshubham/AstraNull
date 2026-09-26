@@ -7,7 +7,19 @@ Keep the existing source fixes: split the readiness delta into two rows, `#proof
 Use shared `DataTable`; no environment-specific table skin. Numeric/status/action columns may add reusable alignment metadata only.
 
 ## Target groups and target detail
-Remove page-level `stack-tight`; use evidence summary → target inventory → verification → schedules/rules → governance. DNS challenges bind to an explicit target. Eligibility fails closed. LOA copy separates safe checks from SOC-gated execution.
+Remove page-level `stack-tight`; use plain-language protection summary → target inventory → verification → schedules/rules → governance. On target detail, show detected WAF, CDN, cloud-hosting, and origin-access layers before the verification ledger. Detection is never presented as effectiveness. API-provided plain-language summaries win; cautious evidence-derived copy is the fallback. DNS challenges bind to an explicit target. Eligibility fails closed. LOA copy separates safe checks from SOC-gated execution.
+
+## Dashboard executive brief
+The Overview tab answers four questions before technical metrics: readiness for the scenarios actually tested, reported protection layers, categorical WAF effectiveness, and up to three evidence-backed fixes. Never turn a score into an unconditional claim of DDoS readiness. Keep the existing KPI row, posture chart, tables, and weighted factors as progressive engineering detail. Technical verdict keys and evidence tiers remain available in an accessible glossary rather than leading the page.
+
+## Plain-language evidence vocabulary
+- `E1`: Declared only. Not tested live; customer evidence is still needed.
+- `E2`: Connection observed. Live network behavior only.
+- `E3`: Behavior observed. Live application or protection behavior.
+- `E4`: SOC-governed. High-scale validation remains staff controlled.
+- `E5`: Monitoring only. No active check.
+
+Lead with outcome language such as “Protection stopped the test traffic,” “Attack traffic reached your server,” and “Not enough evidence.” Preserve raw values in provenance titles or secondary technical keys so engineers and auditors do not lose precision.
 
 ## Integrations and Targets
 Provider directory is an intake surface, not cloud discovery. Show supported/manual mode honestly. Single-domain declaration uses the same normalization/provenance contract as imports. Targets is table-first with provider/source, concrete verification provenance, eligibility reason, group, created time, and safe actions.

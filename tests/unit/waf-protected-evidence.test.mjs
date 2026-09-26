@@ -109,6 +109,71 @@ describe('waf protected evidence corroboration', () => {
     assert.equal(gate?.error, 'waf_validation_evidence_required');
   });
 
+  it('does not treat arbitrary body hashes or declaration-like vendor strings as WAF proof', () => {
+    const scenario = {
+      passed: true,
+      evidence_summary_json: { nonce_hash: 'nonce_weak', request_id: 'evt_weak' },
+    };
+    const corroboration = buildWafEvidenceCorroboration({
+      probes: [{
+        id: 'evt_weak',
+        nonce_hash: 'nonce_weak',
+        metadata: {
+          external_result: 'blocked',
+          block_page_fingerprint_hash: 'hash-of-any-response-body',
+          block_page_signature_id: 'block_sig_generic_waf_v1',
+          waf_product_hint: 'cloudflare/managed',
+          detected_vendor: 'cloudflare',
+        },
+      }],
+    });
+    assert.equal(corroborateEdgeProtectedScenarioEvidence(scenario, corroboration), false);
+  });
+
+  it('rejects a detected WAF whose marker evidence says present but not effective', () => {
+    const scenario = {
+      passed: true,
+      evidence_summary_json: { nonce_hash: 'nonce_monitor', request_id: 'evt_monitor' },
+    };
+    const corroboration = buildWafEvidenceCorroboration({
+      probes: [{
+        id: 'evt_monitor',
+        nonce_hash: 'nonce_monitor',
+        metadata: {
+          external_result: 'blocked',
+          waf_fingerprint_detected: true,
+          waf_effectiveness: { status: 'present_but_not_effective' },
+        },
+      }],
+    });
+    assert.equal(corroborateEdgeProtectedScenarioEvidence(scenario, corroboration), false);
+
+    corroboration.probesByNonce.get('nonce_monitor')[0].metadata.waf_effectiveness.status = 'inconclusive';
+    assert.equal(corroborateEdgeProtectedScenarioEvidence(scenario, corroboration), false);
+  });
+
+  it('requires the qualifying probe to be the exact request cited by the scenario', () => {
+    const scenario = {
+      passed: true,
+      evidence_summary_json: { nonce_hash: 'nonce_shared', request_id: 'evt_cited' },
+    };
+    const corroboration = buildWafEvidenceCorroboration({
+      probes: [
+        {
+          id: 'evt_cited',
+          nonce_hash: 'nonce_shared',
+          metadata: { external_result: 'connected' },
+        },
+        {
+          id: 'evt_other',
+          nonce_hash: 'nonce_shared',
+          metadata: { external_result: 'blocked', waf_fingerprint_detected: true },
+        },
+      ],
+    });
+    assert.equal(corroborateEdgeProtectedScenarioEvidence(scenario, corroboration), false);
+  });
+
   it('buildCorroborationFromEvents scopes to bound test run events', () => {
     const corroboration = buildCorroborationFromEvents(
       [

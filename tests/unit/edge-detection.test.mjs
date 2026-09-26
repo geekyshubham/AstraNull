@@ -247,6 +247,69 @@ describe('edge-detection service delegation', () => {
     assert.equal(exact.detection.waf.status, 'detected');
   });
 
+  it('exposes effectiveness without promoting monitor-only or timeout results', async () => {
+    const run = edgeRun({ status: 'completed' });
+    const service = {
+      getTestRun: async () => run,
+      getRunEvents: async () => [trustedEdgeEvent(run.id, {
+        metadata: {
+          external_result: 'connected',
+          posture_status: 'protected',
+          agent_corroborated: true,
+          marker_probes: [
+            { family: 'sqli_marker', variant: 'plain', blocked: false, allowed: true },
+            { family: 'xss_marker', variant: 'plain', blocked: false, allowed: true },
+            { family: 'path_traversal_marker', variant: 'plain', blocked: false, allowed: true },
+          ],
+          edge_signature: { waf_present: true, cdn_detected: false },
+        },
+      })],
+    };
+    const monitorOnly = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      { runtimeConfig: RUNTIME_CONFIG, testRuns: service },
+    );
+    assert.equal(monitorOnly.status, 'detected');
+    assert.equal(monitorOnly.detection.effectiveness.status, 'present_but_not_effective');
+    assert.equal(monitorOnly.detection.protection.status, 'underprotected');
+
+    service.getRunEvents = async () => [trustedEdgeEvent(run.id, {
+      metadata: {
+        external_result: 'not_run',
+        posture_status: 'inconclusive',
+        probe_validation_passed: false,
+        marker_probes: [],
+        edge_signature: { waf_present: true, cdn_detected: false },
+      },
+    })];
+    const presenceOnly = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      { runtimeConfig: RUNTIME_CONFIG, testRuns: service },
+    );
+    assert.equal(presenceOnly.status, 'detected');
+    assert.equal(presenceOnly.detection.waf.status, 'detected');
+    assert.equal(presenceOnly.detection.effectiveness.status, 'inconclusive');
+    assert.equal(presenceOnly.detection.protection.status, 'inconclusive');
+
+    service.getRunEvents = async () => [trustedEdgeEvent(run.id, {
+      metadata: {
+        external_result: 'timeout',
+        error_class: 'probe_timeout',
+        edge_signature: { waf_present: true, cdn_detected: false },
+      },
+    })];
+    const timeout = await getEdgeDetection(
+      { tenantId: 'ten_demo' },
+      run.id,
+      { runtimeConfig: RUNTIME_CONFIG, testRuns: service },
+    );
+    assert.equal(timeout.status, 'error');
+    assert.equal(timeout.reason, 'worker_result_error');
+    assert.equal(timeout.detection, null);
+  });
+
   it('rejects raw host/private-IP input before startTestRun can run', async () => {
     let starts = 0;
     const testRuns = { startTestRun: async () => { starts += 1; } };

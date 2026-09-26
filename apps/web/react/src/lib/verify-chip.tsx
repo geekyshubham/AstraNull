@@ -72,18 +72,21 @@ export function resolveTargetVerificationProvenance(target: DataItem | null, ver
 export function VerifyChip({
   state,
   provenance,
-  strong
+  strong,
+  label
 }: {
   state: string;
   provenance?: string;
   strong?: boolean;
+  /** Optional plain-language label; the raw API state remains in the provenance title. */
+  label?: string;
 }) {
   const chip = resolveVerifyChipState(state, provenance);
   const className = strong ? `${chip.className} verify-chip--strong` : chip.className;
   return (
     <span className={className} title={chip.title}>
       <span className="vc-dot" aria-hidden="true" />
-      {chip.label}
+      {label?.trim() || chip.label}
     </span>
   );
 }

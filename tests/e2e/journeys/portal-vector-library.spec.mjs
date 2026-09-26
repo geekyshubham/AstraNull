@@ -120,8 +120,8 @@ test.describe('721-vector library workflow', () => {
     await gotoPortalRoute(page, 'checks', sourceBaseUrl);
     const search = page.getByPlaceholder('ID, name, protocol, exposure, control…');
 
-    await search.fill('APP-003');
-    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'APP-003' }).getByRole('button', { name: 'Review' }).click();
+    await search.fill('NET-016');
+    await page.locator('.vector-library-table tbody tr').filter({ hasText: 'NET-016' }).getByRole('button', { name: 'Review' }).click();
     let detail = page.locator('dialog.form-modal[open]');
     await expect(detail).toContainText('SOC-gated only');
     await expect(detail).toContainText('supplemental declaration or transport evidence is not an exposure result');
