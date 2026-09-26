@@ -108,6 +108,56 @@ function validateMatcherNode(node, signatureCount, context) {
   throw new Error(`invalid generated ${context} matcher op ${node.op}`);
 }
 
+/**
+ * AstraNull-curated CDN / edge-platform response headers. Not part of the generated
+ * wafw00f/cdncheck corpus: wafw00f types every header hit as a WAF, and cdncheck only types
+ * addresses/CNAMEs, so an edge platform identified purely by its response headers (Vercel,
+ * Netlify, Azure Front Door, a CloudFront distribution on a non-range address, ...) had no CDN
+ * layer at all. Only vendor-unique header names or exact vendor Server tokens qualify, so an
+ * origin cannot match by accident. Presence of a CDN layer says nothing about WAF effectiveness.
+ */
+export const EDGE_PLATFORM_HEADER_SIGNATURES = Object.freeze([
+  { provider: 'cloudflare', header: 'cf-ray', pattern: /^[0-9a-f]{8,}(?:-[a-z]{3,4})?$/i },
+  { provider: 'cloudflare', header: 'server', pattern: /^cloudflare$/i },
+  { provider: 'cloudfront', header: 'x-amz-cf-id', pattern: /\S/ },
+  { provider: 'cloudfront', header: 'via', pattern: /\(CloudFront\)/i },
+  { provider: 'fastly', header: 'x-fastly-request-id', pattern: /\S/ },
+  { provider: 'fastly', header: 'fastly-debug-digest', pattern: /\S/ },
+  { provider: 'akamai', header: 'server', pattern: /^Akamai(?:GHost|NetStorage)$/i },
+  { provider: 'akamai', header: 'x-akamai-transformed', pattern: /\S/ },
+  { provider: 'akamai', header: 'akamai-grn', pattern: /\S/ },
+  { provider: 'azure_front_door', header: 'x-azure-ref', pattern: /\S/ },
+  { provider: 'google', header: 'via', pattern: /(?:^|,\s*)1\.1 google(?:$|,)/i },
+  { provider: 'vercel', header: 'x-vercel-id', pattern: /\S/ },
+  { provider: 'vercel', header: 'server', pattern: /^Vercel$/i },
+  { provider: 'netlify', header: 'x-nf-request-id', pattern: /\S/ },
+  { provider: 'netlify', header: 'server', pattern: /^Netlify$/i },
+  { provider: 'bunnycdn', header: 'server', pattern: /^BunnyCDN/i },
+  { provider: 'keycdn', header: 'server', pattern: /^keycdn-engine$/i },
+  { provider: 'cdn77', header: 'server', pattern: /^CDN77/i },
+  { provider: 'gcore', header: 'server', pattern: /^G-?Core ?Labs|^gcore$/i },
+  { provider: 'stackpath', header: 'x-hw', pattern: /\S/ },
+]);
+const EDGE_PLATFORM_HEADER_CONFIDENCE = 0.8;
+
+/**
+ * @param {Array<{ name: string, value: string }>} headerEntries
+ * @returns {Array<{ family: 'cdn', provider: string, header: string }>}
+ */
+export function classifyEdgeByResponseHeaders(headerEntries = []) {
+  const entries = Array.isArray(headerEntries) ? headerEntries : [];
+  const matches = new Map();
+  for (const signature of EDGE_PLATFORM_HEADER_SIGNATURES) {
+    if (matches.has(signature.provider)) continue;
+    const hit = entries.find((entry) => (
+      String(entry?.name ?? '').toLowerCase() === signature.header
+      && signature.pattern.test(String(entry?.value ?? ''))
+    ));
+    if (hit) matches.set(signature.provider, { family: 'cdn', provider: signature.provider, header: signature.header });
+  }
+  return [...matches.values()].sort((left, right) => left.provider.localeCompare(right.provider));
+}
+
 let compiledCorpus = null;
 
 function getCompiledCorpus() {
@@ -157,6 +207,8 @@ function getCompiledCorpus() {
   if (priority.length !== Object.keys(vendors).length) {
     throw new Error('generated wafw00f priority does not cover every vendor');
   }
+
+  for (const signature of EDGE_PLATFORM_HEADER_SIGNATURES) exactHeaderNames.add(signature.header);
 
   compiledCorpus = Object.freeze({
     vendors: Object.freeze(vendors),
@@ -806,10 +858,13 @@ export function classifyCdncheckVerdict({ resolvedIps = [], cnameChain = [] } = 
 // Combined classification
 // ---------------------------------------------------------------------------
 
-function providersForFamily(family, vendorMatches, addressMatches, cnameMatches) {
+function providersForFamily(family, vendorMatches, addressMatches, cnameMatches, headerMatches = []) {
   const providers = new Set();
   if (family === 'waf') {
     for (const match of vendorMatches) providers.add(match.vendor);
+  }
+  for (const match of headerMatches) {
+    if (match.family === family) providers.add(match.provider);
   }
   for (const match of addressMatches) {
     if (match.family === family) providers.add(match.provider);
@@ -861,10 +916,20 @@ export function buildEdgeLayers({
   vendorMatches = [],
   addressMatches = [],
   cnameMatches = [],
+  headerMatches = [],
   genericWafDetected = false,
   conflictingVendorSignals = false,
 } = {}) {
   const layerMap = new Map();
+  for (const match of headerMatches) {
+    addLayer(layerMap, {
+      family: match.family,
+      provider: match.provider,
+      source: 'response_header',
+      confidence: EDGE_PLATFORM_HEADER_CONFIDENCE,
+      matchedSignalCount: 1,
+    });
+  }
   for (const match of vendorMatches) {
     addLayer(layerMap, {
       family: 'waf',
@@ -980,7 +1045,11 @@ export function classifyEdgeFingerprint(input = {}) {
 
   // Provider lists are derived only from typed source evidence: wafw00f vendor matches,
   // cdncheck address families, and cdncheck's explicit CNAME type. Names never imply a family.
-  const cdnProviders = providersForFamily('cdn', vendorResult.matches, addressMatches, cnameMatches);
+  const responseEvidence = normalizeWafEvidence(input);
+  const headerMatches = classifyEdgeByResponseHeaders(
+    responseEvidence.normal?.headerEntries ?? responseEvidence.attack?.headerEntries ?? [],
+  );
+  const cdnProviders = providersForFamily('cdn', vendorResult.matches, addressMatches, cnameMatches, headerMatches);
   const wafProviders = providersForFamily('waf', vendorResult.matches, addressMatches, cnameMatches);
   const cloudProviders = providersForFamily('cloud', [], addressMatches, []);
   const best = vendorResult.best;
@@ -992,6 +1061,7 @@ export function classifyEdgeFingerprint(input = {}) {
     vendorMatches: vendorResult.matches,
     addressMatches,
     cnameMatches,
+    headerMatches,
     genericWafDetected,
     conflictingVendorSignals: vendorResult.conflicting_vendor_signals,
   });
@@ -1003,7 +1073,8 @@ export function classifyEdgeFingerprint(input = {}) {
     waf_present: wafProviders.length > 0 || genericWafDetected,
     waf_providers: wafProviders,
     waf_generic_detected: genericWafDetected,
-    cdn_detected: dnsObserved ? cdnProviders.length > 0 : null,
+    // Header evidence proves a CDN on its own; absence is only meaningful once DNS was observed.
+    cdn_detected: headerMatches.length > 0 ? true : dnsObserved ? cdnProviders.length > 0 : null,
     cdn_providers: cdnProviders,
     cloud_hosted: dnsObserved ? cloudProviders.length > 0 : null,
     cloud_providers: cloudProviders,
@@ -1019,6 +1090,7 @@ export function classifyEdgeFingerprint(input = {}) {
     attack_response_evaluated: vendorResult.attack_response_evaluated,
     address_matches: addressMatches,
     cname_matches: cnameMatches,
+    header_matches: headerMatches,
     wafw00f: {
       detected: Boolean(best) || genericWafDetected,
       firewall: best ? bestName.firewall : genericWafDetected ? 'Generic' : 'None',

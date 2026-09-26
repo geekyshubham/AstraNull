@@ -328,7 +328,8 @@ describe('combined edge fingerprint', () => {
     assert.equal(result.waf_present, true);
     assert.deepEqual(result.waf_providers, ['akamai', 'cloudflare']);
     assert.equal(result.cdn_detected, true);
-    assert.deepEqual(result.cdn_providers, ['cloudfront']);
+    // `server: cloudflare` is a proxied Cloudflare edge (curated header layer) as well as a WAF hit.
+    assert.deepEqual(result.cdn_providers, ['cloudflare', 'cloudfront']);
     assert.equal(result.best_vendor.vendor, 'cloudflare');
     assert.deepEqual(result.address_matches, [
       { family: 'cdn', provider: 'cloudfront' },
@@ -352,12 +353,13 @@ describe('combined edge fingerprint', () => {
     });
 
     assert.deepEqual(result.waf_providers, ['awswaf', 'cloudflare']);
-    assert.deepEqual(result.cdn_providers, ['cloudfront']);
+    assert.deepEqual(result.cdn_providers, ['cloudflare', 'cloudfront']);
     assert.equal(result.stacked_vendor_signals, true);
     assert.equal(result.conflicting_provider_signals, false);
     assert.deepEqual(
       result.layers.map((layer) => [layer.family, layer.provider]),
       [
+        ['cdn', 'cloudflare'],
         ['cdn', 'cloudfront'],
         ['waf', 'cloudflare'],
         ['waf', 'awswaf'],
@@ -454,5 +456,39 @@ describe('combined edge fingerprint', () => {
     assert.equal(result.cdn_detected, true);
     assert.deepEqual(result.cdn_providers, ['arvancloud']);
     assert.equal(result.best_vendor, null);
+  });
+});
+
+describe('curated CDN / edge-platform header layers', async () => {
+  const { classifyEdgeByResponseHeaders, classifyEdgeFingerprint: classify, extractFingerprintHeaderEntries } = await import('../../src/lib/edgeFingerprint.mjs');
+  const headers = (pairs) => Object.entries(pairs).map(([name, value]) => ({ name, value }));
+
+  it('identifies header-only edge platforms as CDN layers', () => {
+    assert.deepEqual(
+      classifyEdgeByResponseHeaders(headers({ server: 'Vercel', 'x-vercel-id': 'iad1::abc' })).map((m) => m.provider),
+      ['vercel'],
+    );
+    assert.deepEqual(
+      classifyEdgeByResponseHeaders(headers({ 'x-azure-ref': '0abc', via: '1.1 google' })).map((m) => m.provider),
+      ['azure_front_door', 'google'],
+    );
+    const result = classify({ normal: { headerEntries: headers({ server: 'Netlify', 'x-nf-request-id': '01H' }), statusCode: 200 } });
+    assert.equal(result.cdn_detected, true);
+    assert.deepEqual(result.cdn_providers, ['netlify']);
+    assert.equal(result.waf_present, false, 'a CDN header must never imply a WAF');
+    assert.ok(result.layers.some((layer) => layer.family === 'cdn' && layer.sources.includes('response_header')));
+  });
+
+  it('does not match generic origin servers or look-alike values', () => {
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ server: 'nginx', via: '1.1 varnish' })), []);
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ server: 'cloudflare-nginx-clone' })), []);
+    assert.deepEqual(classifyEdgeByResponseHeaders(headers({ 'cf-ray': 'not a ray id' })), []);
+  });
+
+  it('extracts curated header names from a real response for classification', () => {
+    const response = { headers: new Headers({ 'x-amz-cf-id': 'abc==', server: 'CloudFront', 'x-unrelated': '1' }) };
+    const entries = extractFingerprintHeaderEntries(response);
+    assert.ok(entries.some((entry) => entry.name === 'x-amz-cf-id'));
+    assert.deepEqual(classifyEdgeByResponseHeaders(entries).map((m) => m.provider), ['cloudfront']);
   });
 });

@@ -121,3 +121,15 @@ Version 2 ported the data but not how either tool decides. In production:
 | Follows redirects | Redirect expansion stays disabled | Every hop would need its own signed accounting and scope check |
 | Queries 1.1.1.1/8.8.8.8 | Worker resolver, vetted addresses | Connection pinning and egress policy |
 | Header-name regex treated as a literal key (Shieldon never matches) | Regex applied | Matches the upstream intent |
+
+## Addendum: curated edge-platform header layers
+
+wafw00f types every header hit as a WAF and cdncheck types only addresses and CNAMEs, so edge
+platforms identified purely by response headers (Vercel, Netlify, Azure Front Door, Google Cloud
+load balancing, Bunny, KeyCDN, CDN77, StackPath, or a CloudFront/Cloudflare edge on an address
+outside the vendored ranges) produced no CDN layer. `EDGE_PLATFORM_HEADER_SIGNATURES` in
+`src/lib/edgeFingerprint.mjs` is a small hand-maintained list, separate from the generated
+corpus, of vendor-unique header names or exact vendor `Server` tokens. Matches become `cdn`
+layers with source `response_header`; they never set `waf_present`. Block-page signatures in
+`src/lib/outsideInWafScanner.mjs` were also tightened to vendor-specific phrases after bare
+substrings (`/f5/`, `/azure/`, "security policy") fingerprinted ordinary pages as WAF block pages.

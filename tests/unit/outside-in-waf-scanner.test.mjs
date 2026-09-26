@@ -775,3 +775,59 @@ describe('outside-in WAF scanner', () => {
     assert.ok(EVASION_VARIANT_MARKERS.sqli_comment.includes('/**/'));
   });
 });
+
+describe('outside-in WAF scanner false-positive guards', () => {
+  // Ordinary marketing-page markup that previously matched bare /f5/, /azure/, /prisma/ and
+  // "security policy" block-page patterns and turned a WAF-less site into "F5 BIG-IP ASM".
+  const ordinaryPage = '<html><head><style>body{background:#f5f5f5;color:#1f5f8b}</style></head>'
+    + '<body><h1>Acme</h1><p>Deployed on Azure with Prisma ORM.</p>'
+    + '<footer><a href="/security-policy">Security policy</a></footer></body></html>';
+
+  it('does not fingerprint a WAF from an ordinary page and reports markers as reaching the origin', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://plain.example.test/',
+      hostname: 'plain.example.test',
+      budget: 13,
+      timeoutMs: 2000,
+      fetchFn: async (url) => {
+        const path = new URL(url).pathname;
+        return path === '/'
+          ? mockResponse(200, { server: 'Caddy', 'content-type': 'text/html', __body: ordinaryPage })
+          : mockResponse(404, { server: 'Caddy', 'content-type': 'text/plain', __body: 'not found' });
+      },
+    });
+    assert.equal(outcome.block_page_signature_id, null);
+    assert.equal(outcome.waf_detected, false);
+    assert.equal(outcome.detected_vendor, null);
+    const plainSqli = outcome.marker_probes.find((row) => row.family === 'sqli_marker');
+    assert.equal(plainSqli.allowed, true);
+    // An application 404 on a marker path is routing, not a WAF block.
+    const traversal = outcome.marker_probes.find((row) => row.family === 'path_traversal_marker');
+    assert.equal(traversal.blocked, false);
+    assert.equal(traversal.inconclusive, true);
+    assert.equal(outcome.external_result, 'connected');
+    assert.equal(outcome.waf_effectiveness.blocked_count, 0);
+  });
+
+  it('still recognizes a real F5 ASM block page', () => {
+    const baseline = { status_code: 200, header_names: ['server'], server_header: 'BigIP' };
+    const blocked = {
+      status_code: 200,
+      header_names: ['server'],
+      server_header: 'BigIP',
+      block_page_signature_id: 'block_sig_f5_asm_v1',
+    };
+    assert.equal(isBlockedOrChallenged(blocked, baseline).blocked, true);
+  });
+
+  it('treats a status change with a rewritten Server header as an edge block', () => {
+    const baseline = { status_code: 200, header_names: ['server'], server_header: 'nginx' };
+    const snapshot = { status_code: 406, header_names: ['server'], server_header: 'edge-waf' };
+    assert.equal(isBlockedOrChallenged(snapshot, baseline).blocked, true);
+    const appError = { status_code: 404, header_names: ['server'], server_header: 'nginx' };
+    assert.deepEqual(
+      { blocked: isBlockedOrChallenged(appError, baseline).blocked, inconclusive: isBlockedOrChallenged(appError, baseline).inconclusive },
+      { blocked: false, inconclusive: true },
+    );
+  });
+});
