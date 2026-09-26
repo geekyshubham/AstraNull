@@ -21,6 +21,13 @@ spec:
             app.kubernetes.io/component: connector-poll-scheduler
         spec:
           automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
           restartPolicy: Never
           serviceAccountName: astranull-worker
           containers:
@@ -122,6 +129,13 @@ spec:
             app.kubernetes.io/component: connector-poll-runner
         spec:
           automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
           restartPolicy: Never
           serviceAccountName: astranull-worker
           containers:

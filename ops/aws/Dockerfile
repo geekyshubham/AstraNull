@@ -1,7 +1,7 @@
 # AstraNull control plane for the AWS VM (API + React UI + probe worker).
 # Base image pinned by digest for reproducible builds. Dependabot keeps this current
 # (see .github/dependabot.yml); do not replace with a floating tag.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 
 LABEL org.opencontainers.image.title="AstraNull Control Plane"
 LABEL org.opencontainers.image.description="API and React portal for astranull.site"
@@ -12,9 +12,12 @@ RUN addgroup -g 10001 -S astranull \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# npm is only needed to install; it is removed so its bundled dependencies never ship
+# in the runtime image (nothing at runtime invokes npm/npx/yarn).
 RUN npm install --global npm@11.18.0 \
   && npm ci --omit=dev \
-  && npm cache clean --force
+  && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY src ./src
 COPY scripts ./scripts

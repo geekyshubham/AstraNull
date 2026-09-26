@@ -1,0 +1,56 @@
+name: Security scan
+
+# In-repo dependency, misconfiguration, secret, and image scanning. Runs the same Trivy
+# scanner classes GuardianBot runs, without depending on GuardianBot's external evidence
+# attestation service. HIGH or CRITICAL findings fail the job.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_VERSION: "0.74.0"
+  # sha256 of trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz from the upstream checksums file.
+  TRIVY_SHA256: "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Binary download pinned by version and verified by sha256 instead of a third-party
+      # action, so a retargeted tag cannot change what executes here.
+      - name: Install Trivy (checksum verified)
+        run: |
+          set -euo pipefail
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" trivy
+          sudo install -m 0755 "$RUNNER_TEMP/trivy" /usr/local/bin/trivy
+          trivy --version
+
+      - name: Repository scan (dependencies, misconfiguration, secrets)
+        run: |
+          trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL \
+            --exit-code 1 --no-progress .
+
+      - name: Shipped image scans (AWS control plane, Kubernetes worker, agent)
+        run: |
+          set -euo pipefail
+          docker build -f ops/aws/Dockerfile -t astranull-scan-aws:${GITHUB_SHA} .
+          docker build -f ops/kubernetes/Dockerfile.worker -t astranull-scan-worker:${GITHUB_SHA} .
+          docker build -t astranull-scan-agent:${GITHUB_SHA} agents/linux
+          for image in aws worker agent; do
+            trivy image --scanners vuln,secret --severity HIGH,CRITICAL \
+              --exit-code 1 --no-progress "astranull-scan-${image}:${GITHUB_SHA}"
+          done

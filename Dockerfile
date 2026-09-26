@@ -1,7 +1,7 @@
 # AstraNull control plane (API + static UI). No secrets or database URLs baked in.
 # Base image pinned by digest for reproducible builds. Dependabot keeps this current
 # (see .github/dependabot.yml); do not replace with a floating tag.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 
 LABEL org.opencontainers.image.title="AstraNull Control Plane"
 LABEL org.opencontainers.image.description="No-access-first DDoS readiness validation platform — API and UI"
@@ -18,7 +18,9 @@ WORKDIR /app
 # ERR_MODULE_NOT_FOUND before serving a request. The lockfile is copied without a glob
 # so a missing lockfile breaks the build instead of silently floating.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# npm is removed after install; nothing at runtime invokes npm/npx/yarn.
+RUN npm ci --omit=dev && npm cache clean --force \
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY src ./src
 COPY apps/web ./apps/web
