@@ -137,6 +137,9 @@ export function listTestRuns(ctx, options = {}) {
   if (options.target_id) {
     rows = rows.filter((r) => r.target_id === options.target_id);
   }
+  if (options.check_id) {
+    rows = rows.filter((r) => r.check_id === options.check_id);
+  }
   rows = rows.sort((a, b) =>
     String(b.started_at ?? b.created_at ?? '').localeCompare(
       String(a.started_at ?? a.created_at ?? ''),
@@ -162,7 +165,9 @@ export function listTestRunsEnvelope(ctx, options = {}) {
           ? 'No test runs match this target group filter.'
           : options.target_id
             ? 'No test runs match this target filter.'
-            : 'No test runs have been started for this tenant yet.',
+            : options.check_id
+              ? 'No test runs have been recorded for this check yet.'
+              : 'No test runs have been started for this tenant yet.',
     },
   };
 }

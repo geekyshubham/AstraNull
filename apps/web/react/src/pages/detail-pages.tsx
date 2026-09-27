@@ -528,7 +528,9 @@ function DetailBreadcrumb({ route, title, entityId }: { route: RouteId; title: s
   );
 }
 
-const VISIBLE_DETAIL_ID_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_/;
+// Prefixed record IDs plus dotted catalog check IDs (e.g. origin.leak_scan.safe) stay visible as
+// secondary engineer-facing text under the plain-English title.
+const VISIBLE_DETAIL_ID_RE = /^(?:(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_|[a-z0-9]+(?:_[a-z0-9]+)*(?:\.[a-z0-9]+(?:_[a-z0-9]+)*){1,4}$)/;
 
 function DetailEntityHeading({
   route,
@@ -3656,6 +3658,33 @@ function CheckDetailPage({
     return () => { cancelled = true; };
   }, [config, session, entityId]);
 
+  // The shared runs dataset is only the tenant's newest page, so a check whose runs are older
+  // would read "No runs yet". Fetch this check's own runs.
+  const [checkRunState, setCheckRunState] = useState<{ status: 'idle' | 'loading' | 'loaded' | 'error'; items: DataItem[] }>({ status: 'idle', items: [] });
+  useEffect(() => {
+    if (!entityId) {
+      setCheckRunState({ status: 'idle', items: [] });
+      return;
+    }
+    let cancelled = false;
+    setCheckRunState({ status: 'loading', items: [] });
+    requestJson(config, session, `/v1/test-runs?check_id=${encodeURIComponent(entityId)}&limit=25`)
+      .then((payload) => {
+        if (cancelled) return;
+        const items = payload && typeof payload === 'object' && !Array.isArray(payload)
+          ? (payload as { items?: unknown }).items
+          : null;
+        if (!Array.isArray(items) || !items.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+          throw new Error('Invalid test-run list response.');
+        }
+        setCheckRunState({ status: 'loaded', items: items as DataItem[] });
+      })
+      .catch(() => {
+        if (!cancelled) setCheckRunState({ status: 'error', items: [] });
+      });
+    return () => { cancelled = true; };
+  }, [config, session, entityId]);
+
   if (!entityId) {
     return (
       <div className="content">
@@ -3692,7 +3721,8 @@ function CheckDetailPage({
   const safetyClass = getString(check, ['safety_class'], '');
   const execution = checkExecutionSemantics(check);
   const description = getString(check, ['description', 'summary'], 'No check-specific description is recorded in the catalog.');
-  const latest = latestCheckVerdict(data.runs, data.evidence, entityId);
+  const checkRuns = checkRunState.status === 'loaded' ? checkRunState.items : data.runs;
+  const latest = latestCheckVerdict(checkRuns, data.evidence, entityId);
   const method = getString(check, ['method'], safetyClass === 'safe' ? `${execution.kind} · ${execution.cap}` : 'governed · SOC-scheduled');
   const title = plainCheckName(getString(check, ['name', 'check_id', 'id'], entityId));
   const definition = [
@@ -3745,7 +3775,7 @@ function CheckDetailPage({
   const probeProfile = getNestedItem(check, ['probe_profile']);
   const probeKind = probeProfile ? getString(probeProfile, ['kind'], '') : '';
   const probeRequests = getNestedNumber(check, ['probe_profile', 'max_requests'], 0);
-  const recentCheckRuns = [...data.runs]
+  const recentCheckRuns = [...checkRuns]
     .filter((run) => getString(run, ['check_id'], '') === entityId)
     .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')))
     .slice(0, 8);

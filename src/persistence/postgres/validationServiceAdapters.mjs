@@ -1272,6 +1272,7 @@ export function createPostgresValidationServices(repositories, options = {}) {
       const runs = await validationEvidence.listTestRuns(ctx, {
         targetGroupId: options.target_group_id ?? options.targetGroupId,
         targetId: options.target_id ?? options.targetId,
+        checkId: options.check_id ?? options.checkId,
         limit: options.limit,
       });
       if (!runs.length || typeof validationEvidence.listVerdictsForRuns !== 'function') return runs;
@@ -1291,7 +1292,9 @@ export function createPostgresValidationServices(repositories, options = {}) {
               ? 'No test runs match this target group filter.'
               : options.target_id
                 ? 'No test runs match this target filter.'
-                : 'No test runs have been started for this tenant yet.',
+                : options.check_id
+                  ? 'No test runs have been recorded for this check yet.'
+                  : 'No test runs have been started for this tenant yet.',
         },
       };
     },

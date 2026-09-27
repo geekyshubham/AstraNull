@@ -433,7 +433,7 @@ Scan statuses are `scheduled`, `pending`, `running`, `completed`, `denied`, `can
 | Method | Path | Permission | Request | Response |
 |---|---|---|---|---|
 | POST | `/v1/test-runs` | `test_run:start` | `{ check_id, target_group_id, target_id?, probe_profile? }` | Starts a manual run. HTTP callers cannot fabricate trusted policy dispatch context or a scheduled `policy_id`; scheduled runs enter through the runtime-internal leased dispatcher. Returns `201` run + correlation nonce, with simulation/probe-job details by configured mode. Safety denials include `429` window/rate/cooldown errors, `403 soc_gated_check`, `409 concurrent_run_blocked`, and signed-worker Host/SNI `400 missing_target_bound_direct_address` unless the verified target itself is an IP or IP-literal URL. |
-| GET | `/v1/test-runs` | `test_run:read` | — | `{ items }`. |
+| GET | `/v1/test-runs` | `test_run:read` | query `target_group_id?`, `target_id?`, `check_id?`, `limit?` (default 100, max 100) | `{ items, count, meta.empty_reason }`, newest first; each item carries its published `verdict` (or `null`). Filters apply identically in dev-json and Postgres mode. |
 | GET | `/v1/test-runs/:id` | `test_run:read` | — | Run detail + verdict when present. |
 | GET | `/v1/test-runs/:id/events` | `test_run:read` | — | Timeline events. |
 | POST | `/v1/test-runs/:id/finalize` | `test_run:read` | — | Verdict after collection window. |

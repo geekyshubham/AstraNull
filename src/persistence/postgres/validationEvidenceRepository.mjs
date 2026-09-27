@@ -278,6 +278,11 @@ export function createValidationEvidenceRepository(pool) {
           params.push(options.targetId);
           paramIndex += 1;
         }
+        if (options.checkId != null && options.checkId !== '') {
+          conditions.push(`check_id = $${paramIndex}`);
+          params.push(options.checkId);
+          paramIndex += 1;
+        }
         if (Array.isArray(options.statuses) && options.statuses.length > 0) {
           conditions.push(`status = ANY($${paramIndex})`);
           params.push(options.statuses);

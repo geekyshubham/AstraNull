@@ -94,6 +94,10 @@ describe('postgres test-run list parity', () => {
       const byGroup = await testRuns.listTestRuns(CTX, { target_group_id: 'tg_b' });
       assert.deepEqual([...new Set(byGroup.map((run) => run.target_group_id))], ['tg_b']);
 
+      const byCheck = await testRuns.listTestRuns(CTX, { check_id: 'origin.direct_bypass.safe', limit: '3' });
+      assert.equal(byCheck.length, 3);
+      assert.deepEqual(await testRuns.listTestRuns(CTX, { check_id: 'waf.fingerprint.safe' }), []);
+
       const limited = await testRuns.listTestRuns(CTX, { target_group_id: 'tg_a', limit: '2' });
       assert.equal(limited.length, 2);
 

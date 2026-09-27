@@ -3068,6 +3068,7 @@ async function handleApi(req, res, url, ctx, runtimeConfig, options = {}) {
     const listOpts = {
       target_group_id: url.searchParams.get('target_group_id') ?? undefined,
       target_id: url.searchParams.get('target_id') ?? undefined,
+      check_id: url.searchParams.get('check_id') ?? undefined,
       limit: url.searchParams.get('limit') ?? undefined,
     };
     if (typeof serviceDeps.testRuns.listTestRunsEnvelope === 'function') {

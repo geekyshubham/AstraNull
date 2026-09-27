@@ -2462,6 +2462,9 @@ details.disclosure[open] > summary {
 }
 
 .table-wrap {
+  /* Containing block for absolutely positioned descendants (e.g. .sr-only labels), so they
+     scroll with the table instead of escaping and widening the card. */
+  position: relative;
   width: 100%;
   max-width: 100%;
   overflow-x: auto;
