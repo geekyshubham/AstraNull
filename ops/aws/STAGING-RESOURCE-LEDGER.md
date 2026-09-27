@@ -366,3 +366,25 @@ delete the key. An earlier key ending `…W2XQN` was already invalid
 
 Full key IDs are deliberately not recorded here so they do not enter git history; match
 on the suffix in the IAM console.
+
+## Production releases 2026-09-26 / 27
+
+Each release was an exact `git archive` of the commit, built on-host from `ops/aws/Dockerfile`,
+preceded by an encrypted, structure-checked `pg_dump` in `/opt/astranull-backups`, then
+`compose --profile ops run migrate` and `compose up --force-recreate --wait` of control-plane
+and the three core workers. Final release: `f3ff99ce` → image `sha256:ea2c5b1a3ac6…`, schema head
+`0057_waf_offensive_workflow` (migrations `0054`–`0057` applied during this window). The prior
+images for every release remain tagged `astranull:<sha>` for rollback.
+
+| Change | Detail |
+|---|---|
+| Scheduler | `test-policy-runner` tick also runs the collection-window sweeper and validation-scan runner (verified: expired run finalized within one tick) |
+| Security | Enforced CSP, COOP, Permissions-Policy; HSTS `max-age=31536000` in the Caddyfile (reloaded live, prior copy at `/home/ubuntu/Caddyfile.bak-20260927`) |
+| Live checks | Read-only sweep (`scripts/live-portal-sweep.mjs`, 6 roles × 40 route cases × 2 viewports) 0 findings; unauthenticated/tampered/header-auth all 401; role gates 403 |
+| SSH | Added operator `/32` `122.167.118.172` (rule `sgr-0c96df98af8dce46f`) |
+
+Rollback (code only; migrations `0054`–`0057` are additive and older images ignore them): from
+`/opt/astranull/ops/aws`, export all three `ASTRANULL_*_IMAGE_ID` variables as the prior image ID
+(`docker image inspect --format '{{.Id}}' astranull:<prior-sha>`), then
+`sudo -E docker compose up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`.
+Database restore uses the newest pre-deploy artifact with `ops/aws/restore.sh` (destructive; change approval required).
