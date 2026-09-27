@@ -68,16 +68,49 @@ export function formatSeverityLabel(severity: string, fallback = 'Unknown') {
   return SEVERITY_LABELS[key] ?? severity.replace(/_/g, ' ');
 }
 
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'rbac.denied': 'Access denied (missing permission)',
+  'auth.login.succeeded': 'Signed in',
+  'auth.login.failed': 'Sign-in failed',
+  'auth.password.set': 'Password set',
+  'auth.password.invite_issued': 'Password invite issued',
+  'test_run.started': 'Validation run started',
+  'test_run.cancelled': 'Validation run cancelled',
+  'test_run.verdicted': 'Validation result published',
+  'kill_switch.activated': 'Emergency stop activated',
+  'kill_switch.deactivated': 'Emergency stop cleared',
+};
+
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
+  api: 'Access control',
+  test_run: 'Validation run',
+  target_group: 'Target group',
+  high_scale_request: 'SOC-governed test',
+  waf_offensive_request: 'SOC-governed WAF test',
+  bootstrap_token: 'Agent install token',
+  service_account: 'Service account',
+};
+
+const LABEL_ACRONYMS = new Set(['waf', 'soc', 'api', 'dns', 'tls', 'loa', 'mfa', 'oidc', 'cve', 'ip', 'cdn', 'sla', 'rbac']);
+
+function sentenceCase(value: string) {
+  const words = value.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .split(' ')
+    .map((word) => (LABEL_ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word))
+    .join(' ');
+  return words ? `${words[0].toUpperCase()}${words.slice(1)}` : words;
+}
+
 export function formatAuditAction(action: string, fallback = 'Unknown action') {
   const key = action.trim();
   if (!key) return fallback;
-  return key.replace(/\./g, ' · ').replace(/_/g, ' ');
+  return AUDIT_ACTION_LABELS[key.toLowerCase()] ?? sentenceCase(key);
 }
 
 export function formatResourceTypeLabel(resourceType: string, fallback = 'Record') {
   const key = resourceType.trim().toLowerCase();
   if (!key) return fallback;
-  return key.replace(/_/g, ' ');
+  return RESOURCE_TYPE_LABELS[key] ?? sentenceCase(key);
 }
 
 const EXPECTED_BEHAVIOR_LABELS: Record<string, string> = {
