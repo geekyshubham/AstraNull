@@ -16,21 +16,15 @@ export class HttpBodyError extends Error {
 }
 
 /**
- * Content Security Policy for the portal shell.
+ * Content Security Policy for the portal shell, enforced.
  *
- * Shipped Report-Only deliberately. apps/web/index.html carries four inline
- * <script> blocks (theme init, stylesheet injector, boot controller, module
- * loader) and a large inline <style>. Enforcing a hash-based script-src would
- * hard-break the console the moment any of those blocks is edited, and that file
- * is owned by the portal work — a policy that fails closed on someone else's
- * whitespace change is a liability, not a control. Report-Only gives us the
- * violation telemetry to tighten it later without risking a blank console.
- *
- * `frame-ancestors` is the exception: it is enforced separately below, because
- * clickjacking is the one framing risk that matters here and the console is
- * never legitimately framed.
+ * It was shipped Report-Only first to collect violation telemetry. A live sweep of every portal
+ * and public route (2026-09-27) recorded zero violations, so it is now enforced. apps/web/index.html
+ * still carries inline <script>/<style> boot blocks, hence 'unsafe-inline' for script/style; the
+ * policy still blocks third-party scripts, plugins, <base> hijacking, off-origin form posts and
+ * off-origin fetch/XHR exfiltration. Tightening script-src to hashes is the next step.
  */
-const CSP_REPORT_ONLY = [
+const CSP_POLICY = [
   "default-src 'self'",
   // Inline + injected scripts in the boot shell; see note above.
   "script-src 'self' 'unsafe-inline'",
@@ -51,18 +45,18 @@ const CSP_REPORT_ONLY = [
  * Scope note: AstraNull's portal authenticates with a bearer token held in the
  * SPA, not a cookie session. So framing carries no ambient session and cookie
  * SameSite is not in play — these headers are hardening, not the primary
- * control. HSTS is deliberately NOT emitted: TLS terminates upstream at the load
- * balancer, and an app-level Strict-Transport-Security would let a
- * plaintext-origin misconfiguration pin browsers to a broken scheme.
+ * control. HSTS is deliberately NOT emitted here: TLS terminates upstream, and the
+ * TLS terminator (ops/aws/Caddyfile) sets Strict-Transport-Security instead.
  */
 export function securityHeaders() {
   return {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'X-Frame-Options': 'DENY',
-    // Enforced (framing only); the full policy rides along Report-Only.
-    'Content-Security-Policy': "frame-ancestors 'none'",
-    'Content-Security-Policy-Report-Only': CSP_REPORT_ONLY,
+    'Content-Security-Policy': CSP_POLICY,
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    // The portal uses none of these powerful features; deny them to any injected content.
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
   };
 }
 

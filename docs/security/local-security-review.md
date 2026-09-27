@@ -70,6 +70,18 @@ Passing CLI validation only proves the evidence *shape* is safe for release revi
 - Treat bootstrap tokens, `svc_` service-account tokens, and agent credentials (`agc_v1.…` or legacy `agc_…`) as secrets; rotate after validation sessions; revoke automation tokens via `POST /v1/service-accounts/:id/revoke` when no longer needed.
 - Run `make verify` before promoting builds; review audit log for unexpected `rbac.denied` spikes.
 
+## Response security headers
+
+Every app response carries an enforced Content-Security-Policy (`default-src 'self'`, fonts from
+Google Fonts only, `connect-src 'self'`, `object-src 'none'`, `base-uri 'self'`,
+`form-action 'self'`, `frame-ancestors 'none'`; `'unsafe-inline'` remains for the inline boot
+blocks in `apps/web/index.html`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`, and a deny-all
+`Permissions-Policy` (`src/lib/http.mjs`). The CSP was enforced after a live sweep of every portal
+and public route recorded zero violations under the prior Report-Only policy. HSTS
+(`max-age=31536000`, no `includeSubDomains`/preload) is set at the TLS terminator
+(`ops/aws/Caddyfile`), not by the app.
+
 ## Related docs
 
 - [`docs/api.md`](../api.md) — endpoint permissions and safety notes

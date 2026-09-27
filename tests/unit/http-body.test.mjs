@@ -186,8 +186,15 @@ describe('security headers', () => {
     assert.equal(h['Strict-Transport-Security'], undefined);
   });
 
-  it('allows the portal font origins in the report-only policy', () => {
-    const csp = securityHeaders()['Content-Security-Policy-Report-Only'];
+  it('enforces the full CSP including the portal font origins', () => {
+    const h = securityHeaders();
+    assert.equal(h['Content-Security-Policy-Report-Only'], undefined);
+    const csp = h['Content-Security-Policy'];
+    assert.match(csp, /default-src 'self'/);
+    assert.match(csp, /connect-src 'self'/);
+    assert.match(csp, /base-uri 'self'/);
+    assert.equal(h['Cross-Origin-Opener-Policy'], 'same-origin');
+    assert.match(h['Permissions-Policy'], /camera=\(\)/);
     // apps/web/index.html links fonts.googleapis.com and preconnects gstatic.
     assert.match(csp, /style-src[^;]*https:\/\/fonts\.googleapis\.com/);
     assert.match(csp, /font-src[^;]*https:\/\/fonts\.gstatic\.com/);

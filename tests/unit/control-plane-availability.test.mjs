@@ -441,7 +441,7 @@ describe('security headers on real responses', () => {
     assert.equal(res.headers['x-frame-options'], 'DENY');
     assert.equal(res.headers['referrer-policy'], 'no-referrer');
     assert.match(res.headers['content-security-policy'], /frame-ancestors 'none'/);
-    assert.ok(res.headers['content-security-policy-report-only'], 'full CSP ships report-only');
+    assert.match(res.headers['content-security-policy'], /default-src 'self'/, 'full CSP is enforced');
     // TLS terminates upstream; the app must not pin HSTS itself.
     assert.equal(res.headers['strict-transport-security'], undefined);
   });

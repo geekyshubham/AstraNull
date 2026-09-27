@@ -23,7 +23,8 @@ const SECURITY_HEADERS = [
   'referrer-policy',
   'x-frame-options',
   'content-security-policy',
-  'content-security-policy-report-only',
+  'cross-origin-opener-policy',
+  'permissions-policy',
 ];
 
 /** Assets covering every Content-Type branch the portal actually ships. */

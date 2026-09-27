@@ -79,7 +79,7 @@ async function registerAgent(targetGroupId = 'tg_1') {
     body: { bootstrap_token: secret, hostname: 'hardening-host', capabilities: ['canary', 'heartbeat'] },
   });
   if (reg.status !== 201) {
-    const ours = reg.headers['content-security-policy-report-only'] !== undefined
+    const ours = /default-src 'self'/.test(reg.headers['content-security-policy'] ?? '')
       && reg.headers['x-content-type-options'] === 'nosniff';
     assert.fail(
       `agent register expected 201, got ${reg.status} from ${baseUrl}\n`

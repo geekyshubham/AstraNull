@@ -1,4 +1,7 @@
 astranull.site, www.astranull.site {
   encode gzip
+  # HSTS belongs at the TLS terminator. No includeSubDomains/preload: other names in the zone
+  # (mail) are not served here, and preload is effectively irreversible.
+  header Strict-Transport-Security "max-age=31536000"
   reverse_proxy control-plane:8080
 }
