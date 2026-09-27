@@ -372,7 +372,7 @@ on the suffix in the IAM console.
 Each release was an exact `git archive` of the commit, built on-host from `ops/aws/Dockerfile`,
 preceded by an encrypted, structure-checked `pg_dump` in `/opt/astranull-backups`, then
 `compose --profile ops run migrate` and `compose up --force-recreate --wait` of control-plane
-and the three core workers. Final release: `f3ff99ce` → image `sha256:ea2c5b1a3ac6…`, schema head
+and the three core workers. Final release: `4057dd1f` → image `sha256:bc5f0592feb5…`, schema head
 `0057_waf_offensive_workflow` (migrations `0054`–`0057` applied during this window). The prior
 images for every release remain tagged `astranull:<sha>` for rollback.
 
@@ -380,6 +380,7 @@ images for every release remain tagged `astranull:<sha>` for rollback.
 |---|---|
 | Scheduler | `test-policy-runner` tick also runs the collection-window sweeper and validation-scan runner (verified: expired run finalized within one tick) |
 | Security | Enforced CSP, COOP, Permissions-Policy; HSTS `max-age=31536000` in the Caddyfile (reloaded live, prior copy at `/home/ubuntu/Caddyfile.bak-20260927`) |
+| Resilience | Pool error handler verified live: idle app connections killed server-side, control plane logged it and did not restart |
 | Live checks | Read-only sweep (`scripts/live-portal-sweep.mjs`, 6 roles × 40 route cases × 2 viewports) 0 findings; unauthenticated/tampered/header-auth all 401; role gates 403 |
 | SSH | Added operator `/32` `122.167.118.172` (rule `sgr-0c96df98af8dce46f`) |
 
