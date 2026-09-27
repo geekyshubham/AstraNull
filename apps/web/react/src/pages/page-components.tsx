@@ -1168,9 +1168,13 @@ export function DashboardPage({
   }
 
   const dashboardGroupColumns: TableColumn<DataItem>[] = [
-    { key: 'group', label: 'Group', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
-    { key: 'name', label: 'Name', render: (item) => getString(item, ['name', 'id'], '—') },
-    { key: 'owner', label: 'Owner', render: (item) => <span className="muted">{getString(item, ['owner', 'business_owner'], 'unassigned')}</span> },
+    // Half-width card: name first with the ID and owner as secondary text, so nothing clips.
+    { key: 'group', label: 'Group', render: (item) => (
+      <span className="entity-cell-stack">
+        <strong>{getString(item, ['name', 'id'], '—')}</strong>
+        <small className="mono">{getString(item, ['id'], '—')} · {getString(item, ['owner', 'business_owner'], 'unassigned')}</small>
+      </span>
+    ) },
     {
       key: 'verdict',
       label: 'Verdict',
@@ -1353,7 +1357,7 @@ export function DashboardPage({
         return <Badge tone={verdict.tone} title={verdict.label}>{verdict.label}</Badge>;
       }
     },
-    { key: 'when', label: 'When', render: (item) => <span className="muted">{formatDate(item.created_at ?? item.started_at)}</span> }
+    { key: 'when', label: 'When', render: (item) => <span className="muted nowrap">{formatDashboardShortRelative(String(item.started_at ?? item.created_at ?? ''))}</span> }
   ];
 
   const dashboardEnvironmentRows = buildEnvironmentReadinessRows({
@@ -1485,7 +1489,7 @@ export function DashboardPage({
                     <h3 id="executive-fixes-title">Top fixes</h3>
                     <p>Up to three actions backed by the evidence currently loaded</p>
                   </div>
-                  <Badge tone={nextSteps.length > 0 ? 'warn' : 'success'}>{nextSteps.length} to review</Badge>
+                  <Badge className="flex-none nowrap" tone={nextSteps.length > 0 ? 'warn' : 'success'}>{nextSteps.length} to review</Badge>
                 </div>
                 {nextSteps.length > 0 ? (
                   <ol className="executive-fix-list">

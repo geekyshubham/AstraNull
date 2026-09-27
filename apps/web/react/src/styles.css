@@ -8103,3 +8103,12 @@ body .subscription-page .subscription-usage-grid:has(> .subscription-usage-card:
 .technical-disclosure:not([open]) > :not(summary) {
   display: none;
 }
+
+/* Small layout utilities for chips and timestamps inside tight table cells. */
+.nowrap {
+  white-space: nowrap;
+}
+
+.flex-none {
+  flex: none;
+}

@@ -15816,8 +15816,9 @@ var vs = Object.freeze({
   review: "Needs review",
   manual_review: "Needs review",
   partial: "Only partly verified",
-  misplaced: "The observation agent is in the wrong place",
-  misplaced_agent: "The observation agent is in the wrong place",
+  misplaced: "Agent did not see the test",
+  misplaced_agent: "Agent did not see the test",
+  edge_protected: "Blocked at the edge",
   unknown: "No conclusion yet"
 }), ys = Object.freeze({
   protected: "The tested traffic was stopped before it reached the protected server.",
@@ -15825,7 +15826,8 @@ var vs = Object.freeze({
   penetrated: "Evidence confirms that the safe test traffic reached the protected server.",
   inconclusive: "The available probe and internal observations cannot prove an outcome.",
   misplaced: "The agent or canary could not observe the declared protected path reliably.",
-  misplaced_agent: "The agent or canary could not observe the declared protected path reliably."
+  misplaced_agent: "The agent or canary could not observe the declared protected path reliably.",
+  edge_protected: "The edge blocked the test traffic; no inside agent confirmed it, so this is external evidence only."
 });
 function bs(e) {
   return vs[os(e)] ?? us(e);
@@ -26515,41 +26517,32 @@ function um({ data: e, config: t, session: n, onRefresh: r }) {
       tone: a
     };
   }
-  let se = [
-    {
-      key: "group",
-      label: "Group",
-      render: (e) => /* @__PURE__ */ (0, B.jsx)("span", {
+  let se = [{
+    key: "group",
+    label: "Group",
+    render: (e) => /* @__PURE__ */ (0, B.jsxs)("span", {
+      className: "entity-cell-stack",
+      children: [/* @__PURE__ */ (0, B.jsx)("strong", { children: X(e, ["name", "id"], "—") }), /* @__PURE__ */ (0, B.jsxs)("small", {
         className: "mono",
-        children: X(e, ["id"], "—")
-      })
-    },
-    {
-      key: "name",
-      label: "Name",
-      render: (e) => X(e, ["name", "id"], "—")
-    },
-    {
-      key: "owner",
-      label: "Owner",
-      render: (e) => /* @__PURE__ */ (0, B.jsx)("span", {
-        className: "muted",
-        children: X(e, ["owner", "business_owner"], "unassigned")
-      })
-    },
-    {
-      key: "verdict",
-      label: "Verdict",
-      render: (e) => {
-        let t = I(X(e, ["id"], ""));
-        return /* @__PURE__ */ (0, B.jsx)(W, {
-          tone: t.tone,
-          title: t.label,
-          children: t.label
-        });
-      }
+        children: [
+          X(e, ["id"], "—"),
+          " · ",
+          X(e, ["owner", "business_owner"], "unassigned")
+        ]
+      })]
+    })
+  }, {
+    key: "verdict",
+    label: "Verdict",
+    render: (e) => {
+      let t = I(X(e, ["id"], ""));
+      return /* @__PURE__ */ (0, B.jsx)(W, {
+        tone: t.tone,
+        title: t.label,
+        children: t.label
+      });
     }
-  ], ce = [
+  }], ce = [
     {
       key: "agent",
       label: "Agent",
@@ -26721,8 +26714,8 @@ function um({ data: e, config: t, session: n, onRefresh: r }) {
       key: "when",
       label: "When",
       render: (e) => /* @__PURE__ */ (0, B.jsx)("span", {
-        className: "muted",
-        children: R(e.created_at ?? e.started_at)
+        className: "muted nowrap",
+        children: am(String(e.started_at ?? e.created_at ?? ""))
       })
     }
   ], Ue = lc({
@@ -26899,6 +26892,7 @@ function um({ data: e, config: t, session: n, onRefresh: r }) {
                     id: "executive-fixes-title",
                     children: "Top fixes"
                   }), /* @__PURE__ */ (0, B.jsx)("p", { children: "Up to three actions backed by the evidence currently loaded" })] }), /* @__PURE__ */ (0, B.jsxs)(W, {
+                    className: "flex-none nowrap",
                     tone: he.length > 0 ? "warn" : "success",
                     children: [he.length, " to review"]
                   })]

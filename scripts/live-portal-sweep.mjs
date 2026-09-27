@@ -504,14 +504,25 @@ async function inspectPage(page, role, routeCase, viewport, redact) {
 
 async function settlePortal(page) {
   await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-  await page.waitForFunction((selector) => {
-    if (!document.querySelector('#portal-main')) return false;
-    return ![...document.querySelectorAll(selector)].some((node) => {
-      const style = getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
-      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-    });
-  }, LOADING_SELECTOR, { timeout: 45_000 }).catch(() => {});
+  // Same-document hash navigation can leave the previous route painted for a tick, so a single
+  // "no skeleton" observation can pass before the new route starts loading. Require the page to
+  // stay skeleton-free for a full second before inspecting it.
+  const deadline = Date.now() + 45_000;
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    const busy = await page.evaluate((selector) => {
+      if (!document.querySelector('#portal-main')) return true;
+      return [...document.querySelectorAll(selector)].some((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      });
+    }, LOADING_SELECTOR).catch(() => true);
+    if (busy) stableSince = 0;
+    else if (!stableSince) stableSince = Date.now();
+    else if (Date.now() - stableSince >= 1000) break;
+    await page.waitForTimeout(200);
+  }
   await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
   await page.waitForTimeout(250);
 }

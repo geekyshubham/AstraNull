@@ -100,18 +100,15 @@ test.describe('portal executive clarity', () => {
       if (viewport.width === 1440) {
         const groupCard = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Target group status' }) });
         const tableWrap = groupCard.locator('.table-wrap');
-        await tableWrap.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
-        const tableGeometry = await tableWrap.evaluate((node) => {
-          const owner = node.querySelector('th:nth-child(3)');
-          const container = node.getBoundingClientRect();
-          const cell = owner?.getBoundingClientRect();
-          return {
-            overflowX: getComputedStyle(node).overflowX,
-            ownerVisible: Boolean(cell && cell.left >= container.left - 1 && cell.right <= container.right + 1),
-          };
-        });
+        // Owner is secondary text under the group name so the half-width table never clips.
+        const tableGeometry = await tableWrap.evaluate((node) => ({
+          overflowX: getComputedStyle(node).overflowX,
+          fits: node.scrollWidth <= node.clientWidth + 1,
+          ownerShown: /unassigned|owner|@/i.test(node.textContent ?? ''),
+        }));
         expect(tableGeometry.overflowX).toBe('auto');
-        expect(tableGeometry.ownerVisible, 'Owner column must fit or remain reachable by horizontal scroll').toBe(true);
+        expect(tableGeometry.fits, 'Target group status table must fit its card without clipping').toBe(true);
+        expect(tableGeometry.ownerShown, 'Owner must remain visible').toBe(true);
       }
 
       await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());

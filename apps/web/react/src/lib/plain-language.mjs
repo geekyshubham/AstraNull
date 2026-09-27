@@ -126,8 +126,10 @@ const VERDICT_LABELS = Object.freeze({
   review: 'Needs review',
   manual_review: 'Needs review',
   partial: 'Only partly verified',
-  misplaced: 'The observation agent is in the wrong place',
-  misplaced_agent: 'The observation agent is in the wrong place',
+  // Pill-length labels; the full meaning lives in VERDICT_DESCRIPTIONS.
+  misplaced: 'Agent did not see the test',
+  misplaced_agent: 'Agent did not see the test',
+  edge_protected: 'Blocked at the edge',
   unknown: 'No conclusion yet',
 });
 
@@ -138,6 +140,7 @@ const VERDICT_DESCRIPTIONS = Object.freeze({
   inconclusive: 'The available probe and internal observations cannot prove an outcome.',
   misplaced: 'The agent or canary could not observe the declared protected path reliably.',
   misplaced_agent: 'The agent or canary could not observe the declared protected path reliably.',
+  edge_protected: 'The edge blocked the test traffic; no inside agent confirmed it, so this is external evidence only.',
 });
 
 export function plainVerdictLabel(value) {
