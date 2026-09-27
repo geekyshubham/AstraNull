@@ -187,3 +187,15 @@ describe('correlateOpsReadinessVerdict', () => {
     assert.equal(r.createsFinding, false);
   });
 });
+describe('correlation explanations are mode-neutral', () => {
+  it('never describes a signed-worker probe as simulated', async () => {
+    const { correlateVerdict } = await import('../../src/services/correlation.mjs');
+    for (const [externalResult, agentObserved] of [['blocked', false], ['connected', true], ['blocked', true], ['connected', false]]) {
+      const verdict = correlateVerdict({
+        externalResult, agentObserved, expectedBehavior: 'must_block_before_origin',
+        agentOnline: true, agentBound: true, probeKind: 'http_head', probeIoObserved: true,
+      });
+      assert.doesNotMatch(verdict.explanation, /simulat/i, `${externalResult}/${agentObserved}`);
+    }
+  });
+});

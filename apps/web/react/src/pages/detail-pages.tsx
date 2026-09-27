@@ -3302,7 +3302,7 @@ function catalogValueList(value: unknown): string[] {
 }
 
 const GENERIC_CHECK_REMEDIATION = 'Review edge protection and agent placement for this vector.';
-const GENERIC_CHECK_EXPLANATION = 'Simulated probe metadata correlated with agent observation.';
+const GENERIC_CHECK_EXPLANATION = 'The bounded probe result is correlated with any required agent observation.';
 const GENERIC_CHECK_VERDICT_LOGIC = 'Verdict when probe external_result and agent observation align with the check default_expected_behavior.';
 
 function executionSpecificCheckCopy(kind: 'remediation' | 'explanation' | 'verdict', execution: CheckExecutionSemantics) {

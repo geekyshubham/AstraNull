@@ -90,7 +90,7 @@ export function correlateVerdict({
         verdict: 'protected',
         confidence: 'medium',
         explanation:
-          'Simulated external probe was blocked or timed out and the agent did not observe traffic — consistent with protection.',
+          'The external probe was blocked or timed out and the agent did not observe the test traffic — consistent with protection.',
         createsFinding: false,
       };
     }
@@ -99,7 +99,7 @@ export function correlateVerdict({
         verdict: 'bypassable',
         confidence: 'high',
         explanation:
-          'Simulated external probe reached the target path and the agent observed matching traffic — bypass risk.',
+          'The external probe reached the target path and the agent observed the matching test traffic — bypass risk.',
         createsFinding: true,
         severity: 'high',
       };
