@@ -273,6 +273,11 @@ export function createValidationEvidenceRepository(pool) {
           params.push(options.targetGroupId);
           paramIndex += 1;
         }
+        if (options.targetId != null && options.targetId !== '') {
+          conditions.push(`target_id = $${paramIndex}`);
+          params.push(options.targetId);
+          paramIndex += 1;
+        }
         if (Array.isArray(options.statuses) && options.statuses.length > 0) {
           conditions.push(`status = ANY($${paramIndex})`);
           params.push(options.statuses);
@@ -1246,6 +1251,20 @@ export function createValidationEvidenceRepository(pool) {
         [`kill_switch_state:${ctx.tenantId}`],
       );
       return { acquired: true, result: await callback(client) };
+    },
+
+    async listVerdictsForRuns(ctx, runIds, options = {}) {
+      const ids = normalizeRunIdBatch(runIds, 'listVerdictsForRuns.runIds');
+      if (ids.length === 0) return [];
+      return runWithTenantClient(pool, ctx.tenantId, options.client, async (client) => {
+        const { rows } = await client.query(
+          `SELECT ${VERDICT_COLUMNS}
+           FROM verdicts
+           WHERE tenant_id = $1 AND test_run_id = ANY($2::text[])`,
+          [ctx.tenantId, ids],
+        );
+        return rows.map(mapVerdictRow);
+      });
     },
 
     async getVerdictForRun(ctx, runId, options = {}) {

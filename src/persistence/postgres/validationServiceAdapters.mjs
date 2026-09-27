@@ -1264,8 +1264,35 @@ export function createPostgresValidationServices(repositories, options = {}) {
       return () => runTerminalHooks.delete(hook);
     },
     notifyRunTerminal,
-    async listTestRuns(ctx) {
-      return validationEvidence.listTestRuns(ctx);
+    // Mirrors the dev-json listTestRuns contract: target_group_id / target_id / limit filters are
+    // honoured (they were silently ignored, so filtered lists returned the tenant's newest 100
+    // runs) and every item carries its published verdict so list views can show outcomes.
+    async listTestRuns(ctx, options = {}) {
+      const runs = await validationEvidence.listTestRuns(ctx, {
+        targetGroupId: options.target_group_id ?? options.targetGroupId,
+        targetId: options.target_id ?? options.targetId,
+        limit: options.limit,
+      });
+      if (!runs.length || typeof validationEvidence.listVerdictsForRuns !== 'function') return runs;
+      const verdicts = await validationEvidence.listVerdictsForRuns(ctx, runs.map((run) => run.id));
+      const byRun = new Map(verdicts.filter(Boolean).map((verdict) => [verdict.test_run_id, verdict]));
+      return runs.map((run) => ({ ...run, verdict: byRun.get(run.id) ?? null }));
+    },
+    async listTestRunsEnvelope(ctx, options = {}) {
+      const items = await this.listTestRuns(ctx, options);
+      return {
+        items,
+        count: items.length,
+        meta: {
+          empty_reason: items.length
+            ? null
+            : options.target_group_id
+              ? 'No test runs match this target group filter.'
+              : options.target_id
+                ? 'No test runs match this target filter.'
+                : 'No test runs have been started for this tenant yet.',
+        },
+      };
     },
     async getTestRun(ctx, id) {
       const run = await validationEvidence.getTestRun(ctx, id);

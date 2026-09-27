@@ -131,7 +131,11 @@ export function listTestRuns(ctx, options = {}) {
   rows = rows.sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)));
   const limit = Number(options.limit);
   if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
-  return rows;
+  const verdicts = getStore().verdicts ?? [];
+  return rows.map((run) => ({
+    ...run,
+    verdict: run.verdict ?? verdicts.find((v) => v.tenant_id === ctx.tenantId && v.test_run_id === run.id) ?? null,
+  }));
 }
 
 export function listTestRunsEnvelope(ctx, options = {}) {
