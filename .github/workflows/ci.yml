@@ -80,6 +80,12 @@ jobs:
       - name: Unit tests
         run: node --test tests/unit/*.test.mjs
 
+      # Start the shared Postgres once. Otherwise each parallel integration-test process that
+      # finds no database runs its own `docker compose up`, the runs collide on the fixed
+      # container name, and tests intermittently fail or skip.
+      - name: Start Postgres for integration tests
+        run: docker compose -f docker-compose.yml up -d --wait postgres
+
       - name: Integration tests
         run: node --test tests/integration/*.test.mjs
 
