@@ -59,7 +59,10 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
     await injectPortalDevHeadersSession(page, EMPTY_SESSION);
     await gotoPortalRoute(page, 'target-groups', baseUrl);
 
-    await expect(page.getByText(emptyReason, { exact: false })).toBeVisible();
+    const emptyTitle = emptyReason.replace(/[.!?]+$/, '');
+    const emptyState = page.getByRole('region', { name: emptyTitle });
+    await expect(emptyState.getByRole('heading', { name: emptyTitle })).toBeVisible();
+    await expect(emptyState.locator(':scope > p')).toHaveCount(0);
   });
 
   test('FT-STATE-loading target-detail shows busy skeleton before hydrator resolves', async ({ page }) => {
@@ -98,7 +101,10 @@ test.describe('portal state coverage (FT-STATE-*)', () => {
       entityIds: { 'target-detail': 'tgt_missing_state' },
     });
 
-    await expect(page.getByText(emptyReason, { exact: false })).toBeVisible();
+    const emptyTitle = emptyReason.replace(/[.!?]+$/, '');
+    const emptyState = page.getByRole('region', { name: emptyTitle });
+    await expect(emptyState.getByRole('heading', { name: emptyTitle })).toBeVisible();
+    await expect(emptyState.locator(':scope > p')).toHaveCount(0);
   });
 
   test('FT-STATE-edge long group name, null-field finding, and RTL owner render', async ({ page }) => {

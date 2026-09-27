@@ -14,6 +14,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { EmptyState } from '../components/ui/empty-state';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName, plainCodeLabel, plainEmptyReason, plainFindingTitle, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { Badge, type BadgeProps } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { findingSlaDueAt, findingStatus as readFindingStatus, isFindingSlaBreach, resolveFindingRetestAction } from '../lib/findings-helpers';
@@ -215,7 +217,7 @@ export function FindingDetailView({
     remediation.remSteps ||
     remediation.actionItemId
   );
-  const title = getString(entity, ['title', 'summary'], entityId);
+  const title = plainFindingTitle(entity, [...data.targets, ...affectedTargets], data.checks);
   const slaDueAt = findingSlaDueAt(entity);
   const severity = getString(entity, ['severity'], 'unknown');
   const findingStatus = readFindingStatus(entity);
@@ -300,7 +302,7 @@ export function FindingDetailView({
   async function markDelivered() {
     if (!canWriteFinding) return;
     if (!remediation.actionItemId) {
-      setError('No remediation action item id returned by API.');
+      setError('No remediation action item is linked to this finding.');
       return;
     }
     await runAction(`deliver-${entityId}`, () => requestJson(config, session, `/v1/waf/action-items/${encodeURIComponent(remediation.actionItemId)}/deliver`, { method: 'POST' }), 'Remediation marked delivered.');
@@ -348,15 +350,15 @@ export function FindingDetailView({
         aria-label={`Open target ${getString(item, ['value', 'id'], 'target')}`}
       >{getString(item, ['value', 'id'], '')}</AnchorButton>
     },
-    { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
+    { key: 'kind', label: 'Kind', render: (item) => plainCodeLabel(getString(item, ['kind'], ''), 'Not reported') },
     { key: 'value', label: 'Value', render: (item) => <span className="mono">{getString(item, ['value'], '—')}</span> },
     {
       key: 'verification',
       label: 'Verification',
-      render: (item) => <VerifyChip state={getString(item, ['verification_state', 'verification'], 'unverified')} provenance={getString(item, ['verification_title'], 'Verification state from target API.')} />
+      render: (item) => <VerifyChip state={getString(item, ['verification_state', 'verification'], 'unverified')} provenance={getString(item, ['verification_title'], 'Recorded target verification state.')} />
     },
-    { key: 'eligibility', label: 'Eligibility', render: (item) => getString(item, ['eligibility'], '—') },
-    { key: 'verdict', label: 'Last verdict', render: (item) => getString(item, ['last_verdict'], '—') }
+    { key: 'eligibility', label: 'Eligibility', render: (item) => plainCodeLabel(getString(item, ['eligibility'], ''), 'Not reported') },
+    { key: 'verdict', label: 'Last verdict', render: (item) => { const verdict = getString(item, ['last_verdict'], ''); return verdict ? plainVerdictLabel(verdict) : 'No result yet'; } }
   ];
 
   const artifactColumns: TableColumn<DataItem>[] = [
@@ -365,13 +367,13 @@ export function FindingDetailView({
       label: 'Artifact',
       render: (item) => {
         const artifactId = getString(item, ['id'], '');
-        const label = getString(item, ['id', 'kind'], '—');
+        const label = plainCodeLabel(getString(item, ['kind'], ''), 'Evidence artifact');
         return artifactId
-          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('evidence-detail', artifactId)}>{label}</AnchorButton>
+          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('evidence-detail', artifactId)} title={artifactId}>{label}</AnchorButton>
           : <span>{label}</span>;
       }
     },
-    { key: 'kind', label: 'Kind', render: (item) => getString(item, ['kind'], '—') },
+    { key: 'kind', label: 'Kind', render: (item) => plainCodeLabel(getString(item, ['kind'], ''), 'Not reported') },
     {
       key: 'run',
       label: 'Run',
@@ -416,8 +418,8 @@ export function FindingDetailView({
           <h1 className="page-title">{title}</h1>
           <p className="muted mono finding-id">{entityId}</p>
           <div className="detail-status-line">
-            <Badge tone={findingSeverityTone(severity)} title={`Severity ${severity} from finding API`}>{formatSeverityLabel(severity)}</Badge>
-            <Badge tone={findingStatusTone(findingStatus)} title={`Status ${findingStatus} from finding API`}>{formatFindingLabel(findingStatus)}</Badge>
+            <Badge tone={findingSeverityTone(severity)} title={`Recorded severity: ${formatSeverityLabel(severity)}`}>{formatSeverityLabel(severity)}</Badge>
+            <Badge tone={findingStatusTone(findingStatus)} title={`Recorded status: ${formatFindingLabel(findingStatus)}`}>{formatFindingLabel(findingStatus)}</Badge>
           </div>
         </div>
         <div className="row-actions">
@@ -432,7 +434,7 @@ export function FindingDetailView({
       {!loading ? (
         <>
       <div className="metric-grid four">
-        <MetricCard label="Severity" value={formatSeverityLabel(severity)} sub="Impact class from finding API" icon={TriangleAlert} tone={findingSeverityTone(severity)} />
+        <MetricCard label="Severity" value={formatSeverityLabel(severity)} sub="Recorded impact class" icon={TriangleAlert} tone={findingSeverityTone(severity)} />
         <MetricCard label="Status" value={formatFindingLabel(findingStatus)} sub="Recorded finding state" icon={ShieldCheck} tone={findingStatusTone(findingStatus)} />
         <MetricCard label="Target group" value={targetGroupId || 'Not reported'} sub="Declared scope" icon={Target} tone="info" />
         <MetricCard label="Owner" value={owner} sub="Accountable owner" icon={UserCog} tone="muted" />
@@ -440,13 +442,13 @@ export function FindingDetailView({
 
       <Card className="finding-summary-card">
         <CardHeader>
-          <div><CardTitle>Finding summary</CardTitle><CardDescription>Compact API-backed facts and exact relationships for triage and evidence review.</CardDescription></div>
+          <div><CardTitle>Finding summary</CardTitle><CardDescription>Key facts and exact relationships for triage and evidence review.</CardDescription></div>
         </CardHeader>
         <CardContent>
           <dl className="finding-summary-facts">
             <div className="finding-summary-fact"><dt>Finding ID</dt><dd className="mono">{entityId}</dd></div>
             <div className="finding-summary-fact"><dt>SLA due</dt><dd>{slaDueAt ? formatDate(slaDueAt) : 'Not reported'}{isFindingSlaBreach(entity) ? ' · breached' : ''}</dd></div>
-            {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd className="mono">{checkId}</dd></div> : null}
+            {checkId ? <div className="finding-summary-fact"><dt>Check</dt><dd><span>{plainCheckName(getString(data.checks.find((check) => getString(check, ['check_id', 'id'], '') === checkId) ?? {}, ['name', 'title'], checkId))}</span><small className="mono">{checkId}</small></dd></div> : null}
             {vectorFamily ? <div className="finding-summary-fact"><dt>Vector</dt><dd>{formatFindingLabel(vectorFamily)}</dd></div> : null}
             {targetId ? <div className="finding-summary-fact"><dt>Target ID</dt><dd className="mono">{targetId}</dd></div> : null}
             {testRunId ? <div className="finding-summary-fact"><dt>Source run</dt><dd className="mono">{testRunId}</dd></div> : null}
@@ -466,9 +468,9 @@ export function FindingDetailView({
           <CardHeader>
             <CardTitle>Verdict explanation</CardTitle>
             <CardDescription className="detail-status-line">
-              <Badge tone={findingSeverityTone(severity)} title={`Severity ${severity} from finding API`}>{formatSeverityLabel(severity)}</Badge>
+              <Badge tone={findingSeverityTone(severity)} title={`Recorded severity: ${formatSeverityLabel(severity)}`}>{formatSeverityLabel(severity)}</Badge>
               <span className="detail-status-sep" aria-hidden="true">·</span>
-              <Badge tone={findingStatusTone(findingStatus)} title={`Status ${findingStatus} from finding API`}>{formatFindingLabel(findingStatus)}</Badge>
+              <Badge tone={findingStatusTone(findingStatus)} title={`Recorded status: ${formatFindingLabel(findingStatus)}`}>{formatFindingLabel(findingStatus)}</Badge>
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -528,7 +530,7 @@ export function FindingDetailView({
                 >Close finding</Button>
                 <Button size="sm" variant="secondary" loading={busy === `retest-${entityId}`} disabled={busy !== '' || !canStartFindingRetest} onClick={() => void runAction(`retest-${entityId}`, async () => {
                   const retest = resolveFindingRetestAction(entity);
-                  if (!retest) throw new Error('Retest context missing from finding API.');
+                  if (!retest) throw new Error('Retest details are missing from this finding.');
                   // Every kind resolveFindingRetestAction can return must dispatch a real
                   // request; otherwise runAction reports a false "Retest started." success.
                   // Mirrors retestFinding() in detail-pages.tsx.
@@ -594,7 +596,7 @@ export function FindingDetailView({
               <div className="finding-remediation-meta">
                 <div className="rem-cell"><span className="rem-label">Action</span><span className="rem-value mono">{remediation.remAction || '—'}</span></div>
                 <div className="rem-cell"><span className="rem-label">Owner</span><span className="rem-value">{remediation.remOwner || '—'}</span></div>
-                <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Remediation state ${remediation.remState} from finding API`}>{remediation.remState || '—'}</Badge></div>
+                <div className="rem-cell"><span className="rem-label">State</span><Badge tone={remStateTone(remediation.remStateClass, remediation.remState)} title={`Recorded remediation state: ${plainCodeLabel(remediation.remState)}`}>{plainCodeLabel(remediation.remState, 'Not reported')}</Badge></div>
                 <div className="rem-cell"><span className="rem-label">SLA</span><span className="rem-value">{remediation.remSla || '—'}</span></div>
               </div>
               {remediation.remDescription ? (
@@ -639,7 +641,7 @@ export function FindingDetailView({
         <CardHeader>
           <div>
             <CardTitle>Evidence bundle</CardTitle>
-            <CardDescription>Artifacts, source runs, sealed digests, and custody positions returned by the finding evidence API.</CardDescription>
+            <CardDescription>Recorded artifacts, source runs, sealed digests, and custody positions.</CardDescription>
           </div>
           <div className="row-actions">
             <Button size="sm" variant="ghost" loading={busy === `verify-${entityId}`} disabled={evidence === null || busy !== ''} onClick={() => void verifyChain()}>Verify chain</Button>
@@ -667,21 +669,24 @@ export function FindingDetailView({
               />
             </>
           ) : (
-            <EmptyState icon={FileCheck2} title="No evidence artifacts." body={getString(evidence.meta, ['empty_reason'], 'Evidence bundle contains no artifacts for this finding.')} />
+            <EmptyState icon={FileCheck2} title="No evidence artifacts." body={plainEmptyReason(getString(evidence.meta, ['empty_reason'], 'Evidence bundle contains no artifacts for this finding.'))} />
           )}
         </CardContent>
       </Card>
 
       <Card className="finding-custody-card">
         <CardHeader>
-          <div><CardTitle>Custody chain</CardTitle><CardDescription>Hydrated manifest preview. Verification is reported only after the canonical export payload and custody manifest pass the verify endpoint.</CardDescription></div>
+          <div><CardTitle>Custody chain</CardTitle><CardDescription>Verification is shown only after the exported evidence and custody manifest pass the verification check.</CardDescription></div>
           <Badge tone={chainVerified === true ? 'success' : chainVerified === false ? 'danger' : 'muted'}>{custodyStatus}</Badge>
         </CardHeader>
         <CardContent>
           {evidence === null ? <PortalLoadingSkeleton rows={2} /> : evidence.error ? (
             <EmptyState icon={FileCheck2} title="Custody manifest unavailable" body={evidence.error} actionLabel="Retry" onAction={() => setEvidenceReloadToken((value) => value + 1)} />
           ) : (
-            <pre className="code" tabIndex={0} role="region" aria-label="Finding custody chain YAML">{custodyYaml}</pre>
+            <details className="technical-disclosure">
+              <summary>Show technical custody record</summary>
+              <pre className="code" tabIndex={0} role="region" aria-label="Finding custody chain YAML">{custodyYaml}</pre>
+            </details>
           )}
         </CardContent>
       </Card>

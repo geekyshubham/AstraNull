@@ -296,7 +296,7 @@ export function createValidationEvidenceRepository(pool) {
           `SELECT ${TEST_RUN_COLUMNS}
            FROM test_runs
            WHERE ${conditions.join(' AND ')}
-           ORDER BY created_at DESC
+           ORDER BY COALESCE(started_at, created_at) DESC, id DESC
            LIMIT $${limitParam}`,
           params,
         );
@@ -1553,7 +1553,7 @@ export function createValidationEvidenceRepository(pool) {
           `SELECT ${FINDING_COLUMNS}
            FROM findings
            WHERE ${conditions.join(' AND ')}
-           ORDER BY created_at DESC${limitClause}${lockClause}`,
+           ORDER BY created_at DESC, id DESC${limitClause}${lockClause}`,
           params,
         );
         return rows.map(mapFindingRow);

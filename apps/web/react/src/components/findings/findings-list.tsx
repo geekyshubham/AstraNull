@@ -10,6 +10,8 @@ import type { DataItem } from '../../lib/types';
 import { findingStatus } from '../../lib/finding-lifecycle.mjs';
 import { findingSlaDueAt, isFindingSlaBreach } from '../../lib/findings-helpers';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainFindingTitle } from '../../lib/plain-language.mjs';
 
 type StatusFilter = 'open' | 'closed' | 'accepted' | 'all';
 type SortKey = 'severity' | 'recent' | 'oldest' | 'sla' | 'title';
@@ -157,12 +159,14 @@ export function FindingsListView({
   findings,
   checks,
   targetGroups,
+  targets,
   loadError = null,
   onRetry
 }: {
   findings: DataItem[];
   checks: DataItem[];
   targetGroups: DataItem[];
+  targets: DataItem[];
   loadError?: string | null;
   onRetry?: () => void;
 }) {
@@ -232,7 +236,7 @@ export function FindingsListView({
     {
       key: 'finding',
       label: 'Finding',
-      render: (finding) => <FindingCard finding={finding} checks={checks} targetGroups={targetGroups} onOpen={openFinding} />
+      render: (finding) => <FindingCard finding={finding} checks={checks} targetGroups={targetGroups} targets={targets} onOpen={openFinding} />
     },
     {
       key: 'severity',
@@ -276,7 +280,7 @@ export function FindingsListView({
   function rowProps(finding: DataItem): Omit<HTMLAttributes<HTMLTableRowElement>, 'key'> {
     const id = getString(finding, ['id'], '');
     if (!id) return {};
-    const title = getString(finding, ['title', 'summary'], id);
+    const title = plainFindingTitle(finding, targets, checks);
     return {
       role: 'link',
       tabIndex: 0,

@@ -31,6 +31,25 @@ const GOVERNED_HS_STATES = new Set(['scheduled', 'running', 'stopped', 'closed']
 
 const SOC_KILL_SWITCH_ACTIONS = new Set(['soc.kill_switch.activated', 'soc.kill_switch.cleared']);
 
+const PASS_POSTURE_VERDICTS = new Set([
+  'protected',
+  'pass',
+  'passed',
+  'success',
+  'ok',
+  'allowed_as_expected',
+]);
+const GAP_POSTURE_VERDICTS = new Set([
+  'exposed',
+  'unprotected',
+  'gap',
+  'fail',
+  'failed',
+  'bypassable',
+  'penetrated',
+  'edge_exposed',
+]);
+
 function parseTs(value) {
   if (!value) return null;
   const ms = new Date(value).getTime();
@@ -51,7 +70,7 @@ function runStatusEligible(run) {
   return run.status === 'completed' || run.status === 'verdicted';
 }
 
-function verdictForRun(store, runId) {
+export function evidenceBackedVerdictForRun(store, runId) {
   const verdict = store.verdicts.find((v) => v.test_run_id === runId) ?? null;
   if (!verdict) return null;
   const evidenceIds = new Set(Array.isArray(verdict.evidence_ids) ? verdict.evidence_ids : []);
@@ -75,8 +94,38 @@ function vaultForRun(store, runId) {
 }
 
 function readinessVerdictForRun(store, run) {
-  const verdict = verdictForRun(store, run.id);
+  const verdict = evidenceBackedVerdictForRun(store, run.id);
   return runVerdictSupportsReadiness(run, verdict) ? verdict : null;
+}
+
+function readinessPostureForRuns(store, runs) {
+  const latestByCheck = new Map();
+  for (const run of runs) {
+    if (!runStatusEligible(run)) continue;
+    const verdict = readinessVerdictForRun(store, run);
+    if (!verdict) continue;
+    const checkId = String(run.check_id ?? verdict.check_id ?? '').trim();
+    if (!checkId) continue;
+    const at = parseTs(verdict.created_at ?? run.completed_at ?? run.started_at ?? run.created_at) ?? 0;
+    const previous = latestByCheck.get(checkId);
+    if (
+      !previous
+      || at > previous.at
+      || (at === previous.at && String(run.id).localeCompare(previous.runId) > 0)
+    ) {
+      latestByCheck.set(checkId, { at, runId: String(run.id), verdict: verdict.verdict });
+    }
+  }
+
+  const posture = { pass: 0, review: 0, gap: 0, total: 0 };
+  for (const entry of latestByCheck.values()) {
+    const value = String(entry.verdict ?? '').trim().toLowerCase();
+    if (PASS_POSTURE_VERDICTS.has(value)) posture.pass += 1;
+    else if (GAP_POSTURE_VERDICTS.has(value)) posture.gap += 1;
+    else posture.review += 1;
+  }
+  posture.total = posture.pass + posture.review + posture.gap;
+  return posture;
 }
 
 function runHasEvidenceBacking(store, run) {
@@ -89,7 +138,7 @@ function collectEvidenceTimestamps(store, run) {
     const ms = parseTs(run[field]);
     if (ms != null) stamps.push(ms);
   }
-  const verdict = verdictForRun(store, run.id);
+  const verdict = evidenceBackedVerdictForRun(store, run.id);
   if (verdict) {
     const vMs = parseTs(verdict.created_at);
     if (vMs != null) stamps.push(vMs);
@@ -423,7 +472,12 @@ export function computeReadiness(tenantId) {
   });
 
   const score = Math.min(100, Math.round(factors.reduce((s, f) => s + f.score, 0)));
-  const result = { score, factors, updated_at: new Date().toISOString() };
+  const result = {
+    score,
+    factors,
+    posture: readinessPostureForRuns(store, runs),
+    updated_at: new Date().toISOString(),
+  };
   store.readiness[tenantId] = result;
   return result;
 }

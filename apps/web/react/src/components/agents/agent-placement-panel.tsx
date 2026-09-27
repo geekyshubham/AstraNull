@@ -191,7 +191,7 @@ export function AgentPlacementPanel({
     : attributionStatus === 'loading'
       ? 'Checking authoritative run-event endpoints before selecting a placement run.'
       : placementRun
-        ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdictValue || '(none published)'} · status ${lifecycleStatus} · outcome ${outcome} from test-runs API.`
+        ? `Placement test ${getString(placementRun, ['id'])} · verdict ${verdictValue || '(none published)'} · status ${lifecycleStatus} · outcome ${outcome} in the test-run record.`
         : 'No placement test run recorded for this agent scope.';
   const unresolvedValue = attributionStatus === 'unavailable'
     ? 'Unavailable'

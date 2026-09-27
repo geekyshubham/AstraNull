@@ -1296,6 +1296,7 @@ describe('postgres validation service adapters', () => {
     assert.deepEqual(POSTGRES_VALIDATION_EVIDENCE_SERVICE_METHODS, ['listEvidence', 'getEvidence']);
     assert.deepEqual(POSTGRES_VALIDATION_FINDINGS_SERVICE_METHODS, [
       'listFindings',
+      'listFindingsEnvelope',
       'getFinding',
       'patchFinding',
     ]);

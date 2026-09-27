@@ -105,7 +105,7 @@ test.describe('validation scans (FT-SCAN-01)', () => {
     await page.getByRole('button', { name: 'Start validation scan' }).click();
     const modal = launcher(page);
     await expect(modal).toBeVisible();
-    await expect(modal.getByRole('note').filter({ hasText: 'SOC-gated and monitor-only checks are not selectable' })).toBeVisible();
+    await expect(modal.getByRole('note').filter({ hasText: 'SOC-gated and monitor-only checks cannot be started here' })).toBeVisible();
 
     const catalog = await page.evaluate(async () => {
       const response = await fetch('/v1/checks', {

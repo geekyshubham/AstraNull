@@ -5,6 +5,10 @@ import {
   dashboardReadinessMessage,
   evidenceModePresentation,
   evidenceTierInfo,
+  plainCheckName,
+  plainEmptyReason,
+  plainFindingTitle,
+  plainInlineText,
   plainProtectionLabel,
   plainVerdictLabel,
   plainVerificationLabel,
@@ -48,23 +52,92 @@ describe('portal executive language', () => {
       { evidence_tier: 'E1', last_run_id: 'run_1', last_verdict: 'pass' },
     ]) {
       const presentation = evidenceModePresentation(record);
-      assert.equal(presentation.label, 'Not tested live');
+      assert.equal(presentation.label, 'Declaration only');
       assert.equal(presentation.live, false);
-      assert.match(presentation.detail, /Needs your evidence/);
+      assert.match(presentation.detail, /No live traffic/);
     }
   });
 
-  it('claims a live test only when a live-capable tier or probe also has a result', () => {
-    assert.equal(evidenceModePresentation({ evidence_tier: 'E3' }).label, 'Live check available');
+  it('claims a live test only when a live-capable tier or probe also has cited evidence', () => {
+    assert.equal(evidenceModePresentation({ evidence_tier: 'E3' }).label, 'Bounded live check available');
     assert.equal(
       evidenceModePresentation({ evidence_tier: 'E3', run_id: 'run_1', verdict: 'protected' }).label,
-      'Tested live',
+      'Bounded live check available',
+      'a verdict without a cited evidence id must not be presented as tested live',
+    );
+    assert.equal(
+      evidenceModePresentation({ evidence_tier: 'E3', run_id: 'run_1', verdict: 'protected', evidence_ids: ['evt_1'] }).label,
+      'Tested live (bounded)',
     );
     assert.equal(
       evidenceModePresentation({ evidence_ids: ['evt_1'] }).label,
       'Evidence recorded',
       'evidence without tier or probe kind must not be promoted to live',
     );
+  });
+
+  it('maps machine-coded empty reasons while preserving authored sentences', () => {
+    assert.equal(
+      plainEmptyReason('coverage_summary_not_populated'),
+      'WAF coverage will appear after a declared WAF asset records evidence.',
+    );
+    assert.equal(plainEmptyReason('No targets are declared yet.'), 'No targets are declared yet.');
+    assert.equal(plainEmptyReason('future_reason_code'), 'Future reason code.');
+  });
+
+  it('resolves generated finding titles to a plain verdict and target hostname', () => {
+    const finding = {
+      title: 'Finding: penetrated on tgt_1234',
+      target_id: 'tgt_1234',
+      check_id: 'origin.leak_scan.safe',
+    };
+    assert.equal(
+      plainFindingTitle(
+        finding,
+        [{ id: 'tgt_1234', value: 'astranull.site' }],
+        [{ check_id: 'origin.leak_scan.safe', name: 'Origin bypass check' }],
+      ),
+      'Attack traffic reached your server on astranull.site',
+    );
+    assert.equal(
+      plainFindingTitle({
+        title: 'Finding: edge_exposed on api.example.com',
+        target_id: 'tgt_api',
+        check_id: 'origin.leak_scan.safe',
+      }),
+      'Direct server access was found on api.example.com',
+      'the backend-generated hostname form must not leak a machine-coded verdict',
+    );
+    assert.equal(plainCheckName('WAF/API-Gateway marker'), 'WAF application gateway marker');
+  });
+
+  it('derives declaration-only versus bounded-live copy from the loaded check catalog', () => {
+    assert.equal(
+      evidenceModePresentation(
+        { id: 'run_1', verdict: { verdict: 'inconclusive', evidence_ids: ['evd_1'] } },
+        { probe_profile: { kind: 'metadata_marker' } },
+      ).label,
+      'Declaration only',
+    );
+    const live = evidenceModePresentation(
+      { id: 'run_2', verdict: { verdict: 'inconclusive', evidence_ids: ['evd_2'] } },
+      { probe_profile: { kind: 'http_bounded' } },
+    );
+    assert.equal(live.label, 'Tested live (bounded)');
+    assert.equal(live.live, true);
+    assert.equal(
+      evidenceModePresentation({ id: 'run_3', evidence_ids: ['evd_3'] }).label,
+      'Evidence recorded',
+      'unknown methods must not be promoted to live',
+    );
+  });
+
+  it('humanizes embedded machine tokens without changing supported record and check IDs', () => {
+    assert.equal(
+      plainInlineText('Missing customer_authorization_letter for run_123 on origin.leak_scan.safe.'),
+      'Missing customer authorization letter for run_123 on origin.leak_scan.safe.',
+    );
+    assert.equal(plainInlineText('signup_request is absent'), 'Signup request is absent');
   });
 
   it('qualifies readiness by evidence coverage and high-priority gaps', () => {

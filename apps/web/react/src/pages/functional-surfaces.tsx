@@ -92,6 +92,8 @@ import type { ProgressTone } from '../components/ui/progress';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName, plainVerdictLabel } from '../lib/plain-language.mjs';
 
 const WAF_POSTURE_SURFACE_TABS = [
   ...WAF_POSTURE_TABS,
@@ -137,7 +139,7 @@ const VECTOR_FAMILY_LABELS: Record<string, string> = {
   path: 'Path',
   l3_l4: 'L3/L4',
   dns: 'DNS',
-  l7: 'L7/API',
+  l7: 'Application layer',
   waf: 'WAF',
   tls: 'TLS',
   protocol: 'Protocol',
@@ -214,22 +216,12 @@ function formatCheckBoundLabel(check: DataItem) {
   return '—';
 }
 
-function formatCatalogVerdictLabel(verdict: string) {
-  const key = verdict.trim().toLowerCase();
-  if (!key) return '—';
-  if (['pass', 'passed', 'protected', 'ready', 'success', 'ok'].includes(key)) return 'Pass';
-  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable', 'penetrated'].includes(key)) return 'Gap';
-  if (['review', 'partial', 'inconclusive', 'warn', 'warning', 'medium'].includes(key)) return 'Review';
-  if (key === 'request') return 'request';
-  return formatVerdictLabel(verdict);
-}
-
 function catalogVerdictBadgeTone(verdict: string): BadgeTone {
-  const label = formatCatalogVerdictLabel(verdict);
-  if (label === 'Pass') return 'success';
-  if (label === 'Gap') return 'danger';
-  if (label === 'Review') return 'warn';
-  if (label === 'request') return 'muted';
+  const key = verdict.trim().toLowerCase();
+  if (['pass', 'passed', 'protected', 'ready', 'success', 'ok'].includes(key)) return 'success';
+  if (['gap', 'fail', 'failed', 'unprotected', 'bypassable', 'penetrated', 'edge_exposed'].includes(key)) return 'danger';
+  if (['review', 'partial', 'inconclusive', 'warn', 'warning', 'medium'].includes(key)) return 'warn';
+  if (key === 'request') return 'muted';
   return verdictBadgeTone(verdict);
 }
 
@@ -256,20 +248,6 @@ function verdictBadgeTone(verdict: string): BadgeTone {
   if (normalized === 'partial' || normalized === 'inconclusive') return 'warn';
   if (normalized === 'pending' || normalized === '—' || !normalized) return 'muted';
   return 'info';
-}
-
-function formatVerdictLabel(verdict: string) {
-  const normalized = verdict.toLowerCase();
-  const labels: Record<string, string> = {
-    pass: 'Pass',
-    fail: 'Fail',
-    partial: 'Partial',
-    pending: 'Pending',
-    inconclusive: 'Inconclusive',
-    ready: 'Ready',
-    failed: 'Failed'
-  };
-  return labels[normalized] ?? verdict.replace(/_/g, ' ');
 }
 
 function findingStatusBadgeTone(status: string): BadgeTone {
@@ -426,11 +404,10 @@ function checkStatusFilterKey(
   const checkId = getString(check, ['check_id'], '');
   const latest = verdicts.get(checkId);
   if (latest?.verdict) {
-    const label = formatCatalogVerdictLabel(latest.verdict);
-    if (label === 'Pass') return 'pass';
-    if (label === 'Gap') return 'gap';
-    if (label === 'Review') return 'review';
-    if (label === 'request') return 'request';
+    const key = latest.verdict.trim().toLowerCase();
+    if (['pass', 'passed', 'protected', 'ready', 'success', 'ok'].includes(key)) return 'pass';
+    if (['gap', 'fail', 'failed', 'unprotected', 'bypassable', 'penetrated', 'edge_exposed'].includes(key)) return 'gap';
+    if (key === 'request') return 'request';
     return 'review';
   }
   if (getString(check, ['safety_class'], '') === 'soc_gated') return 'request';
@@ -443,7 +420,7 @@ const CHECK_FAMILY_FILTER_OPTIONS: { value: CheckFamilyTabId; label: string }[] 
   { value: 'origin-bypass', label: 'Origin bypass' },
   { value: 'l3l4', label: 'L3 / L4' },
   { value: 'dns', label: 'DNS' },
-  { value: 'l7api', label: 'L7 / API' },
+  { value: 'l7api', label: 'Application layer' },
   { value: 'protocols', label: 'Protocols / TLS' },
   { value: 'reflection-amplification', label: 'Reflection / amplification' },
   { value: 'exploit', label: 'Exploit-based DoS' },
@@ -641,7 +618,7 @@ function coverageStatusHint(status: string) {
 function checkDisplayName(checks: DataItem[], checkId: string, runId = '') {
   const check = checks.find((entry) => getString(entry, ['check_id']) === checkId);
   const name = getString(check ?? {}, ['name'], checkId);
-  return name || runId || 'View run';
+  return plainCheckName(name || runId || 'View run');
 }
 
 function truncateText(text: string, max = 72) {
@@ -1728,7 +1705,7 @@ export function AgentsPage({
                 </dl>
                 <dl>
                   <dt>Reported online</dt>
-                  <dd>{onlineAgents}<span>API status is online</span></dd>
+                  <dd>{onlineAgents}<span>Reported online</span></dd>
                 </dl>
                 <dl>
                   <dt>Group-bound</dt>
@@ -1849,7 +1826,7 @@ export function AgentsPage({
                     <div className="agents-secret-copy">
                       <h3 id="bootstrap-secret-title">One-time bootstrap token secret</h3>
                       <p>
-                        It is not returned by list APIs and will not be visible after refresh.
+                        It will not appear in list views and will not be visible after refresh.
                         {tokenId ? <> Token id <code className="traffic-path-label">{tokenId}</code>.</> : null}
                         {tokenScope ? <> Scoped to <strong>{tokenScope.label}</strong> (<code className="traffic-path-label">{tokenScope.id}</code>).</> : null}
                       </p>
@@ -2302,7 +2279,7 @@ export function ValidationSurfacePage({
           const latest = latestCheckVerdicts.get(checkId);
           const safetyClass = getString(item, ['safety_class'], '');
           const verdict = latest?.verdict || (safetyClass === 'soc_gated' ? 'request' : '');
-          const badge = <Badge tone={catalogVerdictBadgeTone(verdict)}>{verdict ? formatCatalogVerdictLabel(verdict) : 'Untested'}</Badge>;
+          const badge = <Badge tone={catalogVerdictBadgeTone(verdict)}>{verdict ? (verdict === 'request' ? 'Request required' : plainVerdictLabel(verdict)) : 'Untested'}</Badge>;
           return latest?.runId
             ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', latest.runId)} aria-label={`Open latest run for ${checkId}`}>{badge}</AnchorButton>
             : badge;
@@ -2421,7 +2398,7 @@ export function ValidationSurfacePage({
             <span className="run-status-cell">
               <span className="run-status-line">
                 {inProgress ? <span className="run-live-dot" aria-hidden="true" /> : null}
-                <Badge tone={runStatusBadgeTone(status)} title="Run lifecycle status from API">
+                <Badge tone={runStatusBadgeTone(status)} title="Recorded run lifecycle status">
                   {formatRunStatusLabel(status)}
                 </Badge>
               </span>
@@ -2435,11 +2412,11 @@ export function ValidationSurfacePage({
         label: 'Verdict',
         render: (item) => {
           const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? getRunVerdictValue(item) : '';
-          if (!verdict) return <span className="muted">No verdict evidence</span>;
+          if (!verdict) return <span className="muted">No result yet</span>;
           const verdictRecord = getNestedItem(item, ['verdict']);
           const rawConfidence = getNumber(verdictRecord ?? {}, ['confidence_pct', 'confidence'], -1);
           const confidence = rawConfidence < 0 ? '' : rawConfidence <= 1 ? `${Math.round(rawConfidence * 100)}% confidence` : `${Math.round(rawConfidence)}% confidence`;
-          return <span className="catalog-cell-stack"><Badge tone={verdictBadgeTone(verdict)} title="Evidence-backed run verdict">{formatVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
+          return <span className="catalog-cell-stack"><Badge tone={verdictBadgeTone(verdict)} title="Evidence-backed run verdict">{plainVerdictLabel(verdict)}</Badge>{confidence ? <small>{confidence}</small> : null}</span>;
         }
       },
       {
@@ -2675,7 +2652,7 @@ export function ValidationSurfacePage({
             <Badge tone={findingKpis.slaBreachCount > 0 ? 'danger' : 'muted'}>{findingKpis.slaBreachCount} SLA breached</Badge>
           </CardHeader>
           <CardContent className="findings-surface-wrap">
-            <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} loadError={findingsLoadError} onRetry={() => void handleSurfaceRefresh()} />
+            <FindingsListView findings={data.findings} checks={data.checks} targetGroups={data.targetGroups} targets={data.targets} loadError={findingsLoadError} onRetry={() => void handleSurfaceRefresh()} />
           </CardContent>
         </Card>
       </div>

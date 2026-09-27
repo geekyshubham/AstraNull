@@ -13,7 +13,7 @@ export const CAPABILITY_PROBE_KIND_LABELS: Record<string, string> = {
   dns_failover_posture: 'DNS failover posture',
   tls_audit: 'TLS audit',
   cache_abuse_probe: 'Cache/CDN abuse check',
-  api_surface_scan: 'API surface scan',
+  api_surface_scan: 'Application surface scan',
   cors_posture_probe: 'CORS posture',
   graphql_posture_probe: 'GraphQL posture',
   bot_challenge_probe: 'Bot/challenge probe',
@@ -36,7 +36,7 @@ export const REQUIRED_SETUP_LABELS: Record<string, string> = {
   failover_policy_declaration: 'Failover policy',
   tls_terminated_endpoint: 'TLS-terminated endpoint',
   declared_cache_bust_path: 'Cache-bust path',
-  declared_api_endpoint: 'API endpoint',
+  declared_api_endpoint: 'Application endpoint',
   url_target: 'URL target',
 };
 

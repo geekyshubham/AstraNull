@@ -54,6 +54,59 @@ function sentenceLabel(value) {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
+const MACHINE_CODE_RE = /^[a-z]+(?:_[a-z0-9]+)+$/;
+const EMPTY_REASON_COPY = Object.freeze({
+  coverage_summary_not_populated: 'WAF coverage will appear after a declared WAF asset records evidence.',
+});
+
+export function plainCodeLabel(value, fallback = 'Not reported') {
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  const labels = {
+    fqdn: 'Domain name',
+    must_block_before_origin: 'Block before the origin server',
+    should_be_protected: 'Should be protected',
+  };
+  const key = normalize(text);
+  if (labels[key]) return labels[key];
+  const words = text.replaceAll('_', ' ');
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+export function plainEmptyReason(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (!MACHINE_CODE_RE.test(text)) return text;
+  return EMPTY_REASON_COPY[text] ?? `${sentenceLabel(text)}.`;
+}
+
+const VISIBLE_RECORD_ID_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_/;
+
+export function plainInlineText(value) {
+  const text = String(value ?? '');
+  return text.replace(/\b[a-z]+(?:_[a-z0-9]+)+\b/g, (token, offset) => {
+    if (VISIBLE_RECORD_ID_RE.test(token)) return token;
+    const before = text.slice(0, offset);
+    const start = before.match(/[a-z0-9_.-]+$/i)?.[0] ?? '';
+    const after = text.slice(offset + token.length).match(/^[a-z0-9_.-]+/i)?.[0] ?? '';
+    const envelope = `${start}${token}${after}`.replace(/^\.+|\.+$/g, '');
+    if (/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$/i.test(envelope)) return token;
+    const label = plainCodeLabel(token);
+    return offset === 0 || /[.!?:]\s*$/.test(before)
+      ? label
+      : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+  });
+}
+
+export function plainCheckName(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\bWAF\s*\/\s*API[- ]?Gateway\b/gi, 'WAF application gateway')
+    .replace(/\bL7\s*\/\s*API\b/gi, 'application layer')
+    .replace(/\bAPI[- ]?Gateway\b/gi, 'application gateway')
+    .replace(/\bAPI\b/g, 'application interface');
+}
+
 const VERDICT_LABELS = Object.freeze({
   protected: 'Protection stopped the test traffic',
   pass: 'Protection worked as expected',
@@ -62,6 +115,9 @@ const VERDICT_LABELS = Object.freeze({
   ok: 'Protection worked as expected',
   bypassable: 'A bypass path reached your server',
   penetrated: 'Attack traffic reached your server',
+  edge_exposed: 'Direct server access was found',
+  exposed: 'Direct server access was found',
+  allowed_as_expected: 'The tested traffic behaved as expected',
   gap: 'Protection did not work as expected',
   fail: 'Protection did not work as expected',
   failed: 'Protection did not work as expected',
@@ -92,6 +148,48 @@ export function plainVerdictLabel(value) {
 export function plainVerdictDescription(value) {
   const key = normalize(value);
   return VERDICT_DESCRIPTIONS[key] ?? '';
+}
+
+function recordString(record, keys) {
+  return String(firstValue(record, keys) ?? '').trim();
+}
+
+export function plainFindingTitle(value, targets = [], checks = []) {
+  const finding = asRecord(value) ?? {};
+  const rawTitle = recordString(finding, ['title', 'summary', 'label']);
+  const generated = rawTitle.match(/^Finding:\s*([a-z][a-z0-9_-]*)\s+on\s+(.+)$/i);
+  const nestedVerdict = nestedRecord(finding, 'verdict');
+  const directVerdict = typeof finding.verdict === 'string' ? finding.verdict.trim() : '';
+  const verdict = directVerdict
+    || recordString(finding, ['outcome', 'result', 'reason_code'])
+    || recordString(nestedVerdict, ['verdict', 'result', 'status'])
+    || generated?.[1]
+    || '';
+  const targetId = recordString(finding, ['target_id']) || generated?.[2] || '';
+  const embeddedTarget = asRecord(finding.target);
+  const target = (Array.isArray(targets) ? targets : []).map(asRecord).find((entry) => recordString(entry, ['id', 'target_id']) === targetId);
+  const targetName = recordString(finding, ['target_hostname', 'target_value'])
+    || recordString(embeddedTarget, ['hostname', 'value', 'name', 'label'])
+    || recordString(target, ['hostname', 'value', 'name', 'label'])
+    || generated?.[2]
+    || targetId;
+  const checkId = recordString(finding, ['check_id']);
+  const check = (Array.isArray(checks) ? checks : []).map(asRecord).find((entry) => recordString(entry, ['check_id', 'id']) === checkId);
+  const checkName = plainCheckName(recordString(check, ['name', 'title']) || checkId);
+
+  if (generated || (!rawTitle && verdict)) {
+    const outcome = plainVerdictLabel(verdict || generated?.[1]);
+    return targetName ? `${outcome} on ${targetName}` : outcome;
+  }
+  if (rawTitle) {
+    const namedTitle = targetId && targetName ? rawTitle.replaceAll(targetId, targetName) : rawTitle;
+    const plainTitle = plainCheckName(namedTitle);
+    return targetName && targetName !== targetId && !plainTitle.toLowerCase().includes(targetName.toLowerCase())
+      ? `${plainTitle} · ${targetName}`
+      : plainTitle;
+  }
+  if (checkName && targetName) return `${checkName} on ${targetName}`;
+  return checkName || targetName || 'Evidence-backed finding';
 }
 
 const VERIFICATION_LABELS = Object.freeze({
@@ -142,26 +240,39 @@ export function evidenceTierInfo(value) {
   return EVIDENCE_TIERS.find((tier) => tier.code === code) ?? null;
 }
 
-export function evidenceModePresentation(value) {
+export function evidenceModePresentation(value, catalogCheck = null) {
   const record = asRecord(value) ?? {};
+  const check = asRecord(catalogCheck) ?? {};
   const metadata = nestedRecord(record, 'metadata');
   const profile = nestedRecord(record, 'probe_profile');
+  const checkMetadata = nestedRecord(check, 'metadata');
+  const checkProfile = nestedRecord(check, 'probe_profile');
   const tier = evidenceTierInfo(firstValue(record, ['evidence_tier', 'evidence_level', 'tier'])
-    || firstValue(metadata, ['evidence_tier', 'evidence_level', 'tier']));
+    || firstValue(metadata, ['evidence_tier', 'evidence_level', 'tier'])
+    || firstValue(check, ['evidence_tier', 'evidence_level', 'tier'])
+    || firstValue(checkMetadata, ['evidence_tier', 'evidence_level', 'tier']));
   const probeKind = normalize(
     firstValue(record, ['probe_kind', 'profile_kind'])
       || firstValue(metadata, ['probe_kind', 'profile_kind'])
-      || firstValue(profile, ['kind']),
+      || firstValue(profile, ['kind'])
+      || firstValue(check, ['probe_kind', 'profile_kind'])
+      || firstValue(checkMetadata, ['probe_kind', 'profile_kind'])
+      || firstValue(checkProfile, ['kind']),
   );
-  const evidenceIds = Array.isArray(record.evidence_ids) ? record.evidence_ids.filter(Boolean) : [];
-  const hasResult = evidenceIds.length > 0
-    || Boolean(firstValue(record, ['last_run_id', 'run_id']))
-      && !['', 'unknown', 'pending'].includes(normalize(firstValue(record, ['last_verdict', 'verdict'])));
+  const nestedVerdict = nestedRecord(record, 'verdict');
+  const evidenceIds = [
+    ...(Array.isArray(record.evidence_ids) ? record.evidence_ids : []),
+    ...(Array.isArray(nestedVerdict.evidence_ids) ? nestedVerdict.evidence_ids : []),
+  ].filter(Boolean);
+  const hasEvidenceReference = evidenceIds.length > 0;
+  const hasPublishedLastResult = Boolean(firstValue(record, ['last_run_id']))
+    && !['', 'unknown', 'pending'].includes(normalize(firstValue(record, ['last_verdict'])));
+  const hasResult = hasEvidenceReference || hasPublishedLastResult;
 
-  if (probeKind === 'metadata_marker' || tier?.code === 'E1') {
+  if (['metadata_marker', 'none', 'ops_readiness'].includes(probeKind) || tier?.code === 'E1') {
     return {
-      label: 'Not tested live',
-      detail: 'Needs your evidence before AstraNull can verify protection.',
+      label: 'Declaration only',
+      detail: 'No live traffic was sent for this check.',
       tone: 'warn',
       live: false,
       code: tier?.code ?? 'E1',
@@ -185,10 +296,12 @@ export function evidenceModePresentation(value) {
       code: tier.code,
     };
   }
-  if (tier?.code === 'E2' || tier?.code === 'E3' || probeKind) {
+  if (probeKind || tier?.code === 'E2' || tier?.code === 'E3') {
     return {
-      label: hasResult ? 'Tested live' : 'Live check available',
-      detail: tier?.description ?? 'A bounded probe can collect live evidence for this check.',
+      label: hasResult ? 'Tested live (bounded)' : 'Bounded live check available',
+      detail: hasResult
+        ? 'A bounded check recorded evidence for this run.'
+        : tier?.description ?? 'A bounded check can collect live evidence.',
       tone: hasResult ? 'success' : 'info',
       live: hasResult,
       code: tier?.code ?? '',
@@ -197,14 +310,14 @@ export function evidenceModePresentation(value) {
   if (hasResult) {
     return {
       label: 'Evidence recorded',
-      detail: 'The API returned evidence, but did not report whether the check ran live.',
+      detail: 'Evidence was recorded, but the test method was not identified.',
       tone: 'info',
       live: false,
       code: '',
     };
   }
   return {
-    label: 'Evidence level not reported',
+    label: 'Test method not reported',
     detail: 'Open the check definition before treating this as a live test.',
     tone: 'muted',
     live: false,

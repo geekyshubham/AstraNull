@@ -15,6 +15,8 @@ import {
 } from '../../lib/high-scale';
 import { sha256CanonicalJsonForCustody } from '../../lib/custody';
 import { requestJson } from '../../lib/api';
+// @ts-ignore Plain ESM keeps status labels directly testable with node:test.
+import { plainCodeLabel } from '../../lib/plain-language.mjs';
 import { apiErrorMessage } from '../../lib/error-messages';
 import { sessionHasPermission } from '../../lib/dataset-access.mjs';
 import { buildDetailHref } from '../../lib/route-params';
@@ -384,11 +386,12 @@ export function RunsSocGatePanel({
       label: 'Request',
       render: (item) => {
         const requestId = getString(item, ['id'], '');
+        const requestLabel = getString(item, ['objective', 'reason', 'name'], 'High-scale validation request');
         // §4.7: customers see their own high-scale requests INLINE (all state is in this row);
         // the queue-detail SOC workspace is staff-only, so customers do NOT navigate there
         // (avoids the staff-gated "access denied" dead-end). Staff open the workspace from here.
         if (!isStaffPrincipal) {
-          return <code title={`High-scale request ${requestId} · status shown inline`}>{requestId}</code>;
+          return <span title={requestId || undefined}>{requestLabel}</span>;
         }
         return (
           <AnchorButton
@@ -396,12 +399,12 @@ export function RunsSocGatePanel({
             href={buildDetailHref('queue-detail', requestId)}
             aria-label={`Open SOC workspace for request ${requestId}`}
           >
-            <code>{getString(item, ['id'])}</code>
+            {requestLabel}
           </AnchorButton>
         );
       }
     },
-    { key: 'policy', label: 'Policy', render: (item) => <code>{getString(item, ['policy_id', 'requested_scenario_families'], 'soc_gated')}</code> },
+    { key: 'policy', label: 'Policy', render: (item) => { const policy = getString(item, ['policy_id'], ''); const scenario = getString(item, ['requested_scenario_families'], 'soc_gated'); return <span title={policy || undefined}>{policy ? 'Scheduled policy' : plainCodeLabel(scenario)}</span>; } },
     { key: 'group', label: 'Target group', render: (item) => targetGroupDisplayName(data, getString(item, ['target_group_id'])) },
     { key: 'limits', label: 'Governed limits', render: (item) => governedLimitDisplay(item) },
     {
@@ -425,7 +428,7 @@ export function RunsSocGatePanel({
       label: 'State',
       render: (item) => {
         const state = getString(item, ['state']);
-        return <Badge tone={stateBadgeTone(state)} title={`Request state from API: ${state}`}>{state}</Badge>;
+        return <Badge tone={stateBadgeTone(state)} title={`Recorded request state: ${plainCodeLabel(state)}`}>{plainCodeLabel(state)}</Badge>;
       }
     },
     {
@@ -576,7 +579,7 @@ export function RunsSocGatePanel({
                 <label><span>Window start</span><input name="window_start" type="datetime-local" defaultValue={datetimeLocalValue(24)} required disabled={busy !== ''} /></label>
                 <label><span>Window end</span><input name="window_end" type="datetime-local" defaultValue={datetimeLocalValue(48)} required disabled={busy !== ''} /></label>
                 <label><span>Timezone</span><input name="timezone" defaultValue="UTC" required disabled={busy !== ''} aria-describedby="high-scale-timezone-help" /></label>
-                <p className="muted text-xs" id="high-scale-timezone-help">The API stores the requested window as ISO timestamps and retains this coordination timezone.</p>
+                <p className="muted text-xs" id="high-scale-timezone-help">The requested window is stored as exact timestamps together with this coordination timezone.</p>
               </fieldset>
 
               <fieldset disabled={busy !== ''}>

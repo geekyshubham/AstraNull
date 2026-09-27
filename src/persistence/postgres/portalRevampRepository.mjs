@@ -56,6 +56,8 @@ function mapDnsRow(row) {
 const FINDINGS_PAGE_MAX = 100;
 const FINDINGS_PAGE_FALLBACK = 50;
 const FINDINGS_DEFAULT_PAGE = 20;
+const RUNS_PAGE_MAX = 100;
+const RUNS_PAGE_FALLBACK = 5;
 const VERIFICATION_HISTORY_CAP = 200;
 
 /** @type {readonly string[]} */
@@ -840,6 +842,10 @@ export function createPortalRevampRepository(pool) {
               fallback: FINDINGS_PAGE_FALLBACK,
             })
           : FINDINGS_DEFAULT_PAGE;
+        const runsLimit = clampPageLimit(query.runs_limit, {
+          max: RUNS_PAGE_MAX,
+          fallback: RUNS_PAGE_FALLBACK,
+        });
 
         // Keyset cursors carry the whole (created_at, id) sort tuple. A LEGACY cursor
         // holds only `id`, so its created_at is resolved here with a single primary-key
@@ -940,7 +946,7 @@ export function createPortalRevampRepository(pool) {
            ) v ON TRUE
            WHERE r.tenant_id = $1 AND r.target_id = $2
            ORDER BY COALESCE(r.started_at, r.created_at) DESC LIMIT $3`,
-          [ctx.tenantId, targetId, Number(query.runs_limit) || 5],
+          [ctx.tenantId, targetId, runsLimit],
         );
         bump();
         const policies = await client.query(

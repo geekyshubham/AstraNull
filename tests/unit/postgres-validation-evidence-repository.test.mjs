@@ -762,7 +762,7 @@ describe('postgres validation evidence repository', () => {
     assert.match(query.text, /target_group_id = \$2/);
     assert.match(query.text, /target_id = \$3/);
     assert.match(query.text, /check_id = \$4/);
-    assert.match(query.text, /ORDER BY created_at DESC FOR UPDATE\s*$/);
+    assert.match(query.text, /ORDER BY created_at DESC, id DESC FOR UPDATE\s*$/);
     assert.doesNotMatch(query.text, /status = 'open'/);
     assert.deepEqual(query.params, [CTX.tenantId, 'tg_1', 'tgt_1', 'chk_1']);
   });
@@ -787,7 +787,7 @@ describe('postgres validation evidence repository', () => {
     assert.match(q.text, /target_group_id = \$2/);
     assert.match(q.text, /status = ANY\(\$3\)/);
     assert.match(q.text, /created_at < \$4::timestamptz/);
-    assert.match(q.text, /ORDER BY created_at DESC/);
+    assert.match(q.text, /ORDER BY COALESCE\(started_at, created_at\) DESC, id DESC/);
     assert.match(q.text, /LIMIT \$5/);
     assert.deepEqual(q.params, [CTX.tenantId, 'tg_1', ['running', 'verdicted'], FIXED_NOW, 500]);
     assertUsesTenantPredicate(q.text, q.params, CTX.tenantId);

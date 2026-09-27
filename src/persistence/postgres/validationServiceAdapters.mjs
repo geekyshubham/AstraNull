@@ -320,6 +320,7 @@ export const POSTGRES_VALIDATION_EVIDENCE_SERVICE_METHODS = Object.freeze([
 /** @type {readonly string[]} */
 export const POSTGRES_VALIDATION_FINDINGS_SERVICE_METHODS = Object.freeze([
   'listFindings',
+  'listFindingsEnvelope',
   'getFinding',
   'patchFinding',
 ]);
@@ -2311,6 +2312,24 @@ export function createPostgresValidationServices(repositories, options = {}) {
   const findings = {
     async listFindings(ctx, options = {}) {
       return validationEvidence.listFindings(ctx, options);
+    },
+    async listFindingsEnvelope(ctx, options = {}) {
+      const items = await this.listFindings(ctx, options);
+      return {
+        items,
+        count: items.length,
+        meta: {
+          empty_reason: items.length
+            ? null
+            : options.target_group_id
+              ? 'No findings match this target group filter.'
+              : options.target_id
+                ? 'No findings match this target filter.'
+                : options.test_run_id
+                  ? 'No findings match this test run filter.'
+                  : 'No findings have been published for this tenant yet.',
+        },
+      };
     },
     async getFinding(ctx, id) {
       return validationEvidence.getFinding(ctx, id);

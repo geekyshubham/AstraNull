@@ -2,6 +2,8 @@ import { findingStatus } from '../../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../../lib/route-params';
 import type { DataItem } from '../../lib/types';
 import { formatDate, formatSeverityLabel } from '../../lib/utils';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName, plainFindingTitle, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { Badge } from '../ui/badge';
 
 function getString(item: DataItem, keys: string[], fallback = '') {
@@ -24,23 +26,25 @@ export function FindingCard({
   finding,
   checks,
   targetGroups,
+  targets,
   active = false,
   onOpen
 }: {
   finding: DataItem;
   checks: DataItem[];
   targetGroups: DataItem[];
+  targets: DataItem[];
   active?: boolean;
   onOpen?: (id: string) => void;
 }) {
   const id = getString(finding, ['id'], '');
-  const title = getString(finding, ['title', 'summary'], id || 'Untitled finding');
+  const title = plainFindingTitle(finding, targets, checks);
   const severity = getString(finding, ['severity'], 'unknown');
   const state = findingStatus(finding);
   const verdict = getString(finding, ['verdict'], '');
   const checkId = getString(finding, ['check_id', 'check'], '');
   const check = checks.find((entry) => getString(entry, ['check_id', 'id']) === checkId);
-  const checkLabel = checkId ? getString(check ?? {}, ['name', 'title'], checkId) : '';
+  const checkLabel = checkId ? plainCheckName(getString(check ?? {}, ['name', 'title'], checkId)) : '';
   const groupId = getString(finding, ['target_group_id'], '');
   const group = targetGroups.find((entry) => getString(entry, ['id']) === groupId);
   const groupLabel = getString(group ?? {}, ['name', 'id'], groupId || 'Ungrouped');
@@ -60,7 +64,7 @@ export function FindingCard({
     >
       <span className="fc-headline">
         <strong>{title}</strong>
-        {verdict ? <Badge tone={verdictTone(verdict)} title={`Correlated verdict: ${verdict}`}>{verdict.replaceAll('_', ' ')}</Badge> : null}
+        {verdict ? <Badge tone={verdictTone(verdict)} title={`Recorded verdict: ${plainVerdictLabel(verdict)}`}>{plainVerdictLabel(verdict)}</Badge> : null}
       </span>
       <span className="fc-meta mono" title={id}>{id || 'No finding ID'}</span>
       <span className="fc-facets">

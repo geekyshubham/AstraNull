@@ -12,6 +12,8 @@ import {
 import { agentHeartbeatFreshness } from '../../lib/agent-helpers';
 import type { DataItem } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
+// @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
+import { plainCodeLabel } from '../../lib/plain-language.mjs';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
   if (!item) return fallback;
@@ -34,15 +36,15 @@ function resolveRecordedNonceStatus(agent: DataItem) {
 
   if (installStatus) {
     return {
-      label: installStatus.replace(/_/g, ' '),
-      provenance: `Agent record install_nonce_status=${installStatus}${validationAt ? ` at ${formatDate(validationAt)}` : ''}.`
+      label: plainCodeLabel(installStatus),
+      provenance: `Recorded install nonce state: ${plainCodeLabel(installStatus)}${validationAt ? ` at ${formatDate(validationAt)}` : ''}.`
     };
   }
   if (validationStatus) {
     const matched = validationStatus === 'valid' && Boolean(bootstrapId);
     return {
-      label: matched ? 'match' : validationStatus.replace(/_/g, ' '),
-      provenance: `Agent record last_token_validation_status=${validationStatus}${bootstrapId ? ` for bootstrap token ID ${bootstrapId}` : ''}${validationAt ? ` at ${formatDate(validationAt)}` : ''}.`
+      label: matched ? 'Match' : plainCodeLabel(validationStatus),
+      provenance: `Recorded token validation: ${plainCodeLabel(validationStatus)}${bootstrapId ? ` for bootstrap token ${bootstrapId}` : ''}${validationAt ? ` at ${formatDate(validationAt)}` : ''}.`
     };
   }
   return {
@@ -149,8 +151,8 @@ export function AgentHeartbeatPanel({
           : 'awaiting_heartbeat';
   const provenance = [
     recordedLastHeartbeatAt
-      ? `Agent record ${agentId} reports last_heartbeat_at ${formatDate(recordedLastHeartbeatAt)}.`
-      : `Agent record ${agentId} has no last_heartbeat_at.`,
+      ? `Agent record ${agentId} reports its last heartbeat at ${formatDate(recordedLastHeartbeatAt)}.`
+      : `Agent record ${agentId} has no last-heartbeat timestamp.`,
     latestAuditHeartbeat
       ? `Latest exact agent.heartbeat audit event ${getString(latestAuditHeartbeat.entry, ['id', 'audit_id'], 'ID not returned')} was recorded ${formatDate(latestAuditHeartbeat.at)}; ${heartbeatAudit.length} matching event${heartbeatAudit.length === 1 ? '' : 's'} loaded.`
       : 'No exact agent.heartbeat audit event is loaded for this agent.',
@@ -160,7 +162,7 @@ export function AgentHeartbeatPanel({
     recordedLastHeartbeatAt && !latestAuditHeartbeat
       ? 'The agent record reports a heartbeat, but no matching agent.heartbeat audit event is loaded. Cadence and trace verification are unavailable.'
       : !recordedLastHeartbeatAt && latestAuditHeartbeat
-        ? 'Matching audit heartbeats are loaded, but the agent record has no last_heartbeat_at. Showing audit-only timing without claiming agent verification.'
+        ? 'Matching audit heartbeats are loaded, but the agent record has no last-heartbeat timestamp. Showing audit-only timing without claiming agent verification.'
         : !recordedLastHeartbeatAt && !latestAuditHeartbeat
           ? 'No agent-record or matching audit heartbeat is available yet. The panel will remain unverified until real data arrives.'
           : '';
@@ -289,7 +291,7 @@ export function AgentHeartbeatPanel({
             <strong className="mono mono-hash">
               {latestAuditHeartbeat
                 ? `agent.heartbeat · ${getString(latestAuditHeartbeat.entry, ['id', 'audit_id'], 'ID not returned')} · ${formatDate(latestAuditHeartbeat.at)} · ${heartbeatAudit.length} loaded`
-                : 'No exact resource_id match'}
+                : 'No exact resource match'}
             </strong>
           </div>
           <div>

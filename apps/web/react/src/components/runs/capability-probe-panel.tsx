@@ -10,6 +10,8 @@ import {
 } from '../../lib/capability-probe-labels';
 import type { DataItem } from '../../lib/types';
 import { formatDate } from '../../lib/utils';
+// @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
+import { plainCodeLabel } from '../../lib/plain-language.mjs';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -302,7 +304,7 @@ function eventProofRows(event: DataItem, meta: DataItem): EvidenceRow[] {
   return [
     { label: 'Event ID', value: formatValue(getValue(event, ['id'])) },
     { label: 'Event source', value: formatValue(getValue(event, ['source'])) },
-    { label: 'Producer', value: formatValue(getValue(event, ['producer_kind'])) },
+    { label: 'Source type', value: plainCodeLabel(formatValue(getValue(event, ['producer_kind']))) },
     { label: 'Signal type', value: formatValue(getValue(event, ['signal_type', 'type'])) },
     { label: 'Probe job ID', value: formatValue(getValue(meta, ['probe_job_id'])) },
     { label: 'Probe worker ID', value: formatValue(getValue(meta, ['probe_worker_id'])) },
@@ -328,23 +330,26 @@ export function CapabilityProbeResultCard({ event }: { event: DataItem }) {
           <strong>{capabilityProbeKindLabel(probeKind) || 'Probe observation'}</strong>
           <p className="muted small">{formatDate(event.timestamp ?? event.created_at)}</p>
         </div>
-        <Badge tone={externalResultTone(externalResult)}>{externalResult}</Badge>
+        <Badge tone={externalResultTone(externalResult)} title={externalResult}>{plainCodeLabel(externalResult)}</Badge>
       </div>
-      {errorClass ? <p className="muted small">Error: {errorClass}</p> : null}
-      <div className="verdict-explanation-grid">
-        {isOutsideInWafScan ? <OutsideInWafPostureSummary meta={meta} /> : null}
-        {rows.map((row) => (
-          <ExplanationField
-            key={row.label}
-            label={row.label}
-            value={row.value}
-            fullWidth={row.fullWidth}
-          />
-        ))}
-        {rows.length === 0 && !hasPosture ? (
-          <p className="muted small">No additional capability metadata was recorded for this event.</p>
-        ) : null}
-      </div>
+      {errorClass ? <p className="muted small">Error: {plainCodeLabel(errorClass)}</p> : null}
+      <details className="technical-disclosure">
+        <summary>Show technical probe evidence</summary>
+        <div className="verdict-explanation-grid">
+          {isOutsideInWafScan ? <OutsideInWafPostureSummary meta={meta} /> : null}
+          {rows.map((row) => (
+            <ExplanationField
+              key={row.label}
+              label={row.label}
+              value={row.value}
+              fullWidth={row.fullWidth}
+            />
+          ))}
+          {rows.length === 0 && !hasPosture ? (
+            <p className="muted small">No additional capability details were recorded for this event.</p>
+          ) : null}
+        </div>
+      </details>
     </article>
   );
 }

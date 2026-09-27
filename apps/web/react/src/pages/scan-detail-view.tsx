@@ -189,7 +189,7 @@ function ActivityLogPanel({ items, loading }: { items: ActivityItem[]; loading: 
       <CardHeader>
         <div>
           <CardTitle>Activity log</CardTitle>
-          <CardDescription>Metadata only: no request or response bodies are recorded. Entries are ordered chronologically as returned by the API.</CardDescription>
+          <CardDescription>Metadata only: no request or response bodies are recorded. Entries are shown in recorded time order.</CardDescription>
         </div>
         <Badge tone="muted">{items.length} {items.length === 1 ? 'entry' : 'entries'}</Badge>
       </CardHeader>
@@ -219,7 +219,7 @@ function ActivityLogPanel({ items, loading }: { items: ActivityItem[]; loading: 
                         .filter(([, value]) => value !== null && value !== undefined && typeof value !== 'object')
                         .map(([key, value]) => (
                           <span key={key} className="activity-log-chip">
-                            <span className="muted">{humanizeReason(key)}:</span> {String(value)}
+                            <span className="muted">{humanizeReason(key)}:</span> {key.endsWith('_id') ? String(value) : humanizeReason(String(value))}
                           </span>
                         )) : null}
                     </div>

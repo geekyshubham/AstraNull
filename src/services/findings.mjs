@@ -75,6 +75,11 @@ export function listFindings(ctx, options = {}) {
   if (options.test_run_id) {
     rows = rows.filter((f) => f.test_run_id === options.test_run_id);
   }
+  rows.sort((left, right) =>
+    String(right.created_at ?? right.opened_at ?? '').localeCompare(
+      String(left.created_at ?? left.opened_at ?? ''),
+    ) || String(right.id ?? '').localeCompare(String(left.id ?? '')),
+  );
   const limit = Number(options.limit);
   if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
   return rows;

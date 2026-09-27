@@ -9,6 +9,8 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { PortalLoadingSkeleton } from '../lib/empty-from-api';
 import { ConfirmModal, FormModal } from '../lib/crud-ui';
 import { requestJson } from '../lib/api';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName } from '../lib/plain-language.mjs';
 import { apiErrorMessage } from '../lib/error-messages';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import {
@@ -335,7 +337,7 @@ export function VectorLibraryPage({
       label: 'Vector',
       render: (vector) => (
         <span className="vector-primary">
-          <strong>{getString(vector, ['canonical_name'], 'Unnamed vector')}</strong>
+          <strong>{plainCheckName(getString(vector, ['canonical_name'], 'Unnamed vector'))}</strong>
           <code className="traffic-path-label">{getString(vector, ['vector_id'], '—')}</code>
           <small>{getString(vector, ['family'])} · {getString(vector, ['protocol_service'])}</small>
         </span>
@@ -413,7 +415,7 @@ export function VectorLibraryPage({
           {targetsError ? <div className="form-banner error" role="alert">{targetsError}</div> : null}
           <div className="vector-target-note" role="note">
             <Target size={18} aria-hidden="true" />
-            <div><strong>{selectedTarget ? targetLabel(selectedTarget) : 'No exact target selected'}</strong><p className="muted">Target applicability is recalculated from each mapped check. Ownership, eligibility, concurrency, and rate limits are revalidated by the API at launch.</p></div>
+            <div><strong>{selectedTarget ? targetLabel(selectedTarget) : 'No exact target selected'}</strong><p className="muted">Target fit is recalculated from each mapped check. Ownership, eligibility, concurrency, and rate limits are checked again at launch.</p></div>
           </div>
         </CardContent>
       </Card>
@@ -456,7 +458,7 @@ export function VectorLibraryPage({
 
       <FormModal
         open={Boolean(selectedVector)}
-        title={selectedVector ? `${getString(selectedVector, ['vector_id'])} · ${getString(selectedVector, ['canonical_name'])}` : 'Vector detail'}
+        title={selectedVector ? `${getString(selectedVector, ['vector_id'])} · ${plainCheckName(getString(selectedVector, ['canonical_name']))}` : 'Vector detail'}
         description={selectedVector ? `${getString(selectedVector, ['section'])} · ${getString(selectedVector, ['family'])}` : undefined}
         onClose={() => setSelectedVector(null)}
         wide
@@ -493,7 +495,7 @@ export function VectorLibraryPage({
         title="Start this bounded check?"
         description={pendingRun && selectedTarget ? (
           <div className="stack-tight">
-            <p><strong>Vector intent:</strong> {getString(pendingRun.vector, ['vector_id'])} · {getString(pendingRun.vector, ['canonical_name'])}</p>
+            <p><strong>Vector intent:</strong> {getString(pendingRun.vector, ['vector_id'])} · {plainCheckName(getString(pendingRun.vector, ['canonical_name']))}</p>
             <p><strong>Target group:</strong> {targetGroupId}</p>
             <p><strong>Exact target:</strong> {targetLabel(selectedTarget)} · {targetId}</p>
             <p><strong>Check:</strong> {getString(pendingRun.check, ['name', 'title', 'check_id'])} · {getString(pendingRun.check, ['check_id'])}</p>

@@ -54,13 +54,13 @@ import { Tabs } from '../components/ui/tabs';
 import { AnimatedNumber } from '../components/ui/motion';
 import { runStatusTone as runStatusBadgeTone } from '../lib/status-tone';
 // @ts-ignore Plain ESM keeps executive terminology directly testable with node:test.
-import { dashboardReadinessMessage, plainVerdictLabel } from '../lib/plain-language.mjs';
+import { dashboardReadinessMessage, plainCheckName, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
 import { buildApiHeaders, requestJson } from '../lib/api';
 import { canAccessRoute } from '../lib/route-access';
 import { canReadDataset, sessionHasPermission, staffSessionHasPermission } from '../lib/dataset-access.mjs';
 import { RoleRestrictedCard } from '../components/ui/role-restricted';
 import { resolveDashboardMetrics, resolveRecentRuns } from '../lib/dashboard-metrics';
-import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
+import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
 import { isFindingOpen } from '../lib/findings-helpers';
 import { buildDetailHref } from '../lib/route-params';
 import { DEFENSIVE_RULES, NAV_GROUP_LABELS, ROUTE_BY_ID } from '../lib/navigation';
@@ -654,17 +654,23 @@ function targetGroupDisplayName(data: PortalData, groupId: string) {
   return getString(group ?? {}, ['name', 'title'], groupId || '—');
 }
 
+function targetDisplayName(data: PortalData, targetId: string, fallback = '') {
+  const target = data.targets.find((item) => getString(item, ['id', 'target_id'], '') === targetId);
+  return getString(target ?? {}, ['hostname', 'value', 'name', 'label'], fallback || targetId || 'Target not reported');
+}
+
 function checkDisplayName(data: PortalData, checkId: string) {
-  const check = data.checks.find((item) => getString(item, ['check_id'], '') === checkId);
-  return getString(check ?? {}, ['name', 'title'], checkId || '—');
+  const check = data.checks.find((item) => getString(item, ['check_id', 'id'], '') === checkId);
+  return plainCheckName(getString(check ?? {}, ['name', 'title'], checkId || 'Unnamed check'));
 }
 
 function runDisplayLabel(data: PortalData, run: DataItem) {
-  const titled = getString(run, ['name', 'title'], '');
-  if (titled) return titled;
   const checkName = checkDisplayName(data, getString(run, ['check_id']));
-  const groupName = targetGroupDisplayName(data, getString(run, ['target_group_id']));
-  return `${checkName} · ${groupName}`;
+  const targetId = getString(run, ['target_id'], '');
+  const embeddedTarget = getString(run, ['target_hostname', 'target_value'], '');
+  const targetName = targetDisplayName(data, targetId, embeddedTarget)
+    || targetGroupDisplayName(data, getString(run, ['target_group_id']));
+  return `${checkName} · ${targetName}`;
 }
 
 function evidenceDisplayLabel(item: DataItem) {
@@ -690,21 +696,22 @@ const DASHBOARD_FINDING_PRIORITY: Record<string, number> = {
   low: 3,
 };
 
-function dashboardFindingFixLabel(finding: DataItem) {
+function dashboardFindingFixLabel(data: PortalData, finding: DataItem) {
   const context = [
     getString(finding, ['title', 'summary'], ''),
     getString(finding, ['check_id'], ''),
     getString(finding, ['vector_family', 'category'], ''),
   ].join(' ').toLowerCase();
-  if (context.includes('origin') && (context.includes('bypass') || context.includes('direct'))) {
-    return 'Block direct access to the origin server';
+  const targetId = getString(finding, ['target_id'], '');
+  const targetName = targetDisplayName(data, targetId, getString(finding, ['target_hostname', 'target_value'], 'this target'));
+  if (context.includes('origin') && (context.includes('bypass') || context.includes('direct') || context.includes('penetrated'))) {
+    return `Block direct access to ${targetName}`;
   }
-  if (context.includes('placement') || context.includes('misplaced')) return 'Fix inside-agent placement';
-  if (context.includes('waf') || context.includes('web firewall')) return 'Review web firewall blocking';
-  if (context.includes('dns')) return 'Review DNS protection';
-  if (context.includes('authorization') || context.includes('approval')) return 'Complete SOC authorization';
-  const title = getString(finding, ['title', 'summary'], 'evidence-backed finding');
-  return `Review ${title}`;
+  if (context.includes('placement') || context.includes('misplaced')) return `Fix inside-agent placement for ${targetName}`;
+  if (context.includes('waf') || context.includes('web firewall')) return `Review web firewall blocking for ${targetName}`;
+  if (context.includes('dns')) return `Review DNS protection for ${targetName}`;
+  if (context.includes('authorization') || context.includes('approval')) return `Complete SOC authorization for ${targetName}`;
+  return `Review ${plainFindingTitle(finding, data.targets, data.checks)}`;
 }
 
 function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof resolveDashboardMetrics>): DashboardNextStep[] {
@@ -723,10 +730,10 @@ function buildDashboardNextSteps(data: PortalData, metrics: ReturnType<typeof re
     for (const finding of openFindings.slice(0, 3)) {
       const findingId = getString(finding, ['id'], '');
       const severity = getString(finding, ['severity'], 'unknown');
-      const detail = getString(finding, ['title', 'summary'], 'Review the evidence-backed gap.');
+      const detail = plainFindingTitle(finding, data.targets, data.checks);
       steps.push({
         key: `finding-${findingId || steps.length}`,
-        title: dashboardFindingFixLabel(finding),
+        title: dashboardFindingFixLabel(data, finding),
         detail: `${formatSeverityLabel(severity)} · ${detail}`,
         href: findingId ? buildDetailHref('finding-detail', findingId) : '#findings',
         tone: ['s1', 'critical', 's2', 'high'].includes(severity.toLowerCase()) ? 'danger' : 'warn',
@@ -819,14 +826,14 @@ export function ReadinessFactorsPanel({ factors }: { factors: ReadinessFactor[] 
     <div className="gauge-legend" data-testid="readiness-factors">
       {rows.map((factor, index) => {
         const key = getString(factor as DataItem, ['key'], '');
-        const label = getString(factor as DataItem, ['label', 'key'], 'Factor');
+        const label = plainInlineText(getString(factor as DataItem, ['label', 'key'], 'Factor'));
         const score = Number(factor.score);
         const scale =
           typeof factor.weight === 'number' && Number.isFinite(factor.weight) && factor.weight > 0
             ? factor.weight
             : READINESS_SCALE_POINTS;
         const share = Math.min(100, Math.max(0, (score / scale) * 100));
-        const detail = getString(factor as DataItem, ['detail', 'reason'], '');
+        const detail = plainInlineText(getString(factor as DataItem, ['detail', 'reason'], ''));
         const factorTone = scoreTone(share);
         const provenance = `Factor ${key || label}: ${score} of ${scale} points, from GET /v1/state readiness.factors`;
 
@@ -864,7 +871,7 @@ const CORRELATION_FAMILIES: { label: string; keys: string[] }[] = [
   { label: 'Origin', keys: ['origin'] },
   { label: 'L3/L4', keys: ['l3_l4', 'l3/l4', 'layer_3_4'] },
   { label: 'DNS', keys: ['dns'] },
-  { label: 'L7/API', keys: ['l7_api', 'l7/api', 'application', 'api'] },
+  { label: 'Application layer', keys: ['l7_api', 'l7/api', 'application', 'api'] },
   { label: 'Protocol', keys: ['protocol', 'tls', 'http2', 'http3'] }
 ];
 
@@ -1009,7 +1016,7 @@ function DashboardCorrelationMatrix({
     );
   }
   const families = CORRELATION_FAMILIES.map((family) => ({
-    label: family.label,
+    label: plainCheckName(family.label),
     ids: new Set(
       checks
         .filter((check) => checkMatchesCorrelationFamily(check, family.keys))
@@ -1023,7 +1030,7 @@ function DashboardCorrelationMatrix({
       <div className="heatmap-grid heatmap-grid--variable" style={gridStyle}>
         <span className="heatmap-head">Target group</span>
         {families.map((family) => (
-          <span className="heatmap-head" key={family.label}>{family.label}</span>
+          <span className="heatmap-head" key={family.label}>{plainCheckName(family.label)}</span>
         ))}
         {groups.map((group, groupIndex) => {
           const groupId = getString(group, ['id'], '');
@@ -1034,7 +1041,7 @@ function DashboardCorrelationMatrix({
                 <CorrelationMatrixCell
                   key={`${groupIndex}-${family.label}`}
                   cell={buildCorrelationCell(runs, groupId, family.ids)}
-                  familyLabel={family.label}
+                  familyLabel={plainCheckName(family.label)}
                 />
               ))}
             </Fragment>
@@ -1150,21 +1157,14 @@ export function DashboardPage({
           String(left.started_at ?? left.created_at ?? '')
         )
       )[0];
-    let verdict = '';
-    if (latest) {
-      const raw = latest.verdict;
-      verdict =
-        typeof raw === 'string'
-          ? raw
-          : raw && typeof raw === 'object' && !Array.isArray(raw)
-            ? getString(raw as DataItem, ['verdict', 'status', 'result'], '')
-            : getString(latest, ['verdict'], '');
-    }
-    const key = verdict.trim().toLowerCase();
-    if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
-    if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
-    if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
-    return { label: 'No verdict evidence', tone: 'muted' };
+    const verdict = latest ? publishedRunVerdict(latest) : '';
+    const key = verdict.toLowerCase();
+    const tone: UiBadgeTone = ['pass', 'passed', 'ok', 'success', 'protected'].includes(key)
+      ? 'success'
+      : ['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'edge_exposed', 'unprotected'].includes(key)
+        ? 'danger'
+        : verdict ? 'warn' : 'muted';
+    return { label: verdict ? plainVerdictLabel(verdict) : 'No result yet', tone };
   }
 
   const dashboardGroupColumns: TableColumn<DataItem>[] = [
@@ -1176,7 +1176,7 @@ export function DashboardPage({
       label: 'Verdict',
       render: (item) => {
         const verdict = dashboardGroupVerdict(getString(item, ['id'], ''));
-        return <Badge tone={verdict.tone}>{verdict.label}</Badge>;
+        return <Badge tone={verdict.tone} title={verdict.label}>{verdict.label}</Badge>;
       }
     }
   ];
@@ -1197,7 +1197,7 @@ export function DashboardPage({
       render: (item) => {
         const status = getString(item, ['status'], 'unknown');
         return (
-          <Badge tone={status === 'online' ? 'success' : 'warn'} title={`Agent status ${status} from agents API`}>
+          <Badge tone={status === 'online' ? 'success' : 'warn'} title={`Recorded agent status: ${status}`}>
             {status}
           </Badge>
         );
@@ -1321,25 +1321,18 @@ export function DashboardPage({
   ];
 
   function dashboardRunVerdict(run: DataItem): { label: string; tone: UiBadgeTone } {
-    if (!hasEvidenceBackedVerdict(run, data.evidence)) {
-      return { label: 'No verdict evidence', tone: 'muted' };
-    }
-    const raw = run.verdict;
-    const verdict =
-      typeof raw === 'string'
-        ? raw
-        : raw && typeof raw === 'object' && !Array.isArray(raw)
-          ? getString(raw as DataItem, ['verdict', 'status', 'result'], '')
-          : getString(run, ['verdict'], '');
-    const key = verdict.trim().toLowerCase();
-    if (['pass', 'passed', 'ok', 'success', 'protected'].includes(key)) return { label: 'Pass', tone: 'success' };
-    if (['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'unprotected'].includes(key)) return { label: 'Gap', tone: 'danger' };
-    if (['review', 'warn', 'partial', 'inconclusive', 'manual_review'].includes(key)) return { label: 'Review', tone: 'warn' };
-    return { label: 'No verdict evidence', tone: 'muted' };
+    const verdict = hasEvidenceBackedVerdict(run, data.evidence) ? publishedRunVerdict(run) : '';
+    const key = verdict.toLowerCase();
+    const tone: UiBadgeTone = ['pass', 'passed', 'ok', 'success', 'protected'].includes(key)
+      ? 'success'
+      : ['gap', 'fail', 'failed', 'penetrated', 'bypassable', 'edge_exposed', 'unprotected'].includes(key)
+        ? 'danger'
+        : verdict ? 'warn' : 'muted';
+    return { label: verdict ? plainVerdictLabel(verdict) : 'No result yet', tone };
   }
 
   const dashboardFindingColumns: TableColumn<DataItem>[] = [
-    { key: 'finding', label: 'Finding', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    { key: 'finding', label: 'Finding', render: (item) => <span className="entity-cell-stack"><strong>{plainFindingTitle(item, data.targets, data.checks)}</strong><small className="mono">{getString(item, ['id'], '—')}</small></span> },
     {
       key: 'severity',
       label: 'Severity',
@@ -1351,13 +1344,13 @@ export function DashboardPage({
   ];
 
   const dashboardRunColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (item) => <span className="mono">{getString(item, ['id'], '—')}</span> },
+    { key: 'run', label: 'Run', render: (item) => <span className="entity-cell-stack"><strong>{runDisplayLabel(data, item)}</strong><small className="mono">{getString(item, ['id'], '—')}</small></span> },
     {
       key: 'verdict',
       label: 'Verdict',
       render: (item) => {
         const verdict = dashboardRunVerdict(item);
-        return <Badge tone={verdict.tone}>{verdict.label}</Badge>;
+        return <Badge tone={verdict.tone} title={verdict.label}>{verdict.label}</Badge>;
       }
     },
     { key: 'when', label: 'When', render: (item) => <span className="muted">{formatDate(item.created_at ?? item.started_at)}</span> }
@@ -1443,7 +1436,7 @@ export function DashboardPage({
                     <span>{nextSteps[0] ? `First fix: ${nextSteps[0].title}` : 'No priority fix is backed by the loaded evidence'}</span>
                   </div>
                   {data.state?.readiness?.summary ? (
-                    <p className="executive-api-summary" title="Summary returned by GET /v1/state readiness.summary">{data.state.readiness.summary}</p>
+                    <p className="executive-api-summary" title="Readiness summary recorded by the platform">{data.state.readiness.summary}</p>
                   ) : null}
                 </div>
               </div>
@@ -1553,7 +1546,7 @@ export function DashboardPage({
               <KpiCell
                 label="Agents healthy"
                 value={data.loadErrors.agents ? '—' : `${formatNumber(agentsOnline)}/${formatNumber(agentsTotalDisplay || agentsOnline)}`}
-                delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Status reported by the agents API'}
+                delta={data.loadErrors.agents ? 'Agent status unavailable' : 'Current agent status'}
               />
               <KpiCell
                 label="Last run"
@@ -1738,7 +1731,7 @@ export function DashboardPage({
                 <ul className="dashboard-link-list">
                   {agingFindings.map((finding) => {
                     const id = getString(finding, ['id'], '');
-                    const title = getString(finding, ['title', 'summary'], id);
+                    const title = plainFindingTitle(finding, data.targets, data.checks);
                     return (
                       <li key={id}>
                         <div className="dashboard-link-copy">
@@ -2572,7 +2565,7 @@ export function ReportsPage({
               <Select label="Kind" name="kind" value={selectedReportKind} options={reportKindOptions} onChange={setReportKind} />
               <Select label="Format" name="format" value={selectedReportFormat} options={reportFormatOptions} onChange={setReportFormat} />
               <Select label="Period" name="period" value={selectedReportPeriod} options={reportPeriodOptions} onChange={setReportPeriod} />
-              <p className="muted text-xs full">PDF returns <span className="mono">unsupported_format</span>. Use HTML-to-PDF in your review toolchain.</p>
+              <p className="muted text-xs full">Direct PDF export is not available. Export HTML, then save it as PDF in your review tool.</p>
             </form>
           ) : <RoleRestrictedCard title="Report generation is not available for your role." />}
         </CardContent>
@@ -2798,9 +2791,9 @@ export function SettingsPage({
         scopes,
         ...(expiresAtFromForm(String(form.get('expiry') ?? '')) ? { expires_at: expiresAtFromForm(String(form.get('expiry') ?? '')) } : {})
       }
-    }), 'Service account created. Copy the API secret now; it is shown once.');
+    }), 'Service account created. Copy its secret now; it is shown once.');
     if (result && typeof result === 'object' && 'secret' in result && typeof (result as { secret?: unknown }).secret === 'string') {
-      setOneTimeSecret({ label: 'Service API secret', value: String((result as { secret: string }).secret) });
+      setOneTimeSecret({ label: 'Service account secret', value: String((result as { secret: string }).secret) });
       formElement.reset();
     }
   }
@@ -2813,16 +2806,16 @@ export function SettingsPage({
 
   async function revokeServiceAccount(id: string) {
     if (!canRevokeServiceAccount || !id) return;
-    if (!await confirm({ title: 'Revoke service account', description: 'Revoke this service account? API calls using its secret will stop working.', confirmLabel: 'Revoke account' })) return;
+    if (!await confirm({ title: 'Revoke service account', description: 'Revoke this service account? Automated access using its secret will stop working.', confirmLabel: 'Revoke account' })) return;
     await runSettingsAction(`revoke-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/revoke`, { method: 'POST' }), 'Service account revoked.');
   }
 
   async function rotateServiceAccount(id: string) {
     if (!canRotateServiceAccount || !id) return;
-    if (!await confirm({ title: 'Rotate service account secret', description: 'Rotate this service account? The current API secret will stop working immediately.', confirmLabel: 'Rotate secret' })) return;
-    const result = await runSettingsAction(`rotate-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/rotate`, { method: 'POST' }), 'Service account rotated. Copy the new API secret now; it is shown once.');
+    if (!await confirm({ title: 'Rotate service account secret', description: 'Rotate this service account? The current secret will stop working immediately.', confirmLabel: 'Rotate secret' })) return;
+    const result = await runSettingsAction(`rotate-service-${id}`, () => requestJson(config, session, `/v1/service-accounts/${id}/rotate`, { method: 'POST' }), 'Service account rotated. Copy the new secret now; it is shown once.');
     if (result && typeof result === 'object' && 'secret' in result && typeof (result as { secret?: unknown }).secret === 'string') {
-      setOneTimeSecret({ label: 'Rotated service API secret', value: String((result as { secret: string }).secret) });
+      setOneTimeSecret({ label: 'Rotated service account secret', value: String((result as { secret: string }).secret) });
     }
   }
 
@@ -2890,7 +2883,7 @@ export function SettingsPage({
         plaintext,
         metadata: { source: 'settings_vault' }
       }
-    }), 'Integration secret stored. Plaintext is never returned by list APIs.');
+    }), 'Integration secret stored. Plaintext never appears in list views.');
     formElement.reset();
   }
 
@@ -2966,7 +2959,7 @@ export function SettingsPage({
         <Card className="secret-card">
           <PanelCardHeader
             title={oneTimeSecret.label}
-            description="This value is shown once. It is not returned by list APIs and will not be visible after refresh."
+            description="This value is shown once and will not be visible after refresh."
             trailing={
               <div className="row-actions">
                 <Button
@@ -3060,7 +3053,7 @@ export function SettingsPage({
           </CardContent>
           <CardContent className="settings-list">
             <SettingsNote icon={ShieldCheck}>Tenant user invites and role changes are not self-service on this screen.</SettingsNote>
-            <SettingsNote icon={FileCheck2}>API credentials live under Access; vault secrets under Security; audit history on the Audit page.</SettingsNote>
+            <SettingsNote icon={FileCheck2}>Automation credentials live under Access; vault secrets under Security; audit history on the Audit page.</SettingsNote>
           </CardContent>
           {session.principal === 'staff' ? (
             <CardContent className="row-actions">
@@ -3133,7 +3126,7 @@ export function SettingsPage({
             <Card>
               <CardHeader>
                 <CardTitle>Create service account</CardTitle>
-                <CardDescription>Create scoped API automation credentials. Secrets are returned once and list views stay redacted.</CardDescription>
+                <CardDescription>Create scoped automation credentials. Secrets are shown once and list views stay redacted.</CardDescription>
               </CardHeader>
               <CardContent>
                 <form className="product-form" onSubmit={handleCreateServiceAccount}>
@@ -3163,7 +3156,7 @@ export function SettingsPage({
                     </select>
                   </label>
                   <div className="form-actions full">
-                    <Button type="submit" loading={busy === 'create-service-account'}>Create API key</Button>
+                    <Button type="submit" loading={busy === 'create-service-account'}>Create service account</Button>
                   </div>
                 </form>
               </CardContent>
@@ -3200,7 +3193,7 @@ export function SettingsPage({
               <DataTable
                 columns={serviceAccountColumns}
                 items={data.serviceAccounts}
-                empty={<EmptyState icon={UserCog} title="No service accounts." body="Create an API key only for a clear automation owner and scope." />}
+                empty={<EmptyState icon={UserCog} title="No service accounts." body="Create a service account only for a clear automation owner and scope." />}
                 loadError={data.loadErrors.serviceAccounts}
                 onRetry={onRefresh ? () => void onRefresh() : undefined}
               />
@@ -3245,7 +3238,7 @@ export function SettingsPage({
                       <option value="integration_credential">Integration credential</option>
                       <option value="waf_connector">WAF connector</option>
                       <option value="webhook_signing">Webhook signing</option>
-                      <option value="provider_api">Provider API</option>
+                      <option value="provider_api">Provider service</option>
                     </select>
                   </label>
                   <label>
@@ -3254,7 +3247,7 @@ export function SettingsPage({
                   </label>
                   <label className="full">
                     <span>Credential value</span>
-                    <textarea name="plaintext" rows={4} placeholder="API token or JSON credential" required />
+                    <textarea name="plaintext" rows={4} placeholder="Provider access token or JSON credential" required />
                   </label>
                   <div className="form-actions full">
                     <Button type="submit" loading={busy === 'create-vault-secret'}>Store secret</Button>
@@ -3284,7 +3277,7 @@ export function SettingsPage({
                   </label>
                   <label className="full">
                     <span>Replacement credential</span>
-                    <textarea name="plaintext" rows={4} placeholder="New API token or JSON credential" required />
+                    <textarea name="plaintext" rows={4} placeholder="New provider access token or JSON credential" required />
                   </label>
                   <div className="form-actions full">
                     <Button type="submit" disabled={busy !== '' || data.secrets.length === 0}>Rotate secret</Button>
@@ -3369,7 +3362,7 @@ export function SettingsPage({
           </CardContent>
           <CardContent className="settings-list">
             <SettingsNote icon={FileCheck2}>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</SettingsNote>
-            <SettingsNote icon={ShieldCheck}>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the API reference.</SettingsNote>
+            <SettingsNote icon={ShieldCheck}>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the operations guide.</SettingsNote>
           </CardContent>
         </Card>
       )}
@@ -3681,7 +3674,7 @@ export function PolicyPage({
   }
 
   const policyColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Schedule', render: (item) => getString(item, ['id', 'policy_id']) },
+    { key: 'id', label: 'Schedule', render: (item) => { const policyId = getString(item, ['id', 'policy_id'], ''); return <span title={policyId || undefined}>{getString(item, ['name', 'title'], 'Scheduled policy')}</span>; } },
     {
       key: 'target',
       label: 'Target group',
@@ -3700,7 +3693,7 @@ export function PolicyPage({
       render: (item) => {
         const check = item.check && typeof item.check === 'object' ? item.check as DataItem : {};
         const checkId = getString(item, ['check_id'], getString(check, ['check_id'], ''));
-        const label = getString(check, ['name', 'check_id'], checkId);
+        const label = plainCheckName(getString(check, ['name', 'check_id'], checkId));
         return checkId ? <AnchorButton size="sm" variant="ghost" href="#checks">{label}</AnchorButton> : label;
       }
     },
@@ -4281,8 +4274,8 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
     backendProvider: 'cloudflare',
     supportsCredentialPolling: true,
     capability: 'Read-only zone polling',
-    description: 'Poll bounded zone inventory with a vault-backed API token. Successful server-side evidence can verify selected imported domains.',
-    credentialExample: 'API token or {"api_token":"..."}',
+    description: 'Poll bounded zone inventory with a secured provider token. Successful current evidence can verify selected imported domains.',
+    credentialExample: 'Provider token or {"api_token":"..."}',
     tone: 'accent'
   },
   {
@@ -4313,7 +4306,7 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
     backendProvider: 'godaddy',
     supportsCredentialPolling: true,
     capability: 'Read-only domain polling',
-    description: 'List account domains through a bounded, vault-backed API request. Imported domains retain exact provider evidence.',
+    description: 'List account domains through a bounded, secured provider request. Imported domains retain exact provider evidence.',
     credentialExample: '{"key":"...","secret":"..."}',
     tone: 'success'
   },
@@ -4335,8 +4328,8 @@ const DNS_PROVIDER_DIRECTORY: readonly DnsProviderDirectoryEntry[] = [
     backendProvider: 'ibm_ns1',
     supportsCredentialPolling: true,
     capability: 'Read-only zone polling',
-    description: 'List NS1 zones with a vault-backed API key through bounded requests to the fixed NS1 API origin.',
-    credentialExample: 'API key or {"api_key":"..."}',
+    description: 'List NS1 zones with a secured access key through bounded requests to the fixed NS1 service.',
+    credentialExample: 'Access key or {"api_key":"..."}',
     tone: 'accent'
   },
   {
@@ -5372,7 +5365,7 @@ export function IntegrationPage({
             <Card className="card--dense">
               <PanelCardHeader
                 title="Loaded connector snapshots"
-                description="Returned by a supported provider poll or manual metadata ingest."
+                description="Recorded by a supported provider check or manual metadata entry."
                 trailing={<Badge tone="muted">{snapshots.length}</Badge>}
               />
               <CardContent className="support-evidence-list">
@@ -5436,7 +5429,7 @@ export function IntegrationPage({
             <span className="provider-path-icon" aria-hidden="true"><FileCheck2 size={18} /></span>
             <Badge tone={connectorsEnabled ? 'info' : 'muted'}>{connectorsEnabled ? 'No credentials' : 'Add-on disabled'}</Badge>
             <h3>Manual metadata</h3>
-            <p>Create a provider record without credentials, then submit selected normalized zone or policy metadata. No provider API call is made.</p>
+            <p>Create a provider record without credentials, then submit selected normalized zone or policy metadata. AstraNull does not contact the provider.</p>
             <Button type="button" size="sm" variant="secondary" disabled={!canWriteConnectors || !connectorsEnabled} onClick={() => beginConnectorSetup('manual')}>
               Continue manually
             </Button>
@@ -5465,7 +5458,7 @@ export function IntegrationPage({
             title={connectorSetupMode === 'connect' ? `Connect ${selectedCreateProvider.label} read-only` : `Add ${selectedCreateProvider.label} manually`}
             description={connectorSetupMode === 'connect'
               ? 'Creates a vault-backed connector for the implemented bounded metadata poller. Validate it before the first poll.'
-              : 'Creates a metadata-only connector. No cloud credential or provider API access is requested.'}
+              : 'Creates a metadata-only connector. No cloud credential or provider access is requested.'}
             wide
             onClose={() => setShowCreateConnector(false)}
           >
@@ -6255,7 +6248,7 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
         <EmptyState
           icon={LifeBuoy}
           title="No subscription configured for this tenant."
-          body="The subscription API loaded successfully but returned no subscription record. Contact AstraNull support for provisioning or billing assistance."
+          body="No subscription record is available. Contact AstraNull support for provisioning or billing assistance."
           actionLabel="Open support workspace"
           actionHref="#support"
         />
@@ -6374,7 +6367,7 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
               </div>
             </>
           ) : (
-            <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan metadata is available, but the subscription API did not return workspace usage counts." />
+            <EmptyState icon={Activity} title="No usage snapshot recorded." body="Plan details are available, but workspace usage counts were not recorded." />
           )}
         </CardContent>
       </Card>
@@ -6382,7 +6375,7 @@ export function SubscriptionPage({ data }: { data: PortalData }) {
       <Card className="card--dense">
         <PanelCardHeader
           title="Effective entitlements"
-          description="Effective access is the authoritative subscription API result. Plan inclusion and access source explain how it was derived."
+          description="Effective access is the recorded subscription decision. Plan inclusion and access source explain how it was derived."
           trailing={
             <Badge tone={recordedEntitlements.length > 0 && enabledEntitlements > 0 ? 'success' : 'muted'}>
               {recordedEntitlements.length > 0 ? `${enabledEntitlements} / ${recordedEntitlements.length} enabled` : 'Not recorded'}
@@ -6649,7 +6642,7 @@ export function StaffSurfacePage({
             <Card density="compact" className="staff-queue-priority">
               <CardHeader>
                 <CardTitle>Signup queue</CardTitle>
-                <CardDescription>Requests from the staff-only signup review API.</CardDescription>
+                <CardDescription>Requests in the staff-only signup review queue.</CardDescription>
               </CardHeader>
               <CardContent>
                 <DataTable columns={signupColumns} items={data.internalSignupRequests} empty={renderFriendlyEmptyState({ icon: ClipboardList, title: 'No signup requests.', body: 'Reviewed account intake records will appear here after customers submit requests.' })} loadError={data.loadErrors.internalSignupRequests} onRetry={() => void onRefresh()} />
@@ -6682,7 +6675,7 @@ export function StaffSurfacePage({
             <Card density="compact">
               <CardHeader>
                 <CardTitle>Internal audit</CardTitle>
-                <CardDescription>Recent staff actions from the internal audit API.</CardDescription>
+                <CardDescription>Recent actions in the internal audit record.</CardDescription>
               </CardHeader>
               <CardContent>
                 <DataTable columns={auditColumns} items={data.internalAudit} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions will be listed after they are recorded.' })} loadError={data.loadErrors.internalAudit} onRetry={onRefresh ? () => void onRefresh() : undefined} />

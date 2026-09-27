@@ -981,15 +981,17 @@ th {
      without changing how it sizes inside row containers. */
   width: fit-content;
   min-width: 0;
-  max-width: 100%;
+  max-width: min(100%, 28rem);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   padding: 2px var(--space-2);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.6;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
 }
 
 .badge-sans,
@@ -2460,6 +2462,8 @@ details.disclosure[open] > summary {
 }
 
 .table-wrap {
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -7188,8 +7192,32 @@ body .targets-page .targets-toolbar {
    content behind it, and not at all when the table already fits. */
 .table-scroller {
   position: relative;
+  width: 100%;
   min-width: 0;
   max-width: 100%;
+}
+
+.entity-cell-stack {
+  display: flex;
+  min-width: 0;
+  max-width: 34rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  white-space: normal;
+}
+
+.entity-cell-stack > strong,
+.entity-cell-stack > .btn {
+  max-width: 100%;
+}
+
+.entity-cell-stack > small {
+  max-width: 100%;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .table-scroller::before,

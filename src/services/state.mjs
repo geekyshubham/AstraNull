@@ -1,5 +1,5 @@
 import { getStore } from '../store.mjs';
-import { computeReadiness } from './readiness.mjs';
+import { computeReadiness, evidenceBackedVerdictForRun } from './readiness.mjs';
 import { activeTargetGroupsForTenant } from './targetGroups.mjs';
 import { buildGetStatePayload } from '../lib/statePayload.mjs';
 
@@ -21,6 +21,20 @@ export async function getState(ctx) {
   const tenantHighScaleRequests = Array.isArray(store.highScaleRequests)
     ? store.highScaleRequests.filter((h) => h.tenant_id === tenantId)
     : [];
+  const recentRuns = store.testRuns
+    .filter((run) => run.tenant_id === tenantId)
+    .sort((left, right) =>
+      String(left.started_at ?? left.created_at ?? '').localeCompare(
+        String(right.started_at ?? right.created_at ?? ''),
+      ) || String(left.id ?? '').localeCompare(String(right.id ?? '')),
+    )
+    .slice(-5)
+    .map((run) => ({
+      ...run,
+      verdict: ['completed', 'verdicted'].includes(run.status)
+        ? evidenceBackedVerdictForRun(store, run.id)
+        : null,
+    }));
 
   return buildGetStatePayload({
     tenantId,
@@ -29,7 +43,7 @@ export async function getState(ctx) {
       readiness: computeReadiness(tenantId),
       target_groups: activeTargetGroupsForTenant(tenantId).length,
       agents_online: store.agents.filter((a) => a.tenant_id === tenantId && a.status === 'online').length,
-      recent_runs: store.testRuns.filter((r) => r.tenant_id === tenantId).slice(-5),
+      recent_runs: recentRuns,
       open_findings: store.findings.filter(
         (f) => f.tenant_id === tenantId && (f.status === 'open' || f.state === 'open'),
       ).length,

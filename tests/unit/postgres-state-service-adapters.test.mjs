@@ -499,7 +499,9 @@ describe('postgres state service adapter', () => {
     assert.equal(payload.agents_online, 1);
     assert.equal(payload.open_findings, 1);
     assert.equal(payload.recent_runs.length, 5);
-    assert.equal(payload.recent_runs[0].id, 'run_5');
+    assert.equal(payload.recent_runs[0].id, 'run_1');
+    assert.equal(payload.recent_runs.at(-1).id, 'run_5');
+    assert.equal(payload.recent_runs[0].verdict?.id, 'ver_1');
     assert.equal(payload.high_scale_requests, 1);
     assert.equal(payload.high_scale_status, 'degraded');
     assert.deepEqual(payload.kill_switch, {

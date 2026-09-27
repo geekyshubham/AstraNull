@@ -1,4 +1,4 @@
-import { decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
+import { clampPageLimit, decodeCursor, encodeCursor, paginateItems } from '../lib/cursorPagination.mjs';
 import { effectiveTargetVerifications } from '../lib/effectiveTargetVerification.mjs';
 import { getStore } from '../store.mjs';
 import { getTargetEdgeDetection } from './targetEdgeDetectionStore.mjs';
@@ -9,6 +9,9 @@ import {
   latestRunsByCheck,
   recentRunRow,
 } from '../lib/targetDetailRows.mjs';
+
+const RUNS_PAGE_MAX = 100;
+const RUNS_PAGE_FALLBACK = 5;
 
 function toIso(value) {
   if (value == null) return value;
@@ -164,25 +167,33 @@ function buildChecksApplied(ctx, target, latestByCheck) {
   return boundCheckRows(target, policies, latestByCheck);
 }
 
-function buildRunsRecent(runs, verdictForRun, limit = 5) {
+function buildRunsRecent(runs, verdictForRun, limit = RUNS_PAGE_FALLBACK) {
+  const boundedLimit = clampPageLimit(limit, {
+    max: RUNS_PAGE_MAX,
+    fallback: RUNS_PAGE_FALLBACK,
+  });
   return runs
     .slice()
     .sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)))
-    .slice(0, limit)
+    .slice(0, boundedLimit)
     .map((run) => recentRunRow(run, verdictForRun(run)));
 }
 
 function buildFindings(targetId, query = {}) {
   const all = (getStore().findings ?? [])
     .filter((f) => f.target_id === targetId)
-    .sort((a, b) => String(b.opened_at).localeCompare(String(a.opened_at)))
+    .sort((a, b) =>
+      String(b.created_at ?? b.opened_at ?? '').localeCompare(
+        String(a.created_at ?? a.opened_at ?? ''),
+      ) || String(b.id ?? '').localeCompare(String(a.id ?? '')),
+    )
     .map((f) => ({
       id: f.id,
       severity: f.severity,
       title: f.title,
-      state: f.state,
-      opened_at: toIso(f.opened_at),
-      owner_group: f.owner_group,
+      state: f.status ?? f.state,
+      opened_at: toIso(f.created_at ?? f.opened_at),
+      owner_group: f.owner_group ?? 'edge-sre',
     }));
 
   const limit = Number(query.findings_limit);
@@ -272,8 +283,8 @@ export function getTargetDetail(ctx, targetId, query = {}) {
     loa: buildLoa(ctx, target.target_group_id),
     counts: {
       runs_total: runs.length,
-      findings_open: allFindings.filter((f) => f.state === 'open').length,
-      findings_closed: allFindings.filter((f) => f.state === 'closed' || f.state === 'accepted').length,
+      findings_open: allFindings.filter((f) => (f.status ?? f.state) === 'open').length,
+      findings_closed: allFindings.filter((f) => ['closed', 'accepted'].includes(f.status ?? f.state)).length,
     },
   };
   if (next_cursor) payload.findings_next_cursor = next_cursor;

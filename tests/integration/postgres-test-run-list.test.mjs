@@ -8,6 +8,8 @@ import { createProbeJobRepository } from '../../src/persistence/postgres/probeJo
 import { withTenantContext } from '../../src/persistence/postgres/tenantContext.mjs';
 import { createValidationEvidenceRepository } from '../../src/persistence/postgres/validationEvidenceRepository.mjs';
 import { createPostgresValidationServices } from '../../src/persistence/postgres/validationServiceAdapters.mjs';
+import { listTestRuns as listDevTestRuns } from '../../src/services/testRuns.mjs';
+import { resetStoreForTests } from '../../src/store.mjs';
 import { resolvePostgresHarnessAvailability, withEphemeralPostgres } from '../helpers/pg-harness.mjs';
 
 const TENANT = 'ten_run_list';
@@ -68,6 +70,10 @@ describe('postgres test-run list parity', () => {
     await withEphemeralPostgres(async (pool) => {
       await seedTenant(pool, TENANT, { tg_a: { tgt_a1: 3, tgt_a2: 2 }, tg_b: { tgt_b1: 2 } });
       await seedTenant(pool, OTHER, { tg_other: { tgt_other: 2 } });
+      await withTenantContext(pool, TENANT, (client) => client.query(
+        "UPDATE test_runs SET started_at = '2027-01-01T00:00:00.000Z' WHERE tenant_id = $1 AND id = 'run_tgt_a1_0'",
+        [TENANT],
+      ));
       const { testRuns } = createPostgresValidationServices({
         validationEvidence: createValidationEvidenceRepository(pool),
         audit: createAuditRepository(pool),
@@ -79,6 +85,7 @@ describe('postgres test-run list parity', () => {
 
       const all = await testRuns.listTestRuns(CTX, {});
       assert.equal(all.length, 7, 'tenant-scoped: other tenant runs never appear');
+      assert.equal(all[0].id, 'run_tgt_a1_0', 'newest started run sorts first even when created earlier');
 
       const byTarget = await testRuns.listTestRuns(CTX, { target_id: 'tgt_a1' });
       assert.deepEqual([...new Set(byTarget.map((run) => run.target_id))], ['tgt_a1']);
@@ -97,6 +104,32 @@ describe('postgres test-run list parity', () => {
       const empty = await testRuns.listTestRunsEnvelope(CTX, { target_id: 'tgt_other' });
       assert.equal(empty.count, 0, 'another tenant target id returns nothing');
       assert.equal(empty.meta.empty_reason, 'No test runs match this target filter.');
+
+      await withTenantContext(pool, TENANT, (client) => client.query(
+        `INSERT INTO test_runs (id, tenant_id, target_group_id, target_id, check_id, status, started_at, created_at)
+         SELECT 'run_cap_' || lpad(n::text, 3, '0'), $1, 'tg_a', 'tgt_a1',
+                'origin.direct_bypass.safe', 'completed',
+                '2025-01-01T00:00:00.000Z'::timestamptz + n * interval '1 second',
+                '2025-01-01T00:00:00.000Z'::timestamptz + n * interval '1 second'
+         FROM generate_series(1, 500) AS n`,
+        [TENANT],
+      ));
+      assert.equal((await testRuns.listTestRuns(CTX)).length, 100, 'Postgres default is bounded');
+      assert.equal((await testRuns.listTestRuns(CTX, { limit: '9999' })).length, 500, 'Postgres max is bounded');
+
+      const devRuns = Array.from({ length: 507 }, (_, index) => ({
+        id: `run_dev_cap_${index}`,
+        tenant_id: TENANT,
+        target_group_id: 'tg_a',
+        target_id: 'tgt_a1',
+        check_id: 'origin.direct_bypass.safe',
+        status: 'completed',
+        started_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      }));
+      resetStoreForTests({ testRuns: devRuns, verdicts: [] });
+      assert.equal(listDevTestRuns(CTX).length, 100, 'dev-json uses the same default');
+      assert.equal(listDevTestRuns(CTX, { limit: '9999' }).length, 500, 'dev-json uses the same max');
     });
   });
 });

@@ -970,13 +970,20 @@ function actionItemsByAsset(ctx) {
   return byAsset;
 }
 
+function resolveWindowDays(options = {}) {
+  const raw = options.window_days ?? options.windowDays ?? 90;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 90;
+  return Math.min(Math.max(Math.trunc(parsed), 1), 365);
+}
+
 function gatherWafAnalyticsContext(ctx, options = {}) {
   ensureStoreShape();
-  const windowDays = Number(options.window_days ?? options.windowDays ?? 90);
+  const windowDays = resolveWindowDays(options);
   const assets = listWafAssets(ctx);
   const snapshotsByAsset = currentSnapshotsByAsset(ctx);
   const cutoff = new Date();
-  cutoff.setUTCDate(cutoff.getUTCDate() - Math.max(1, windowDays));
+  cutoff.setUTCDate(cutoff.getUTCDate() - windowDays);
   const historicalSnapshots = getStore().wafPostureSnapshots.filter(
     (snapshot) =>
       snapshot.tenant_id === ctx.tenantId

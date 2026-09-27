@@ -9,6 +9,8 @@ import { EmptyState } from '../ui/empty-state';
 // handled in production and covered nowhere.
 import type { FamilyCoverage, FamilyCoverageStatus } from '../../lib/vector-coverage.mjs';
 import { VECTOR_FAMILIES, familyCheckIds, familyCoverage } from '../../lib/vector-coverage.mjs';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName } from '../../lib/plain-language.mjs';
 
 type VectorHeatmapProps = {
   checks: Record<string, unknown>[];
@@ -94,7 +96,7 @@ export function VectorHeatmap({ checks, targetGroups, testPolicies, runs, eviden
           <span className="heatmap-head">Target group</span>
           {VECTOR_FAMILIES.map((family) => (
             <span className="heatmap-head" key={family.label}>
-              {family.label}
+              {plainCheckName(family.label)}
             </span>
           ))}
           {groups.map((group, groupIndex) => (

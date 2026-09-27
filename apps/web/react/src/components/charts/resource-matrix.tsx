@@ -2,6 +2,8 @@ import { ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { requestJson } from '../../lib/api';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName } from '../../lib/plain-language.mjs';
 import type { PortalConfig, Session } from '../../lib/types';
 import { asArray } from '../../lib/utils';
 import type {
@@ -181,12 +183,12 @@ function cellDescription(family: ResourceFamily, state: ResourceFamilyVerdictSta
     ? 'Included in DDoS readiness posture.'
     : 'Validation-only coverage; excluded from DDoS readiness scoring.';
   if (state.status === 'not_applicable') {
-    return `${family.label}: no mapped checks support this target group's declared target kinds. ${family.description} ${scope}`;
+    return `${plainCheckName(family.label)}: no mapped checks support this target group's declared target kinds. ${family.description} ${scope}`;
   }
   if (state.status === 'not_run') {
-    return `${family.label}: no stored verdict found in the loaded API window for ${state.applicableCheckCount} applicable checks. ${family.description} ${scope}`;
+    return `${plainCheckName(family.label)}: no stored verdict found in the loaded records for ${state.applicableCheckCount} applicable checks. ${family.description} ${scope}`;
   }
-  return `${family.label} (${family.metric}): ${statusLabel(family, state.status)}. ${state.testedCheckCount} of ${state.applicableCheckCount} applicable checks tested; ${state.freshCheckCount} fresh and ${state.staleCheckCount} stale. ${latestLabel(state.latestEvidenceAt)}. ${scope}`;
+  return `${plainCheckName(family.label)} (${family.metric}): ${statusLabel(family, state.status)}. ${state.testedCheckCount} of ${state.applicableCheckCount} applicable checks tested; ${state.freshCheckCount} fresh and ${state.staleCheckCount} stale. ${latestLabel(state.latestEvidenceAt)}. ${scope}`;
 }
 
 function MatrixCell({
@@ -387,7 +389,7 @@ export function ResourceMatrix({
               <th className="heatmap-head" scope="col" style={{ textAlign: 'left', minWidth: '10rem' }}>Target group</th>
               {RESOURCE_FAMILIES.map((family) => (
                 <th className="heatmap-head" scope="col" key={family.id} title={family.description}>
-                  <span style={{ display: 'block' }}>{family.label}</span>
+                  <span style={{ display: 'block' }}>{plainCheckName(family.label)}</span>
                   <small style={{ display: 'block', marginTop: '0.2rem', color: 'var(--fg-2)', fontWeight: 400 }}>
                     {family.metric} · {family.scoredForDdosReadiness ? 'DDoS readiness' : 'validation only'}
                   </small>
@@ -430,7 +432,7 @@ export function ResourceMatrix({
       </div>
       <MatrixLegend />
       <p className="muted" style={{ marginBottom: 0 }}>
-        “Not run” or “Not validated” means no evidence-backed stored verdict was found in the bounded records returned by the API; it is not proof that no historical run exists.
+        “Not run” or “Not validated” means no evidence-backed stored verdict was found in the bounded records currently loaded; it is not proof that no historical run exists.
       </p>
     </>
   );

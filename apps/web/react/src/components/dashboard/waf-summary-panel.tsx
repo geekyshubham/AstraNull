@@ -1,5 +1,7 @@
 import { ShieldHalf } from 'lucide-react';
 import type { DataItem } from '../../lib/types';
+// @ts-ignore Plain ESM keeps machine-code presentation directly testable with node:test.
+import { plainEmptyReason } from '../../lib/plain-language.mjs';
 import { EmptyState } from '../ui/empty-state';
 
 function getNumber(item: DataItem | null | undefined, keys: string[], fallback: number | null = null) {
@@ -170,7 +172,7 @@ export function WafSummaryPanel({ summary }: { summary: DataItem | null }) {
       <EmptyState
         icon={ShieldHalf}
         title="No WAF assets in scope."
-        body={emptyReason}
+        body={plainEmptyReason(emptyReason)}
         actionLabel="Open target groups"
         actionHref="#target-groups"
       />

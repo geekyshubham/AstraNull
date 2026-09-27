@@ -8,7 +8,7 @@ import {
   TRUTH_TABLE_ROWS,
 } from '../../lib/verdict-explanation';
 // @ts-ignore Plain ESM keeps terminology directly testable with node:test.
-import { plainVerdictLabel } from '../../lib/plain-language.mjs';
+import { plainCodeLabel, plainVerdictLabel } from '../../lib/plain-language.mjs';
 import { formatDate } from '../../lib/utils';
 
 const VERDICT_TRUTH_ROWS = [
@@ -77,7 +77,7 @@ export function TrafficPathPanel({
   const authenticatedObservationCount = events.filter(isAuthenticatedAgentObservationEvent).length;
   const noObservationCount = events.filter(isInternalControlPlaneNoObservationEvent).length;
   const statusLine = verdict
-    ? `${plainVerdictLabel(verdict)}. Technical verdict: ${verdict}${confidence ? ` (${confidence})` : ''}. Evidence states reflect only trusted events passed to this panel.`
+    ? `${plainVerdictLabel(verdict)}${confidence ? ` (${plainCodeLabel(confidence)} confidence)` : ''}. This summary uses only trusted events recorded for the run.`
     : 'No final verdict is recorded. Evidence states reflect only trusted events passed to this panel.';
 
   const internalEvidenceLabel = authenticatedObservationCount > 0
@@ -138,11 +138,15 @@ export function VerdictExplanationPanel({
   return (
     <section className="verdict-explanation">
       <h3>{heading}</h3>
-      <div className="verdict-explanation-grid">
-        {fields.map((field) => (
-          <ExplanationField key={field.label} label={field.label} value={field.value} />
-        ))}
-      </div>
+      <p className="muted">{plainVerdictLabel(verdict)}. Open the technical evidence details for exact event fields.</p>
+      <details className="technical-disclosure">
+        <summary>Show technical evidence details</summary>
+        <div className="verdict-explanation-grid">
+          {fields.map((field) => (
+            <ExplanationField key={field.label} label={field.label} value={field.value} />
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
@@ -198,7 +202,7 @@ export function RunTimelineViz({ events }: { events: DataItem[] }) {
           return (
             <li key={`${eventId || 'event'}-${index}`}>
               <time dateTime={typeof timestamp === 'string' ? timestamp : undefined}>{formatDate(timestamp)}</time>
-              {' · '}{signal}
+              {' · '}{plainCodeLabel(signal)}
               {source ? <> · {source}</> : null}
               {eventId ? <> · <code className="mono small">{eventId}</code></> : null}
             </li>

@@ -175,7 +175,7 @@ export function CheckPicker({
       <p className="check-picker-note" role="note">
         <ShieldOff size={14} aria-hidden="true" />
         <span>
-          SOC-gated and monitor-only checks are not selectable here and the API refuses them.
+          SOC-gated and monitor-only checks cannot be started here.
           {excluded.total > 0 ? ` ${excluded.total} catalog ${excluded.total === 1 ? 'entry is' : 'entries are'} hidden for that reason.` : ''}
         </span>
       </p>

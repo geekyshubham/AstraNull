@@ -8,7 +8,7 @@ export type PrototypeSurface = {
   audience: 'Public' | 'Customer' | 'Staff' | 'SOC' | 'Operator';
   group: SurfaceKind | 'public' | 'operator';
   source: string;
-  status: 'React implemented' | 'Backend/API backed' | 'Operator workflow' | 'Intentional boundary';
+  status: 'React implemented' | 'Connected data' | 'Operator workflow' | 'Intentional boundary';
   summary: string;
 };
 
@@ -22,7 +22,7 @@ export type PageTab = {
 export type FeatureItem = {
   name: string;
   surface: string;
-  status: 'Visible' | 'Partial' | 'API-backed' | 'Operator-only' | 'Staff-only' | 'By design hidden';
+  status: 'Visible' | 'Partial' | 'Connected' | 'Operator-only' | 'Staff-only' | 'By design hidden';
   relationship: string;
 };
 
@@ -525,7 +525,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   ],
   'target-groups': [
     { id: 'overview', label: 'Overview', summary: 'Declared target groups with readiness and owner context.', evidence: 'Customer-provided scope declaration.' },
-    { id: 'targets', label: 'Targets', summary: 'Manual or CSV/API-imported targets only.', evidence: 'Declared targets and explicit expected behavior.' },
+    { id: 'targets', label: 'Targets', summary: 'Manual, CSV, or automation-imported targets only.', evidence: 'Declared targets and explicit expected behavior.' },
     { id: 'expected-behavior', label: 'Expected Behavior', summary: 'Expected paths, health signals, and protective baseline.', evidence: 'Customer declaration and observed checks.' },
     { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to declared scope.', evidence: 'Agent heartbeat and placement confidence.' },
     { id: 'checks', label: 'Checks', summary: 'Check bindings and coverage.', evidence: 'Check catalog and policy bindings.' },
@@ -547,7 +547,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'origin-bypass', label: 'Origin Bypass', summary: 'Bounded origin protection checks.', evidence: 'Probe metadata and agent observation.' },
     { id: 'l3l4', label: 'L3/L4', summary: 'TCP and reachability validation families.', evidence: 'Probe results.' },
     { id: 'dns', label: 'DNS', summary: 'Resolver and delegation readiness checks.', evidence: 'DNS lookup metadata.' },
-    { id: 'l7api', label: 'L7/API', summary: 'Safe application path and API posture checks.', evidence: 'HEAD/marker observations without sensitive content.' },
+    { id: 'l7api', label: 'Application layer', summary: 'Safe application path and interface posture checks.', evidence: 'HEAD/marker observations without sensitive content.' },
     { id: 'protocols', label: 'Protocols', summary: 'TLS and protocol hygiene checks.', evidence: 'Handshake and metadata observations.' },
     { id: 'high-scale', label: 'High-Scale', summary: 'Request-only scenarios that require SOC governance.', evidence: 'Authorization pack and SOC decision artifacts.' },
     { id: 'custom', label: 'Custom', summary: 'Customer-defined checks bound to declarations.', evidence: 'Policy record and reviewed scope.' }
@@ -601,7 +601,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   settings: [
     { id: 'organization', label: 'Organization', summary: 'Tenant profile, environments, support owner, and residency.', evidence: 'Tenant record.' },
     { id: 'users-roles', label: 'Users & Roles', summary: 'User access and permission model.', evidence: 'Role contracts and audit.' },
-    { id: 'api-keys', label: 'API Keys', summary: 'Service accounts, bootstrap tokens, revoke, and rotate.', evidence: 'Token and service-account records.' },
+    { id: 'api-keys', label: 'Automation keys', summary: 'Service accounts, bootstrap tokens, revoke, and rotate.', evidence: 'Token and service-account records.' },
     { id: 'sso', label: 'SSO/SAML', summary: 'Enterprise OIDC/JWKS posture with production-safe defaults.', evidence: 'Auth configuration.' },
     { id: 'notifications', label: 'Notifications', summary: 'Default routing and provider links.', evidence: 'Notification rule records.' },
     { id: 'integrations', label: 'Integrations', summary: 'Optional connectors and remediation delivery.', evidence: 'Connector and secret metadata.' },
@@ -609,7 +609,7 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
     { id: 'audit', label: 'Audit Log', summary: 'Settings changes and security-sensitive events.', evidence: 'Audit trail.' }
   ],
   admin: [
-    { id: 'overview', label: 'Overview', summary: 'Staff metrics, pending sign-ups, approvals, and support posture.', evidence: 'Internal management API.' },
+    { id: 'overview', label: 'Overview', summary: 'Staff metrics, pending sign-ups, approvals, and support posture.', evidence: 'Internal management records.' },
     { id: 'signup-queue', label: 'Sign-up Queue', summary: 'Approve, reject, request info, and provision tenant.', evidence: 'Signup request record.' },
     { id: 'tenants', label: 'Tenants', summary: 'Tenant lifecycle, status, plan, users, and support actions.', evidence: 'Tenant detail record.' },
     { id: 'approvals', label: 'Approvals', summary: 'Internal approval queue and decision ledger.', evidence: 'Approval record.' },
@@ -626,22 +626,22 @@ export const PAGE_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
 
 export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   'target-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Per-target verification, WAF posture, and counts.', evidence: 'GET /v1/targets/:id hydrator.' },
+    { id: 'overview', label: 'Overview', summary: 'Per-target verification, WAF posture, and counts.', evidence: 'Recorded target details.' },
     { id: 'ownership', label: 'Ownership', summary: 'Verification ladder and DNS/agent state.', evidence: 'target_verifications rows.' },
     { id: 'findings', label: 'Findings', summary: 'Open and closed findings on this target.', evidence: 'findings filtered by target_id.' }
   ],
   'finding-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Severity, status, and verdict explanation.', evidence: 'Finding detail API.' },
+    { id: 'overview', label: 'Overview', summary: 'Severity, status, and verdict explanation.', evidence: 'Recorded finding details.' },
     { id: 'remediation', label: 'Remediation', summary: 'Owner, SLA, steps, and delivery state.', evidence: 'Remediation contract fields.' },
-    { id: 'evidence', label: 'Evidence', summary: 'Bundle artifacts and custody chain.', evidence: 'Finding evidence hydrator.' }
+    { id: 'evidence', label: 'Evidence', summary: 'Bundle artifacts and custody chain.', evidence: 'Recorded finding evidence.' }
   ],
   'queue-detail': [
-    { id: 'overview', label: 'Overview', summary: 'SOC-gated request lifecycle and authorization pack.', evidence: 'High-scale request API.' },
+    { id: 'overview', label: 'Overview', summary: 'SOC-gated request lifecycle and authorization pack.', evidence: 'Recorded high-scale request.' },
     { id: 'artifacts', label: 'Artifacts', summary: 'Metadata-only authorization artifacts.', evidence: 'Artifact ledger.' },
-    { id: 'notes', label: 'Notes', summary: 'SOC execution notes thread.', evidence: 'SOC notes API.' }
+    { id: 'notes', label: 'Notes', summary: 'SOC execution notes thread.', evidence: 'Recorded SOC notes.' }
   ],
   'target-group-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Readiness, runs, and declaration metadata for this service.', evidence: 'Target group detail API.' },
+    { id: 'overview', label: 'Overview', summary: 'Readiness, runs, and declaration metadata for this service.', evidence: 'Recorded target-group details.' },
     { id: 'scope', label: 'Scope & behavior', summary: 'Declared targets and expected protection behavior.', evidence: 'Customer-provided scope declaration.' },
     { id: 'validation', label: 'Validation', summary: 'Policies, runs, and findings for this group.', evidence: 'Run and finding records.' },
     { id: 'agents', label: 'Agents', summary: 'Outbound observers bound to this group.', evidence: 'Agent heartbeat records.' },
@@ -655,7 +655,7 @@ export const DETAIL_TAB_SETS: Partial<Record<RouteId, PageTab[]>> = {
   ],
   'run-detail': PAGE_TAB_SETS.runs,
   'tenant-detail': [
-    { id: 'overview', label: 'Overview', summary: 'Lifecycle, plan, and subscription summary.', evidence: 'Staff tenant detail API.' },
+    { id: 'overview', label: 'Overview', summary: 'Lifecycle, plan, and subscription summary.', evidence: 'Recorded staff tenant details.' },
     { id: 'users', label: 'Users', summary: 'Tenant users and support owner.', evidence: 'Tenant user records.' },
     { id: 'entitlements', label: 'Entitlements', summary: 'Plan features and grant controls.', evidence: 'Subscription entitlements.' },
     { id: 'provisioning', label: 'Provisioning', summary: 'Signup request that created this tenant.', evidence: 'Signup request record.' },
@@ -674,7 +674,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Sign-up status lookup', surface: 'Sign-up Status', status: 'Visible', relationship: 'Extends public request lifecycle without direct tenant provisioning.' },
       { name: 'Customer authentication entry', surface: 'Customer Login', status: 'Visible', relationship: 'Opens tenant-scoped portal session.' },
       { name: 'Staff authentication entry', surface: 'Staff Login', status: 'Visible', relationship: 'Separates internal management from customer portal.' },
-      { name: 'Public site configuration API', surface: '/v1/public/site-config', status: 'API-backed', relationship: 'Supplies configured login, sign-up, and plan metadata.' }
+      { name: 'Public site configuration', surface: '/v1/public/site-config', status: 'Connected', relationship: 'Supplies configured login, sign-up, and plan metadata.' }
     ]
   },
   {
@@ -685,7 +685,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Tenant and environment management', surface: 'Environments, Settings', status: 'Partial', relationship: 'Environments scope target groups and run history.' },
       { name: 'Target groups and declared targets', surface: 'Target Groups, Target Detail', status: 'Visible', relationship: 'The declared target group is the unit of validation.' },
       { name: 'Expected behavior model', surface: 'Target Groups', status: 'Visible', relationship: 'Expected paths and health signals support verdict interpretation.' },
-      { name: 'CSV/API import for declared scope', surface: 'Target Groups, APIs', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
+      { name: 'CSV or automation import for declared scope', surface: 'Target groups and automation', status: 'Partial', relationship: 'Imports are declarations, not autonomous discovery.' },
       { name: 'Guided first test run', surface: 'Onboarding', status: 'Visible', relationship: 'Connects setup to first validation evidence.' },
       { name: 'Role-based navigation and permissions', surface: 'Portal Shell', status: 'Partial', relationship: 'Controls SOC, audit, and release evidence visibility.' }
     ]
@@ -709,7 +709,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     summary: 'Checks, runs, findings, and scoring preserve governed validation behavior.',
     items: [
       { name: 'Check catalog', surface: 'Checks Library', status: 'Visible', relationship: 'Customer-runnable and SOC-gated checks are clearly separated.' },
-      { name: 'Check families', surface: 'Checks Library', status: 'Visible', relationship: 'Origin, L3/L4, DNS, L7/API, TLS, protocol, operations, and high-scale families.' },
+      { name: 'Check families', surface: 'Checks Library', status: 'Visible', relationship: 'Origin, L3/L4, DNS, application layer, TLS, protocol, operations, and high-scale families.' },
       { name: 'Test policies', surface: 'Test Policies', status: 'Visible', relationship: 'Binds cadence, expected verdict, target group, and schedule windows.' },
       { name: 'Run detail visualizations', surface: 'Test Runs, Run Detail', status: 'Visible', relationship: 'Timeline, probe results, observations, correlation, evidence, and events.' },
       { name: 'Correlation engine and verdict logic', surface: 'Runs, Evidence, Dashboard', status: 'Partial', relationship: 'Verdicts link to observed facts instead of assumptions.' },
@@ -723,9 +723,9 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     summary: 'Every result can be traced to evidence and exported with custody context.',
     items: [
       { name: 'Evidence ledger', surface: 'Evidence Vault', status: 'Visible', relationship: 'Stores run, finding, report, and release-ready evidence references.' },
-      { name: 'Evidence snapshot signing', surface: 'Release Evidence, APIs', status: 'API-backed', relationship: 'Produces signed manifests for release and compliance.' },
-      { name: 'Custody verification', surface: 'Reports, Evidence APIs', status: 'API-backed', relationship: 'Verifies digest and custody references.' },
-      { name: 'Event ingestion', surface: 'Events API', status: 'API-backed', relationship: 'Adds metadata-only events and deduplicates observations.' },
+      { name: 'Evidence snapshot signing', surface: 'Release evidence and automation', status: 'Connected', relationship: 'Produces signed manifests for release and compliance.' },
+      { name: 'Custody verification', surface: 'Reports and evidence', status: 'Connected', relationship: 'Verifies digest and custody references.' },
+      { name: 'Event ingestion', surface: 'Event intake', status: 'Connected', relationship: 'Adds metadata-only events and deduplicates observations.' },
       { name: 'Report builder', surface: 'Reports', status: 'Visible', relationship: 'Executive, technical, SOC, audit, custody, WAF, and release views.' },
       { name: 'Production release evidence ledger', surface: 'Release Evidence', status: 'Visible', relationship: 'Tracks required launch-gate evidence and open gaps.' }
     ]
@@ -751,13 +751,13 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     summary: 'Exposure workflows stay reviewed, metadata-only, and linked to declared scope.',
     items: [
       { name: 'Live exposure CVE pipeline', surface: 'CVE Pipeline', status: 'Partial', relationship: 'Ingests CVEs and maps them to declared WAF assets.' },
-      { name: 'CVE triage, match, recommend', surface: 'CVE Pipeline', status: 'Partial', relationship: 'Shows triage factors and asset matches while advanced actions stay API-backed.' },
-      { name: 'CVE stage, retest, playbook approval', surface: 'CVE Pipeline APIs', status: 'API-backed', relationship: 'Supports multi-vendor mitigation approval and validation.' },
+      { name: 'CVE triage, match, recommend', surface: 'CVE Pipeline', status: 'Partial', relationship: 'Shows triage factors and asset matches while advanced actions stay connected to governed services.' },
+      { name: 'CVE stage, retest, playbook approval', surface: 'CVE pipeline automation', status: 'Connected', relationship: 'Supports multi-vendor mitigation approval and validation.' },
       { name: 'Enhanced discovery modes', surface: 'Discovery', status: 'Visible', relationship: 'D0-D4 modes remain approval-gated and never required for core inventory.' },
       { name: 'Discovery candidate inbox', surface: 'Discovery, Discovery Entity', status: 'Visible', relationship: 'Candidates require decision before import into declared scope.' },
       { name: 'Approved candidate import', surface: 'Discovery', status: 'Partial', relationship: 'Imports approved candidates into existing declared target groups.' },
       { name: 'Supply-chain risk detection', surface: 'Supply Chain', status: 'Visible', relationship: 'Tracks dangling CNAME, deleted app, dependency, redirect, vendor, and subdomain risks.' },
-      { name: 'Supply-chain active-protection phases', surface: 'Supply Chain APIs', status: 'API-backed', relationship: 'Phase authorization governs any active-protection transition.' }
+      { name: 'Supply-chain active-protection phases', surface: 'Supply-chain automation', status: 'Connected', relationship: 'Phase authorization governs any active-protection transition.' }
     ]
   },
   {
@@ -768,7 +768,7 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Action-item remediation', surface: 'Remediation, Findings', status: 'Partial', relationship: 'Converts findings, CVEs, and supply-chain risks into owner work.' },
       { name: 'Remediation delivery preview', surface: 'Remediation, Integrations', status: 'Partial', relationship: 'Ticketing and SIEM/SOAR outputs are redacted and opt-in.' },
       { name: 'Notification rules and events', surface: 'Notifications', status: 'Visible', relationship: 'Routes safe in-app and provider notifications.' },
-      { name: 'Notification provider credentials', surface: 'Notifications APIs', status: 'API-backed', relationship: 'Secret storage is metadata-only from the UI perspective.' },
+      { name: 'Notification provider credentials', surface: 'Notification automation', status: 'Connected', relationship: 'Secret storage is metadata-only from the UI perspective.' },
       { name: 'Notification retry and DLQ redrive', surface: 'Notifications', status: 'Partial', relationship: 'Preview and recovery flows expose only operational metadata.' },
       { name: 'Integrations catalog', surface: 'Integrations', status: 'Visible', relationship: 'Groups connectors, ticketing, notification, and remediation delivery options.' }
     ]
@@ -795,10 +795,10 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
       { name: 'Internal management overview', surface: 'Admin Console', status: 'Visible', relationship: 'Shows pending sign-ups, approvals, tenants, support, and audit counts.' },
       { name: 'Staff signup queue', surface: 'Admin Console', status: 'Staff-only', relationship: 'Review, request info, approve, reject, and provision tenants.' },
       { name: 'Staff tenant operations', surface: 'Admin Console, Tenant Detail', status: 'Staff-only', relationship: 'Suspend, reactivate, view users, support notes, and lifecycle state.' },
-      { name: 'Staff subscription and entitlements', surface: 'Admin Console, Subscription', status: 'Partial', relationship: 'Shows plan and entitlement state while writes stay API-governed.' },
+      { name: 'Staff subscription and entitlements', surface: 'Admin Console, Subscription', status: 'Partial', relationship: 'Shows plan and entitlement state while writes stay governed.' },
       { name: 'Staff user support', surface: 'Admin Console, Support', status: 'Partial', relationship: 'Invite resend, disable user, and support-note flows.' },
       { name: 'Internal approval queue', surface: 'Admin Console', status: 'Partial', relationship: 'Lists approval requests and decision context.' },
-      { name: 'Break-glass status', surface: 'Internal APIs', status: 'API-backed', relationship: 'Emergency access remains audited and separate from general UI.' }
+      { name: 'Break-glass status', surface: 'Internal services', status: 'Connected', relationship: 'Emergency access remains audited and separate from general UI.' }
     ]
   },
   {
@@ -806,11 +806,11 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
     title: 'Settings, Security, And Operations',
     summary: 'Production readiness, privacy, observability, and release operations are surfaced at the right layer.',
     items: [
-      { name: 'Service accounts and API keys', surface: 'Settings', status: 'Partial', relationship: 'Create, revoke, rotate, and audit automation access.' },
-      { name: 'Secret vault', surface: 'Settings APIs', status: 'API-backed', relationship: 'Tenant-scoped encrypted metadata with no plaintext read path.' },
+      { name: 'Service accounts and automation keys', surface: 'Settings', status: 'Partial', relationship: 'Create, revoke, rotate, and audit automation access.' },
+      { name: 'Secret vault', surface: 'Settings automation', status: 'Connected', relationship: 'Tenant-scoped encrypted metadata with no plaintext read path.' },
       { name: 'Privacy retention', surface: 'Settings', status: 'Partial', relationship: 'Retention status and purge controls support compliance.' },
-      { name: 'Rate limiting', surface: 'API layer', status: 'API-backed', relationship: 'Protects public and API routes.' },
-      { name: 'Observability', surface: '/health, /ready, /metrics, /v1/observability', status: 'API-backed', relationship: 'Health, readiness, metrics, and operational state.' },
+      { name: 'Rate limiting', surface: 'Service layer', status: 'Connected', relationship: 'Protects public and authenticated routes.' },
+      { name: 'Observability', surface: '/health, /ready, /metrics, /v1/observability', status: 'Connected', relationship: 'Health, readiness, metrics, and operational state.' },
       { name: 'Postgres persistence and migrations', surface: 'Operator scripts', status: 'Operator-only', relationship: 'Migrations, repositories, and tenant query audit support production.' },
       { name: 'Backup, restore, and DR drills', surface: 'Release Evidence', status: 'Operator-only', relationship: 'Produces operational evidence for release readiness.' },
       { name: 'Staging and hosted verification scripts', surface: 'Release Evidence, package scripts', status: 'Operator-only', relationship: 'Feeds release evidence and attestation workflows.' }

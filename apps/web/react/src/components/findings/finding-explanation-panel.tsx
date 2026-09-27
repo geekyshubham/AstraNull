@@ -230,9 +230,9 @@ export function FindingExplanationPanel({
       <section className="verdict-explanation" aria-label="Finding evidence provenance">
         <h3>Evidence provenance</h3>
         <div className="verdict-explanation-grid">
-          <ExplanationField label="Finding record" value={findingId || 'Not returned by finding'} />
+          <ExplanationField label="Finding record" value={findingId || 'Not recorded on finding'} />
           <ExplanationField label="Originating run" value={linkedRunId} />
-          <ExplanationField label="Run check" value={runCheckId || 'Not returned by linked run'} />
+          <ExplanationField label="Run check" value={runCheckId || 'Not recorded on linked run'} />
           <ExplanationField label="Run event records" value={`${eventCount} loaded from linked run`} />
         </div>
         <div className="row-actions">

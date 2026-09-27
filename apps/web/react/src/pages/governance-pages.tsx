@@ -21,7 +21,9 @@ import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
-import { formatDate, formatNumber } from '../lib/utils';
+import { formatAuditAction, formatDate, formatNumber } from '../lib/utils';
+// @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
+import { plainCodeLabel } from '../lib/plain-language.mjs';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
 import { useConfirmModal } from '../lib/crud-ui';
 
@@ -652,7 +654,7 @@ function buildProviderContactRows(requests: DataItem[]): ProviderContactRow[] {
 }
 
 const providerContactColumns: TableColumn<ProviderContactRow>[] = [
-  { key: 'request', label: 'Request', render: (item) => <span className="mono">{item.requestId}</span> },
+  { key: 'request', label: 'Request', render: (item) => <span title={item.requestId}>High-scale request</span> },
   {
     key: 'provider',
     label: 'Provider',
@@ -707,7 +709,7 @@ function buildSocCrossTenantRows(approvals: DataItem[]): SocCrossTenantRow[] {
 
 const socCrossTenantColumns: TableColumn<SocCrossTenantRow>[] = [
   { key: 'tenant', label: 'Tenant', render: (item) => <span className="mono">{item.tenantId}</span> },
-  { key: 'request', label: 'Request', render: (item) => <span className="mono">{item.id}</span> },
+  { key: 'request', label: 'Request', render: (item) => <span title={item.id}>High-scale request</span> },
   { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{formatGovernanceStatusLabel(item.kind, 'high scale')}</Badge> },
   {
     key: 'state',
@@ -1133,8 +1135,8 @@ export function AuditPage({
       if (actor !== '—') actors.add(actor);
     }
     return [
-      { value: 'all', label: 'all' },
-      ...Array.from(actors).sort().map((actor) => ({ value: actor, label: actor }))
+      { value: 'all', label: 'All' },
+      ...Array.from(actors).sort().map((actor) => ({ value: actor, label: plainCodeLabel(actor) }))
     ];
   }, [data.audit]);
 
@@ -1145,8 +1147,8 @@ export function AuditPage({
       if (action !== '—') actions.add(action);
     }
     return [
-      { value: 'all', label: 'all' },
-      ...Array.from(actions).sort().map((action) => ({ value: action, label: action }))
+      { value: 'all', label: 'All' },
+      ...Array.from(actions).sort().map((action) => ({ value: action, label: formatAuditAction(action) }))
     ];
   }, [data.audit]);
 
@@ -1233,8 +1235,8 @@ export function AuditPage({
 
   const columns: TableColumn<DataItem>[] = [
     { key: 'time', label: 'Time', render: (item) => <span className="mono">{formatDate(item.timestamp ?? item.created_at)}</span> },
-    { key: 'actor', label: 'Actor', render: (item) => <span className="mono">{getString(item, ['actor_role', 'actor_user_id'], 'system')}</span> },
-    { key: 'action', label: 'Action', render: (item) => <span className="mono">{getString(item, ['action'])}</span> },
+    { key: 'actor', label: 'Actor', render: (item) => <span>{plainCodeLabel(getString(item, ['actor_role', 'actor_user_id'], 'system'))}</span> },
+    { key: 'action', label: 'Action', render: (item) => <span>{formatAuditAction(getString(item, ['action']))}</span> },
     {
       key: 'target',
       label: 'Target',
@@ -1318,7 +1320,7 @@ export function AuditPage({
                 getRowId={(item) => auditEntrySelectionKey(item)}
                 getRowProps={(item) => {
                   const key = auditEntrySelectionKey(item);
-                  const label = `Inspect ${getString(item, ['action'], 'audit event')} on ${getString(item, ['resource_id', 'resource_type'], 'unknown resource')}`;
+                  const label = `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${getString(item, ['resource_id', 'resource_type'], 'unknown resource')}`;
                   return {
                     onClick: () => setSelectedId(key),
                     onKeyDown: (event) => {
@@ -1341,7 +1343,7 @@ export function AuditPage({
             <Card density="compact" raised>
               <CardHeader>
                 <CardTitle>Custody and metadata drilldown</CardTitle>
-                <CardDescription>{getString(selectedEntry, ['action'])} · {getString(selectedEntry, ['resource_type'])}</CardDescription>
+                <CardDescription>{formatAuditAction(getString(selectedEntry, ['action']))} · {plainCodeLabel(getString(selectedEntry, ['resource_type']))}</CardDescription>
               </CardHeader>
               <CardContent className="kv-list">
                 <KvField label="Actor">
@@ -1400,11 +1402,11 @@ export function ReleaseEvidencePage({ data, session }: { data: PortalData; sessi
   const attestation = data.releaseAttestation;
   const coverage = computeReleaseEvidenceCoverage(data.releaseEvidence);
   const missingKindColumns: TableColumn<{ kind: string }>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => item.kind },
+    { key: 'kind', label: 'Kind', render: (item) => <span title={item.kind}>{plainCodeLabel(item.kind)}</span> },
     { key: 'status', label: 'Status', render: () => <Badge tone="warn">Missing</Badge> }
   ];
   const columns: TableColumn<DataItem>[] = [
-    { key: 'kind', label: 'Kind', render: (item) => <Badge tone="info">{getString(item, ['kind'])}</Badge> },
+    { key: 'kind', label: 'Kind', render: (item) => { const kind = getString(item, ['kind']); return <Badge tone="info" title={kind}>{plainCodeLabel(kind)}</Badge>; } },
     {
       key: 'status',
       label: 'Status',
@@ -1702,7 +1704,7 @@ export function SocConsolePage({
     return requestJson(config, session, path, options);
   }
   const requestColumns: TableColumn<DataItem>[] = [
-    { key: 'id', label: 'Request', render: (item) => getString(item, ['id']) },
+    { key: 'id', label: 'Request', render: (item) => { const id = getString(item, ['id'], ''); return <span title={id || undefined}>{getString(item, ['objective', 'reason', 'name'], 'High-scale validation request')}</span>; } },
     {
       key: 'state',
       label: 'State',

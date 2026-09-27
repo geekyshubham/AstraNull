@@ -52,6 +52,8 @@ export function EmptyState({
 }: EmptyStateProps) {
   const titleId = useId();
   const showAction = Boolean(actionLabel && (actionHref || onAction));
+  const normalizeCopy = (value: string) => value.trim().toLocaleLowerCase().replace(/[.!?]+$/, '');
+  const showBody = Boolean(body.trim()) && normalizeCopy(body) !== normalizeCopy(title);
 
   return (
     <div
@@ -65,7 +67,7 @@ export function EmptyState({
         <Icon className="empty-icon" size={36} aria-hidden="true" />
       )}
       <h2 id={titleId}>{title}</h2>
-      <p>{body}</p>
+      {showBody ? <p>{body}</p> : null}
       {showAction ? (
         <EmptyStateAction actionLabel={actionLabel!} actionHref={actionHref} onAction={onAction} />
       ) : null}

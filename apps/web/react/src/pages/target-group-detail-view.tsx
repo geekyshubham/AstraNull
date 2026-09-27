@@ -31,6 +31,8 @@ import { EmptyState } from '../components/ui/empty-state';
 import { Badge } from '../components/ui/badge';
 import { DataTable, type TableColumn } from '../components/ui/table';
 import { Tabs, type TabOption } from '../components/ui/tabs';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName, plainFindingTitle, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 import {
   effectivePolicyTargetKind,
   isPolicyTargetCompatible,
@@ -1086,7 +1088,7 @@ export function TargetGroupDetailView({
         }
       }) as DataItem;
       if (!getString(created, ['id'], '')) {
-        throw new Error('The target API did not return the created target ID, so no follow-up action was attempted.');
+        throw new Error('Target creation did not provide an identifier, so no follow-up action was attempted.');
       }
       setMessage(options.successMessage ?? 'Target declared.');
       if (options.closeModal !== false) setShowOnboardModal(false);
@@ -1449,7 +1451,7 @@ export function TargetGroupDetailView({
       setMessage('');
       return;
     }
-    const checkName = getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId);
+    const checkName = plainCheckName(getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId));
     await runAction(`run-test-${targetId}`, async () => {
       await requestJson(config, session, '/v1/test-runs', {
         method: 'POST',
@@ -1573,7 +1575,7 @@ export function TargetGroupDetailView({
           safe_windows: [{ day, start, end, timezone }]
         }
       });
-      const checkName = getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId);
+      const checkName = plainCheckName(getString(selectedPolicyCheck, ['name', 'check_id'], effectiveSelectedPolicyCheckId));
       setMessage(
         `${checkName} scheduled ${humanizeLabel(cadence).toLowerCase()} for ${getString(selectedPolicyTarget, ['value'], effectiveSelectedPolicyTargetId)} inside ${day} ${start}–${end} ${timezone}.`
       );
@@ -1664,7 +1666,7 @@ export function TargetGroupDetailView({
     {
       key: 'source',
       label: 'Source',
-      render: (item) => <Badge tone="muted" title="Declaration provenance from target API metadata">{targetDeclarationProvenanceLabel(item)}</Badge>
+      render: (item) => <Badge tone="muted" title="Recorded declaration source">{plainCheckName(targetDeclarationProvenanceLabel(item))}</Badge>
     },
     {
       key: 'expected',
@@ -1695,7 +1697,7 @@ export function TargetGroupDetailView({
         if (!probe) return <span className="muted">—</span>;
         const key = probe.trim().toLowerCase();
         const tone = key === 'pass' ? 'success' : key === 'gap' || key === 'fail' ? 'danger' : 'warn';
-        return <Badge tone={tone} title={`Last probe verdict ${probe} from target API`}>{humanizeLabel(probe)}</Badge>;
+        return <Badge tone={tone} title={`Last recorded probe verdict: ${plainVerdictLabel(probe)}`}>{plainVerdictLabel(probe)}</Badge>;
       }
     },
     {
@@ -1822,7 +1824,7 @@ export function TargetGroupDetailView({
       label: 'Select',
       render: (item) => {
         const checkId = getString(item, ['check_id', 'id'], '');
-        const checkName = getString(item, ['name', 'check_id'], checkId);
+        const checkName = plainCheckName(getString(item, ['name', 'check_id'], checkId));
         return (
           <label className="check-choice">
             <input
@@ -1851,8 +1853,8 @@ export function TargetGroupDetailView({
         const description = getString(item, ['description', 'summary'], '');
         return (
           <span className="check-primary">
-            <strong>{getString(item, ['name'], checkId)}</strong>
-            {description ? <span className="check-description">{description}</span> : null}
+            <strong>{plainCheckName(getString(item, ['name'], checkId))}</strong>
+            {description ? <span className="check-description">{plainCheckName(description)}</span> : null}
             <span className="check-id mono">{checkId}</span>
           </span>
         );
@@ -1900,15 +1902,16 @@ export function TargetGroupDetailView({
       label: 'Target',
       render: (item) => {
         const targetId = getString(item, ['target_id'], '');
+        const target = targets.find((entry) => getString(entry, ['id'], '') === targetId);
         return targetId
-          ? <AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', targetId)}>{targetId}</AnchorButton>
-          : <span className="muted">group-level</span>;
+          ? <span className="entity-cell-stack"><AnchorButton size="sm" variant="ghost" href={buildDetailHref('target-detail', targetId)}>{getString(target, ['hostname', 'value', 'name'], targetId)}</AnchorButton><small className="mono">{targetId}</small></span>
+          : <span className="muted">Group-level</span>;
       }
     },
     {
       key: 'finding',
       label: 'Finding',
-      render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', getString(item, ['id'], ''))}>{getString(item, ['title', 'id'], '')}</AnchorButton>
+      render: (item) => <span className="entity-cell-stack"><AnchorButton size="sm" variant="ghost" href={buildDetailHref('finding-detail', getString(item, ['id'], ''))}>{plainFindingTitle(item, targets, checks)}</AnchorButton><small className="mono">{getString(item, ['id'], '')}</small></span>
     },
     { key: 'severity', label: 'Severity', render: (item) => formatSeverityLabel(getString(item, ['severity'], 'unknown')) },
     { key: 'status', label: 'Status', render: (item) => findingStatus(item) }
@@ -1916,12 +1919,12 @@ export function TargetGroupDetailView({
 
   const runColumns: TableColumn<DataItem>[] = [
     { key: 'run', label: 'Run', render: (item) => <AnchorButton size="sm" variant="ghost" href={buildDetailHref('run-detail', getString(item, ['id'], ''))}>{getString(item, ['id'], '')}</AnchorButton> },
-    { key: 'policy', label: 'Policy', render: (item) => getString(item, ['policy_id', 'test_policy_id'], '—') },
+    { key: 'policy', label: 'Policy', render: (item) => { const policyId = getString(item, ['policy_id', 'test_policy_id'], ''); return <span title={policyId || undefined}>{policyId ? 'Scheduled policy' : 'Not scheduled'}</span>; } },
     { key: 'checks', label: 'Checks', render: (item) => String(item.check_count ?? getString(item, ['check_id'], '—')) },
     { key: 'status', label: 'Lifecycle', render: (item) => humanizeLabel(getString(item, ['status'], 'pending')) },
     { key: 'verdict', label: 'Verdict', render: (item) => {
       const verdict = hasEvidenceBackedVerdict(item, data.evidence) ? publishedRunVerdict(item) : '';
-      return verdict ? humanizeLabel(verdict) : <span className="muted">No verdict evidence</span>;
+      return verdict ? plainVerdictLabel(verdict) : <span className="muted">No result yet</span>;
     } },
     { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
   ];
@@ -1932,7 +1935,7 @@ export function TargetGroupDetailView({
     {
       key: 'state',
       label: 'State',
-      render: (item) => <VerifyChip state={challengeChipState(item)} provenance={`DNS challenge ${getString(item, ['id'], '')} · ${getString(item, ['state'], 'pending')} per ownership API`} />
+      render: (item) => <VerifyChip state={challengeChipState(item)} provenance={`DNS challenge ${getString(item, ['id'], '')} · ${getString(item, ['state'], 'pending')} in the ownership record`} />
     },
     { key: 'issued', label: 'Issued', render: (item) => formatDate(item.issued_at) },
     { key: 'checked', label: 'Last checked', render: (item) => (item.last_checked_at ? formatDate(item.last_checked_at) : '—') }
@@ -1943,7 +1946,7 @@ export function TargetGroupDetailView({
     : activeChallengeId
       ? `Challenge ${activeChallengeId} is ${humanizeLabel(dnsChipState).toLowerCase()} for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}.${targetOwnershipDnsVerified ? ' Target ownership remains DNS verified from prior target evidence.' : ''}`
       : targetOwnershipDnsVerified
-        ? `${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} is DNS verified by the target API; challenge details are unavailable`
+        ? `${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} has recorded DNS verification; challenge details are unavailable`
         : selectedDnsTargetId
           ? `No DNS challenge is active for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}`
           : 'Select a domain target to inspect its DNS ownership state';
@@ -1993,7 +1996,7 @@ export function TargetGroupDetailView({
             <CardTitle>Ownership verification</CardTitle>
             <CardDescription>Each step counts targets whose current proof is exactly that level, so stronger proof (agent, user) is not also counted under DNS. Group status is the weakest target's current proof. Incomplete proof keeps bounded validation fail closed.</CardDescription>
           </div>
-          <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
+          <Badge tone={ownershipTone} title={`Recorded ownership status: ${plainVerificationLabel(ownershipStatus)}`}>{plainVerificationLabel(ownershipStatus)}</Badge>
         </CardHeader>
         <CardContent>
           {ladderError ? <div className="form-banner error" role="alert">{ladderError}</div> : null}
@@ -2035,13 +2038,13 @@ export function TargetGroupDetailView({
         <div className="kpi-cell">
           <div className="kpi-label">Ownership</div>
           <div className="kpi-value kpi-value--status">
-            <Badge tone={ownershipTone} title={`Ownership status ${ownershipStatus} from target group API`}>{ownershipStatus}</Badge>
+            <Badge tone={ownershipTone} title={`Recorded ownership status: ${plainVerificationLabel(ownershipStatus)}`}>{plainVerificationLabel(ownershipStatus)}</Badge>
           </div>
         </div>
         <div className="kpi-cell">
           <div className="kpi-label">LOA</div>
           <div className="kpi-value kpi-value--status">
-            <Badge tone={loaSigned ? 'success' : 'warn'} title={`LOA state ${loaState} from target group API`}>{loaSigned ? 'Signed' : 'Required'}</Badge>
+            <Badge tone={loaSigned ? 'success' : 'warn'} title={`Recorded letter-of-authorization state: ${loaState}`}>{loaSigned ? 'Signed' : 'Required'}</Badge>
           </div>
         </div>
         <div className="kpi-cell">
@@ -2180,13 +2183,13 @@ export function TargetGroupDetailView({
             <EmptyState
               icon={ShieldHalf}
               title="DNS ownership confirmed"
-              body={`The target API reports ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} as DNS verified. Challenge details are unavailable, so AstraNull will not issue a replacement.`}
+              body={`${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)} has recorded DNS verification. Challenge details are unavailable, so AstraNull will not issue a replacement.`}
             />
           ) : selectedDnsTarget ? (
             <EmptyState
               icon={Globe}
               title="No challenge for the selected domain"
-              body={`Issue a challenge for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}. AstraNull will send that exact target ID to the ownership API.`}
+              body={`Issue a challenge for ${getString(selectedDnsTarget, ['value'], selectedDnsTargetId)}. AstraNull will use that exact target identifier for the ownership check.`}
               actionLabel={busy.startsWith('dns-') ? undefined : 'Issue DNS challenge'}
               onAction={busy.startsWith('dns-') ? undefined : () => void issueDnsChallenge(selectedDnsTargetId)}
             />
@@ -2678,7 +2681,7 @@ export function TargetGroupDetailView({
                   </select>
                 </label>
                 <label className="full"><span>Notes (optional)</span><input name="notes" placeholder="Origin behind CDN · single-AZ · IPv4 only" /></label>
-                <p id="ip-port-storage-note" className="muted small full">The target remains a canonical bare IP. Port is retained separately as target metadata.</p>
+                <p id="ip-port-storage-note" className="muted small full">The target remains a bare IP address. The port is stored separately.</p>
                 <div className="form-actions full">
                   <Button type="submit" loading={busy === 'add-target-ip'}>Register &amp; wait for agent</Button>
                   <AnchorButton size="sm" variant="secondary" href="#agents">Open agent install</AnchorButton>
@@ -2701,7 +2704,7 @@ export function TargetGroupDetailView({
           ) : null}
           {onboardTab === 'cloud' ? (
             <div className="stack-tight">
-              <p className="muted">Connect a DNS provider once, then select exact zones for this target group. A current vault-backed server poll can verify the imported zone from durable provider API evidence; manual or prefetched metadata remains pending and still requires DNS proof.</p>
+              <p className="muted">Connect a DNS provider once, then select exact zones for this target group. A current, secured provider check can verify an imported zone; manually supplied or older records remain pending and still require DNS proof.</p>
               {connectors.length === 0 ? (
                 <EmptyState
                   icon={Bot}

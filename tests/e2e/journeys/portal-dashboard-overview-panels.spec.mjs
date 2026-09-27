@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { applyPortalBaselineReadinessBoost } from '../../fixtures/portal-baseline/readiness.mjs';
 import { PORTAL_BASELINE_IDS } from '../../fixtures/portal-baseline/seed.mjs';
+import { plainInlineText } from '../../../apps/web/react/src/lib/plain-language.mjs';
 import {
   isPortalScaleEnabled,
   PORTAL_SCALE_PROFILE,
@@ -104,7 +105,7 @@ test.describe('portal dashboard overview panels', () => {
       const row = rows.filter({ hasText: factor.label });
       await expect(row, `one row for factor ${factor.key}`).toHaveCount(1);
       await expect(row.locator('.lg-pct')).toHaveText(String(factor.score));
-      await expect(row).toContainText(factor.detail);
+      await expect(row).toContainText(plainInlineText(factor.detail));
     }
   });
 

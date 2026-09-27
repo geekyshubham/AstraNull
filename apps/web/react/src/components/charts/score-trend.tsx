@@ -1,6 +1,8 @@
 import type { DataItem } from '../../lib/types';
 import { cn, scoreTone } from '../../lib/utils';
 import { Badge } from '../ui/badge';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainVerdictLabel } from '../../lib/plain-language.mjs';
 
 type ScoreTrendProps = {
   runs: DataItem[];
@@ -98,11 +100,6 @@ function verdictTone(verdict: string): VerdictTone {
   return 'muted';
 }
 
-function formatVerdict(verdict: string): string {
-  const words = verdict.trim().replace(/[_-]+/g, ' ');
-  return words ? `${words.charAt(0).toUpperCase()}${words.slice(1)}` : 'Unknown';
-}
-
 function runSortKey(run: DataItem): string {
   return String(run.completed_at ?? run.created_at ?? run.started_at ?? run.id ?? '');
 }
@@ -180,7 +177,7 @@ export function ScoreTrend({ runs, currentScore, tone }: ScoreTrendProps) {
                 tone={verdictTone(verdict)}
                 title={`Run ${String(run.id ?? index + 1)} · ${verdict}`}
               >
-                {label} · {formatVerdict(verdict)}
+                {label} · {plainVerdictLabel(verdict)}
               </Badge>
             );
           })}

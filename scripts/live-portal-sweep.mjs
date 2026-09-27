@@ -22,6 +22,17 @@ const EXPECTED_ROUTE_IDS = [
 const REQUIRED_TARGET_GROUP_IDS = ['tg_demo_origin', 'tg_e667ec494cba38ec'];
 const REQUIRED_TARGET_IDS = ['tgt_6a31fa8a3ebc162f', 'tgt_be430ffbeba98c0b', 'tgt_demo_1'];
 const API_PATH_RE = /^\/(?:v1|internal)\//;
+const PRODUCTION_HOST = 'astranull.site';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const LOADING_SELECTOR = '#portal-main [aria-busy="true"], #portal-main .skeleton, #portal-main [class*="skeleton"]';
+const MACHINE_TOKEN_RE = /\b[a-z]+(?:_[a-z0-9]+)+\b/g;
+const MACHINE_ID_PREFIX_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_/;
+const JARGON_PATTERNS = [
+  ['api', /\bAPI\b/g],
+  ['hydrator', /\bhydrator\b/gi],
+  ['canonical', /\bcanonical\b/gi],
+  ['producer_attribution', /\bproducer attribution\b/gi],
+];
 const RAW_ERROR_PATTERNS = [
   ['postgres_route_not_wired', /\bpostgres_route_not_wired\b/i],
   ['internal_error', /\binternal_error\b/i],
@@ -105,11 +116,13 @@ function requiredArg(argv, index, flag) {
   return value;
 }
 
-function normalizedBaseUrl(value) {
+export function normalizedBaseUrl(value) {
   const url = new URL(value);
   if (url.username || url.password || url.search || url.hash) throw new Error('--base-url must not contain credentials, query, or hash');
-  if (url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '::1'].includes(url.hostname)) {
-    throw new Error('--base-url must use HTTPS except on localhost');
+  const productionOrigin = url.protocol === 'https:' && url.hostname === PRODUCTION_HOST && url.port === '';
+  const loopbackOrigin = url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
+  if (url.pathname !== '/' || (!productionOrigin && !loopbackOrigin)) {
+    throw new Error(`--base-url must be https://${PRODUCTION_HOST} or an HTTP loopback development origin`);
   }
   return url.origin;
 }
@@ -359,6 +372,41 @@ function inspectRawErrors(text, viewport) {
   });
 }
 
+function diagnosticSnippet(text, index, length) {
+  const start = Math.max(0, index - 90);
+  return text.slice(start, Math.min(text.length, index + length + 170)).replace(/\s+/g, ' ').trim();
+}
+
+function dottedIdentifierAt(text, index, length) {
+  let start = index;
+  let end = index + length;
+  while (start > 0 && /[a-z0-9_.-]/i.test(text[start - 1])) start -= 1;
+  while (end < text.length && /[a-z0-9_.-]/i.test(text[end])) end += 1;
+  const envelope = text.slice(start, end).replace(/^\.+|\.+$/g, '');
+  return envelope.includes('.') && /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$/i.test(envelope);
+}
+
+export function inspectVisibleLanguage(value, viewport = 'unknown') {
+  const text = String(value ?? '');
+  const machineTokens = [];
+  const seenTokens = new Set();
+  for (const match of text.matchAll(new RegExp(MACHINE_TOKEN_RE.source, 'g'))) {
+    const token = match[0];
+    const index = Number(match.index ?? 0);
+    if (MACHINE_ID_PREFIX_RE.test(token) || dottedIdentifierAt(text, index, token.length) || seenTokens.has(token)) continue;
+    seenTokens.add(token);
+    machineTokens.push({ token, viewport, snippet: diagnosticSnippet(text, index, token.length) });
+  }
+
+  const jargon = [];
+  for (const [kind, pattern] of JARGON_PATTERNS) {
+    const match = new RegExp(pattern.source, pattern.flags).exec(text);
+    if (!match) continue;
+    jargon.push({ kind, term: match[0], viewport, snippet: diagnosticSnippet(text, Number(match.index ?? 0), match[0].length) });
+  }
+  return { machineTokens, jargon };
+}
+
 async function inspectPage(page, role, routeCase, viewport, redact) {
   const state = await page.evaluate(() => ({
     text: document.body?.innerText ?? '',
@@ -379,10 +427,46 @@ async function inspectPage(page, role, routeCase, viewport, redact) {
         disabled: node.hasAttribute('disabled') || node.getAttribute('aria-disabled') === 'true',
       })).filter((entry) => entry.label),
     busy: [...document.querySelectorAll('#portal-main [aria-busy="true"]')].length,
+    loadingPlaceholders: [...document.querySelectorAll('#portal-main [aria-busy="true"], #portal-main .skeleton, #portal-main [class*="skeleton"]')]
+      .filter((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      })
+      .map((node) => ({
+        tag: node.tagName.toLowerCase(),
+        classes: [...node.classList].slice(0, 5).join(' '),
+        ariaBusy: node.getAttribute('aria-busy') ?? '',
+      })),
+    horizontalOverflows: (() => {
+      const candidates = new Set();
+      for (const table of document.querySelectorAll('#portal-main table')) {
+        let node = table.parentElement;
+        for (let depth = 0; node && depth < 6 && node.id !== 'portal-main'; depth += 1, node = node.parentElement) {
+          if (depth === 0 || node.matches('.table-wrap, .table-scroller, [role="region"]')) candidates.add(node);
+        }
+      }
+      return [...candidates].flatMap((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        const overflow = node.scrollWidth - node.clientWidth;
+        if (style.display === 'none' || style.visibility === 'hidden' || rect.width <= 0 || overflow <= 1) return [];
+        if (style.overflowX === 'auto' || style.overflowX === 'scroll') return [];
+        return [{
+          element: node.tagName.toLowerCase(),
+          classes: [...node.classList].slice(0, 6).join(' '),
+          role: node.getAttribute('role') ?? '',
+          overflowX: style.overflowX,
+          clientWidth: node.clientWidth,
+          scrollWidth: node.scrollWidth,
+        }];
+      });
+    })(),
     accessNotice: document.querySelector('.route-access-notice')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
   }));
   const text = redact(state.text, 100_000);
   const rawErrors = inspectRawErrors(text, viewport).map((entry) => ({ ...entry, snippet: redact(entry.snippet, 260) }));
+  const language = inspectVisibleLanguage(text, viewport);
   const expectedAccess = canAccessRoute(role, routeCase.route, { principal: 'customer' });
   const missingExpectedToken = expectedAccess && routeCase.expectedToken && !text.includes(routeCase.expectedToken)
     ? [{ viewport, expected: routeCase.expectedToken, symptom: 'Expected real record identifier is not visible.' }]
@@ -409,6 +493,10 @@ async function inspectPage(page, role, routeCase, viewport, redact) {
     missingAccessState,
     staleAccessState,
     unauthorizedControls,
+    machineTokens: language.machineTokens.map((entry) => ({ ...entry, snippet: redact(entry.snippet, 300) })),
+    jargon: language.jargon.map((entry) => ({ ...entry, snippet: redact(entry.snippet, 300) })),
+    horizontalOverflows: state.horizontalOverflows.map((entry) => ({ ...entry, viewport })),
+    loadingPlaceholders: state.loadingPlaceholders.map((entry) => ({ ...entry, viewport })),
     busyCount: state.busy,
     accessNotice: redact(state.accessNotice, 300),
   };
@@ -416,12 +504,16 @@ async function inspectPage(page, role, routeCase, viewport, redact) {
 
 async function settlePortal(page) {
   await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-  await page.waitForFunction(() => {
+  await page.waitForFunction((selector) => {
     if (!document.querySelector('#portal-main')) return false;
-    return ![...document.querySelectorAll('#portal-main [aria-busy="true"]')].some((node) =>
-      node.classList.contains('content') || node.getAttribute('role') === 'status');
-  }, undefined, { timeout: 20_000 }).catch(() => {});
+    return ![...document.querySelectorAll(selector)].some((node) => {
+      const style = getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    });
+  }, LOADING_SELECTOR, { timeout: 45_000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+  await page.waitForTimeout(250);
 }
 
 async function settleViewport(page, width) {
@@ -493,6 +585,7 @@ async function sweepRole({ browser, baseUrl, role, tokenRecord, cases, shotsDir,
         expectedAccess: canAccessRoute(role, routeCase.route, { principal: 'customer' }),
         finalUrl: '', navigationError: '', pageErrors: [], consoleErrors: [], apiErrors: [], nonGetRequests: [],
         blockedHosts: [], rawErrors: [], missingExpectedData: [], missingAccessState: [], staleAccessState: [], unauthorizedControls: [],
+        machineTokens: [], jargon: [], horizontalOverflows: [], loadingPlaceholders: [],
         emptyStates: [], busyCounts: {}, screenshots: [],
       };
       activeRecord = record;
@@ -528,6 +621,10 @@ async function sweepRole({ browser, baseUrl, role, tokenRecord, cases, shotsDir,
       record.missingAccessState.push(...desktop.missingAccessState, ...mobile.missingAccessState);
       record.staleAccessState.push(...desktop.staleAccessState, ...mobile.staleAccessState);
       record.unauthorizedControls.push(...desktop.unauthorizedControls, ...mobile.unauthorizedControls);
+      record.machineTokens.push(...desktop.machineTokens, ...mobile.machineTokens);
+      record.jargon.push(...desktop.jargon, ...mobile.jargon);
+      record.horizontalOverflows.push(...desktop.horizontalOverflows, ...mobile.horizontalOverflows);
+      record.loadingPlaceholders.push(...desktop.loadingPlaceholders, ...mobile.loadingPlaceholders);
       record.emptyStates = [...new Set([...desktop.emptyStates, ...mobile.emptyStates])];
       record.busyCounts = { 1440: desktop.busyCount, 390: mobile.busyCount };
       record.accessNotice = desktop.accessNotice || mobile.accessNotice;
@@ -576,11 +673,16 @@ function buildSummary(records, cases, roles, fixtureCounts) {
     missingAccessStates: records.reduce((sum, record) => sum + record.missingAccessState.length, 0),
     staleAccessStates: records.reduce((sum, record) => sum + record.staleAccessState.length, 0),
     unauthorizedControls: records.reduce((sum, record) => sum + record.unauthorizedControls.length, 0),
+    machineTokens: records.reduce((sum, record) => sum + record.machineTokens.length, 0),
+    jargon: records.reduce((sum, record) => sum + record.jargon.length, 0),
+    horizontalOverflows: records.reduce((sum, record) => sum + record.horizontalOverflows.length, 0),
+    loadingPlaceholders: records.reduce((sum, record) => sum + record.loadingPlaceholders.length, 0),
     navigationErrors: records.filter((record) => record.navigationError).length,
   };
   const unexpectedCount = counts.pageErrors + counts.consoleErrors + counts.unexpectedApiErrors + counts.nonGetRequests
     + counts.blockedHosts + counts.rawErrors + counts.missingExpectedData + counts.missingAccessStates
-    + counts.staleAccessStates + counts.unauthorizedControls + counts.navigationErrors;
+    + counts.staleAccessStates + counts.unauthorizedControls + counts.navigationErrors
+    + counts.machineTokens + counts.jargon + counts.horizontalOverflows + counts.loadingPlaceholders;
   return {
     counts: { ...counts, unexpectedFindings: unexpectedCount }, routeCoverage, fixtureCounts,
     screenshotContractSatisfied: screenshotCount === records.length * 2,
@@ -613,7 +715,7 @@ export async function runLivePortalSweep(options) {
 
   const summary = buildSummary(records, cases, options.roles, fixtures.counts);
   const result = {
-    schema_version: 1, artifact_type: 'astranull_live_portal_read_only_sweep', created_at: new Date().toISOString(),
+    schema_version: 2, artifact_type: 'astranull_live_portal_read_only_sweep', created_at: new Date().toISOString(),
     base_url: options.baseUrl, read_only: true, roles: options.roles, route_ids: EXPECTED_ROUTE_IDS,
     detail_records: cases.filter((entry) => entry.expectedToken).map((entry) => ({ route: entry.route, id: entry.expectedToken })),
     unavailable_detail_routes: fixtures.unavailableDetailRoutes,
@@ -626,6 +728,10 @@ export async function runLivePortalSweep(options) {
       rawErrors: uniqueDiagnostics(records, 'rawErrors'), missingExpectedData: uniqueDiagnostics(records, 'missingExpectedData'),
       missingAccessStates: uniqueDiagnostics(records, 'missingAccessState'), staleAccessStates: uniqueDiagnostics(records, 'staleAccessState'),
       unauthorizedControls: uniqueDiagnostics(records, 'unauthorizedControls'),
+      machineTokens: uniqueDiagnostics(records, 'machineTokens'),
+      jargon: uniqueDiagnostics(records, 'jargon'),
+      horizontalOverflows: uniqueDiagnostics(records, 'horizontalOverflows'),
+      loadingPlaceholders: uniqueDiagnostics(records, 'loadingPlaceholders'),
       navigationErrors: records.filter((record) => record.navigationError).map((record) => ({ role: record.role, route: record.route, case: record.case, detail: record.navigationError })),
     },
     observations: records.map((record) => ({

@@ -50,6 +50,7 @@ export function publishedRunVerdict(run: DataItem) {
 export function hasEvidenceBackedVerdict(run: DataItem, evidence: DataItem[]) {
   if (!publishedRunVerdict(run)) return false;
   const rawVerdict = run.verdict;
+  if (getStringArray(run, 'evidence_ids').length > 0) return true;
   if (rawVerdict && typeof rawVerdict === 'object' && !Array.isArray(rawVerdict)) {
     if (getStringArray(rawVerdict as DataItem, 'evidence_ids').length > 0) return true;
   }

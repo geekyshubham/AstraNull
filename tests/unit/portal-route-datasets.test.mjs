@@ -46,7 +46,9 @@ describe('portal route dataset policy', () => {
   it('keeps every route hydrate bounded', () => {
     for (const [route, datasets] of Object.entries(PORTAL_ROUTE_DATASETS)) {
       const total = CORE_PORTAL_DATASETS.length + datasets.length;
-      assert.ok(total <= 12, `${route} requested ${total} datasets`);
+      const limit = route === 'dashboard' ? 13 : 12;
+      assert.ok(total <= limit, `${route} requested ${total} datasets`);
     }
+    assert.ok(PORTAL_ROUTE_DATASETS.dashboard.includes('targets'), 'dashboard needs declared target names for finding and run labels');
   });
 });

@@ -69,7 +69,7 @@ describe('Integrations portal annotations', () => {
     }
     assert.match(integrations, /title="Add provider"/);
     assert.match(integrations, /supportsCredentialPolling/);
-    assert.match(integrations, /No provider API call is made/);
+    assert.match(integrations, /AstraNull does not contact the provider/);
     assert.match(integrations, /Opening a provider never grants AstraNull cloud access/);
     assert.doesNotMatch(integrations, /api\.cloudflare\.com|route53\.amazonaws\.com|management\.azure\.com/);
   });
@@ -114,7 +114,7 @@ describe('Subscription portal annotations', () => {
     assert.match(subscription, /Subscription data could not be loaded/);
     assert.match(subscription, /window\.location\.reload\(\)/);
     assert.match(subscription, /Loading subscription…/);
-    assert.match(subscription, /returned no subscription record/);
+    assert.match(subscription, /No subscription record is available/);
   });
 
   it('uses a three, two, one responsive usage-card grid', () => {

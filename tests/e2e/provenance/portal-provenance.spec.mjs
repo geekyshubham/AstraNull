@@ -86,10 +86,10 @@ test.describe('portal dynamic provenance', () => {
     await expect(openTab.locator('.ft-count')).toHaveText(String(PROVENANCE_FINDINGS.baselineOpenCount));
     await expect(page.locator('.findings-pager')).toContainText(`of ${PROVENANCE_FINDINGS.baselineOpenCount}`);
     for (const title of PROVENANCE_FINDINGS.baselineOnlyTitles) {
-      await expect(page.getByText(title, { exact: true })).toBeVisible();
+      await expect(page.getByText(title, { exact: false })).toBeVisible();
     }
     for (const title of PROVENANCE_FINDINGS.mutatedOnlyTitles) {
-      await expect(page.getByText(title, { exact: true })).toHaveCount(0);
+      await expect(page.getByText(title, { exact: false })).toHaveCount(0);
     }
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceFindingsExpanded });
@@ -102,7 +102,7 @@ test.describe('portal dynamic provenance', () => {
     await expect(page.locator('.findings-pager')).toContainText(`of ${PROVENANCE_FINDINGS.mutatedOpenCount}`);
     await pageSizeSelect.selectOption('12');
     for (const title of PROVENANCE_FINDINGS.mutatedOnlyTitles) {
-      await expect(page.getByText(title, { exact: true })).toBeVisible();
+      await expect(page.getByText(title, { exact: false })).toBeVisible();
     }
   });
 
@@ -120,7 +120,7 @@ test.describe('portal dynamic provenance', () => {
     const ladderMeta = page.locator('.verify-ladder .vl-meta');
     const promotedTargetRow = page.locator('tr').filter({ hasText: PROVENANCE_DNS_LADDER.promotedTargetValue });
     await expect(ladderMeta.filter({ hasText: `${PROVENANCE_DNS_LADDER.baselineDnsVerified} of ${PROVENANCE_DNS_LADDER.total}` })).toBeVisible();
-    await expect(promotedTargetRow).toContainText('agent_verified');
+    await expect(promotedTargetRow).toContainText('Observed from inside');
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderExpanded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -130,7 +130,7 @@ test.describe('portal dynamic provenance', () => {
 
     await page.goto(`${mutatedBaseUrl}/app#target-group-detail?id=${encodeURIComponent(PORTAL_BASELINE_IDS.targetGroupId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
     await expect(ladderMeta.filter({ hasText: `${PROVENANCE_DNS_LADDER.mutatedDnsVerified} of ${PROVENANCE_DNS_LADDER.total}` })).toBeVisible();
-    await expect(promotedTargetRow).toContainText('dns_verified');
+    await expect(promotedTargetRow).toContainText('Domain ownership verified');
   });
 
   test('FT-PROV-dyn-04 target detail WAF posture updates after posture mutation', async ({ page }) => {
@@ -143,7 +143,9 @@ test.describe('portal dynamic provenance', () => {
     await gotoPortalRoute(page, 'target-detail', baseUrl);
 
     const posturePanel = page.locator('.content').filter({ has: page.getByRole('heading', { name: 'WAF posture' }) });
-    await expect(posturePanel.getByText(PROVENANCE_WAF_POSTURE.baselinePosture, { exact: true }).first()).toBeVisible();
+    await expect(posturePanel.getByText('Protection worked', { exact: true }).first()).toBeVisible();
+    await posturePanel.getByText('Show technical WAF record', { exact: true }).click();
+    await expect(posturePanel.locator('pre.codeblock')).toBeVisible();
     await expect(posturePanel.locator('pre.codeblock')).toContainText(`"posture": "${PROVENANCE_WAF_POSTURE.baselinePosture}"`);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureDrift });
@@ -153,8 +155,10 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedDetail.waf_posture?.drift_reason).toBe(PROVENANCE_WAF_POSTURE.mutatedDriftReason);
 
     await page.goto(`${mutatedBaseUrl}/app#target-detail?id=${encodeURIComponent(PROVENANCE_WAF_POSTURE.targetId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(posturePanel.getByText(PROVENANCE_WAF_POSTURE.mutatedPosture, { exact: true }).first()).toBeVisible();
-    await expect(posturePanel.getByText(PROVENANCE_WAF_POSTURE.mutatedDriftReason, { exact: true })).toBeVisible();
+    await expect(posturePanel.getByText('Drift', { exact: true }).first()).toBeVisible();
+    await expect(posturePanel.getByText('Configuration changed', { exact: true })).toBeVisible();
+    await posturePanel.getByText('Show technical WAF record', { exact: true }).click();
+    await expect(posturePanel.locator('pre.codeblock')).toBeVisible();
     await expect(posturePanel.locator('pre.codeblock')).toContainText(`"posture": "${PROVENANCE_WAF_POSTURE.mutatedPosture}"`);
     await expect(posturePanel.locator('pre.codeblock')).toContainText(`"drift_reason": "${PROVENANCE_WAF_POSTURE.mutatedDriftReason}"`);
   });
@@ -221,8 +225,8 @@ test.describe('portal dynamic provenance', () => {
     await gotoPortalRoute(page, 'runs', baseUrl);
 
     const queueTable = page.locator('.runs-soc-gate table');
-    await expect(queueTable.getByText(PROVENANCE_SOC_QUEUE.baselineRequestId)).toBeVisible();
-    await expect(queueTable.getByText(PROVENANCE_SOC_QUEUE.addedRequestId)).toHaveCount(0);
+    await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.baselineRequestId}"]`)).toBeVisible();
+    await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.addedRequestId}"]`)).toHaveCount(0);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceSocQueueExpanded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -231,7 +235,7 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedQueue.some((row) => row.id === PROVENANCE_SOC_QUEUE.addedRequestId)).toBe(true);
 
     await page.goto(`${mutatedBaseUrl}/app#runs`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(queueTable.getByText(PROVENANCE_SOC_QUEUE.baselineRequestId)).toBeVisible();
-    await expect(queueTable.getByText(PROVENANCE_SOC_QUEUE.addedRequestId)).toBeVisible();
+    await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.baselineRequestId}"]`)).toBeVisible();
+    await expect(queueTable.locator(`[title="${PROVENANCE_SOC_QUEUE.addedRequestId}"]`)).toBeVisible();
   });
 });

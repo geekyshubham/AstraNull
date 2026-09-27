@@ -1,4 +1,6 @@
 import type { DataItem } from './types';
+// @ts-ignore Plain ESM keeps verification labels directly testable with node:test.
+import { plainVerificationLabel } from './plain-language.mjs';
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '') {
   if (!item) return fallback;
@@ -20,7 +22,7 @@ export function resolveVerifyChipState(
   provenance?: string
 ): VerifyChipState {
   const state = verificationState.trim().toLowerCase();
-  const title = provenance?.trim() || `Verification state ${state || 'unverified'} from API.`;
+  const title = provenance?.trim() || `Recorded verification state: ${state || 'unverified'}.`;
 
   if (state === 'user_confirmed') {
     return { label: 'user_confirmed', className: 'verify-chip is-verified verify-chip--strong', title };
@@ -53,20 +55,20 @@ export function resolveTargetVerificationProvenance(target: DataItem | null, ver
   if (sourceRef && typeof sourceRef === 'object' && !Array.isArray(sourceRef)) {
     const ref = sourceRef as DataItem;
     if (getString(ref, ['dns_challenge_id'])) {
-      return `DNS TXT challenge ${getString(ref, ['dns_challenge_id'])} resolved per verification API.`;
+      return `DNS TXT challenge ${getString(ref, ['dns_challenge_id'])} resolved in the verification record.`;
     }
     if (getString(ref, ['agent_id'])) {
-      return `Probe and agent correlated on ${getString(ref, ['agent_id'])} per verification API.`;
+      return `Probe and agent correlated on ${getString(ref, ['agent_id'])} in the verification record.`;
     }
     if (sourceKind === 'provider_account' && getString(ref, ['connector_id'])) {
       const observedAt = getString(ref, ['observed_at'], 'the recorded poll time');
       return `Read-only provider inventory from connector ${getString(ref, ['connector_id'])}, observed ${observedAt}.`;
     }
     if (getString(ref, ['correlated_at'])) {
-      return `Verification correlated at ${getString(ref, ['correlated_at'])} (${sourceKind || 'api'}).`;
+      return `Verification correlated at ${getString(ref, ['correlated_at'])} (${sourceKind || 'recorded source'}).`;
     }
   }
-  return `Verification state ${state} from target verification API.`;
+  return `Recorded target verification state: ${state}.`;
 }
 
 export function VerifyChip({
@@ -78,7 +80,7 @@ export function VerifyChip({
   state: string;
   provenance?: string;
   strong?: boolean;
-  /** Optional plain-language label; the raw API state remains in the provenance title. */
+  /** Optional label override; shared plain-language copy is the default. */
   label?: string;
 }) {
   const chip = resolveVerifyChipState(state, provenance);
@@ -86,7 +88,7 @@ export function VerifyChip({
   return (
     <span className={className} title={chip.title}>
       <span className="vc-dot" aria-hidden="true" />
-      {label?.trim() || chip.label}
+      {label?.trim() || plainVerificationLabel(state)}
     </span>
   );
 }

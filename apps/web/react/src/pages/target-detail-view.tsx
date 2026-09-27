@@ -19,7 +19,7 @@ import { requestJson } from '../lib/api';
 import { canStartRun } from '../lib/run-permissions.mjs';
 import { MetricCard } from './page-components';
 // @ts-ignore Plain ESM keeps evidence-conservative labels directly testable with node:test.
-import { evidenceModePresentation, evidenceTierInfo, plainProtectionLabel, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
+import { evidenceModePresentation, evidenceTierInfo, plainCheckName, plainCodeLabel, plainFindingTitle, plainProtectionLabel, plainVerdictLabel, plainVerificationLabel } from '../lib/plain-language.mjs';
 
 type StatTone = NonNullable<BadgeProps['tone']>;
 
@@ -67,7 +67,6 @@ const targetDetailStyles = `
 .target-detail-view .target-protection-layer-head strong { color: var(--fg); font-size: var(--text-sm); }
 .target-detail-view .target-protection-layer-value { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .target-detail-view .target-protection-layer-value > strong { color: var(--fg); font-size: var(--text-sm); line-height: 1.4; }
-.target-detail-view .technical-key { color: var(--fg-2); font-family: var(--font-mono); font-size: 10px; }
 .target-detail-view .target-protection-layer p { margin: 0; color: var(--fg-2); font-size: var(--text-xs); line-height: 1.5; }
 .target-detail-view .waf-effectiveness { display: grid; grid-template-columns: minmax(180px, 0.75fr) minmax(0, 1.5fr); gap: var(--space-5); align-items: center; margin-top: var(--space-5); padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
 .target-detail-view .waf-effectiveness-copy { display: flex; flex-direction: column; gap: var(--space-1); }
@@ -78,7 +77,6 @@ const targetDetailStyles = `
 .target-detail-view .effectiveness-step[aria-current="true"] { border-color: var(--border-strong); background: var(--surface-sunk); color: var(--fg); font-weight: 700; }
 .target-detail-view .evidence-mode-cell { display: flex; max-width: 28rem; flex-direction: column; align-items: flex-start; gap: var(--space-1); }
 .target-detail-view .evidence-mode-cell > span:last-child { color: var(--fg-2); font-size: var(--text-xs); line-height: 1.4; }
-.target-detail-view .state-with-key { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
 @media (max-width: 1100px) {
   .target-detail-view .target-protection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -190,8 +188,8 @@ function EdgeFamilyProviders({ family, providers }: { family: DataItem | null; p
   return <><dt>{summary.label}</dt><dd>{summary.value}</dd></>;
 }
 
-function EvidenceModeCell({ item }: { item: DataItem }) {
-  const mode = evidenceModePresentation(item);
+function EvidenceModeCell({ item, check }: { item: DataItem; check?: DataItem | null }) {
+  const mode = evidenceModePresentation(item, check);
   return (
     <span className="evidence-mode-cell">
       <Badge tone={mode.tone} title={`${mode.detail}${mode.code ? ` Technical tier ${mode.code}.` : ''}`}>
@@ -229,8 +227,7 @@ function ProtectionLayer({
     <section className="target-protection-layer" aria-label={`${label}: ${value}`}>
       <div className="target-protection-layer-head"><Icon size={16} aria-hidden="true" /><strong>{label}</strong></div>
       <div className="target-protection-layer-value">
-        <Badge tone={tone} title={`${detail}${technicalState ? ` Technical state ${technicalState}.` : ''}`}>{value}</Badge>
-        {technicalState ? <code className="technical-key">{technicalState}</code> : null}
+        <Badge tone={tone} title={`${detail}${technicalState ? ` Recorded state: ${plainCodeLabel(technicalState)}.` : ''}`}>{value}</Badge>
       </div>
       <p>{detail}</p>
     </section>
@@ -239,8 +236,12 @@ function ProtectionLayer({
 
 /** Target-detail runs carry the verdict record's evidence ids beside the verdict text. */
 function recentRunVerdict(run: DataItem) {
-  const evidenceBacked = { ...run, id: getString(run, ['run_id', 'id'], ''), verdict: { verdict: run.verdict, evidence_ids: run.evidence_ids } };
-  return hasEvidenceBackedVerdict(evidenceBacked, []) ? publishedRunVerdict(evidenceBacked) : '';
+  const normalizedRun = {
+    ...run,
+    id: getString(run, ['run_id', 'id'], ''),
+    evidence_ids: run.evidence_ids,
+  };
+  return hasEvidenceBackedVerdict(normalizedRun, []) ? publishedRunVerdict(normalizedRun) : '';
 }
 
 function boundCheckScope(check: DataItem) {
@@ -248,7 +249,7 @@ function boundCheckScope(check: DataItem) {
   if (!policyId) return 'Binding source not reported';
   const scope = getString(check, ['binding_scope'], '') === 'target' ? 'Target policy' : 'Target-group policy';
   const state = getString(check, ['policy_state'], '');
-  return `${scope} ${policyId}${state && state !== 'active' ? ` · ${formatTargetLabel(state).toLowerCase()}` : ''}`;
+  return `${scope}${state && state !== 'active' ? ` · ${formatTargetLabel(state).toLowerCase()}` : ''}`;
 }
 
 function DetailEntityLink({ route, id, label }: { route: 'target-group-detail' | 'finding-detail' | 'run-detail' | 'target-detail'; id: string; label?: string }) {
@@ -296,7 +297,7 @@ function buildTargetVerificationLadder(
       id: 'declared',
       label: 'Target declared',
       done: true,
-      meta: targetDeclarationProvenanceLabel(target),
+      meta: plainCheckName(targetDeclarationProvenanceLabel(target)),
     },
     {
       id: 'ownership',
@@ -329,11 +330,13 @@ export function TargetDetailView({
   entityId,
   config,
   session,
+  checks,
   onRefresh
 }: {
   entityId: string;
   config: PortalConfig;
   session: Session;
+  checks: DataItem[];
   onRefresh: () => Promise<void>;
 }) {
   ensureTargetDetailStyles();
@@ -393,11 +396,13 @@ export function TargetDetailView({
   const provenance = resolveTargetVerificationProvenance(target, verification);
   const kind = getString(target, ['kind'], 'unknown');
   const checksApplied = uniqueAppliedChecks(detail?.checks_applied) as DataItem[];
+  const checkById = new Map([...checks, ...checksApplied].map((check) => [getString(check, ['check_id', 'id'], ''), check]));
+  const displayCheckName = (checkId: string) => plainCheckName(getString(checkById.get(checkId), ['name', 'title', 'check_name'], checkId || 'Unnamed check'));
   const runsRecent = uniqueRecentRuns(detail?.runs_recent) as DataItem[];
   const rawVerificationHistory = Array.isArray(verification?.history) ? verification.history : [];
   const verificationHistory = uniqueVerificationHistory(rawVerificationHistory) as DataItem[];
   const verificationLadder = target ? buildTargetVerificationLadder(target, verification, verificationHistory) : [];
-  const declarationProvenance = target ? targetDeclarationProvenanceLabel(target) : 'Not reported';
+  const declarationProvenance = target ? plainCheckName(targetDeclarationProvenanceLabel(target)) : 'Not reported';
   const effectiveSelectedRunCheckId = checksApplied.some(
     (check) => getString(check, ['check_id', 'id'], '') === selectedRunCheckId
   ) ? selectedRunCheckId : '';
@@ -505,11 +510,15 @@ export function TargetDetailView({
   }
 
   const runColumns: TableColumn<DataItem>[] = [
-    { key: 'run', label: 'Run', render: (item) => <DetailEntityLink route="run-detail" id={getString(item, ['run_id', 'id'], '')} /> },
-    { key: 'binding', label: 'Rule / policy ref', render: (item) => <span className="mono">{getString(item, ['check_id', 'policy_id', 'test_policy_id'], 'Not reported')}</span> },
+    { key: 'run', label: 'Run', render: (item) => {
+      const runId = getString(item, ['run_id', 'id'], '');
+      const checkId = getString(item, ['check_id'], '');
+      return <span className="entity-cell-stack"><DetailEntityLink route="run-detail" id={runId} label={`${displayCheckName(checkId)} · ${targetDisplayValue(target)}`} /><small className="mono">{runId}</small></span>;
+    } },
+    { key: 'binding', label: 'Rule / policy ref', render: (item) => { const policyId = getString(item, ['policy_id', 'test_policy_id'], ''); return <span title={policyId || undefined}>{policyId ? 'Scheduled policy' : 'Direct selection'}</span>; } },
     { key: 'status', label: 'Lifecycle', render: (item) => {
       const value = getString(item, ['status', 'run_status'], 'unknown');
-      return <Badge tone={runOutcomeTone(value)} title="Run lifecycle status from target-detail API">{formatTargetLabel(value)}</Badge>;
+      return <Badge tone={runOutcomeTone(value)} title="Recorded run lifecycle">{formatTargetLabel(value)}</Badge>;
     } },
     { key: 'verdict', label: 'Verdict', render: (item) => {
       const value = recentRunVerdict(item);
@@ -518,13 +527,13 @@ export function TargetDetailView({
         ? <Badge tone={runOutcomeTone(value)} title={`Technical verdict ${value}; ${getString(item, ['verdict_id'], 'record')} cites ${evidenceCount} evidence record${evidenceCount === 1 ? '' : 's'}`}>{plainVerdictLabel(value)}</Badge>
         : <span className="muted">No evidence-backed result</span>;
     } },
-    { key: 'evidence', label: 'How it was checked', render: (item) => <EvidenceModeCell item={item} /> },
+    { key: 'evidence', label: 'How it was checked', render: (item) => <EvidenceModeCell item={item} check={checkById.get(getString(item, ['check_id'], ''))} /> },
     { key: 'started', label: 'Started', render: (item) => formatDate(item.started_at ?? item.created_at) }
   ];
 
   const findingColumns: TableColumn<DataItem>[] = [
     { key: 'severity', label: 'Severity', render: (item) => formatSeverityLabel(getString(item, ['severity'], 'unknown')) },
-    { key: 'id', label: 'Finding', render: (item) => <DetailEntityLink route="finding-detail" id={getString(item, ['id'], '')} label={getString(item, ['title'], getString(item, ['id']))} /> },
+    { key: 'id', label: 'Finding', render: (item) => <span className="entity-cell-stack"><DetailEntityLink route="finding-detail" id={getString(item, ['id'], '')} label={plainFindingTitle(item, [target], checks)} /><small className="mono">{getString(item, ['id'], '')}</small></span> },
     { key: 'target', label: 'Target', render: (item) => <DetailEntityLink route="target-detail" id={getString(item, ['target_id'], entityId)} label={getString(item, ['target_value', 'target'], getString(target, ['value'], getString(item, ['target_id'], entityId)))} /> },
     { key: 'state', label: 'State', render: (item) => findingStatus(item) },
     { key: 'opened', label: 'Opened', render: (item) => formatDate(item.opened_at ?? item.created_at) },
@@ -548,9 +557,9 @@ export function TargetDetailView({
         </label>
       );
     } },
-    { key: 'check', label: 'Bound check', render: (item) => <span className="mono">{getString(item, ['check_id', 'id'], 'Not reported')}</span> },
+    { key: 'check', label: 'Bound check', render: (item) => { const checkId = getString(item, ['check_id', 'id'], ''); return <span className="entity-cell-stack"><strong>{displayCheckName(checkId)}</strong><small className="mono">{checkId}</small></span>; } },
     { key: 'scope', label: 'Bound by', render: (item) => <span className="muted small mono">{boundCheckScope(item)}</span> },
-    { key: 'evidence', label: 'Evidence level', render: (item) => <EvidenceModeCell item={item} /> }
+    { key: 'evidence', label: 'Evidence level', render: (item) => <EvidenceModeCell item={item} check={checkById.get(getString(item, ['check_id', 'id'], ''))} /> }
   ];
 
   const verificationHistoryColumns: TableColumn<DataItem>[] = [
@@ -614,7 +623,7 @@ export function TargetDetailView({
               mono
               title={`Corpus tier ${getString(signal, ['tier'], 'unknown')}`}
             >
-              {getString(signal, ['signal'], 'Not reported')}
+              {plainCodeLabel(getString(signal, ['signal'], 'Not reported'))}
             </Badge>
           ))}
         </span>
@@ -625,10 +634,10 @@ export function TargetDetailView({
   const expectedBehavior = getString(target, ['expected_behavior', 'expected'], '—');
   const reportedEligibilityReason = getString(target, ['eligibility_reason'], '');
   const eligibilityReason = reportedEligibilityReason
-    ? `Target API reason: ${formatTargetLabel(reportedEligibilityReason)}.`
+    ? `Recorded eligibility reason: ${formatTargetLabel(reportedEligibilityReason)}.`
     : targetEligible
-      ? 'The target API explicitly reports eligible ownership state.'
-      : 'The target API did not report an explicitly eligible ownership state, so validation remains locked.';
+      ? 'The recorded ownership state makes this target eligible.'
+      : 'No explicitly eligible ownership state is recorded, so validation remains locked.';
   const apiProtectionSummary = getString(edgeDetection, ['plain_language_summary', 'protection_summary'], '')
     || getString(wafPosture, ['plain_language_summary', 'protection_summary'], '');
   const wafValidation = asDataItem(wafPosture?.validation);
@@ -694,9 +703,9 @@ export function TargetDetailView({
   const wafEffectivenessSourceId = hasEdgeEffectivenessScore ? edgeTestRunId : wafValidationRunId;
   const wafEffectivenessTechnicalState = hasEdgeEffectivenessScore ? edgeEffectivenessStatus : wafValidationVerdict;
   const wafEffectivenessDetail = hasEdgeEffectivenessScore
-    ? `${edgeEffectivenessTier ? `${edgeEffectivenessTier.label} (${edgeEffectivenessTier.code}). ` : ''}Based on ${testedProbeCount} safe probes from ${edgeTestRunId || 'the returned edge result'}; untested scenarios are not covered.`
+    ? `${edgeEffectivenessTier ? `${edgeEffectivenessTier.label} (${edgeEffectivenessTier.code}). ` : ''}Based on ${testedProbeCount} safe probes from ${edgeTestRunId || 'the recorded edge result'}; untested scenarios are not covered.`
     : wafValidationRunId
-      ? `Based on linked validation ${wafValidationRunId}; untested scenarios are not covered.`
+      ? 'Based on the linked validation; untested scenarios are not covered.'
       : 'Detection alone cannot show whether the WAF blocked traffic.';
   const effectivenessSteps = ['Not tested', 'Needs attention', 'Worked in tested scenario'];
   const protectionLayers: Array<{ icon: typeof Activity; label: string; value: string; detail: string; technicalState: string; tone: StatTone }> = [
@@ -755,15 +764,15 @@ export function TargetDetailView({
           </div>
           <Badge
             tone={apiProtectionSummary ? 'info' : wafValidationRunId ? 'success' : edgeDetection ? 'info' : 'warn'}
-            title={apiProtectionSummary ? 'Plain-language summary returned by the target-detail edge detection payload.' : 'Fallback summary derived only from returned target-detail evidence fields.'}
+            title={apiProtectionSummary ? 'Summary recorded with the latest edge evidence.' : 'Cautious summary derived only from recorded evidence fields.'}
           >
-            {apiProtectionSummary ? 'Summary from API' : wafValidationRunId ? 'Linked validation' : edgeDetection ? 'Live edge check' : 'Evidence limited'}
+            {apiProtectionSummary ? 'Recorded summary' : wafValidationRunId ? 'Linked validation' : edgeDetection ? 'Live edge check' : 'Evidence limited'}
           </Badge>
         </CardHeader>
         <CardContent>
           <p className="target-protection-lede">{protectionSummary}</p>
           <p className="target-protection-source">
-            {apiProtectionSummary ? 'The API supplied this wording.' : 'AstraNull generated this cautious fallback from the returned evidence fields.'}
+            {apiProtectionSummary ? 'This wording was recorded with the latest evidence.' : 'AstraNull generated this cautious fallback from the recorded evidence fields.'}
           </p>
           <div className="target-protection-grid" aria-label="Detected and reported protection layers">
             {protectionLayers.map((layer) => <ProtectionLayer key={layer.label} {...layer} />)}
@@ -816,7 +825,7 @@ export function TargetDetailView({
               <summary>Show recorded verification transitions</summary>
               <div className="target-history-head">
                 <h3>Recorded verification transitions</h3>
-                <span className="muted small">Exact duplicate API rows removed · oldest to newest</span>
+                <span className="muted small">Duplicate records removed · oldest to newest</span>
               </div>
               <DataTable
                 columns={verificationHistoryColumns}
@@ -830,9 +839,9 @@ export function TargetDetailView({
       </Card>
 
       <div className="metric-grid four">
-        <MetricCard label="Kind" value={kind} sub="Declared target type" icon={Target} tone="info" />
+        <MetricCard label="Kind" value={formatTargetLabel(kind)} sub="Declared target type" icon={Target} tone="info" />
         <MetricCard label="Expected behavior" value={formatTargetLabel(getString(target, ['expected_behavior', 'expected'], '—'))} sub="Declared expectation" icon={Activity} tone="muted" />
-        <MetricCard label="Verification" value={plainVerificationLabel(verificationState)} sub="Ownership signal from target API" icon={ShieldCheck} tone={verificationTone(verificationState)} />
+        <MetricCard label="Verification" value={plainVerificationLabel(verificationState)} sub="Recorded ownership signal" icon={ShieldCheck} tone={verificationTone(verificationState)} />
         <MetricCard label="Eligibility" value={eligibilityDisplay} sub={targetEligible ? 'Explicitly eligible for checks' : 'Validation locked (fail closed)'} icon={FileCheck2} tone={targetEligible ? 'success' : 'warn'} />
       </div>
 
@@ -840,7 +849,7 @@ export function TargetDetailView({
         <CardHeader>
           <div>
             <CardTitle>Target facts</CardTitle>
-            <CardDescription>Declared inventory, ownership provenance, relations, and authorization returned for this target.</CardDescription>
+            <CardDescription>Declared inventory, ownership evidence, relationships, and authorization for this target.</CardDescription>
           </div>
         </CardHeader>
         <CardContent>
@@ -855,11 +864,11 @@ export function TargetDetailView({
                 <tr><td className="muted">Ownership status</td><td><div className="kv"><VerifyChip state={verificationState} provenance={provenance} label={plainVerificationLabel(verificationState)} /></div></td></tr>
                 <tr><td className="muted">Target group</td><td><div className="kv"><DetailEntityLink route="target-group-detail" id={getString(target, ['target_group_id'], '')} /></div></td></tr>
                 <tr><td className="muted">Environment</td><td><div className="kv"><span className="mono">{getString(target, ['environment_id'], 'Not reported')}</span></div></td></tr>
-                <tr><td className="muted">Expected behavior</td><td><div className="kv"><span className="mono">{expectedBehavior}</span></div></td></tr>
+                <tr><td className="muted">Expected behavior</td><td><div className="kv"><span>{formatTargetLabel(expectedBehavior)}</span></div></td></tr>
                 {agentBinding ? (
                   <tr><td className="muted">Agent binding</td><td><div className="kv"><span className="mono">{agentBindingId}</span>{agentBindingAt ? <span className="kv-meta">{formatDate(agentBindingAt)}</span> : null}</div></td></tr>
                 ) : null}
-                <tr><td className="muted">Group LOA</td><td><div className="kv"><Badge tone={loaSigned ? 'success' : loaState ? 'warn' : 'muted'} title="LOA state from target group API">{loaState ? formatTargetLabel(loaState) : 'Not reported'}</Badge>{loaCustody ? <span className="kv-meta">{loaCustody}</span> : null}</div></td></tr>
+                <tr><td className="muted">Group LOA</td><td><div className="kv"><Badge tone={loaSigned ? 'success' : loaState ? 'warn' : 'muted'} title="Recorded letter-of-authorization state">{loaState ? formatTargetLabel(loaState) : 'Not reported'}</Badge>{loaCustody ? <span className="kv-meta">{loaCustody}</span> : null}</div></td></tr>
                 {loaSigner ? (
                   <tr><td className="muted">LOA signer</td><td><div className="kv"><span>{loaSigner}</span>{loaSignedAt ? <span className="kv-meta">{formatDate(loaSignedAt)}</span> : null}</div></td></tr>
                 ) : null}
@@ -871,28 +880,31 @@ export function TargetDetailView({
 
       {showWaf ? (
         <Card>
-          <CardHeader><CardTitle>WAF posture</CardTitle><CardDescription>Linked per-target WAF asset returned by the target-detail API.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>WAF posture</CardTitle><CardDescription>Linked WAF posture for this target.</CardDescription></CardHeader>
           <CardContent>
             <div className="kpi-row">
-              <div className="kpi-cell"><div className="kpi-label">Posture</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(wafPostureState)}</span><code className="technical-key">{wafPostureState || 'not_reported'}</code></div></div>
-              <div className="kpi-cell"><div className="kpi-label">Drift</div><div className="kpi-value state-with-key"><span>{wafPosture?.drift_reason ? 'Configuration changed' : 'No drift reported'}</span><code className="technical-key">{getString(wafPosture, ['drift_reason'], 'none')}</code></div></div>
-              <div className="kpi-cell"><div className="kpi-label">Validation result</div><div className="kpi-value state-with-key"><span>{wafValidationVerdict ? plainVerdictLabel(wafValidationVerdict) : 'Not reported'}</span>{wafValidationVerdict ? <code className="technical-key">{wafValidationVerdict}</code> : null}</div></div>
-              <div className="kpi-cell"><div className="kpi-label">Data connection</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(getString(wafPosture?.connector as DataItem | undefined, ['state'], 'unknown'))}</span><code className="technical-key">{getString(wafPosture?.connector as DataItem | undefined, ['state'], 'not_reported')}</code></div></div>
-              <div className="kpi-cell"><div className="kpi-label">Fingerprint</div><div className="kpi-value mono" title={getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}>{getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Posture</div><div className="kpi-value">{plainProtectionLabel(wafPostureState)}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Drift</div><div className="kpi-value">{wafPosture?.drift_reason ? 'Configuration changed' : 'No drift reported'}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Validation result</div><div className="kpi-value">{wafValidationVerdict ? plainVerdictLabel(wafValidationVerdict) : 'Not reported'}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Data connection</div><div className="kpi-value">{plainProtectionLabel(getString(wafPosture?.connector as DataItem | undefined, ['state'], 'unknown'))}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Fingerprint</div><div className="kpi-value" title={getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], 'Not reported')}>{getString(wafPosture?.fingerprint as DataItem | undefined, ['signature'], '') ? 'Recorded' : 'Not reported'}</div></div>
               <div className="kpi-cell"><div className="kpi-label">Marker rules</div><div className="kpi-value">{String(wafPosture?.marker_rules ?? '—')}</div></div>
-              <div className="kpi-cell"><div className="kpi-label">Origin bypass</div><div className="kpi-value">{getString(wafPosture?.origin_bypass as DataItem | undefined, ['state'], '—')}</div></div>
+              <div className="kpi-cell"><div className="kpi-label">Origin bypass</div><div className="kpi-value">{plainProtectionLabel(getString(wafPosture?.origin_bypass as DataItem | undefined, ['state'], 'unknown'))}</div></div>
             </div>
             <p className="muted">{getString(wafPosture, ['plain_language_summary', 'protection_summary', 'notes', 'summary'], 'No additional WAF summary was returned.')}</p>
-            <pre className="codeblock" tabIndex={0} role="region" aria-label="WAF posture technical details">{JSON.stringify({
-              asset_id: getString(wafPosture, ['asset_id'], ''),
-              vendor: getString(wafPosture, ['vendor'], ''),
-              target: getString(target, ['value'], ''),
-              target_group: getString(target, ['target_group_id'], ''),
-              posture: getString(wafPosture, ['posture'], ''),
-              drift_reason: getString(wafPosture, ['drift_reason'], ''),
-              validation: wafPosture?.validation ?? null,
-              connector: wafPosture?.connector ?? null
-            }, null, 2)}</pre>
+            <details className="technical-disclosure">
+              <summary>Show technical WAF record</summary>
+              <pre className="codeblock" tabIndex={0} role="region" aria-label="WAF posture technical details">{JSON.stringify({
+                asset_id: getString(wafPosture, ['asset_id'], ''),
+                vendor: getString(wafPosture, ['vendor'], ''),
+                target: getString(target, ['value'], ''),
+                target_group: getString(target, ['target_group_id'], ''),
+                posture: getString(wafPosture, ['posture'], ''),
+                drift_reason: getString(wafPosture, ['drift_reason'], ''),
+                validation: wafPosture?.validation ?? null,
+                connector: wafPosture?.connector ?? null
+              }, null, 2)}</pre>
+            </details>
           </CardContent>
         </Card>
       ) : null}
@@ -901,7 +913,7 @@ export function TargetDetailView({
         <CardHeader>
           <div>
             <CardTitle>WAF / CDN edge detection</CardTitle>
-            <CardDescription>Durable per-target fingerprint evidence returned by the target-detail API. Provider labels come only from returned edge fields; producer attribution is not inferred.</CardDescription>
+            <CardDescription>Recorded fingerprint evidence for this target. Provider names appear only when the evidence names them; AstraNull does not guess the source.</CardDescription>
           </div>
           {edgeDetection ? (
             <Badge
@@ -929,7 +941,7 @@ export function TargetDetailView({
           {edgeDetection ? (
             <>
               <div className="kpi-row">
-                <div className="kpi-cell"><div className="kpi-label">Overall</div><div className="kpi-value state-with-key"><span>{plainProtectionLabel(edgeStatus)}</span><code className="technical-key">{edgeStatus}</code></div></div>
+                <div className="kpi-cell"><div className="kpi-label">Overall</div><div className="kpi-value">{plainProtectionLabel(edgeStatus)}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Confidence</div><div className="kpi-value">{edgeConfidence || 'Not reported'}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Corpus version</div><div className="kpi-value mono">{getString(edgeDetection, ['corpus_version'], 'Not reported')}</div></div>
                 <div className="kpi-cell"><div className="kpi-label">Observed</div><div className="kpi-value">{edgeObservedAt ? formatDate(edgeObservedAt) : 'Not reported'}</div></div>
@@ -1082,10 +1094,10 @@ export function TargetDetailView({
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><div><CardTitle>Recent runs</CardTitle><CardDescription>Canonical target-scoped rows from the hydrator; duplicate run IDs are shown once.</CardDescription></div></CardHeader>
+          <CardHeader><div><CardTitle>Recent runs</CardTitle><CardDescription>Latest runs for this target; duplicate records are shown once.</CardDescription></div></CardHeader>
           <CardContent>
             <DataTable columns={runColumns} items={runsRecent} empty={emptyStateFromApi({ icon: Activity, meta: detail.sectionMeta?.runs, actionHref: '#runs', actionLabel: 'Open test runs' })} />
-            {runsRecent.length > 0 ? <p className="history-summary">Showing {runsRecent.length} recent unique run{runsRecent.length === 1 ? '' : 's'} returned by the target-detail API.</p> : null}
+            {runsRecent.length > 0 ? <p className="history-summary">Showing {runsRecent.length} recent unique run{runsRecent.length === 1 ? '' : 's'} for this target.</p> : null}
           </CardContent>
         </Card>
       </div>

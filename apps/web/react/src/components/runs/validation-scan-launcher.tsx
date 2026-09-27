@@ -376,7 +376,7 @@ export function ValidationScanLauncher({
             <p><strong>Request upper bound:</strong> {summary.requestUpperBound !== null ? `${summary.requestUpperBound} probe request${summary.requestUpperBound === 1 ? '' : 's'} across all steps` : 'Not recorded for every selected check'}</p>
             <p><strong>Schedule:</strong> {form.schedule === 'later' ? `${formatDate(scheduledIso)} · ${recurrenceLabel(form.recurrence === 'none' ? null : { cadence: form.recurrence, timezone: form.timezone })}` : 'Runs immediately, one step at a time'}</p>
             {form.name.trim() ? <p><strong>Name:</strong> {form.name.trim()}</p> : null}
-            <p className="muted small"><CalendarClock size={14} aria-hidden="true" /> Ownership, eligibility, safe windows, concurrency, and the tenant kill switch are re-checked by the API for every step.</p>
+            <p className="muted small"><CalendarClock size={14} aria-hidden="true" /> Ownership, eligibility, safe windows, concurrency, and the tenant kill switch are checked again for every step.</p>
           </div>
         )}
         confirmLabel={editing ? 'Save changes' : form.schedule === 'later' ? 'Schedule scan' : 'Start scan'}

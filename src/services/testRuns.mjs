@@ -120,6 +120,15 @@ export function listChecks() {
   return customerSelectableChecks(getStore().checkCatalog ?? []).map(withCheckSection);
 }
 
+const DEFAULT_TEST_RUN_LIST_LIMIT = 100;
+const MAX_TEST_RUN_LIST_LIMIT = 500;
+
+function normalizeTestRunListLimit(limit) {
+  const parsed = Number(limit);
+  if (limit == null || !Number.isFinite(parsed) || parsed < 1) return DEFAULT_TEST_RUN_LIST_LIMIT;
+  return Math.min(Math.floor(parsed), MAX_TEST_RUN_LIST_LIMIT);
+}
+
 export function listTestRuns(ctx, options = {}) {
   let rows = getStore().testRuns.filter((r) => r.tenant_id === ctx.tenantId);
   if (options.target_group_id) {
@@ -128,9 +137,12 @@ export function listTestRuns(ctx, options = {}) {
   if (options.target_id) {
     rows = rows.filter((r) => r.target_id === options.target_id);
   }
-  rows = rows.sort((a, b) => String(b.started_at ?? b.created_at).localeCompare(String(a.started_at ?? a.created_at)));
-  const limit = Number(options.limit);
-  if (Number.isFinite(limit) && limit > 0) rows = rows.slice(0, limit);
+  rows = rows.sort((a, b) =>
+    String(b.started_at ?? b.created_at ?? '').localeCompare(
+      String(a.started_at ?? a.created_at ?? ''),
+    ) || String(b.id ?? '').localeCompare(String(a.id ?? '')),
+  );
+  rows = rows.slice(0, normalizeTestRunListLimit(options.limit));
   const verdicts = getStore().verdicts ?? [];
   return rows.map((run) => ({
     ...run,

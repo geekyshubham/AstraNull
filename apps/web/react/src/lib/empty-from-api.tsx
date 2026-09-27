@@ -1,6 +1,8 @@
 import type { LucideIcon } from 'lucide-react';
 import { EmptyState } from '../components/ui/empty-state';
 import type { DataItem } from './types';
+// @ts-ignore Plain ESM keeps machine-code presentation directly testable with node:test.
+import { plainEmptyReason } from './plain-language.mjs';
 
 export function readMetaAction(meta: DataItem | null | undefined, key: string) {
   if (!meta) return undefined;
@@ -14,7 +16,7 @@ function readEmptyReason(meta: DataItem | null | undefined, keys: string[] = ['e
   if (!meta) return '';
   for (const key of keys) {
     const value = meta[key];
-    if (value !== undefined && value !== null && String(value).trim()) return String(value);
+    if (value !== undefined && value !== null && String(value).trim()) return plainEmptyReason(value);
   }
   return '';
 }

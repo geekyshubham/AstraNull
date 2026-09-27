@@ -39,6 +39,25 @@ const RUN_EVENTS_LIMIT = 1000;
 const RUN_EVENT_FETCH_RUN_LIMIT = 30;
 const RECENT_RUNS_LIMIT = 5;
 
+const PASS_POSTURE_VERDICTS = new Set([
+  'protected',
+  'pass',
+  'passed',
+  'success',
+  'ok',
+  'allowed_as_expected',
+]);
+const GAP_POSTURE_VERDICTS = new Set([
+  'exposed',
+  'unprotected',
+  'gap',
+  'fail',
+  'failed',
+  'bypassable',
+  'penetrated',
+  'edge_exposed',
+]);
+
 /** @type {readonly string[]} */
 export const STATE_CORE_CATALOG_REPOSITORY_METHODS = Object.freeze(['listTargetGroups']);
 
@@ -76,6 +95,36 @@ function isRecentMs(ms, nowMs) {
 
 function runStatusEligible(run) {
   return run.status === 'completed' || run.status === 'verdicted';
+}
+
+function readinessPostureForRuns(runs, verdictByRun) {
+  const latestByCheck = new Map();
+  for (const run of runs) {
+    if (!runStatusEligible(run)) continue;
+    const verdict = verdictByRun.get(run.id) ?? null;
+    if (!runVerdictSupportsReadiness(run, verdict)) continue;
+    const checkId = String(run.check_id ?? verdict.check_id ?? '').trim();
+    if (!checkId) continue;
+    const at = parseTs(verdict.created_at ?? run.completed_at ?? run.started_at ?? run.created_at) ?? 0;
+    const previous = latestByCheck.get(checkId);
+    if (
+      !previous
+      || at > previous.at
+      || (at === previous.at && String(run.id).localeCompare(previous.runId) > 0)
+    ) {
+      latestByCheck.set(checkId, { at, runId: String(run.id), verdict: verdict.verdict });
+    }
+  }
+
+  const posture = { pass: 0, review: 0, gap: 0, total: 0 };
+  for (const entry of latestByCheck.values()) {
+    const value = String(entry.verdict ?? '').trim().toLowerCase();
+    if (PASS_POSTURE_VERDICTS.has(value)) posture.pass += 1;
+    else if (GAP_POSTURE_VERDICTS.has(value)) posture.gap += 1;
+    else posture.review += 1;
+  }
+  posture.total = posture.pass + posture.review + posture.gap;
+  return posture;
 }
 
 function assertStateRepositories(repositories) {
@@ -440,6 +489,7 @@ function computeReadinessSummary({
   return {
     score,
     factors,
+    posture: readinessPostureForRuns(runs, verdictByRun),
     updated_at: new Date(nowMs).toISOString(),
     persistence: 'postgres',
   };
@@ -464,7 +514,10 @@ function evidenceBackedByTrustedLinkedEvent(item, eventsByRun) {
     .some((event) => event.id === item.related_event_id);
 }
 function sortRunsNewestFirst(runs) {
-  return [...runs].sort((a, b) => (parseTs(b.created_at) ?? 0) - (parseTs(a.created_at) ?? 0));
+  return [...runs].sort((a, b) => {
+    const time = (parseTs(b.started_at ?? b.created_at) ?? 0) - (parseTs(a.started_at ?? a.created_at) ?? 0);
+    return time || String(b.id ?? '').localeCompare(String(a.id ?? ''));
+  });
 }
 
 function verdictBackedByTrustedEvidence(verdict, runId, eventsByRun, evidenceByRun) {
@@ -694,7 +747,10 @@ export function createPostgresStateServices(repositories, options = {}) {
           readiness,
           target_groups: groups.length,
           agents_online: tenantAgents.filter((a) => a.status === 'online').length,
-          recent_runs: sortedRuns.slice(0, RECENT_RUNS_LIMIT),
+          recent_runs: sortedRuns
+            .slice(0, RECENT_RUNS_LIMIT)
+            .reverse()
+            .map((run) => ({ ...run, verdict: verdictByRun.get(run.id) ?? null })),
           open_findings: openFindingsCount,
           high_scale_requests: tenantHighScaleRequests.length,
         },

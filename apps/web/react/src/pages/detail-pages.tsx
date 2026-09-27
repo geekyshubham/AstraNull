@@ -64,6 +64,8 @@ import { MetricCard, PageContextSummary } from './page-components';
 import { TargetGroupDetailView as TargetGroupDetailViewRevamp } from './target-group-detail-view';
 import { TargetDetailView } from './target-detail-view';
 import { FindingDetailView as FindingDetailViewRevamp } from './finding-detail-view';
+// @ts-ignore Plain ESM keeps executive labels directly testable with node:test.
+import { plainCheckName, plainCodeLabel, plainFindingTitle, plainInlineText, plainVerdictLabel } from '../lib/plain-language.mjs';
 
 
 function getString(item: DataItem | null | undefined, keys: string[], fallback = '—') {
@@ -180,7 +182,7 @@ function humanizeSignalType(value: string) {
 
 function checkDisplayName(checks: DataItem[], checkId: string) {
   const check = checks.find((entry) => getString(entry, ['check_id'], '') === checkId);
-  return getString(check ?? {}, ['name', 'title'], checkId);
+  return plainCheckName(getString(check ?? {}, ['name', 'title'], checkId));
 }
 
 function runDisplayLabel(runs: DataItem[], runId: string) {
@@ -436,6 +438,11 @@ function StatusBadge({ value, tone, fallback = '—' }: { value: string; tone: S
   return <Badge tone={tone}>{label}</Badge>;
 }
 
+function VerdictBadge({ value, tone }: { value: string; tone: StatusBadgeTone }) {
+  const label = plainVerdictLabel(value);
+  return <Badge tone={tone} title={label}>{label}</Badge>;
+}
+
 function DetailPageIntro({ route, eyebrow }: { route: RouteId; eyebrow?: string }) {
   const item = ROUTE_BY_ID.get(route);
   const description = item?.description?.trim();
@@ -490,7 +497,7 @@ function detailEntityTitle(route: RouteId, entity: DataItem, entityId: string, c
     const checkId = getString(entity, ['check_id'], '');
     return checkId && context?.checks ? checkDisplayName(context.checks, checkId) : getString(entity, ['check_id'], entityId);
   }
-  if (route === 'finding-detail') return getString(entity, ['title', 'label', 'kind', 'id'], entityId);
+  if (route === 'finding-detail') return plainFindingTitle(entity);
   if (route === 'queue-detail') {
     return getString(entity, ['objective', 'reason', 'id'], entityId);
   }
@@ -521,6 +528,8 @@ function DetailBreadcrumb({ route, title, entityId }: { route: RouteId; title: s
   );
 }
 
+const VISIBLE_DETAIL_ID_RE = /^(?:tgt|tg|run|fnd|evt|agt|env|rpt|scan|usr|ten|wof|id|job|evd|btok|dns)_/;
+
 function DetailEntityHeading({
   route,
   entityId,
@@ -537,7 +546,7 @@ function DetailEntityHeading({
       {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
       <DetailBreadcrumb route={route} title={title} entityId={entityId} />
       <h1>{title}</h1>
-      {title !== entityId ? <p className="muted"><code>{entityId}</code></p> : null}
+      {title !== entityId && VISIBLE_DETAIL_ID_RE.test(entityId) ? <p className="muted"><code>{entityId}</code></p> : null}
     </>
   );
 }
@@ -673,12 +682,15 @@ function DetailKvMonoField({ label, value, compact }: { label: string; value: st
 }
 
 function DetailCodeBlock({ label, children }: { label: string; children: string }) {
-  // tabIndex=0 makes the horizontally-scrollable <pre> keyboard-accessible
-  // (WCAG 2.1.1 / axe scrollable-region-focusable); aria-label already names it.
+  // Exact machine records remain available to engineers without competing with
+  // the customer-facing explanation or being mistaken for presentation copy.
   return (
-    <pre className="codeblock" aria-label={label} tabIndex={0}>
-      {children}
-    </pre>
+    <details className="technical-disclosure">
+      <summary>Show technical {label.toLocaleLowerCase()}</summary>
+      <pre className="codeblock" aria-label={label} tabIndex={0}>
+        {children}
+      </pre>
+    </details>
   );
 }
 
@@ -997,7 +1009,7 @@ function RunDetailView({
   const verdictValue = hasEvidenceBackedVerdict(entity, data.evidence)
     ? getNestedString(entity, ['verdict', 'verdict'], runVerdictValue(entity))
     : '';
-  const verdictDisplay = verdictValue ? formatStatusLabel(verdictValue) : 'No verdict evidence';
+  const verdictDisplay = verdictValue ? plainVerdictLabel(verdictValue) : 'No result yet';
   const primaryFinding = relatedFindings[0] ?? null;
   const runPolicyId = getString(entity, ['policy_id', 'test_policy_id'], '');
   const runNonceHash = getNestedString(entity, ['correlation', 'nonce_hash'], '');
@@ -1021,7 +1033,7 @@ function RunDetailView({
   ];
   const rawEventColumns: TableColumn<DataItem>[] = [
     { key: 'signal', label: 'Signal', render: (event) => humanizeSignalType(getString(event, ['signal_type'], 'event')) },
-    { key: 'producer', label: 'Producer', render: (event) => getString(event, ['producer_kind'], 'untrusted / legacy') },
+    { key: 'producer', label: 'Source type', render: (event) => plainCodeLabel(getString(event, ['producer_kind'], ''), 'Untrusted or legacy') },
     { key: 'source', label: 'Source', render: (event) => getString(event, ['source'], '—') },
     { key: 'reference', label: 'Reference', render: (event) => <span className="mono small mono-hash">{getString(event, ['check_id', 'agent_id', 'target_id'], '—')}</span> },
     { key: 'recorded', label: 'Recorded', render: (event) => formatDate(event.timestamp ?? event.created_at) },
@@ -1093,7 +1105,7 @@ function RunDetailView({
                       <TrafficPathPanel detail={entity} events={trustedEvidenceEvents} />
                     )}
                     <div className="kv-list">
-                      <div><span>Stored verdict</span>{verdictValue ? <StatusBadge value={verdictValue} tone={verdictBadgeTone(verdictValue)} /> : <strong>No verdict evidence</strong>}</div>
+                      <div><span>Stored verdict</span>{verdictValue ? <VerdictBadge value={verdictValue} tone={verdictBadgeTone(verdictValue)} /> : <strong>No result yet</strong>}</div>
                       <div><span>Placement support</span><strong>{formatStatusLabel(placementLevel)}</strong></div>
                       <div><span>Trusted events</span><strong>{runEventEvidenceLoading || runEventEvidenceUnavailable ? '—' : trustedEvidenceEvents.length}</strong></div>
                     </div>
@@ -1102,7 +1114,7 @@ function RunDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Run facts</CardTitle>
-                    <CardDescription>Immutable identifiers, declared relationships, and lifecycle timestamps returned by the run API.</CardDescription>
+                    <CardDescription>Recorded identifiers, declared relationships, and lifecycle timestamps for this run.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     <DetailKvMonoField label="Run ID" value={entityId} />
@@ -1110,7 +1122,7 @@ function RunDetailView({
                     <div><span>Check</span>{runCheckId ? <DetailEntityLink route="check-detail" id={runCheckId} label={checkDisplayName(data.checks, runCheckId)} /> : <strong>not recorded</strong>}</div>
                     <div><span>Target group</span>{groupId ? <DetailEntityLink route="target-group-detail" id={groupId} label={groupName} /> : <strong>not recorded</strong>}</div>
                     <div><span>Target</span>{runTargetId ? <DetailEntityLink route="target-detail" id={runTargetId} /> : <strong>not recorded</strong>}</div>
-                    <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} /> : <strong>not scheduled by a recorded policy</strong>}</div>
+                    <div><span>Policy</span>{runPolicyId ? <DetailEntityLink route="policy-detail" id={runPolicyId} label="Scheduled policy" /> : <strong>not scheduled by a recorded policy</strong>}</div>
                     <div><span>Validation mode</span><strong>{explicitRunValidationMode ? formatStatusLabel(explicitRunValidationMode) : 'not recorded'}</strong></div>
                     <div><span>Created</span><strong>{formatDate(entity.created_at)}</strong></div>
                     <div><span>Started</span><strong>{formatDate(entity.started_at)}</strong></div>
@@ -1152,7 +1164,7 @@ function RunDetailView({
               <CardHeader>
                 <CardTitle>Timeline</CardTitle>
                 <CardDescription>
-                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <> · policy <code>{runPolicyId}</code></> : null}{correlatingAgentId ? <> · agent <code>{correlatingAgentId}</code></> : null}.
+                  Ordered run lifecycle and trusted event provenance{runPolicyId ? <span title={runPolicyId}> · scheduled policy</span> : null}{correlatingAgentId ? <> · agent <code>{correlatingAgentId}</code></> : null}.
                 </CardDescription>
               </CardHeader>
               <CardContent className="stack-tight">
@@ -1271,7 +1283,7 @@ function RunDetailView({
                         const findingId = getString(finding, ['id'], '');
                         return (
                           <div key={findingId}>
-                            <span>{getString(finding, ['title', 'summary'], findingId)}</span>
+                            <span>{plainFindingTitle(finding, data.targets, data.checks)}</span>
                             <strong>
                               <DetailEntityLink route="finding-detail" id={findingId} label={formatStatusLabel(findingStatus(finding))} />
                               {' · '}<StatusBadge value={getString(finding, ['severity'], 'unknown')} tone={findingSeverityBadgeTone(getString(finding, ['severity'], 'unknown'))} fallback="unknown" />
@@ -1290,7 +1302,7 @@ function RunDetailView({
             <Card>
               <CardHeader>
                 <CardTitle>Raw events</CardTitle>
-                <CardDescription>Read-only envelopes returned by this run log. Only signed_probe, authenticated_agent, and internal_control_plane producers feed proof panels.</CardDescription>
+                <CardDescription>Read-only event records for this run. Only signed probes, authenticated agents, and internal control-plane events contribute to the proof panels.</CardDescription>
               </CardHeader>
               <CardContent>
                 {runEventEvidenceLoading ? (
@@ -1550,7 +1562,7 @@ function TenantDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Account facts</CardTitle>
-                    <CardDescription>Tenant identity, lifecycle, residency, and support ownership returned by staff administration.</CardDescription>
+                    <CardDescription>Tenant identity, lifecycle, residency, and support ownership recorded by staff administration.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     <div><span>Name</span><strong>{getString(tenant, ['name'])}</strong></div>
@@ -1574,7 +1586,7 @@ function TenantDetailView({
                         <div><span>Signup state</span><StatusBadge value={getString(signupRequest, ['state'], 'recorded')} tone={signupRequestStateTone(getString(signupRequest, ['state']))} fallback="recorded" /></div>
                       </div>
                     ) : (
-                      <p className="muted">No signup_request reference was returned. Tenants provisioned outside the signup queue may not have one.</p>
+                      <p className="muted">No signup request is linked to this tenant. Tenants provisioned outside the signup queue may not have one.</p>
                     )}
                     <DataTable
                       columns={approvalColumns}
@@ -1587,7 +1599,7 @@ function TenantDetailView({
               <Card>
                 <CardHeader>
                   <CardTitle>Support ownership</CardTitle>
-                  <CardDescription>Assign the customer support owner. This staff mutation is recorded by the administration API.</CardDescription>
+                  <CardDescription>Assign the customer support owner. Every change is recorded in the administration audit trail.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <form className="product-form" onSubmit={patchSupportOwner}>
@@ -1605,7 +1617,7 @@ function TenantDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Subscription facts</CardTitle>
-                    <CardDescription>Plan and billing fields returned by the subscription endpoint; missing values remain unavailable.</CardDescription>
+                    <CardDescription>Recorded plan and billing fields; missing values remain unavailable.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     <div><span>Plan</span><strong>{getString(subscription, ['plan_id'], 'not recorded')}</strong></div>
@@ -1617,7 +1629,7 @@ function TenantDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Effective entitlements</CardTitle>
-                    <CardDescription>Feature gates returned by the subscription record.</CardDescription>
+                    <CardDescription>Feature access recorded for this subscription.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
                     {effectiveEntitlements ? STAFF_ENTITLEMENT_FEATURES.map((feature) => (
@@ -1672,7 +1684,7 @@ function TenantDetailView({
             <Card>
               <CardHeader>
                 <CardTitle>Tenant users</CardTitle>
-                <CardDescription>Owner and member identities returned by tenant detail. Resend and disable actions remain staff-gated.</CardDescription>
+                <CardDescription>Recorded owner and member identities. Resend and disable actions remain staff-gated.</CardDescription>
               </CardHeader>
               <CardContent>
                 <DataTable columns={userColumns} items={users} empty={<EmptyState icon={Users} title="No tenant users returned." body="No user record was present in this tenant detail response." />} />
@@ -1684,7 +1696,7 @@ function TenantDetailView({
             <Card>
               <CardHeader>
                 <CardTitle>Internal audit</CardTitle>
-                <CardDescription>Recent tenant-scoped audit entries returned by the tenant detail endpoint.</CardDescription>
+                <CardDescription>Recent audit entries for this tenant.</CardDescription>
               </CardHeader>
               <CardContent>
                 <DataTable columns={auditColumns} items={recentAudit} empty={<EmptyState icon={FileCheck2} title="No tenant audit entries returned." body="No recent_tenant_audit records were present in this response." />} />
@@ -1858,8 +1870,8 @@ function AgentDetailView({
       render: (run) => {
         const value = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
         return value
-          ? <StatusBadge value={value} tone={verdictBadgeTone(value)} />
-          : <span className="muted">No verdict evidence</span>;
+          ? <VerdictBadge value={value} tone={verdictBadgeTone(value)} />
+          : <span className="muted">No result yet</span>;
       }
     },
     { key: 'sealed', label: 'Sealed', render: (run) => <span className="muted">{formatDate(run.updated_at ?? run.created_at)}</span> }
@@ -2238,9 +2250,9 @@ function EvidenceDetailView({
       <div className="content">
         <DetailPageHeader
           route="evidence-detail"
-          eyebrow={`Validation · evidence artifact · ${entityId}`}
+          eyebrow="Validation · evidence artifact"
           entityId={entityId}
-          title={entityId}
+          title="Evidence artifact"
         />
         <EmptyState
           icon={ShieldCheck}
@@ -2381,9 +2393,9 @@ function EvidenceDetailView({
     <div className="content">
       <DetailPageHeader
         route="evidence-detail"
-        eyebrow={`Validation · evidence artifact · ${artifactId}`}
+        eyebrow="Validation · evidence artifact"
         entityId={artifactId}
-        title={artifactId}
+        title={plainCodeLabel(kind, 'Evidence artifact')}
         actions={(
           <>
             {findingId ? (
@@ -2394,22 +2406,22 @@ function EvidenceDetailView({
           </>
         )}
       />
-      <p className="muted small">Recorded evidence artifact — API-returned metadata, optional digest fields, and a JSON preview. No custody or server verification is inferred.</p>
+      <p className="muted small">Recorded evidence artifact with optional digest fields and a technical JSON preview. No custody or server verification is inferred.</p>
       {loading ? <DetailLoadingPlaceholder label="Refreshing evidence artifact…" variant="compact" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message} />
 
       <div className="metric-grid four">
-        <MetricCard label="Kind" value={kind || '—'} sub="Artifact classification" icon={FileCheck2} tone="info" />
+        <MetricCard label="Kind" value={plainCodeLabel(kind, 'Not reported')} sub="Artifact classification" icon={FileCheck2} tone="info" />
         <MetricCard label="Run" value={runId || '—'} sub="Originating test run" icon={Activity} tone="muted" />
         <MetricCard label="Size" value={sizeLabel || '—'} sub="Recorded size field" icon={FileText} tone="muted" />
-        <MetricCard label="Digest" value={custodyLabel} sub={sha256 ? CUSTODY_CONTENT_CANONICALIZATION : 'no digest returned'} icon={ShieldCheck} tone={custodyTone} />
+        <MetricCard label="Digest" value={custodyLabel} sub={sha256 ? 'Digest method recorded' : 'No digest recorded'} icon={ShieldCheck} tone={custodyTone} />
       </div>
 
       <div className="dash-grid">
         <Card>
           <CardHeader>
             <CardTitle>Artifact record</CardTitle>
-            <CardDescription>Metadata returned for this artifact. Absent fields are omitted rather than inferred.</CardDescription>
+            <CardDescription>Recorded artifact metadata. Absent fields are omitted rather than inferred.</CardDescription>
           </CardHeader>
           <CardContent>
             {artifactRecord ? (
@@ -2427,7 +2439,7 @@ function EvidenceDetailView({
         <Card>
           <CardHeader>
             <CardTitle>Supplied chain metadata &amp; digest</CardTitle>
-            <CardDescription>Chain and digest values shown exactly when returned by the artifact API; this panel does not independently verify them.</CardDescription>
+            <CardDescription>Recorded chain and digest values are shown exactly; this panel does not independently verify them.</CardDescription>
           </CardHeader>
           <CardContent>
             {custodyRecord ? (
@@ -2442,13 +2454,13 @@ function EvidenceDetailView({
       <Card>
         <CardHeader>
           <CardTitle>Stored JSON preview</CardTitle>
-          <CardDescription>{payloadSource ? `Showing the returned ${payloadSource} object.` : 'No payload, content, or metadata object was returned.'}</CardDescription>
+          <CardDescription>{payloadSource ? `Technical ${payloadSource} record available.` : 'No payload, content, or metadata record is available.'}</CardDescription>
         </CardHeader>
         <CardContent>
           {payloadJson ? (
             <DetailCodeBlock label="Artifact JSON preview">{payloadJson}</DetailCodeBlock>
           ) : (
-            <EmptyState icon={FileText} title="No JSON preview returned." body="The artifact API returned no object-valued payload, content, or metadata field." />
+            <EmptyState icon={FileText} title="No JSON preview available." body="This artifact has no object-valued payload, content, or metadata record." />
           )}
         </CardContent>
       </Card>
@@ -2587,7 +2599,7 @@ function HighScaleDetailView({
       />
       <PageContextSummary>
         <StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /> · pack{' '}
-        <StatusBadge value={packOverall} tone={artifactReviewBadgeTone(packOverall)} fallback="missing" /> · <code>{entityId}</code>
+        <StatusBadge value={packOverall} tone={artifactReviewBadgeTone(packOverall)} fallback="missing" />
       </PageContextSummary>
       {loading ? <DetailLoadingPlaceholder label="Loading high-scale request…" /> : null}
       <DetailStatusBanners loadError={loadError} error={error} message={message}>
@@ -2613,10 +2625,10 @@ function HighScaleDetailView({
                 <Card>
                   <CardHeader>
                     <CardTitle>Request facts</CardTitle>
-                    <CardDescription>Customer request, declared scope, safe window, and provenance fields returned by the API.</CardDescription>
+                    <CardDescription>Recorded customer request, declared scope, safe window, and source details.</CardDescription>
                   </CardHeader>
                   <CardContent className="kv-list">
-                    <DetailKvMonoField label="Request ID" value={entityId} />
+                    <div><span>Request</span><strong title={entityId}>{title}</strong></div>
                     <div><span>State</span><StatusBadge value={requestState} tone={highScaleStateBadgeTone(requestState)} fallback="submitted" /></div>
                     <div><span>Target group</span>{getString(entity, ['target_group_id'], '') ? <DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} label={getString(targetGroup ?? {}, ['name'], getString(entity, ['target_group_id']))} /> : <strong>not recorded</strong>}</div>
                     <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
@@ -2626,7 +2638,7 @@ function HighScaleDetailView({
                     <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} → ${formatDate(requestedWindowEnd)}` : 'not fully recorded'}</strong></div>
                     <div><span>Timezone</span><strong>{requestedTimezone || 'not recorded'}</strong></div>
                     <div><span>Scheduled window</span><strong>{scheduledWindowStart && scheduledWindowEnd ? `${formatDate(scheduledWindowStart)} → ${formatDate(scheduledWindowEnd)}` : 'not scheduled'}</strong></div>
-                    {scopeHash ? <DetailKvMonoField label="Scope hash" value={scopeHash} /> : null}
+                    {scopeHash ? <div><span>Scope hash</span><strong title={scopeHash}>Recorded</strong></div> : null}
                   </CardContent>
                 </Card>
                 <Card>
@@ -2639,7 +2651,7 @@ function HighScaleDetailView({
                       {requestGates.map((gate) => (
                         <li key={gate.label}>
                           <ShieldCheck size={14} aria-hidden="true" />
-                          <span>{gate.label}<span className="muted small"> · {gate.detail}</span></span>
+                          <span>{gate.label}<span className="muted small"> · {plainInlineText(gate.detail)}</span></span>
                           <Badge tone={gate.pass ? 'success' : 'muted'}>{gate.pass ? 'recorded' : 'pending'}</Badge>
                         </li>
                       ))}
@@ -2650,7 +2662,7 @@ function HighScaleDetailView({
               <Card>
                 <CardHeader>
                   <CardTitle>Execution telemetry</CardTitle>
-                  <CardDescription>Provider or adapter fields are shown only when the request API returned them.</CardDescription>
+                  <CardDescription>Provider execution fields appear only when they were recorded for this request.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   {adapterRecord ? (
@@ -2735,7 +2747,7 @@ function HighScaleDetailView({
 
           {tab === 'lifecycle' ? (
             <Card>
-              <CardHeader><CardTitle>Lifecycle trail</CardTitle><CardDescription>Ordered request transitions returned by the request record.</CardDescription></CardHeader>
+              <CardHeader><CardTitle>Lifecycle trail</CardTitle><CardDescription>Ordered transitions recorded for this request.</CardDescription></CardHeader>
               <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
             </Card>
           ) : null}
@@ -3010,13 +3022,13 @@ function SocRequestDetailView({
     <div className="content">
       <DetailPageHeader route="queue-detail" eyebrow="SOC execution workspace" entityId={entityId} title={title} />
       <PageContextSummary>
-        <StatusBadge value={state} tone={highScaleStateBadgeTone(state)} fallback="submitted" /> · tenant <code>{actionTenantId ?? 'not recorded'}</code> · <code>{entityId}</code>
+        <StatusBadge value={state} tone={highScaleStateBadgeTone(state)} fallback="submitted" /> · tenant <code>{actionTenantId ?? 'not recorded'}</code>
       </PageContextSummary>
       <DetailStatusBanners error={error} message={message} hideMessageWhenLoadError={false} />
       <div className="metric-grid four">
         <MetricCard label="State" value={formatStatusLabel(state, 'submitted')} sub="Governed lifecycle state" icon={ShieldCheck} tone={stateTone === 'danger' ? 'danger' : stateTone === 'warn' ? 'warn' : stateTone === 'success' ? 'success' : 'info'} />
         <MetricCard label="Pack" value={formatStatusLabel(getString(packStatus ?? {}, ['overall'], 'missing'), 'missing')} sub="Authorization pack review" icon={FileCheck2} tone={packReady ? 'success' : 'warn'} />
-        <MetricCard label="Target group" value={getString(entity, ['target_group_id'], '—')} sub="Declared scope under request" icon={Target} tone="muted" />
+        <MetricCard label="Target group" value={getString(entity, ['target_group_name', 'target_group_label'], 'Declared target group')} sub="Declared scope under request" icon={Target} tone="muted" />
         <MetricCard label="Window" value={windowConfirmed ? formatDate(windowStart) : 'Unscheduled'} sub={windowConfirmed ? 'Confirmed safe window' : 'Awaiting schedule'} icon={Activity} tone={windowConfirmed ? 'info' : 'muted'} />
       </div>
       <Card>
@@ -3040,7 +3052,7 @@ function SocRequestDetailView({
       {tab === 'workspace' ? (
         <>
         <Card>
-          <CardHeader><CardTitle>Queue context</CardTitle><CardDescription>Lifecycle actions for {entityId}</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Queue context</CardTitle><CardDescription>Lifecycle actions for this request</CardDescription></CardHeader>
           <CardContent className="kv-list">
             <div><span>State</span><StatusBadge value={state} tone={highScaleStateBadgeTone(state)} /></div>
             <div><span>Pack</span><StatusBadge value={getString(packStatus ?? {}, ['overall'], 'missing')} tone={artifactReviewBadgeTone(getString(packStatus ?? {}, ['overall'], 'missing'))} fallback="missing" /></div>
@@ -3060,7 +3072,7 @@ function SocRequestDetailView({
             ) : null}
             {state === 'stopped' && !reportBusy && !postTestReportError && !hasPostTestReport ? (
               <div className="stack-tight">
-                <p className="muted small">Attach a post-test report before closing. The governed lifecycle rejects Close without one (409 <code>post_test_report_required</code>).</p>
+                <p className="muted small">Attach a post-test report before closing. The governed lifecycle rejects Close until the report is attached.</p>
                 <form className="product-form" aria-busy={busy === `report-${entityId}` || undefined} onSubmit={(event) => void submitPostTestReport(event)}>
                   <label className="full"><span>Customer summary</span><textarea name="customer_summary" rows={2} disabled={busy === `report-${entityId}`} placeholder="Customer-facing summary of the governed high-scale test outcome." /></label>
                   <label className="full"><span>Impact summary</span><textarea name="impact_summary" rows={2} disabled={busy === `report-${entityId}`} placeholder="Impact, residual risk, and recommended next steps." /></label>
@@ -3074,7 +3086,7 @@ function SocRequestDetailView({
           <Card>
             <CardHeader><CardTitle>Request facts</CardTitle><CardDescription>Tenant, scope, purpose, and safe-window fields returned with this queue item.</CardDescription></CardHeader>
             <CardContent className="kv-list">
-              <DetailKvMonoField label="Request ID" value={entityId} />
+              <div><span>Request</span><strong title={entityId}>{title}</strong></div>
               <div><span>Tenant</span><strong>{actionTenantId ?? 'not recorded'}</strong></div>
               <div><span>Target group</span>{getString(entity, ['target_group_id'], '') ? <DetailEntityLink route="target-group-detail" id={getString(entity, ['target_group_id'], '')} /> : <strong>not recorded</strong>}</div>
               <div><span>Reason</span><strong>{getString(entity, ['reason'], 'not recorded')}</strong></div>
@@ -3082,7 +3094,7 @@ function SocRequestDetailView({
               <div><span>Requested by</span><strong>{getString(entity, ['created_by', 'requested_by'], 'not recorded')}</strong></div>
               <div><span>Requested window</span><strong>{requestedWindowStart && requestedWindowEnd ? `${formatDate(requestedWindowStart)} → ${formatDate(requestedWindowEnd)}` : 'not fully recorded'}</strong></div>
               <div><span>Scheduled window</span><strong>{windowConfirmed ? `${formatDate(windowStart)} → ${formatDate(windowEnd)}` : 'not scheduled'}</strong></div>
-              {getString(entity, ['scope_hash'], '') ? <DetailKvMonoField label="Scope hash" value={getString(entity, ['scope_hash'], '')} /> : null}
+              {getString(entity, ['scope_hash'], '') ? <div><span>Scope hash</span><strong title={getString(entity, ['scope_hash'], '')}>Recorded</strong></div> : null}
             </CardContent>
           </Card>
           <Card>
@@ -3125,7 +3137,7 @@ function SocRequestDetailView({
           <CardHeader><CardTitle>Provider checklist</CardTitle><CardDescription>Recorded provider approvals and requirements. Request state alone does not prove provider readiness.</CardDescription></CardHeader>
           <CardContent>
             {providerChecklist.length === 0 ? (
-              <EmptyState icon={ClipboardList} title="No provider checklist returned." body="No provider_approval_checklist records are available for this request." />
+              <EmptyState icon={ClipboardList} title="No provider checklist returned." body="No provider approval records are available for this request." />
             ) : (
               <div className="kv-list">
                 {providerChecklist.map((item, index) => (
@@ -3221,7 +3233,7 @@ const CHECK_VECTOR_FAMILY_LABELS: Record<string, string> = {
   path: 'Path',
   l3_l4: 'L3/L4',
   dns: 'DNS',
-  l7: 'L7/API',
+  l7: 'Application layer',
   waf: 'WAF',
   tls: 'TLS',
   protocol: 'Protocol',
@@ -3401,7 +3413,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
         <EmptyState
           icon={Network}
           title="Environment not found."
-          body="This environment id was not returned by the authoritative environment dataset."
+          body="This environment is not present in the authoritative environment list."
           actionLabel="Open environments"
           actionHref="#environments"
         />
@@ -3436,8 +3448,8 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
       render: (item) => {
         const outcome = latestGroupVerdict(data.runs, data.evidence, getString(item, ['id'], ''));
         return outcome
-          ? <StatusBadge value={outcome.verdict} tone={outcomeBadgeTone(outcome.verdict)} />
-          : <span className="muted">No verdict evidence</span>;
+          ? <VerdictBadge value={outcome.verdict} tone={outcomeBadgeTone(outcome.verdict)} />
+          : <span className="muted">No result yet</span>;
       }
     }
   ];
@@ -3459,13 +3471,13 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
     { key: 'lifecycle', label: 'Lifecycle', render: (item) => <StatusBadge value={getString(item, ['status'], 'pending')} tone={runStatusBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" /> },
     { key: 'outcome', label: 'Verdict', render: (item) => {
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
-      return outcome ? <StatusBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No verdict evidence</span>;
+      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
     } },
     { key: 'recorded', label: 'Recorded', render: (item) => formatDate(item.updated_at ?? item.created_at) }
   ];
 
   const findingColumns: TableColumn<DataItem>[] = [
-    { key: 'finding', label: 'Finding', render: (item) => getString(item, ['title', 'summary', 'id']) },
+    { key: 'finding', label: 'Finding', render: (item) => plainFindingTitle(item, data.targets, data.checks) },
     { key: 'severity', label: 'Severity', render: (item) => {
       const severity = getString(item, ['severity'], 'unknown');
       return <StatusBadge value={formatSeverityLabel(severity)} tone={findingSeverityBadgeTone(severity)} fallback="unknown" />;
@@ -3504,7 +3516,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
         <Card>
           <CardHeader>
             <CardTitle>Environment record</CardTitle>
-            <CardDescription>Canonical environment fields joined to target groups that explicitly declare this environment id.</CardDescription>
+            <CardDescription>Authoritative environment fields joined to the target groups declared in this environment.</CardDescription>
           </CardHeader>
           <CardContent className="kv-list">
             <DetailKvMonoField label="Environment ID" value={entityId} />
@@ -3533,7 +3545,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
       <Card>
         <CardHeader>
           <CardTitle>Target groups</CardTitle>
-          <CardDescription>Declared services whose environment_id exactly matches this environment.</CardDescription>
+          <CardDescription>Declared services assigned to this environment.</CardDescription>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -3549,7 +3561,7 @@ function EnvironmentDetailPage({ entityId, data }: { entityId: string; data: Por
         <Card>
           <CardHeader>
             <CardTitle>Agents</CardTitle>
-            <CardDescription>Outbound observers whose environment_id exactly matches this environment.</CardDescription>
+            <CardDescription>Outbound observers assigned to this environment.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
@@ -3682,7 +3694,7 @@ function CheckDetailPage({
   const description = getString(check, ['description', 'summary'], 'No check-specific description is recorded in the catalog.');
   const latest = latestCheckVerdict(data.runs, data.evidence, entityId);
   const method = getString(check, ['method'], safetyClass === 'safe' ? `${execution.kind} · ${execution.cap}` : 'governed · SOC-scheduled');
-  const title = getString(check, ['name', 'check_id', 'id'], entityId);
+  const title = plainCheckName(getString(check, ['name', 'check_id', 'id'], entityId));
   const definition = [
     `check_id: ${entityId}`,
     `family: ${family || '—'}`,
@@ -3738,7 +3750,7 @@ function CheckDetailPage({
     .sort((left, right) => String(right.updated_at ?? right.created_at ?? '').localeCompare(String(left.updated_at ?? left.created_at ?? '')))
     .slice(0, 8);
   const policyColumns: TableColumn<DataItem>[] = [
-    { key: 'policy', label: 'Policy', render: (item) => <code className="mono-hash">{getString(item, ['id', 'policy_id'], '—')}</code> },
+    { key: 'policy', label: 'Policy', render: (item) => { const policyId = getString(item, ['id', 'policy_id'], ''); return <span title={policyId || undefined}>{getString(item, ['name', 'title'], 'Scheduled policy')}</span>; } },
     { key: 'group', label: 'Target group', render: (item) => {
       const groupId = getString(item, ['target_group_id'], '');
       return groupId ? <DetailEntityLink route="target-group-detail" id={groupId} label={getNestedString(item, ['target_group', 'name'], groupId)} /> : '—';
@@ -3759,7 +3771,7 @@ function CheckDetailPage({
     { key: 'lifecycle', label: 'Lifecycle', render: (item) => <StatusBadge value={getString(item, ['status'], 'pending')} tone={runStatusBadgeTone(getString(item, ['status'], 'pending'))} fallback="pending" /> },
     { key: 'outcome', label: 'Verdict', render: (item) => {
       const outcome = hasEvidenceBackedVerdict(item, data.evidence) ? runVerdictValue(item) : '';
-      return outcome ? <StatusBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No verdict evidence</span>;
+      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
     } },
     { key: 'recorded', label: 'Recorded', render: (item) => formatDate(item.updated_at ?? item.created_at) }
   ];
@@ -3785,7 +3797,7 @@ function CheckDetailPage({
         <MetricCard label="Family" value={formatCheckFamilyLabel(family)} sub="Vector family" icon={Network} tone="info" />
         <MetricCard label="Mode" value={formatCheckModeLabel(safetyClass)} sub={safetyClass === 'soc_gated' ? 'SOC request-only' : 'Customer-runnable'} icon={ShieldCheck} tone={safetyClass === 'soc_gated' ? 'warn' : 'success'} />
         <MetricCard label="Execution" value={execution.kind} sub={execution.cap} icon={Activity} tone="muted" />
-        <MetricCard label="Last verdict" value={latest ? formatStatusLabel(latest.verdict) : 'None'} sub={latest ? 'From most recent run' : 'No runs yet'} icon={FileCheck2} tone={latest ? (outcomeBadgeTone(latest.verdict) === 'danger' ? 'danger' : outcomeBadgeTone(latest.verdict) === 'warn' ? 'warn' : 'success') : 'muted'} />
+        <MetricCard label="Last verdict" value={latest ? plainVerdictLabel(latest.verdict) : 'None'} sub={latest ? 'From most recent run' : 'No runs yet'} icon={FileCheck2} tone={latest ? (outcomeBadgeTone(latest.verdict) === 'danger' ? 'danger' : outcomeBadgeTone(latest.verdict) === 'warn' ? 'warn' : 'success') : 'muted'} />
       </div>
       {remediation ? (
         <Card>
@@ -3820,7 +3832,7 @@ function CheckDetailPage({
             {expectedBehavior ? (
               <div>
                 <p className="check-fact-label">Expected behavior catalog key</p>
-                <code className="traffic-path-label">{expectedBehavior}</code>
+                <span className="traffic-path-label" title={expectedBehavior}>{plainCodeLabel(expectedBehavior)}</span>
               </div>
             ) : null}
           </CardContent>
@@ -3837,7 +3849,7 @@ function CheckDetailPage({
               <p className="check-fact-label">{row.label}</p>
               {row.values.length > 0 ? (
                 <div className="row-actions">
-                  {row.values.map((value) => <Badge key={`${row.label}-${value}`} tone="muted"><span className="mono">{value}</span></Badge>)}
+                  {row.values.map((value) => <Badge key={`${row.label}-${value}`} tone="muted" title={value}>{value.includes('_') ? plainCodeLabel(value) : value}</Badge>)}
                 </div>
               ) : <p className="muted">No {row.prefix} identifiers recorded.</p>}
             </div>
@@ -3905,7 +3917,7 @@ function CheckDetailPage({
               <div>
                 <p className="check-fact-label">Probe profile</p>
                 <div className="row-actions">
-                  <code className="traffic-path-label" title={probeKind}>{probeKind}</code>
+                  <span className="traffic-path-label" title={probeKind}>{plainCodeLabel(probeKind)}</span>
                   {probeRequests ? <Badge tone="muted">{checkProbeOperationBoundLabel(probeRequests)}</Badge> : null}
                 </div>
               </div>
@@ -3923,7 +3935,7 @@ function CheckDetailPage({
         <Card>
           <CardHeader>
             <CardTitle>Scheduled policies</CardTitle>
-            <CardDescription>Exact test-policy records whose check_id matches this catalog entry.</CardDescription>
+            <CardDescription>Test policies explicitly linked to this catalog check.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
@@ -3934,14 +3946,14 @@ function CheckDetailPage({
               loadError={linkedPolicyState.status === 'error' ? linkedPolicyState.error : null}
               empty={linkedPolicyState.status === 'loading'
                 ? <DetailLoadingPlaceholder label="Loading linked policies…" variant="compact" />
-                : <EmptyState icon={ClipboardList} title="No linked policies." body="The policy endpoint returned no active policy with this check_id." actionLabel="Open test policies" actionHref="#test-policies" />}
+                : <EmptyState icon={ClipboardList} title="No linked policies." body="No active policy is explicitly linked to this check." actionLabel="Open test policies" actionHref="#test-policies" />}
             />
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
             <CardTitle>Recent run evidence</CardTitle>
-            <CardDescription>Latest loaded runs whose check_id exactly matches this check.</CardDescription>
+            <CardDescription>Latest loaded runs explicitly linked to this check.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable
@@ -3949,7 +3961,7 @@ function CheckDetailPage({
               items={recentCheckRuns}
               getRowId={(item) => getString(item, ['id'], '')}
               getRowProps={(item) => detailRowNavProps('run-detail', getString(item, ['id'], ''))}
-              empty={<EmptyState icon={Activity} title="No runs for this check." body="No loaded run record identifies this check_id." actionLabel="Open test runs" actionHref="#runs" />}
+              empty={<EmptyState icon={Activity} title="No runs for this check." body="No loaded run is explicitly linked to this check." actionLabel="Open test runs" actionHref="#runs" />}
             />
           </CardContent>
         </Card>
@@ -4083,8 +4095,8 @@ function PolicyDetailPage({
     ['schedule_revision', getString(policy, ['schedule_revision'], '')]
   ]);
   const dispatchGates = [
-    { label: 'Exact target binding recorded', pass: Boolean(targetGroupId && targetId), detail: targetId || 'target_id missing' },
-    { label: 'Catalog check resolved', pass: Boolean(linkedCheck && checkId), detail: checkId || 'check_id missing' },
+    { label: 'Exact target binding recorded', pass: Boolean(targetGroupId && targetId), detail: targetId ? 'Exact target linked' : 'Target is missing' },
+    { label: 'Catalog check resolved', pass: Boolean(linkedCheck && checkId), detail: checkId ? checkDisplayName(data.checks, checkId) : 'Check is missing' },
     { label: 'Customer-runnable check', pass: Boolean(linkedCheck) && !gated, detail: gated ? 'SOC-governed request required' : getString(linkedCheck ?? {}, ['safety_class'], 'not returned') },
     { label: 'Policy active and enabled', pass: state === 'active' && enabled, detail: `${state}; enabled=${policy.enabled === undefined ? 'not returned' : String(policy.enabled)}` },
     { label: 'Safe window recorded', pass: safeWindow !== '—', detail: safeWindow === '—' ? 'No safe window returned' : safeWindow }
@@ -4094,7 +4106,7 @@ function PolicyDetailPage({
     { key: 'status', label: 'Status', render: (run) => <StatusBadge value={getString(run, ['status'], 'pending')} tone={runStatusBadgeTone(getString(run, ['status'], 'pending'))} fallback="pending" /> },
     { key: 'outcome', label: 'Verdict', render: (run) => {
       const outcome = hasEvidenceBackedVerdict(run, data.evidence) ? runVerdictValue(run) : '';
-      return outcome ? <StatusBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No verdict evidence</span>;
+      return outcome ? <VerdictBadge value={outcome} tone={outcomeBadgeTone(outcome)} /> : <span className="muted">No result yet</span>;
     } },
     { key: 'scheduled', label: 'Recorded', render: (run) => formatDate(run.updated_at ?? run.created_at) }
   ];
@@ -4119,14 +4131,13 @@ function PolicyDetailPage({
       />
       <PageContextSummary>
         <StatusBadge value={state} tone={lifecycleBadgeTone(state)} fallback="not recorded" /> ·{' '}
-        {checkId ? <DetailEntityLink route="check-detail" id={checkId} label={checkDisplayName(data.checks, checkId)} /> : 'check not recorded'} ·{' '}
-        <code>{entityId}</code>
+        {checkId ? <DetailEntityLink route="check-detail" id={checkId} label={checkDisplayName(data.checks, checkId)} /> : 'check not recorded'}
       </PageContextSummary>
       <div className="metric-grid four">
         <MetricCard label="State" value={formatStatusLabel(state, 'not recorded')} sub={enabled ? 'enabled' : policy.enabled === false ? 'disabled' : 'enabled flag not returned'} icon={ShieldCheck} tone={state === 'active' && enabled ? 'success' : 'warn'} />
         <MetricCard label="Cadence" value={formatStatusLabel(cadence)} sub={safeWindow === '—' ? 'No safe window returned' : safeWindow} icon={Activity} tone="info" />
-        <MetricCard label="Next eligible" value={nextRunAt ? formatDate(nextRunAt) : '—'} sub="next_run_at" icon={ClipboardList} tone={nextRunAt ? 'info' : 'muted'} />
-        <MetricCard label="Last dispatched" value={lastDispatchedAt ? formatDate(lastDispatchedAt) : '—'} sub={lastRunId ? `run ${lastRunId}` : 'No last_run_id returned'} icon={FileCheck2} tone={lastDispatchedAt ? 'muted' : 'muted'} />
+        <MetricCard label="Next eligible" value={nextRunAt ? formatDate(nextRunAt) : '—'} sub="Recorded next-run time" icon={ClipboardList} tone={nextRunAt ? 'info' : 'muted'} />
+        <MetricCard label="Last dispatched" value={lastDispatchedAt ? formatDate(lastDispatchedAt) : '—'} sub={lastRunId ? 'Linked to the latest run' : 'No previous run recorded'} icon={FileCheck2} tone={lastDispatchedAt ? 'muted' : 'muted'} />
       </div>
       <div className="dash-grid">
         <Card>
@@ -4171,7 +4182,7 @@ function PolicyDetailPage({
             {dispatchGates.map((gate) => (
               <li key={gate.label}>
                 <ShieldCheck size={14} aria-hidden="true" />
-                <span>{gate.label}<span className="muted small"> · {gate.detail}</span></span>
+                <span>{gate.label}<span className="muted small"> · {plainInlineText(gate.detail)}</span></span>
                 <Badge tone={gate.pass ? 'success' : 'warn'}>{gate.pass ? 'recorded' : 'missing'}</Badge>
               </li>
             ))}
@@ -4192,7 +4203,7 @@ function PolicyDetailPage({
       <Card>
         <CardHeader>
           <CardTitle>Dispatch history</CardTitle>
-          <CardDescription>Recent runs returned by /v1/test-runs?limit=100 whose policy_id or test_policy_id exactly matches this policy. Group/check similarity alone is not attribution.</CardDescription>
+          <CardDescription>Recent runs explicitly linked to this policy. A similar group or check name alone does not establish that link.</CardDescription>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -4442,7 +4453,7 @@ export function DetailRoutePage({
         </div>
       );
     }
-    return <TargetDetailView entityId={entityId} config={config} session={session} onRefresh={onRefresh} />;
+    return <TargetDetailView entityId={entityId} config={config} session={session} checks={data.checks} onRefresh={onRefresh} />;
   }
 
   if (route === 'environment-detail') {
@@ -4472,7 +4483,7 @@ export function DetailRoutePage({
             title="No high-scale request selected."
             body={staffSocWorkspace
               ? 'Open a queue item from the SOC console with ?id=.'
-              : 'Open a request from Test runs with Complete pack or the request id link.'}
+              : 'Open a request from Test runs using Complete pack.'}
             actionLabel={staffSocWorkspace ? 'Open SOC console' : 'Open test runs'}
             actionHref={staffSocWorkspace ? '#internal-soc' : '#runs'}
           />
@@ -4934,7 +4945,7 @@ export function ReportDetailPage({
     { key: 'surface', label: 'Surface', render: (item) => <code>{item.name}</code> },
     { key: 'runs', label: 'Snapshot runs loaded', render: (item) => <span className="tabular-nums">{item.runs}</span> },
     { key: 'findings', label: 'Currently open linked findings', render: (item) => <span className="tabular-nums">{item.openFindings}</span> },
-    { key: 'verdict', label: 'Last evidence-backed verdict', render: (item) => item.verdict ? <StatusBadge value={item.verdict} tone={outcomeBadgeTone(item.verdict)} /> : <span className="muted">No verdict evidence</span> }
+    { key: 'verdict', label: 'Last evidence-backed verdict', render: (item) => item.verdict ? <VerdictBadge value={item.verdict} tone={outcomeBadgeTone(item.verdict)} /> : <span className="muted">No result yet</span> }
   ];
   const factorColumns: TableColumn<DataItem>[] = [
     { key: 'factor', label: 'Factor', render: (factor) => formatStatusLabel(getString(factor, ['label', 'key'], 'Factor')) },
@@ -5033,14 +5044,14 @@ export function ReportDetailPage({
             columns={factorColumns}
             items={readinessFactors}
             getRowId={(factor) => getString(factor, ['key', 'label'], JSON.stringify(factor))}
-            empty={<EmptyState icon={Activity} title="No factor array in this report." body={getString(readinessFactorStatus ?? {}, ['detail', 'status'], 'The report summary did not return readiness_factors as an array.')} />}
+            empty={<EmptyState icon={Activity} title="No factor array in this report." body={getString(readinessFactorStatus ?? {}, ['detail', 'status'], 'The report summary does not include a readiness-factor list.')} />}
           />
         </CardContent>
       </Card>
       <Card>
         <CardHeader>
           <CardTitle>Run coverage in report snapshot</CardTitle>
-          <CardDescription>Relationships are limited to run_ids captured by this report and still present in the loaded run data. Finding counts are current exact-run relationships, not generation-time totals.</CardDescription>
+          <CardDescription>Relationships are limited to runs captured by this report and still present in the loaded records. Finding counts reflect current exact-run relationships, not historical totals from report generation.</CardDescription>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -5048,7 +5059,7 @@ export function ReportDetailPage({
             items={coverageRows}
             getRowId={(item) => item.id}
             getRowProps={(item) => detailRowNavProps('target-group-detail', item.id)}
-            empty={<EmptyState icon={Target} title="No snapshot run relationships loaded." body="The report has no run_ids with a loaded target_group_id, or those run records are outside the current list window." />}
+            empty={<EmptyState icon={Target} title="No snapshot run relationships loaded." body="This report has no loaded runs linked to a target group, or those runs are outside the current list window." />}
           />
           {missingReportRunCount > 0 ? <p className="muted small">{missingReportRunCount} report run ID{missingReportRunCount === 1 ? '' : 's'} are not present in the currently loaded run list.</p> : null}
         </CardContent>

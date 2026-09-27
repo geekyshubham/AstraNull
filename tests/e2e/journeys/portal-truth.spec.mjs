@@ -20,6 +20,13 @@ async function openCheck(page, checkId) {
   await expect(page.locator('h1').first()).toBeVisible();
 }
 
+async function openTechnicalProbeEvidence(page) {
+  const summary = page.getByText('Show technical probe evidence', { exact: true }).first();
+  await expect(summary).toBeVisible();
+  const expanded = await summary.evaluate((node) => node.parentElement?.hasAttribute('open') ?? false);
+  if (!expanded) await summary.click();
+}
+
 test.describe('portal truth surfaces', () => {
   test.beforeEach(async () => {
     await startPortalPlaywrightServer({ mutate: applyPortalBaselineReadinessBoost });
@@ -296,7 +303,7 @@ test.describe('portal truth surfaces', () => {
     const probeCard = page.locator('.card').filter({
       has: page.getByRole('heading', { name: 'Probe result', exact: true }),
     });
-    await expect(probeCard).toContainText('blocked');
+    await expect(probeCard).toContainText(/Blocked/i);
     await expect(probeCard).not.toContainText(publicProbeMarker);
 
     const agentCard = page.locator('.card').filter({
@@ -308,6 +315,7 @@ test.describe('portal truth surfaces', () => {
 
     // The verdict explanation and truth table sit in the correlation matrix on the summary tab.
     await page.getByRole('tab', { name: 'Summary' }).click();
+    await page.getByText('Show technical evidence details', { exact: true }).first().click();
     const explanation = page.locator('.verdict-explanation');
     const internalEvidence = explanation.locator('.verdict-explanation-item').filter({ hasText: 'Internal agent evidence' });
     const placement = explanation.locator('.verdict-explanation-item').filter({ hasText: 'Placement confidence' });
@@ -409,24 +417,26 @@ test.describe('portal truth surfaces', () => {
     // Probe evidence markers render on the probe/agent tab; the tab selection persists across
     // run rebinding, so stale-response protection is still observed from a single place.
     await page.getByRole('tab', { name: 'Probe & agent' }).click();
-    await expect(page.getByText(markerA, { exact: true })).toBeVisible();
+    await openTechnicalProbeEvidence(page);
+    await expect(page.getByText(new RegExp(`^${markerA}$`, 'i'))).toBeVisible();
 
     const firstBRequest = page.waitForRequest((request) => (
       new URL(request.url()).pathname === `/v1/test-runs/${runB}/events`
     ));
     await page.evaluate((id) => { window.location.hash = `run-detail?id=${encodeURIComponent(id)}`; }, runB);
     await firstBRequest;
-    await expect(page.getByText(markerA, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(new RegExp(`^${markerA}$`, 'i'))).toHaveCount(0);
     await expect(page.getByLabel('Loading run event evidence…').first()).toBeVisible();
     firstB.resolve();
-    await expect(page.getByText(markerBFirst, { exact: true })).toBeVisible();
+    await openTechnicalProbeEvidence(page);
+    await expect(page.getByText(new RegExp(`^${markerBFirst}$`, 'i'))).toBeVisible();
 
     const secondARequest = page.waitForRequest((request) => (
       new URL(request.url()).pathname === `/v1/test-runs/${runA}/events`
     ));
     await page.evaluate((id) => { window.location.hash = `run-detail?id=${encodeURIComponent(id)}`; }, runA);
     await secondARequest;
-    await expect(page.getByText(markerBFirst, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(new RegExp(`^${markerBFirst}$`, 'i'))).toHaveCount(0);
 
     const secondBRequest = page.waitForRequest((request) => (
       new URL(request.url()).pathname === `/v1/test-runs/${runB}/events`
@@ -435,10 +445,11 @@ test.describe('portal truth surfaces', () => {
     await secondBRequest;
     lateA.resolve();
     await lateAFulfilled.promise;
-    await expect(page.getByText(markerALate, { exact: true })).toHaveCount(0);
-    await expect(page.getByText(markerBFirst, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(new RegExp(`^${markerALate}$`, 'i'))).toHaveCount(0);
+    await expect(page.getByText(new RegExp(`^${markerBFirst}$`, 'i'))).toHaveCount(0);
     secondB.resolve();
-    await expect(page.getByText(markerBSecond, { exact: true })).toBeVisible();
+    await openTechnicalProbeEvidence(page);
+    await expect(page.getByText(new RegExp(`^${markerBSecond}$`, 'i'))).toBeVisible();
   });
 
   test('run detail reports event endpoint failure without authoritative empty-evidence claims', async ({ page }) => {
