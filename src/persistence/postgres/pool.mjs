@@ -272,6 +272,24 @@ export function resolvePgPoolConfig(env = process.env) {
  * @param {import('pg').PoolConfig | NodeJS.ProcessEnv} configOrEnv
  * @returns {import('pg').Pool}
  */
+/**
+ * node-postgres re-emits an idle client's socket error on the Pool; with no listener that is an
+ * uncaught exception that kills the process. A Postgres restart, failover, idle-connection reset,
+ * or an operator pg_terminate_backend would therefore crash the control plane and every worker.
+ * The broken idle client is already discarded by the pool, and the next checkout reconnects, so
+ * logging (without the connection string) is the whole handling.
+ *
+ * @param {import('pg').Pool} pool
+ * @param {(message: string) => void} [warn]
+ */
+export function attachPgPoolErrorHandler(pool, warn = (message) => console.warn(message)) {
+  pool.on('error', (err) => {
+    const code = err && typeof err === 'object' && 'code' in err ? ` (${String(err.code)})` : '';
+    warn(`astranull postgres: idle client error${code}: ${String(err?.message ?? err).slice(0, 200)}`);
+  });
+  return pool;
+}
+
 export function createPgPool(configOrEnv = process.env) {
   const config =
     configOrEnv != null &&
@@ -280,7 +298,7 @@ export function createPgPool(configOrEnv = process.env) {
     configOrEnv.connectionString
       ? configOrEnv
       : resolvePgPoolConfig(configOrEnv);
-  return new pg.Pool(config);
+  return attachPgPoolErrorHandler(new pg.Pool(config));
 }
 
 /**
