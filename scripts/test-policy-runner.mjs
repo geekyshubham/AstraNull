@@ -389,6 +389,50 @@ export async function runScheduledCompanionJobs(env, config, deps = {}) {
   return result;
 }
 
+/**
+ * Run one scheduler tick: the policy runner, the collection-window sweeper, and the validation-scan
+ * runner. All three are independent scheduled jobs, so each runs in its own try/catch — a
+ * policy-runner failure must not skip the companion jobs (finding 8). Returns an exit code that is
+ * nonzero if any of the three failed. Injectable deps keep this unit-testable.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {{ tenantIds: string[], dryRun: boolean, out?: string | null }} config
+ * @param {{ policy?: typeof runTestPolicyRunner, companions?: typeof runScheduledCompanionJobs, log?: (msg: string) => void, error?: (msg: string) => void }} [deps]
+ */
+export async function runTestPolicySchedulerTick(env, config, deps = {}) {
+  const log = deps.log ?? ((msg) => console.log(msg));
+  const error = deps.error ?? ((msg) => console.error(msg));
+  const policyFn = deps.policy ?? runTestPolicyRunner;
+  const companionsFn = deps.companions ?? runScheduledCompanionJobs;
+
+  let policyExit = 0;
+  try {
+    const { summary, exitCode } = await policyFn(env, config);
+    log('test-policy-runner: ok');
+    log(`  mode: ${summary.mode}`);
+    log(`  tenant_count: ${summary.tenant_count}`);
+    log(`  due_count: ${summary.due_count}`);
+    if (config.out) log(`  out: ${config.out}`);
+    policyExit = exitCode || 0;
+  } catch (err) {
+    error(`test-policy-runner: failed: ${redactDatabaseUrlInMessage(err, env)}`);
+    policyExit = 1;
+  }
+
+  let companionExit = 0;
+  try {
+    const companions = await companionsFn(env, config);
+    log(`  collection_window_sweep: ${companions.sweep}`);
+    log(`  validation_scans: ${companions.scans}`);
+    companionExit = companions.exitCode || 0;
+  } catch (err) {
+    error(`test-policy-runner: companion jobs failed: ${redactDatabaseUrlInMessage(err, env)}`);
+    companionExit = 1;
+  }
+
+  return policyExit || companionExit;
+}
+
 async function main() {
   let parsed;
   try {
@@ -408,21 +452,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  try {
-    const { summary, exitCode } = await runTestPolicyRunner(process.env, config);
-    console.log('test-policy-runner: ok');
-    console.log(`  mode: ${summary.mode}`);
-    console.log(`  tenant_count: ${summary.tenant_count}`);
-    console.log(`  due_count: ${summary.due_count}`);
-    if (config.out) console.log(`  out: ${config.out}`);
-    const companions = await runScheduledCompanionJobs(process.env, config);
-    console.log(`  collection_window_sweep: ${companions.sweep}`);
-    console.log(`  validation_scans: ${companions.scans}`);
-    process.exitCode = exitCode || companions.exitCode;
-  } catch (error) {
-    console.error(`test-policy-runner: failed: ${redactDatabaseUrlInMessage(error, process.env)}`);
-    process.exitCode = 1;
-  }
+  process.exitCode = await runTestPolicySchedulerTick(process.env, config);
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

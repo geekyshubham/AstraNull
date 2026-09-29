@@ -294,6 +294,29 @@ async function guardedScanUpdate(client, tenantId, id, patch, options = {}) {
 export function createPostgresValidationScanRepository(pool, options = {}) {
   const auditRepository = options.auditRepository ?? createAuditRepository(pool);
 
+  // Scan locks hold a session-level advisory lock on a dedicated connection for the whole duration
+  // of the executor callback, and that callback needs its OWN connections from the main pool for
+  // its short tenant transactions. Sharing one pool means ~max concurrent lock holders (10 by
+  // default) each pin a connection while starving the queries they depend on, stalling scans and
+  // timing out unrelated API requests. A separate small pool keeps lock connections off the query
+  // pool's budget. Tests can inject options.lockPool; otherwise it is derived lazily from the main
+  // pool's own config so no new connection string plumbing is required.
+  const lockPoolMax = Number(options.lockPoolMax) > 0 ? Number(options.lockPoolMax) : 5;
+  let ownedLockPool = null;
+  const resolveLockPool = () => {
+    if (options.lockPool) return options.lockPool;
+    if (ownedLockPool) return ownedLockPool;
+    const base = pool?.options ?? {};
+    ownedLockPool = new pool.constructor({ ...base, max: lockPoolMax });
+    // A dropped idle lock connection must not crash the process (same failure mode as the main
+    // pool's handler); the pool discards it and the next checkout reconnects.
+    ownedLockPool.on('error', (err) => {
+      const code = err && typeof err === 'object' && 'code' in err ? ` (${String(err.code)})` : '';
+      console.warn(`astranull postgres: idle scan-lock client error${code}: ${String(err?.message ?? err).slice(0, 200)}`);
+    });
+    return ownedLockPool;
+  };
+
   async function readScan(client, tenantId, id, { forUpdate = false } = {}) {
     const { rows } = await client.query(
       `SELECT ${VALIDATION_SCAN_COLUMNS}
@@ -576,8 +599,20 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
      */
     async withScanLock(ctx, scanId, callback) {
       const lockKey = `validation_scan:${scanId}`;
-      const client = await pool.connect();
+      const client = await resolveLockPool().connect();
       let locked = false;
+      let clientBroken = false;
+      // A busy (checked-out) client re-emits its socket error on the client object, NOT on the
+      // pool, so the pool-level handler does not cover it. Without this listener a Postgres restart,
+      // failover, or pg_terminate_backend during a held lock is an uncaught 'error' event that kills
+      // the control plane or runner. We record the break, log without the connection string, and
+      // discard the client on release so a fresh connection is used next time.
+      const onClientError = (err) => {
+        clientBroken = true;
+        const code = err && typeof err === 'object' && 'code' in err ? ` (${String(err.code)})` : '';
+        console.warn(`astranull postgres: scan-lock client error${code}: ${String(err?.message ?? err).slice(0, 200)}`);
+      };
+      client.on('error', onClientError);
       try {
         const { rows } = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', [lockKey]);
         locked = rows[0]?.acquired === true;
@@ -585,16 +620,19 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
         const result = await callback();
         return { acquired: true, result };
       } finally {
-        let released = !locked;
-        if (locked) {
+        // discard = true means hand the pool an Error so it destroys the connection instead of
+        // reusing it. Always discard a broken client. If the lock was acquired on a healthy client,
+        // unlock and keep it; only keep it when the unlock succeeded.
+        let discard = clientBroken;
+        if (locked && !clientBroken) {
           try {
             await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
-            released = true;
           } catch {
-            released = false;
+            discard = true;
           }
         }
-        client.release(released ? undefined : new Error('validation scan lock release failed'));
+        client.removeListener('error', onClientError);
+        client.release(discard ? new Error('validation scan lock release failed') : undefined);
       }
     },
 
@@ -675,6 +713,16 @@ export function createPostgresValidationScanRepository(pool, options = {}) {
           constraints: asObject(row.constraints_json),
         }));
       });
+    },
+
+    // Release the dedicated scan-lock pool on shutdown. Only ends a pool this repository created;
+    // an injected options.lockPool is owned by the caller.
+    async close() {
+      if (ownedLockPool) {
+        const toClose = ownedLockPool;
+        ownedLockPool = null;
+        await toClose.end();
+      }
     },
   };
 }

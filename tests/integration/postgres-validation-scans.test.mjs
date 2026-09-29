@@ -406,7 +406,13 @@ describe('postgres validation scans (service adapters over a live database)', ()
 
       const step = (await repo.listSteps(CTX, scan.id))[0];
       assert.equal(await repo.updateStep(CTX, step.id, { status: 'running' }, { expectedStatuses: ['starting'] }), null);
-      assert.equal((await repo.listScans(CTX, { seriesId: scan.id })).length, 1);
+      // Cancelling a single occurrence (no cancel_series) of a recurring scan must keep the series
+      // alive: the cancelled scan plus exactly one scheduled successor (finding 1).
+      const series = await repo.listScans(CTX, { seriesId: scan.id });
+      assert.equal(series.length, 2);
+      const successor = series.find((row) => row.id !== scan.id);
+      assert.equal(successor.status, 'scheduled');
+      assert.equal(successor.previous_scan_id, scan.id);
 
       const catalog = await pool.query(
         `SELECT indexname FROM pg_indexes WHERE tablename = 'audit_logs'

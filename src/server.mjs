@@ -248,17 +248,24 @@ function blockWafFeatureDisabled(runtimeConfig, path, res) {
   return true;
 }
 
-async function reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx) {
+export async function reconcileConnectorFeatureProjection(runtimeConfig, serviceDeps, ctx) {
   if (runtimeConfig.persistenceMode !== 'postgres' || !ctx.tenantId) return;
   const waf = serviceDeps.wafPosture;
   if (typeof waf?.isConnectorFeatureEnabled !== 'function'
     || typeof waf?.setConnectorFeatureState !== 'function') return;
   const desired = isConnectorsEnabledForTenant(runtimeConfig, ctx.tenantId);
-  if (await waf.isConnectorFeatureEnabled(ctx) === desired) return;
-  await waf.setConnectorFeatureState(
-    { ...ctx, userId: 'runtime-config-connector-sync', role: 'system' },
-    desired,
-  );
+  // Best-effort projection sync only. The authoritative gate is isConnectorsEnabledForTenant on the
+  // in-memory runtimeConfig (see blockConnectorFeatureDisabled), so a transient database failure
+  // here must not 500 every connector request. Log and move on; the next request retries the sync.
+  try {
+    if (await waf.isConnectorFeatureEnabled(ctx) === desired) return;
+    await waf.setConnectorFeatureState(
+      { ...ctx, userId: 'runtime-config-connector-sync', role: 'system' },
+      desired,
+    );
+  } catch (err) {
+    console.warn(`astranull: connector feature projection sync skipped: ${redactDatabaseUrlInMessage(err)}`);
+  }
 }
 
 function blockConnectorFeatureDisabled(runtimeConfig, ctx, path, res) {

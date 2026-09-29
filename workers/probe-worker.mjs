@@ -1314,7 +1314,6 @@ async function executeProbeWithinDeadline(job, deps, accounting, caps) {
   if (capabilityOutcome) {
     return capabilityOutcome;
   }
-  if (profileKind === 'metadata_marker') return executor(executionJob, probeDeps);
   return executor(executionJob, probeDeps);
 }
 

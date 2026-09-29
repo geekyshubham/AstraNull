@@ -97,7 +97,17 @@ export function parseTargetCsv(input) {
   const [first] = split.records;
   if (!first) return csvRejection('CSV body is empty. Provide at least one target row.');
   const firstCells = first.fields.map((name) => name.trim().toLowerCase());
-  const hasHeader = firstCells.some((name) => HEADER_ALIASES.has(name) || name === 'port');
+  // Header detection has to disambiguate two cases that both start with a known token:
+  //   `value,owner`         -> a header with a typo'd/extra column (reject with unsupported column)
+  //   `fqdn,api.example.com` -> a headerless kind,value data row (the first cell is also a kind)
+  // Rule: it is a header when the first cell is a HEADER-ONLY alias (a token that is never a valid
+  // target kind, e.g. `kind`/`value`/`label`/`port`), OR when every cell is a known alias. A row
+  // whose first cell is a kind alias (`fqdn`/`ip`/`url`/…) and whose later cells are not known
+  // aliases is treated as data, which is the finding-2 fix.
+  const knownAlias = (name) => HEADER_ALIASES.has(name) || name === 'port';
+  const isKindAlias = (name) => VALUE_COLUMN_KIND.has(name);
+  const firstIsHeaderOnly = knownAlias(firstCells[0]) && !isKindAlias(firstCells[0]);
+  const hasHeader = firstIsHeaderOnly || firstCells.every(knownAlias);
   let columns;
   let defaultKind = null;
   let dataRecords;

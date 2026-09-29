@@ -12,6 +12,7 @@ import {
   resolveTestPolicySchedulerIntervalSeconds,
   runPostgresTestPolicies,
   runScheduledCompanionJobs,
+  runTestPolicySchedulerTick,
   summarizePolicyDispatch,
 } from '../../scripts/test-policy-runner.mjs';
 
@@ -306,5 +307,49 @@ describe('scheduled companion jobs (hosted single-VM tick)', () => {
       scans: async () => assert.fail('scans must not run'),
     });
     assert.equal(result.exitCode, 0);
+  });
+});
+
+describe('scheduler tick independence (finding 8)', () => {
+  it('runs the sweeper and scan runner even when the policy runner throws', async () => {
+    let companionsRan = false;
+    const logs = [];
+    const errors = [];
+    const exitCode = await runTestPolicySchedulerTick(
+      { ASTRANULL_DATABASE_URL: 'postgres://user:secret@db/astranull' },
+      { tenantIds: ['ten_a'], dryRun: false },
+      {
+        policy: async () => { throw new Error('policy boom for postgres://user:secret@db'); },
+        companions: async () => {
+          companionsRan = true;
+          return { sweep: 'ok', scans: 'ok', exitCode: 0 };
+        },
+        log: (msg) => logs.push(msg),
+        error: (msg) => errors.push(msg),
+      },
+    );
+    // Companions ran despite the policy-runner failure.
+    assert.equal(companionsRan, true);
+    // The tick still reports failure via a nonzero exit code.
+    assert.notEqual(exitCode, 0);
+    // The DB secret is not leaked in the error output.
+    assert.equal(errors.join('\n').includes('user:secret'), false);
+    assert.ok(logs.some((line) => line.includes('validation_scans: ok')));
+  });
+
+  it('exits nonzero when only the companions fail but still runs the policy runner', async () => {
+    let policyRan = false;
+    const exitCode = await runTestPolicySchedulerTick(
+      {},
+      { tenantIds: ['ten_a'], dryRun: false },
+      {
+        policy: async () => { policyRan = true; return { summary: { mode: 'apply', tenant_count: 1, due_count: 0 }, exitCode: 0 }; },
+        companions: async () => ({ sweep: 'failed', scans: 'ok', exitCode: 1 }),
+        log: () => {},
+        error: () => {},
+      },
+    );
+    assert.equal(policyRan, true);
+    assert.notEqual(exitCode, 0);
   });
 });

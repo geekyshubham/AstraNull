@@ -177,4 +177,38 @@ describe('validation scan scheduling (dev-json)', () => {
     assert.equal(listValidationScans(CTX, { status: 'scheduled', runtimeConfig: RUNTIME, now: due }).count, 0);
     assert.ok(actions().includes('validation_scan.series_stopped'));
   });
+
+  it('keeps a recurring series alive when a single scheduled occurrence is cancelled (finding 1)', () => {
+    const scan = scheduledScan({ recurrence: 'daily' });
+    // Cancel the scheduled occurrence BEFORE it ever dispatches, without cancel_series.
+    const cancelDue = new Date('2026-06-01T12:30:00.000Z');
+    const cancelled = cancelValidationScan(CTX, scan.id, { reason: 'skip today', now: cancelDue });
+    assert.equal(cancelled.status, 'cancelled');
+    // The series must not silently end: a successor scheduled run exists.
+    const scheduled = listValidationScans(CTX, { status: 'scheduled', runtimeConfig: RUNTIME, now: cancelDue });
+    assert.equal(scheduled.count, 1);
+    const next = scheduled.items[0];
+    assert.equal(next.previous_scan_id, scan.id);
+    assert.equal(next.recurrence_series_id, scan.id);
+    assert.equal(next.scheduled_for, '2026-06-02T13:00:00.000Z');
+    assert.deepEqual(next.check_ids, scan.check_ids);
+    // Exactly one cancelled audit event, and it carries the continuation metadata (no duplicate).
+    const cancelledEvents = getStore().auditLog.filter((entry) => entry.action === 'validation_scan.cancelled'
+      && entry.resource_id === scan.id);
+    assert.equal(cancelledEvents.length, 1);
+    assert.equal(cancelledEvents[0].metadata.series_continued_scan_id, next.id);
+    assert.equal(cancelledEvents[0].metadata.next_scheduled_for, next.scheduled_for);
+  });
+
+  it('collapses a missed-run backlog into one future occurrence after downtime (finding 5)', () => {
+    const scan = scheduledScan({ recurrence: 'daily' });
+    // Scheduler was down 26 days; dispatch runs long after scheduled_for.
+    const lateDue = new Date('2026-06-27T13:00:01.000Z');
+    dispatchDueValidationScans(CTX, { now: lateDue, runtimeConfig: RUNTIME });
+    const scheduled = listValidationScans(CTX, { status: 'scheduled', runtimeConfig: RUNTIME, now: lateDue });
+    // Exactly one catch-up successor, scheduled in the FUTURE, not 26 back-to-back replays.
+    assert.equal(scheduled.count, 1);
+    assert.ok(new Date(scheduled.items[0].scheduled_for).getTime() > lateDue.getTime());
+    assert.equal(scheduled.items[0].scheduled_for, '2026-06-28T13:00:00.000Z');
+  });
 });

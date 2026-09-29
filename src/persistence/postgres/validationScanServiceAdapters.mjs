@@ -14,6 +14,7 @@ import {
   deriveScanStatus,
   isHourlyCapDenial,
   nextScanOccurrenceAt,
+  nextScanOccurrenceAfter,
   normalizeCancelReason,
   normalizeScanInput,
   paginateActivity,
@@ -706,9 +707,9 @@ export function createPostgresValidationScanServices(repositories, options = {})
   async function createNextOccurrence(actor, state, now) {
     const scan = state.scan;
     if (!scan.recurrence || scan.next_scan_id) return null;
-    const nextAt = nextScanOccurrenceAt(scan.recurrence, scan.scheduled_for ?? now);
-    if (!nextAt) return null;
     const seriesId = scan.recurrence_series_id ?? scan.id;
+    const nextAt = nextScanOccurrenceAfter(scan.recurrence, scan.scheduled_for ?? now, now);
+    if (!nextAt) return null;
     const occurrenceKey = scanOccurrenceKey(scan.tenant_id, seriesId, nextAt);
     let next = await repo.findScanByOccurrenceKey(state.ctx, occurrenceKey);
     let created = false;
@@ -773,6 +774,70 @@ export function createPostgresValidationScanServices(repositories, options = {})
         await services.cancelValidationScan(actor, next.id, { reason: current.cancel_reason ?? 'series_stopped', now });
       }
       throw err;
+    }
+    return next;
+  }
+
+  // Continue a recurring series after a single occurrence is cancelled without cancel_series.
+  // The successor is otherwise only created at dispatch, so cancelling a scheduled run that never
+  // dispatched would silently end the whole series. The new occurrence is anchored from now and is
+  // not linked via the cancelled scan's next_scan_id (that scan is terminal).
+  async function continueSeriesAfterCancel(actor, ctx, scan, steps, now) {
+    if (!scan.recurrence) return null;
+    const seriesId = scan.recurrence_series_id ?? scan.id;
+    const nextAt = nextScanOccurrenceAfter(scan.recurrence, scan.scheduled_for ?? now, now);
+    if (!nextAt) return null;
+    const occurrenceKey = scanOccurrenceKey(scan.tenant_id, seriesId, nextAt);
+    const existing = await repo.findScanByOccurrenceKey(ctx, occurrenceKey);
+    if (existing) return existing;
+    const checks = scan.check_ids.map((checkId) => getCheckById(checkId)).filter(Boolean);
+    const nextSteps = materializeSteps(
+      steps.map((step, position) => ({
+        position,
+        check_id: step.check_id,
+        target_id: step.target_id,
+        request_snapshot: step.request_snapshot,
+      })),
+      checks,
+      now,
+    );
+    const record = {
+      ...scan,
+      id: newId('scan'),
+      status: 'scheduled',
+      scheduled_for: nextAt,
+      recurrence_series_id: seriesId,
+      occurrence_key: occurrenceKey,
+      occurrence_index: (scan.occurrence_index ?? 0) + 1,
+      previous_scan_id: scan.id,
+      next_scan_id: null,
+      dispatched_at: null,
+      started_at: null,
+      completed_at: null,
+      abort_reason: null,
+      cancel_reason: null,
+      cancelled_by: null,
+      cancelled_by_role: null,
+      cancelled_at: null,
+      lease_token: null,
+      lease_owner: null,
+      lease_expires_at: null,
+      next_eligible_at: null,
+      revision: 1,
+      summary: computeScanSummary(nextSteps),
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+    };
+    const inserted = await repo.createNextOccurrence(ctx, record, nextSteps);
+    const next = inserted?.scan ?? null;
+    if (inserted?.created && next) {
+      await scanAudit(actor, next, SCAN_AUDIT_ACTIONS.scheduled, {
+        series_id: seriesId,
+        occurrence_index: next.occurrence_index,
+        scheduled_for: next.scheduled_for,
+        previous_scan_id: scan.id,
+        continued_after_cancel: true,
+      }, now);
     }
     return next;
   }
@@ -1183,6 +1248,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
       }
       const skipped = await skipRemainingSteps(state, 'scan_cancelled', now);
       const activeRunId = [...cancelledRunIds].at(-1) ?? null;
+      let continued = null;
       if (callOptions.cancel_series && scan.recurrence) {
         await scanAudit(ctx, state.scan, SCAN_AUDIT_ACTIONS.seriesStopped, { reason }, now);
         const seriesId = scan.recurrence_series_id ?? scan.id;
@@ -1193,6 +1259,11 @@ export function createPostgresValidationScanServices(repositories, options = {})
           if (next?.status !== 'scheduled' || next.id === scan.id) continue;
           await services.cancelValidationScan(ctx, next.id, { reason, cancel_series: true, now });
         }
+      } else if (scan.recurrence && !state.scan.next_scan_id) {
+        // Single-occurrence cancel: keep the series alive. Without this the successor is only ever
+        // created at dispatch, so cancelling a scheduled run that never dispatched silently ends
+        // every future run of the recurring scan.
+        continued = await continueSeriesAfterCancel(ctx, ctx, scan, state.steps, now);
       }
       await state.refreshSummary(now);
       await scanAudit(ctx, state.scan, SCAN_AUDIT_ACTIONS.cancelled, {
@@ -1202,6 +1273,7 @@ export function createPostgresValidationScanServices(repositories, options = {})
         cancelled_steps: cancelledSteps.length,
         skipped_steps: skipped.length,
         active_test_run_id: activeRunId,
+        ...(continued ? { series_continued_scan_id: continued.id, next_scheduled_for: continued.scheduled_for } : {}),
       }, now);
       return projectScan(ctx, state.scan);
     },

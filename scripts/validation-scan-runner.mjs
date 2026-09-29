@@ -209,6 +209,7 @@ export function summarizeScanAdvance(result) {
     status: safeCode(row.status, null),
     ...(row.reason ? { reason: safeCode(row.reason, 'advance_skipped') } : {}),
     ...(row.abort_reason ? { abort_reason: safeCode(row.abort_reason, 'aborted') } : {}),
+    ...(row.error ? { error: safeCode(row.error, 'advance_failed') ?? 'advance_failed' } : {}),
     ...(row.deferred_until ? { deferred_until: String(row.deferred_until) } : {}),
   };
 }
@@ -265,8 +266,14 @@ export async function runPostgresValidationScans(options) {
         const runnable = await service.listRunnableScans(ctx, { limit: options.limit });
         const advancedRows = [];
         for (const scan of Array.isArray(runnable) ? runnable : []) {
-          const advanced = await service.advanceScan(ctx, scan.id, { runtimeConfig: options.runtimeConfig });
-          advancedRows.push(summarizeScanAdvance(advanced ?? { scan_id: scan.id }));
+          // Isolate each scan: one scan throwing must not abort the remaining runnable scans (they
+          // would otherwise fall through to the per-tenant catch and be dropped as a batch).
+          try {
+            const advanced = await service.advanceScan(ctx, scan.id, { runtimeConfig: options.runtimeConfig });
+            advancedRows.push(summarizeScanAdvance(advanced ?? { scan_id: scan.id }));
+          } catch (err) {
+            advancedRows.push(summarizeScanAdvance({ scan_id: scan.id, error: safeCode(err?.code ?? err?.message, 'advance_failed') ?? 'advance_failed' }));
+          }
         }
         tenants.push({
           tenant_id: tenantId,

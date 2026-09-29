@@ -14,6 +14,7 @@ import {
   deferredStepEligibleAt,
   deriveScanStatus,
   nextScanOccurrenceAt,
+  nextScanOccurrenceAfter,
   normalizeCancelReason,
   normalizeScanInput,
   paginateActivity,
@@ -552,7 +553,9 @@ function scheduleDenied(ctx, scan, code, now, extra = {}) {
 
 function createNextOccurrence(ctx, scan, now) {
   if (!scan.recurrence || scan.next_scan_id) return null;
-  const nextAt = nextScanOccurrenceAt(scan.recurrence, scan.scheduled_for ?? now);
+  // Advance past now while preserving cadence alignment: on-time runs keep their wall-clock slot,
+  // but a catch-up after downtime collapses the missed backlog into one future run.
+  const nextAt = nextScanOccurrenceAfter(scan.recurrence, scan.scheduled_for ?? now, now);
   if (!nextAt) return null;
   const seriesId = scan.recurrence_series_id ?? scan.id;
   const occurrenceKey = scanOccurrenceKey(scan.tenant_id, seriesId, nextAt);
@@ -828,9 +831,9 @@ export function createValidationScan(ctx, body = {}, runtimeConfig = undefined, 
 
 export function listValidationScans(ctx, options = {}) {
   const store = ensureStoreShape();
-  for (const scan of store.validationScans) {
-    if (scan.tenant_id === ctx.tenantId) readPathAdvance(ctx, scan, options);
-  }
+  // A list read must not advance scans or start test runs. The Postgres adapter's list is a pure
+  // read (readPathAdvance runs only on single-scan get and activity reads), so advancing every scan
+  // here made dev behave differently from production and gave a read surprising side effects.
   let rows = store.validationScans.filter((scan) => scan.tenant_id === ctx.tenantId);
   if (options.target_group_id) rows = rows.filter((scan) => scan.target_group_id === options.target_group_id);
   if (options.status) {
@@ -951,6 +954,7 @@ export function cancelValidationScan(ctx, id, options = {}) {
   }
   const skipped = skipRemainingSteps(scan, 'scan_cancelled', now);
   const activeRunId = [...cancelledRunIds].at(-1) ?? null;
+  let continued = null;
   if (options.cancel_series && seriesRecurrence) {
     scan.recurrence = null;
     scanAudit(ctx, scan, SCAN_AUDIT_ACTIONS.seriesStopped, { reason });
@@ -960,6 +964,11 @@ export function cancelValidationScan(ctx, id, options = {}) {
       && row.status === 'scheduled'
       && (row.recurrence_series_id === seriesId || row.id === scan.next_scan_id));
     for (const next of upcoming) cancelValidationScan(ctx, next.id, { reason, cancel_series: true, now });
+  } else if (seriesRecurrence && !scan.next_scan_id) {
+    // Single-occurrence cancel: keep the series alive. The successor is otherwise only created at
+    // dispatch, so cancelling a scheduled run that never dispatched would silently end every future
+    // run. createNextOccurrence anchors from now and reuses this scan's step shape.
+    continued = createNextOccurrence(ctx, scan, now);
   }
   refreshSummary(scan, now);
   scanAudit(ctx, scan, SCAN_AUDIT_ACTIONS.cancelled, {
@@ -969,6 +978,7 @@ export function cancelValidationScan(ctx, id, options = {}) {
     cancelled_steps: cancelledSteps.length,
     skipped_steps: skipped.length,
     active_test_run_id: activeRunId,
+    ...(continued ? { series_continued_scan_id: continued.id, next_scheduled_for: continued.scheduled_for } : {}),
   });
   persistStore();
   return projectScan(ctx, scan);

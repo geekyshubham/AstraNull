@@ -333,6 +333,37 @@ export function nextScanOccurrenceAt(recurrence, from) {
   );
 }
 
+/**
+ * The next occurrence strictly after `now`, preserving the series' wall-clock cadence alignment.
+ *
+ * Starts from `from` (normally the just-run occurrence's scheduled_for) and advances one cadence
+ * step at a time until the result is after `now`. On-time and slightly-late runs return exactly the
+ * next aligned slot (no clock drift). After long scheduler downtime this collapses the missed
+ * backlog into a single future run instead of replaying every missed occurrence back-to-back.
+ *
+ * @param {unknown} recurrence
+ * @param {Date|string|number} from
+ * @param {Date|string|number} now
+ * @param {number} [maxSteps] safety cap on iterations
+ * @returns {string|null} ISO timestamp or null when the recurrence produces no next run
+ */
+export function nextScanOccurrenceAfter(recurrence, from, now, maxSteps = 4000) {
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime();
+  let cursor = from instanceof Date ? from : new Date(from);
+  for (let step = 0; step < maxSteps; step += 1) {
+    const nextIso = nextScanOccurrenceAt(recurrence, cursor);
+    if (!nextIso) return null;
+    const nextMs = new Date(nextIso).getTime();
+    if (nextMs > nowMs) return nextIso;
+    // Defensive: a cadence must strictly advance. If it ever returns a non-advancing time, stop
+    // rather than spin, and let the fallback below place the next slot after now.
+    if (nextMs <= cursor.getTime()) break;
+    cursor = new Date(nextIso);
+  }
+  // Cap hit (e.g. sub-daily cadence after years of downtime): fall back to the next slot after now.
+  return nextScanOccurrenceAt(recurrence, new Date(nowMs));
+}
+
 export function scanOccurrenceKey(tenantId, seriesId, scheduledFor) {
   const scheduled = normalizeIsoTimestamp(scheduledFor, 'scheduled_for');
   return createHash('sha256')

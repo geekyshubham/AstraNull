@@ -250,6 +250,41 @@ describe('validation scan operator runner', () => {
     );
   });
 
+  it('isolates a failing advance so other runnable scans still advance (finding 6)', async () => {
+    const advanced = [];
+    const recorder = {};
+    const createPostgresRuntimeFn = fakeRuntime({
+      async dispatchDueValidationScans() { return []; },
+      async listRunnableScans() {
+        return [{ id: 'scan_bad', status: 'running' }, { id: 'scan_good', status: 'running' }];
+      },
+      async advanceScan(_ctx, id) {
+        advanced.push(id);
+        if (id === 'scan_bad') throw new Error('boom for postgres://user:secret@db');
+        return { scan_id: id, acquired: true, waiting: false, status: 'completed' };
+      },
+    }, recorder);
+
+    const tenants = await runPostgresValidationScans({
+      env: {}, tenantIds: ['ten_a'], dryRun: false, limit: 5,
+      workerId: 'scan-runner-1', runtimeConfig: RUNTIME_CONFIG, createPostgresRuntimeFn,
+    });
+
+    // Both scans were attempted; the bad one did not abort the good one.
+    assert.deepEqual(advanced, ['scan_bad', 'scan_good']);
+    assert.equal(recorder.closed, 1);
+    const [tenant] = tenants;
+    // The tenant is NOT marked tenant_processing_failed; only the bad scan carries an error.
+    assert.equal(tenant.error, undefined);
+    assert.equal(tenant.runnable_count, 2);
+    const bad = tenant.advanced.find((row) => row.scan_id === 'scan_bad');
+    const good = tenant.advanced.find((row) => row.scan_id === 'scan_good');
+    assert.equal(good.status, 'completed');
+    assert.ok(bad.error);
+    // No secret leaks into the summary.
+    assert.equal(JSON.stringify(tenants).includes('user:secret'), false);
+  });
+
   it('summarizes dispatch and advance results with sanitized codes and builds the artifact', async () => {
     assert.deepEqual(summarizeScanDispatch({ scan_id: 'scan_1', dispatched: false, denied: 'bad code with spaces' }), {
       scan_id: 'scan_1', dispatched: false, denied: 'schedule_denied',

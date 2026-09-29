@@ -238,6 +238,26 @@ describe('validation scans (dev-json): stop and activity', () => {
 describe('validation scans (dev-json): parity guards', () => {
   beforeEach(() => freshStore());
 
+  it('does not start a run or advance scans when listing (finding 9)', () => {
+    // A scheduled scan that is already due.
+    const scan = createValidationScan(
+      CTX,
+      { target_group_id: 'tg_1', target_id: 'tgt_1', check_ids: ['dns.authoritative_response.safe'], scheduled_for: '2026-06-01T13:00:00.000Z' },
+      RUNTIME,
+      { now: new Date('2026-06-01T12:00:00.000Z') },
+    );
+    assert.equal(scan.status, 'scheduled');
+    const before = getStore().testRuns.length;
+    // Listing at a time when the scan is due must NOT dispatch it or start a run (parity with
+    // Postgres, whose list is a pure read).
+    const listed = listValidationScans(CTX, { runtimeConfig: RUNTIME, now: new Date('2026-06-01T13:00:01.000Z') });
+    assert.equal(listed.items[0].status, 'scheduled');
+    assert.equal(getStore().testRuns.length, before);
+    // The single-scan read path still advances (unchanged behavior).
+    const got = getValidationScan(CTX, scan.id, { runtimeConfig: RUNTIME, now: new Date('2026-06-01T13:00:01.000Z') });
+    assert.equal(got.status, 'running');
+  });
+
   it('cancel also stops an active child run that is not linked to its step yet', () => {
     const scan = createValidationScan(CTX, { target_group_id: 'tg_1', check_ids: CHECKS }, RUNTIME);
     const stored = getStore().validationScans.find((row) => row.id === scan.id);

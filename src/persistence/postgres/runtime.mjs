@@ -194,12 +194,21 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
   /** @type {import('pg').Pool | undefined} */
   let pool;
   let closed = false;
+  /** @type {{ close?: () => Promise<void> } | undefined} */
+  let validationScansRepo;
 
   const close = async () => {
     if (closed) {
       return;
     }
     closed = true;
+    if (validationScansRepo?.close) {
+      try {
+        await validationScansRepo.close();
+      } catch {
+        // best-effort: never let lock-pool teardown block the main pool close
+      }
+    }
     if (pool) {
       await closePoolFn(pool);
     }
@@ -240,6 +249,7 @@ export async function createPostgresRuntime(env = process.env, options = {}) {
         repositories[key] = factory(pool, { auditRepository });
       } else repositories[key] = factory(pool);
     }
+    validationScansRepo = repositories.validationScans;
 
     // Kept outside POSTGRES_RUNTIME_REPOSITORY_KEYS so that stable repository facade
     // remains backward compatible while the production service gains its private ledger.
