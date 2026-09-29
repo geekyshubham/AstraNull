@@ -389,3 +389,29 @@ Rollback (code only; migrations `0054`–`0057` are additive and older images ig
 (`docker image inspect --format '{{.Id}}' astranull:<prior-sha>`), then
 `sudo -E docker compose up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`.
 Database restore uses the newest pre-deploy artifact with `ops/aws/restore.sh` (destructive; change approval required).
+
+## Production release 2026-09-29 (`db97b3ae`)
+
+Commit `db97b3ae015a568a02a30e483bc8faf46cdcc3e9` (validation-scan/scheduler review fixes, ADR-0007
+reflector guardrails, portal browser-review fixes, tab accessibility) was released by hand. The
+CI `Deploy AWS` workflow (run `36589216954`) passed CI but failed at SSH: its host/key secrets predate
+the 2026-09-02 cutover and the runners are not on the SSH allow-list. Nothing on the host changed
+during that failed run.
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` of the exact commit, SHA-256 `25c95f95901f8f186dd8598471c5b51f16e72a6b8824a20da22de19c2581aa76`, verified on host, extracted to `/opt/astranull-release-db97b3ae015a568a02a30e483bc8faf46cdcc3e9` |
+| Image | `astranull:db97b3ae…` → `sha256:8040329d747649ca40cea835d6a2dc1c09c3acc8da9be84d524c045745471f81`; served `react-app.js`/`.css` byte-identical to the commit |
+| Backup | `/opt/astranull-backups/postgres-2026-09-29T19-42-19-151Z-4abd26381fdb.dump.enc` (+ manifest), encrypted SHA-256 `16fc277ab373…`, `pg_restore --list` parsed, `postgres-restore-drill --validate-only` ok, root-owned mode 600, no plaintext left |
+| Migrate | `migrate-postgres: ok`, schema head unchanged at `0057_waf_offensive_workflow` (no new migrations); app/backup role grants re-applied |
+| Activate | `compose up --no-build --force-recreate --wait` of control-plane, probe-worker, password-recovery-worker, test-policy-runner — all healthy on the new image; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); public pages 200; unauthenticated and header-auth API calls 401; CSP/COOP/Permissions-Policy/HSTS present; 0 control-plane errors. Read-only `scripts/live-portal-sweep.mjs` (6 roles × 32 routes × 2 viewports): 0 API, console, raw-error, access, control, jargon, overflow, or placeholder findings. Its 15 `pageErrors` were the sweep's own Playwright wait predicate blocked by the strict CSP (`eval at evaluate`; the bundle contains no `eval`/`new Function`) — all 15 pages replayed in a real browser with 0 exceptions |
+| SSH | Released from the existing allow-listed operator `/32` `123.252.204.182`. A temporary rule for `152.58.32.228/32` (`sgr-009c1da2afbd7ec86`) was added and revoked the same day (carrier NAT; it never connected) |
+
+Rollback (code only; no schema change in this release): from `/opt/astranull`, export all three
+`ASTRANULL_*_IMAGE_ID` variables as `sha256:bc5f0592feb5b0756f12796884a1ac65408fb347105095ef41c08ff0a1137c7f`
+(`astranull:4057dd1f…`), then
+`sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`.
+
+Open: point the `ASTRANULL_AWS_HOST` / `ASTRANULL_AWS_KNOWN_HOSTS` secrets at this host and give the
+deploy job a reachable path (e.g. SSM instead of public SSH) so pushes to `main` deploy again.
