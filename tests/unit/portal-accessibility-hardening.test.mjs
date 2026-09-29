@@ -63,7 +63,9 @@ describe('portal accessibility hardening', () => {
     assert.match(proof, /className="truth-table-viz" tabIndex=\{0\} role="region" aria-labelledby="truth-table-heading"/);
     assert.match(heatmap, /className="heatmap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="Vector coverage summary matrix, scrollable"/m);
     assert.doesNotMatch(heatmap, /HEATMAP_CELL_STYLE|style=\{HEATMAP_CELL_STYLE/);
-    assert.match(install, /className="codeblock"[\s\S]*role="tabpanel"[\s\S]*aria-label=\{`\$\{activeTab\.label\} commands`\}[\s\S]*tabIndex=\{0\}/m);
+    // The scrollable command block is a tab panel, so it is named by its tab (aria-labelledby).
+    assert.match(install, /className="codeblock"[\s\S]*role="tabpanel"[\s\S]*aria-labelledby=\{installTabId\(tab\)\}[\s\S]*tabIndex=\{0\}/m);
+    assert.match(install, /getTabId=\{installTabId\}/);
     assert.match(landing, /className="public-compare table-wrap"\s*tabIndex=\{0\}\s*role="region"\s*aria-label="AstraNull capability comparison, scrollable"/m);
     assert.match(css, /@media \(max-width: 900px\)[\s\S]*?\.public-compare \{\s*overflow-x: auto;/m);
     assert.match(css, /pre\.verdict-explanation-value[\s\S]*overflow: visible/);

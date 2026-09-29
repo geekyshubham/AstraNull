@@ -29,6 +29,25 @@ describe('target CSV parsing', () => {
     assert.equal(parseTargetCsv('a,b,c,d\n').error, 'invalid_csv');
   });
 
+  it('accepts a headerless kind,value row whose first cell is also a header alias (finding 2)', () => {
+    // `fqdn` is a valid header alias AND a valid kind. A data row `fqdn,api.example.com` must be
+    // read as kind=fqdn,value=api.example.com, not mistaken for a header (which rejected the value).
+    assert.deepEqual(parseTargetCsv('fqdn,api.example.com\n').rows, [
+      { row: 1, kind: 'fqdn', value: 'api.example.com', expected_behavior: null },
+    ]);
+    assert.equal(parseTargetCsv('fqdn,api.example.com\n').errors.length, 0);
+    // A genuine all-known header row still parses as a header.
+    assert.deepEqual(parseTargetCsv('kind,value\nfqdn,b.example.com\n').rows, [
+      { row: 2, kind: 'fqdn', value: 'b.example.com', expected_behavior: null },
+    ]);
+    // A header-only first cell (never a valid kind) with an unknown column is still a header, so it
+    // rejects the unknown column rather than silently treating it as data.
+    const unknownCol = parseTargetCsv('value,owner\ncsv-f.example.com,alice\n');
+    assert.equal(unknownCol.error, 'invalid_csv');
+    assert.equal(unknownCol.status, 400);
+    assert.match(unknownCol.message, /Unsupported CSV columns: owner/);
+  });
+
   it('reports ragged rows, unterminated quotes, port columns, and size limits', () => {
     assert.deepEqual(parseTargetCsv('kind,value\nfqdn\n').errors.map((entry) => entry.row), [2]);
     assert.equal(parseTargetCsv('value\n"a.example.com\n').error, 'invalid_csv');
@@ -52,6 +71,28 @@ describe('target CSV parsing', () => {
       [4, 'target_exists'],
       [5, 'invalid_target'],
     ]);
+  });
+
+  it('client preview agrees with the server on header detection', async () => {
+    const { summarizeTargetCsv } = await import('../../apps/web/react/src/lib/target-csv-import.ts');
+    const cases = [
+      'fqdn,api.example.com\n',
+      'fqdn,a.example.com\nfqdn,b.example.com\n',
+      'value,owner\ncsv-f.example.com,alice\n',
+      'kind,value\nfqdn,b.example.com\n',
+      'ip,label\n192.0.2.1,edge\n',
+      'tcp,a.example.com:443\n',
+      'a.example.com\nb.example.com\n',
+    ];
+    for (const csv of cases) {
+      const server = parseTargetCsv(csv);
+      // The server either returns rows (first data row is 2 when a header was consumed) or rejects
+      // a header's unknown column.
+      const serverHeader = server.rows ? server.rows[0].row === 2 : /Unsupported CSV columns/.test(server.message ?? '');
+      const client = summarizeTargetCsv(csv);
+      assert.equal(client.hasHeader, serverHeader, `header mismatch for ${JSON.stringify(csv)}`);
+      if (server.rows) assert.equal(client.rowCount, server.rows.length + server.errors.length, `row count for ${JSON.stringify(csv)}`);
+    }
   });
 
   it('extracts the named multipart file field', () => {

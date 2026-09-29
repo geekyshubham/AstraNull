@@ -1,4 +1,5 @@
 import { roleHasPermission } from '../../../../../src/contracts/roles.mjs';
+import { staffRoleHasPermission } from '../../../../../src/contracts/staffRoles.mjs';
 
 /** Align with isStaffSocRole in api.ts — operational SOC staff only. */
 const STAFF_SOC_ROLES = new Set(['soc_analyst', 'soc_lead']);
@@ -31,7 +32,10 @@ export function canAccessRoute(role, routeId, context = {}) {
   const staffRole = String(context.staffRole ?? '').trim().toLowerCase();
 
   if (STAFF_ONLY_ROUTES.has(routeId)) {
-    return principal === 'staff';
+    if (principal !== 'staff') return false;
+    // The tenant record API requires staff:tenant:read (SOC roles lack it). Without this gate a
+    // SOC analyst lands on a page of fallback values presented as the tenant's real state.
+    return routeId !== 'tenant-detail' || staffRoleHasPermission(staffRole, 'staff:tenant:read');
   }
 
   if (STAFF_SOC_ROUTES.has(routeId)) {

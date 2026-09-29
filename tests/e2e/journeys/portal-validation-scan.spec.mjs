@@ -12,6 +12,7 @@ import {
 } from '../../helpers/portal-playwright-server.mjs';
 import {
   gotoPortalRoute,
+  waitForPortalRouteSettled,
   injectPortalDevHeadersSession,
   PORTAL_AUDITOR_SESSION,
 } from '../../helpers/portal-playwright-session.mjs';
@@ -63,6 +64,9 @@ function stepRows(page) {
 }
 
 async function expectNoBlockingAxeViolations(page, selector) {
+  // In-app hash navigation (not only gotoPortalRoute) replays the route-enter fade; axe must
+  // sample settled colors or muted copy reads as #727272 instead of #787878 and fails AA.
+  await waitForPortalRouteSettled(page);
   const builder = new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']);
   const results = await (selector ? builder.include(selector) : builder).analyze();
   const blocking = results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''));

@@ -170,3 +170,21 @@ export function formatRunDuration(run: Record<string, unknown>, fallback = '—'
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return fallback;
   return formatDurationSeconds((end - start) / 1000, fallback);
 }
+
+/** Trigger a client-side download of a JSON payload (evidence artifact export with custody manifest). */
+export function triggerJsonDownload(filename: string, payload: unknown) {
+  triggerTextDownload(filename, JSON.stringify(payload, null, 2), 'application/json');
+}
+
+/** Trigger a client-side download of already-serialized content (report Markdown/HTML exports). */
+export function triggerTextDownload(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}

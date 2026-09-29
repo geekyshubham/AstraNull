@@ -322,6 +322,9 @@ export function buildPortalBaselineStore() {
         target_group_id: ids.targetGroupId,
         target_id: ids.targetId,
         test_run_id: 'run_checkout_1',
+        // Real findings carry the producing check (src/services/findings.mjs); without it the
+        // finding's Retest button can only report "Retest details are missing".
+        check_id: ids.checkId,
         severity: 's2',
         title: 'Origin direct bypass',
         state: 'open',

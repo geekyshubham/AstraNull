@@ -6781,6 +6781,12 @@ textarea,
   animation: tab-rise 240ms var(--ease-out-soft) both;
 }
 
+/* Tab panels wrapped only for ARIA pairing (role, id, aria-labelledby). display: contents keeps the
+   wrapper out of the box tree, so the parent's flex/grid gap and card layout are unchanged. */
+.tab-panel {
+  display: contents;
+}
+
 /* Reveal never latches content hidden: the base class is visible, and the
    pre-animation state is only armed once JS has confirmed motion is allowed and
    an observer is watching. */

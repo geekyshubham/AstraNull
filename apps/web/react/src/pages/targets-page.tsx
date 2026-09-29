@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { requestJson } from '../lib/api';
+import { apiErrorMessage } from '../lib/error-messages';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import { formatDate, formatNumber } from '../lib/utils';
@@ -221,7 +222,7 @@ export function TargetsPage({
       setShowAdd(false);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not add the domain.');
+      setError(apiErrorMessage(err, 'Could not add the domain.'));
     } finally {
       setBusy('');
     }
@@ -246,7 +247,7 @@ export function TargetsPage({
       setMessage(`${value} removed from declared scope.`);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not remove the target.');
+      setError(apiErrorMessage(err, 'Could not remove the target.'));
     } finally {
       setBusy('');
     }

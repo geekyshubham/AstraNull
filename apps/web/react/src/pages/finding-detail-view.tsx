@@ -5,10 +5,11 @@ import { FindingExplanationPanel } from '../components/findings/finding-explanat
 import { populateFindingAffectedTargets, populateFindingEvidence, readFindingRemediationFields } from '../lib/finding-detail';
 import { VerifyChip } from '../lib/verify-chip';
 import { requestJson } from '../lib/api';
+import { apiErrorMessage } from '../lib/error-messages';
 import { sessionHasPermission } from '../lib/dataset-access.mjs';
 import { buildDetailHref } from '../lib/route-params';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
-import { formatDate, formatSeverityLabel } from '../lib/utils';
+import { formatDate, formatSeverityLabel, triggerJsonDownload } from '../lib/utils';
 import { AnchorButton, Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { EmptyState } from '../components/ui/empty-state';
@@ -288,7 +289,7 @@ export function FindingDetailView({
       setMessage(success);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed.');
+      setError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
@@ -336,7 +337,12 @@ export function FindingDetailView({
   }
 
   async function exportBundle() {
-    await runAction(`export-${entityId}`, () => requestJson(config, session, `/v1/findings/${entityId}/export`, { method: 'POST' }), 'Evidence bundle export requested.');
+    // The export endpoint returns the sealed bundle synchronously (payload + custody manifest);
+    // there is no queued job, so hand the file to the operator instead of discarding it.
+    await runAction(`export-${entityId}`, async () => {
+      const bundle = await requestJson(config, session, `/v1/findings/${encodeURIComponent(entityId)}/export`, { method: 'POST' });
+      triggerJsonDownload(`finding-${entityId}-evidence.json`, bundle);
+    }, 'Evidence bundle downloaded with its SHA-256 custody manifest.');
   }
 
   const affectedColumns: TableColumn<DataItem>[] = [

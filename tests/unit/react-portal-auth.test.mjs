@@ -351,6 +351,18 @@ describe('react portal route access', () => {
     assert.equal(canAccessRoute('admin', 'tenant-detail', { principal: 'staff', staffRole: 'support_engineer' }), true);
   });
 
+  it('gates staff tenant-detail on staff:tenant:read so SOC roles never see fallback tenant state', () => {
+    for (const staffRole of ['internal_admin', 'billing_ops', 'support_engineer', 'security_admin']) {
+      assert.equal(canAccessRoute('admin', 'tenant-detail', { principal: 'staff', staffRole }), true, staffRole);
+    }
+    for (const staffRole of ['soc_analyst', 'soc_lead']) {
+      assert.equal(canAccessRoute('admin', 'tenant-detail', { principal: 'staff', staffRole }), false, staffRole);
+      // SOC staff still reach the admin console for approvals (staff:approval:read).
+      assert.equal(canAccessRoute('admin', 'admin', { principal: 'staff', staffRole }), true, staffRole);
+    }
+    assert.equal(canAccessRoute('admin', 'tenant-detail', { principal: 'customer' }), false);
+  });
+
   it('aligns staff SOC route gate with operational SOC roles only', () => {
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'admin' }), false);
     assert.equal(canAccessRoute('admin', 'internal-soc', { principal: 'staff', staffRole: 'internal_admin' }), false);

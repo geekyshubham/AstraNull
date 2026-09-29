@@ -91,4 +91,20 @@ describe('portal demo seed fixture', () => {
     assert.equal(result.error, undefined, JSON.stringify(result));
     assert.equal(result.state, 'scheduled');
   });
+
+  it('seeds only test policies the policy contract accepts, so demo edits (Pause/Resume) work', async () => {
+    const { normalizePolicyInput } = await import('../../src/contracts/testPolicyManagement.mjs');
+    const { buildPortalBaselineStore } = await import('../fixtures/portal-baseline/seed.mjs').catch(() => ({}));
+    const stores = [['portal-demo', buildPortalDemoStore()]];
+    if (buildPortalBaselineStore) stores.push(['portal-baseline', buildPortalBaselineStore()]);
+    for (const [name, store] of stores) {
+      for (const policy of store.testPolicies ?? []) {
+        // A PATCH re-validates the merged record, so an invalid seed breaks every later edit.
+        assert.doesNotThrow(
+          () => normalizePolicyInput({ state: 'paused' }, { current: policy }),
+          `${name} policy ${policy.id} (cadence=${policy.cadence}, state=${policy.state}) is not editable`,
+        );
+      }
+    }
+  });
 });

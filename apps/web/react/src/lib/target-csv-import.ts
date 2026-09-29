@@ -5,7 +5,21 @@ export const TARGET_CSV_MAX_BYTES = 256 * 1024;
 export const TARGET_CSV_MAX_ROWS = 1000;
 export const TARGET_CSV_FORM_FIELD = 'file';
 
-const HEADER_CELLS = new Set(['value', 'target', 'kind', 'type', 'fqdn', 'hostname', 'domain', 'url', 'ip', 'port', 'label', 'name']);
+// Mirrors src/lib/targetCsvImport.mjs HEADER_ALIASES (+ port). Kept in sync by
+// tests/unit/target-csv-import.test.mjs, which compares both classifiers.
+const HEADER_CELLS = new Set(['kind', 'type', 'value', 'target', 'fqdn', 'hostname', 'domain', 'url', 'ip', 'expected_behavior', 'label', 'name', 'notes', 'port']);
+// Header aliases that are also valid target kinds; a first cell like `fqdn` alone is ambiguous.
+const KIND_ALIAS_CELLS = new Set(['fqdn', 'hostname', 'domain', 'url', 'ip']);
+
+/**
+ * Same rule as the server: a header when the first cell is a header-only alias, or every cell is a
+ * known alias. `fqdn,api.example.com` is therefore a headerless kind,value data row.
+ */
+export function csvFirstRowIsHeader(cells: string[]): boolean {
+  if (cells.length === 0) return false;
+  const firstIsHeaderOnly = HEADER_CELLS.has(cells[0]) && !KIND_ALIAS_CELLS.has(cells[0]);
+  return firstIsHeaderOnly || cells.every((cell) => HEADER_CELLS.has(cell));
+}
 
 export type TargetCsvSummary = {
   rowCount: number;
@@ -28,7 +42,7 @@ export function summarizeTargetCsv(text: string): TargetCsvSummary {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length === 0) return { rowCount: 0, hasHeader: false, columns: [] };
   const firstCells = splitCsvCells(lines[0]).map((cell) => cell.toLowerCase());
-  const hasHeader = firstCells.some((cell) => HEADER_CELLS.has(cell));
+  const hasHeader = csvFirstRowIsHeader(firstCells);
   return {
     rowCount: hasHeader ? lines.length - 1 : lines.length,
     hasHeader,

@@ -809,8 +809,7 @@ export function NotificationsPage({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Notification action failed.'));
+      setError(apiErrorMessage(err, 'Notification action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -1813,8 +1812,7 @@ export function SocConsolePage({
       }
       return payload;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'SOC action failed.'));
+      setError(apiErrorMessage(err, 'SOC action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -1842,8 +1840,7 @@ export function SocConsolePage({
         setQueueRefreshing(false);
       }
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Kill switch action failed.'));
+      setError(apiErrorMessage(err, 'Kill switch action failed.'));
     } finally {
       setBusy('');
     }

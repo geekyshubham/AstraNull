@@ -29,6 +29,10 @@ function installPanelId(tabId: InstallTabId) {
   return `agent-install-panel-${tabId}`;
 }
 
+function installTabId(tabId: InstallTabId) {
+  return `agent-install-tab-${tabId}`;
+}
+
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
@@ -198,20 +202,21 @@ export function AgentInstallMatrix({
           className="tabs-wrap"
           ariaLabel="Agent installation packages"
           getPanelId={installPanelId}
+          getTabId={installTabId}
         />
         {snippet ? (
           <pre
             className="codeblock"
             id={installPanelId(tab)}
             role="tabpanel"
-            aria-label={`${activeTab.label} commands`}
+            aria-labelledby={installTabId(tab)}
             tabIndex={0}
             style={INSTALL_CODE_STYLE}
           >
             {snippet}
           </pre>
         ) : (
-          <div id={installPanelId(tab)} role="tabpanel" tabIndex={0} className="form-banner neutral">
+          <div id={installPanelId(tab)} role="tabpanel" aria-labelledby={installTabId(tab)} tabIndex={0} className="form-banner neutral">
             {release
               ? `${activeTab.label} distribution metadata is not published by the accepted release. No commands are available.`
               : 'Commands remain disabled until an active signed tarball release and active tenant-approved trust key are available.'}

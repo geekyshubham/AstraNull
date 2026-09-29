@@ -105,6 +105,20 @@ export function resolvePortalRouteUrl(routeId, baseUrl, options = {}) {
 export async function gotoPortalRoute(page, routeId, baseUrl, options = {}) {
   const url = resolvePortalRouteUrl(routeId, baseUrl, options);
   await page.goto(url, { waitUntil: 'networkidle', timeout: 60_000 });
+  await waitForPortalRouteSettled(page);
+}
+
+/**
+ * Wait for `.route-transition.is-entering` (opacity 0 → 1) to finish. Content assertions pass
+ * mid-fade, but anything that samples rendered pixels (axe color-contrast, screenshots) sees
+ * partly transparent text and fails intermittently.
+ */
+export async function waitForPortalRouteSettled(page) {
+  await page.waitForFunction(() => {
+    const transition = document.querySelector('.route-transition');
+    return !transition
+      || (!transition.classList.contains('is-entering') && getComputedStyle(transition).opacity === '1');
+  }, undefined, { timeout: 10_000 });
 }
 
 /**

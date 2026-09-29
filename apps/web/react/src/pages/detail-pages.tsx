@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { Activity, Bot, ClipboardList, FileCheck2, FileText, Network, ShieldCheck, Siren, Target, TriangleAlert, UserCog, Users } from 'lucide-react';
 import { FindingExplanationPanel } from '../components/findings/finding-explanation-panel';
 import { Badge, type BadgeProps } from '../components/ui/badge';
@@ -11,11 +11,12 @@ import { DataTable, type TableColumn } from '../components/ui/table';
 import { Select } from '../components/ui/select';
 import { Tabs } from '../components/ui/tabs';
 import { buildApiHeaders, isStaffSocRole, requestJson, requestSocJson } from '../lib/api';
+import { apiErrorMessage, humanizeErrorCode } from '../lib/error-messages';
 import { ROUTE_BY_ID } from '../lib/navigation';
 import { buildDetailHref, getRouteEntityId, getRouteTenantId } from '../lib/route-params';
 import { buildEvidenceCustodyManifest, CUSTODY_CONTENT_CANONICALIZATION } from '../lib/custody';
 import type { DataItem, PortalConfig, PortalData, RouteId, Session } from '../lib/types';
-import { formatDate, formatDurationSeconds, formatSeverityLabel, scoreTone } from '../lib/utils';
+import { formatDate, formatDurationSeconds, formatSeverityLabel, scoreTone, triggerJsonDownload, triggerTextDownload } from '../lib/utils';
 import { buildEnvironmentReadinessRows, hasEvidenceBackedVerdict } from '../lib/environments';
 import { AgentHeartbeatPanel } from '../components/agents/agent-heartbeat-panel';
 import { AgentPlacementPanel } from '../components/agents/agent-placement-panel';
@@ -236,16 +237,6 @@ function formatConfidencePercent(entity: DataItem) {
 
 
 
-/** Trigger a client-side download of a JSON payload (evidence artifact export with custody manifest). */
-function triggerJsonDownload(filename: string, payload: unknown) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
 
 /** Human-readable byte size for evidence artifact KPIs; returns '' when size is unknown so callers can omit gracefully. */
 function formatEvidenceSize(entity: DataItem): string {
@@ -790,41 +781,65 @@ function useEntityDetail<T extends DataItem>(
   const [detail, setDetail] = useState<T | null>(fallback);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(enabled && Boolean(path));
+  // Bumped by reload(): the detail is otherwise fetched only when `path` changes, so a mutation on
+  // the detail page (remove/add target, triage, ...) left the entity showing pre-mutation state.
+  const [reloadTick, setReloadTick] = useState(0);
+  const reloadWaitersRef = useRef<Array<() => void>>([]);
+  const reload = useCallback(() => new Promise<void>((resolve) => {
+    reloadWaitersRef.current.push(resolve);
+    setReloadTick((n) => n + 1);
+  }), []);
   // `fallback` is derived (data.<list>.find(...)) so it is a NEW object identity on
   // every render. Keeping it in the effect deps re-fires the fetch on any re-render and
   // cancels the in-flight request, so the detail can starve and never resolve under
   // render churn. Read it through a ref instead — deps below intentionally omit it.
   const fallbackRef = useRef(fallback);
   fallbackRef.current = fallback;
+  const loadedPathRef = useRef('');
 
   useEffect(() => {
+    const settleWaiters = () => {
+      const waiters = reloadWaitersRef.current;
+      reloadWaitersRef.current = [];
+      for (const resolve of waiters) resolve();
+    };
     if (!enabled || !path) {
       setDetail(fallbackRef.current);
       setLoading(false);
+      settleWaiters();
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    // A reload of the same entity keeps the current detail on screen (no skeleton, open dialogs
+    // stay mounted); only a new path shows the loading state.
+    const isReload = loadedPathRef.current === path;
+    if (!isReload) setLoading(true);
     setError('');
     requestJson(config, session, path)
       .then((payload) => {
-        if (!cancelled) setDetail(payload as T);
+        if (!cancelled) {
+          loadedPathRef.current = path;
+          setDetail(payload as T);
+        }
       })
       .catch((err) => {
         if (!cancelled) {
-          setDetail(fallbackRef.current);
-          setError(err instanceof Error ? err.message : 'Could not load entity detail.');
+          if (!isReload) setDetail(fallbackRef.current);
+          setError(apiErrorMessage(err, 'Could not load entity detail.'));
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          settleWaiters();
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [config, session, path, enabled]);
+  }, [config, session, path, enabled, reloadTick]);
 
-  return { detail, error, loading };
+  return { detail, error, loading, reload };
 }
 
 function useListBackedDetail<T extends DataItem>(
@@ -873,7 +888,7 @@ function useListBackedDetail<T extends DataItem>(
       .catch((err) => {
         if (!cancelled) {
           setDetail(fallbackRef.current);
-          setError(err instanceof Error ? err.message : 'Could not load entity detail.');
+          setError(apiErrorMessage(err, 'Could not load entity detail.'));
         }
       })
       .finally(() => {
@@ -976,7 +991,7 @@ function RunDetailView({
       setMessage(success);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed.');
+      setError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
@@ -1088,10 +1103,12 @@ function RunDetailView({
             <MetricCard label="Verdict" value={verdictDisplay} sub={`placement ${placementLevel}`} icon={ShieldCheck} tone={verdictValue ? verdictBadgeTone(verdictValue) : 'muted'} />
             <MetricCard label="Duration" value={formatRunDuration(entity)} sub={formatStatusLabel(status, 'pending')} icon={Activity} tone="muted" />
           </div>
-          <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections" />
+          <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Run detail sections"
+            getTabId={(id) => `run-detail-sections-tab-${id}`}
+            getPanelId={(id) => `run-detail-sections-panel-${id}`} />
 
           {tab === 'summary' ? (
-            <>
+            <div role="tabpanel" id="run-detail-sections-panel-summary" aria-labelledby="run-detail-sections-tab-summary" className="tab-panel"><>
               <div className="dash-grid">
                 <Card>
                   <CardHeader>
@@ -1158,11 +1175,11 @@ function RunDetailView({
                   )}
                 </CardContent>
               </Card>
-            </>
+            </></div>
           ) : null}
 
           {tab === 'timeline' ? (
-            <Card>
+            <div role="tabpanel" id="run-detail-sections-panel-timeline" aria-labelledby="run-detail-sections-tab-timeline" className="tab-panel"><Card>
               <CardHeader>
                 <CardTitle>Timeline</CardTitle>
                 <CardDescription>
@@ -1179,11 +1196,11 @@ function RunDetailView({
                   </p>
                 )}
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
 
           {tab === 'probe-agent' ? (
-            <div className="dash-grid">
+            <div role="tabpanel" id="run-detail-sections-panel-probe-agent" aria-labelledby="run-detail-sections-tab-probe-agent" className="tab-panel"><div className="dash-grid">
               <Card>
                 <CardHeader>
                   <CardTitle>Probe result</CardTitle>
@@ -1238,11 +1255,11 @@ function RunDetailView({
                   )}
                 </CardContent>
               </Card>
-            </div>
+            </div></div>
           ) : null}
 
           {tab === 'evidence' ? (
-            <div className="dash-grid">
+            <div role="tabpanel" id="run-detail-sections-panel-evidence" aria-labelledby="run-detail-sections-tab-evidence" className="tab-panel"><div className="dash-grid">
               <Card>
                 <CardHeader>
                   <CardTitle>Evidence artifacts</CardTitle>
@@ -1297,11 +1314,11 @@ function RunDetailView({
                   )}
                 </CardContent>
               </Card>
-            </div>
+            </div></div>
           ) : null}
 
           {tab === 'raw-events' ? (
-            <Card>
+            <div role="tabpanel" id="run-detail-sections-panel-raw-events" aria-labelledby="run-detail-sections-tab-raw-events" className="tab-panel"><Card>
               <CardHeader>
                 <CardTitle>Raw events</CardTitle>
                 <CardDescription>Read-only event records for this run. Only signed probes, authenticated agents, and internal control-plane events contribute to the proof panels.</CardDescription>
@@ -1319,7 +1336,7 @@ function RunDetailView({
                   />
                 )}
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
         </>
       ) : null}
@@ -1414,8 +1431,7 @@ function TenantDetailView({
       await onRefresh();
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Staff action failed.'));
+      setError(apiErrorMessage(err, 'Staff action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -1487,9 +1503,12 @@ function TenantDetailView({
       render: (item) => {
         const userId = getString(item, ['id'], '');
         if (getString(item, ['status']) === 'disabled') return '—';
+        // The resend endpoint is an owner-invite resend (resendOwnerInvite matches role=owner in both
+        // runtimes); offering it on other rows always failed with a misleading "record no longer exists".
+        const canResend = getString(item, ['role']).toLowerCase() === 'owner';
         return (
           <div className="row-actions">
-            <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void resendInvite(userId)}>Resend invite</Button>
+            {canResend ? <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void resendInvite(userId)}>Resend invite</Button> : null}
             <Button size="sm" variant="danger" disabled={busy !== ''} onClick={() => void disableUser(userId)}>Disable</Button>
           </div>
         );
@@ -1556,10 +1575,12 @@ function TenantDetailView({
             onChange={setTab}
             className="tabs-wrap"
             ariaLabel="Tenant detail sections"
+            getTabId={(id) => `tenant-detail-sections-tab-${id}`}
+            getPanelId={(id) => `tenant-detail-sections-panel-${id}`}
           />
 
           {tab === 'overview' ? (
-            <>
+            <div role="tabpanel" id="tenant-detail-sections-panel-overview" aria-labelledby="tenant-detail-sections-tab-overview" className="tab-panel"><>
               <div className="dash-grid">
                 <Card>
                   <CardHeader>
@@ -1610,11 +1631,11 @@ function TenantDetailView({
                   </form>
                 </CardContent>
               </Card>
-            </>
+            </></div>
           ) : null}
 
           {tab === 'billing' ? (
-            <>
+            <div role="tabpanel" id="tenant-detail-sections-panel-billing" aria-labelledby="tenant-detail-sections-tab-billing" className="tab-panel"><>
               <div className="dash-grid">
                 <Card>
                   <CardHeader>
@@ -1679,11 +1700,11 @@ function TenantDetailView({
                   </form>
                 </CardContent>
               </Card>
-            </>
+            </></div>
           ) : null}
 
           {tab === 'users' ? (
-            <Card>
+            <div role="tabpanel" id="tenant-detail-sections-panel-users" aria-labelledby="tenant-detail-sections-tab-users" className="tab-panel"><Card>
               <CardHeader>
                 <CardTitle>Tenant users</CardTitle>
                 <CardDescription>Recorded owner and member identities. Resend and disable actions remain staff-gated.</CardDescription>
@@ -1691,11 +1712,11 @@ function TenantDetailView({
               <CardContent>
                 <DataTable columns={userColumns} items={users} empty={<EmptyState icon={Users} title="No tenant users returned." body="No user record was present in this tenant detail response." />} />
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
 
           {tab === 'audit' ? (
-            <Card>
+            <div role="tabpanel" id="tenant-detail-sections-panel-audit" aria-labelledby="tenant-detail-sections-tab-audit" className="tab-panel"><Card>
               <CardHeader>
                 <CardTitle>Internal audit</CardTitle>
                 <CardDescription>Recent audit entries for this tenant.</CardDescription>
@@ -1703,7 +1724,7 @@ function TenantDetailView({
               <CardContent>
                 <DataTable columns={auditColumns} items={recentAudit} empty={<EmptyState icon={FileCheck2} title="No tenant audit entries returned." body="No recent_tenant_audit records were present in this response." />} />
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
         </>
       ) : null}
@@ -1909,7 +1930,7 @@ function AgentDetailView({
       setRevokeConfirmOpen(false);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Agent revoke failed.');
+      setError(apiErrorMessage(err, 'Agent revoke failed.'));
     } finally {
       setBusy('');
     }
@@ -1943,8 +1964,7 @@ function AgentDetailView({
       setMessage(formatMutationSuccessMessage('Placement test started.', result));
       await onRefresh();
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Placement test failed.'));
+      setError(apiErrorMessage(err, 'Placement test failed.'));
     } finally {
       setBusy('');
     }
@@ -1973,9 +1993,11 @@ function AgentDetailView({
         <MetricCard label="Placement" value={formatAgentPlacement(entity)} sub={targetGroupId ? `bound · ${targetGroupId}` : 'no group assignment'} icon={Target} tone={targetGroupId ? 'success' : 'warn'} />
         <MetricCard label="Status" value={formatAgentHealth(entity)} sub="From last heartbeat" icon={Activity} tone={getString(entity, ['status']) === 'online' ? 'success' : getString(entity, ['status']) === 'revoked' ? 'danger' : 'muted'} />
       </div>
-      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Agent detail sections" />
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Agent detail sections"
+            getTabId={(id) => `agent-detail-sections-tab-${id}`}
+            getPanelId={(id) => `agent-detail-sections-panel-${id}`} />
       {tab === 'overview' ? (
-        <>
+        <div role="tabpanel" id="agent-detail-sections-panel-overview" aria-labelledby="agent-detail-sections-tab-overview" className="tab-panel"><>
         <AgentHeartbeatPanel
           agent={entity}
           agentId={entityId}
@@ -2094,10 +2116,10 @@ function AgentDetailView({
           onCancel={() => setRevokeConfirmOpen(false)}
           onConfirm={() => void revokeAgent()}
         />
-        </>
+        </></div>
       ) : null}
       {tab === 'health' ? (
-        <Card>
+        <div role="tabpanel" id="agent-detail-sections-panel-health" aria-labelledby="agent-detail-sections-tab-health" className="tab-panel"><Card>
           <CardHeader>
             <CardTitle>Health signals</CardTitle>
             <CardDescription>Heartbeat freshness derived from agent record timestamps.</CardDescription>
@@ -2115,10 +2137,10 @@ function AgentDetailView({
               ip={declaredProbeIp}
             />
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       {tab === 'placement' ? (
-        <Card>
+        <div role="tabpanel" id="agent-detail-sections-panel-placement" aria-labelledby="agent-detail-sections-tab-placement" className="tab-panel"><Card>
           <CardHeader>
             <CardTitle>Placement review</CardTitle>
             <CardDescription>Target-group placement confidence from placement reviews.</CardDescription>
@@ -2139,10 +2161,10 @@ function AgentDetailView({
             <div><span>Observation mode</span><strong>{getString(placementReview, ['observation_mode'], '—')}</strong></div>
             <div><span>Summary</span><strong>{getString(placementReview, ['summary'], getNestedString(placementReviews, ['summary', 'summary'], 'Awaiting baseline traffic evidence.'))}</strong></div>
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       {tab === 'audit' ? (
-        <Card>
+        <div role="tabpanel" id="agent-detail-sections-panel-audit" aria-labelledby="agent-detail-sections-tab-audit" className="tab-panel"><Card>
           <CardHeader>
             <CardTitle>Audit trail</CardTitle>
             <CardDescription>Metadata-only lifecycle events for this agent.</CardDescription>
@@ -2158,7 +2180,7 @@ function AgentDetailView({
               />
             ) : <RoleRestrictedNotice title="The audit trail is not available for your role." />}
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       </>
       ) : null}
@@ -2369,7 +2391,7 @@ function EvidenceDetailView({
         setError('No displayed sealed contents are available for local digest recomputation. No server verification request was made.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Digest recomputation failed.');
+      setError(apiErrorMessage(err, 'Digest recomputation failed.'));
     } finally {
       setBusy('');
     }
@@ -2385,7 +2407,7 @@ function EvidenceDetailView({
       triggerJsonDownload(`evidence-${artifactId}.json`, { payload, custody });
       setMessage('Evidence artifact exported with a locally generated manifest over the downloaded JSON.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Export failed.');
+      setError(apiErrorMessage(err, 'Export failed.'));
     } finally {
       setBusy('');
     }
@@ -2565,7 +2587,7 @@ function HighScaleDetailView({
       await onRefresh();
     } catch (err) {
       setLastFailedUploadType(type);
-      setError(err instanceof Error ? err.message : 'Authorization artifact upload failed.');
+      setError(apiErrorMessage(err, 'Authorization artifact upload failed.'));
     } finally {
       setBusy('');
     }
@@ -2619,10 +2641,12 @@ function HighScaleDetailView({
             <MetricCard label="Scope" value={getString(targetGroup ?? {}, ['name'], getString(entity, ['target_group_id'], '—'))} sub={scopeHash ? 'scope hash recorded' : 'scope hash not returned'} icon={Target} tone={scopeHash ? 'info' : 'muted'} />
             <MetricCard label="Window" value={requestedWindowStart ? formatDate(requestedWindowStart) : '—'} sub={requestedWindowEnd ? `through ${formatDate(requestedWindowEnd)}` : 'requested window incomplete'} icon={Activity} tone={requestedWindowStart && requestedWindowEnd ? 'info' : 'muted'} />
           </div>
-          <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="High-scale request sections" />
+          <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="High-scale request sections"
+            getTabId={(id) => `high-scale-request-sections-tab-${id}`}
+            getPanelId={(id) => `high-scale-request-sections-panel-${id}`} />
 
           {tab === 'overview' ? (
-            <>
+            <div role="tabpanel" id="high-scale-request-sections-panel-overview" aria-labelledby="high-scale-request-sections-tab-overview" className="tab-panel"><>
               <div className="dash-grid">
                 <Card>
                   <CardHeader>
@@ -2678,11 +2702,11 @@ function HighScaleDetailView({
                   )}
                 </CardContent>
               </Card>
-            </>
+            </></div>
           ) : null}
 
           {tab === 'authorization' ? (
-            <Card>
+            <div role="tabpanel" id="high-scale-request-sections-panel-authorization" aria-labelledby="high-scale-request-sections-tab-authorization" className="tab-panel"><Card>
               <CardHeader><CardTitle>Authorization artifacts</CardTitle><CardDescription>Record metadata references for SOC review. This form does not upload or hash local file bytes.</CardDescription></CardHeader>
               <CardContent className="stack-tight">
                 <div className="artifact-upload-grid">
@@ -2744,18 +2768,18 @@ function HighScaleDetailView({
                   )}
                 </div>
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
 
           {tab === 'lifecycle' ? (
-            <Card>
+            <div role="tabpanel" id="high-scale-request-sections-panel-lifecycle" aria-labelledby="high-scale-request-sections-tab-lifecycle" className="tab-panel"><Card>
               <CardHeader><CardTitle>Lifecycle trail</CardTitle><CardDescription>Ordered transitions recorded for this request.</CardDescription></CardHeader>
               <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
-            </Card>
+            </Card></div>
           ) : null}
 
           {tab === 'provider' ? (
-            <Card>
+            <div role="tabpanel" id="high-scale-request-sections-panel-provider" aria-labelledby="high-scale-request-sections-tab-provider" className="tab-panel"><Card>
               <CardHeader><CardTitle>Provider checklist</CardTitle><CardDescription>Provider requirements and review states recorded for this request; no live provider telemetry is inferred.</CardDescription></CardHeader>
               <CardContent>
                 {providerChecklist.length === 0 ? <p className="muted">No provider checklist items returned.</p> : (
@@ -2772,7 +2796,7 @@ function HighScaleDetailView({
                   </div>
                 )}
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
         </>
       ) : null}
@@ -2868,7 +2892,7 @@ function SocRequestDetailView({
       await loadPostTestReport();
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Attach post-test report failed.');
+      setError(apiErrorMessage(err, 'Attach post-test report failed.'));
     } finally {
       setBusy('');
     }
@@ -2909,7 +2933,7 @@ function SocRequestDetailView({
       setMessage(`SOC ${action} completed.`);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'SOC action failed.');
+      setError(apiErrorMessage(err, 'SOC action failed.'));
     } finally {
       setBusy('');
     }
@@ -2929,7 +2953,7 @@ function SocRequestDetailView({
       const payload = await socFetch(`/internal/soc/high-scale/${encodeURIComponent(entityId)}/adapter-status`);
       setAdapterStatus(payload as DataItem);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Adapter status unavailable.');
+      setError(apiErrorMessage(err, 'Adapter status unavailable.'));
       setAdapterStatus(null);
     } finally {
       setBusy('');
@@ -3050,9 +3074,11 @@ function SocRequestDetailView({
           </ul>
         </CardContent>
       </Card>
-      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="SOC queue detail sections" />
+      <Tabs value={tab} options={tabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="SOC queue detail sections"
+            getTabId={(id) => `soc-queue-detail-sections-tab-${id}`}
+            getPanelId={(id) => `soc-queue-detail-sections-panel-${id}`} />
       {tab === 'workspace' ? (
-        <>
+        <div role="tabpanel" id="soc-queue-detail-sections-panel-workspace" aria-labelledby="soc-queue-detail-sections-tab-workspace" className="tab-panel"><>
         <Card>
           <CardHeader><CardTitle>Queue context</CardTitle><CardDescription>Lifecycle actions for this request</CardDescription></CardHeader>
           <CardContent className="kv-list">
@@ -3104,10 +3130,10 @@ function SocRequestDetailView({
             <CardContent><TimelinePanel items={lifecycleTrail.map((event) => ({ label: event.action, at: event.at }))} /></CardContent>
           </Card>
         </div>
-        </>
+        </></div>
       ) : null}
       {tab === 'artifacts' ? (
-        <Card>
+        <div role="tabpanel" id="soc-queue-detail-sections-panel-artifacts" aria-labelledby="soc-queue-detail-sections-tab-artifacts" className="tab-panel"><Card>
           <CardHeader><CardTitle>Authorization artifacts</CardTitle></CardHeader>
           <CardContent>
             {artifacts.length === 0 ? <p className="muted">No artifacts uploaded.</p> : (
@@ -3132,10 +3158,10 @@ function SocRequestDetailView({
               </div>
             )}
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       {tab === 'provider' ? (
-        <Card>
+        <div role="tabpanel" id="soc-queue-detail-sections-panel-provider" aria-labelledby="soc-queue-detail-sections-tab-provider" className="tab-panel"><Card>
           <CardHeader><CardTitle>Provider checklist</CardTitle><CardDescription>Recorded provider approvals and requirements. Request state alone does not prove provider readiness.</CardDescription></CardHeader>
           <CardContent>
             {providerChecklist.length === 0 ? (
@@ -3154,10 +3180,10 @@ function SocRequestDetailView({
               </div>
             )}
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       {tab === 'adapter' ? (
-        <Card>
+        <div role="tabpanel" id="soc-queue-detail-sections-panel-adapter" aria-labelledby="soc-queue-detail-sections-tab-adapter" className="tab-panel"><Card>
           <CardHeader><CardTitle>Adapter status</CardTitle></CardHeader>
           <CardContent>
             <Button size="sm" variant="secondary" loading={busy === `adapter-${entityId}`} disabled={busy !== ''} onClick={() => void loadAdapterStatus()}>Refresh adapter status</Button>
@@ -3169,10 +3195,10 @@ function SocRequestDetailView({
               </div>
             ) : <p className="muted">Adapter status has not been requested. No provider telemetry is inferred.</p>}
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
       {tab === 'notes' ? (
-        <Card>
+        <div role="tabpanel" id="soc-queue-detail-sections-panel-notes" aria-labelledby="soc-queue-detail-sections-tab-notes" className="tab-panel"><Card>
           <CardHeader><CardTitle>SOC notes</CardTitle><CardDescription>Thread before adding execution context.</CardDescription></CardHeader>
           <CardContent>
             {notesLoading ? <DetailLoadingPlaceholder label="Loading SOC notes…" variant="compact" /> : null}
@@ -3192,7 +3218,7 @@ function SocRequestDetailView({
               <div className="form-actions full"><Button type="submit" loading={busy === `notes-${entityId}`} disabled={busy !== '' || notesLoading}>Add note</Button></div>
             </form>
           </CardContent>
-        </Card>
+        </Card></div>
       ) : null}
     </div>
   );
@@ -4321,6 +4347,20 @@ export function DetailRoutePage({
     `/v1/findings/${encodeURIComponent(entityId)}`,
     findingFallback
   );
+  // Mutations on an entity detail page must re-read the entity itself, not just the list
+  // datasets onRefresh reloads; otherwise removed targets, triage changes, etc. stay on screen.
+  const activeEntityReload = route === 'target-group-detail'
+    ? targetGroupDetail.reload
+    : route === 'run-detail'
+      ? runDetail.reload
+      : route === 'tenant-detail'
+        ? tenantDetail.reload
+        : route === 'finding-detail'
+          ? findingDetailState.reload
+          : null;
+  const refreshWithEntity = useCallback(async () => {
+    await Promise.all([onRefresh(), activeEntityReload ? activeEntityReload() : Promise.resolve()]);
+  }, [onRefresh, activeEntityReload]);
   // Agent detail is sourced by id from the real GET /v1/agents tenant list: the backend exposes
   // GET /v1/agents plus /v1/agents/:id/{revoke,heartbeat,jobs,observations,update} but no single
   // GET /v1/agents/:id document route, so a list-backed lookup returns the real agent record by id
@@ -4427,7 +4467,7 @@ export function DetailRoutePage({
         data={data}
         config={config}
         session={session}
-        onRefresh={onRefresh}
+        onRefresh={refreshWithEntity}
         loading={tenantDetail.loading}
         loadError={tenantDetail.error}
       />
@@ -4467,7 +4507,7 @@ export function DetailRoutePage({
         data={data}
         config={config}
         session={session}
-        onRefresh={onRefresh}
+        onRefresh={refreshWithEntity}
         loading={findingDetailState.loading}
         loadError={findingDetailState.error}
       />
@@ -4614,7 +4654,7 @@ export function DetailRoutePage({
         data={data}
         config={config}
         session={session}
-        onRefresh={onRefresh}
+        onRefresh={refreshWithEntity}
         loading={detailState.loading}
         loadError={detailState.error}
       />
@@ -4716,7 +4756,7 @@ export function DetailRoutePage({
         data={data}
         config={config}
         session={session}
-        onRefresh={onRefresh}
+        onRefresh={refreshWithEntity}
         runEventState={visibleRunEventState}
         loading={detailState.loading}
         loadError={detailState.error}
@@ -4827,8 +4867,7 @@ export function ReportDetailPage({
       setMessage(success);
       return result;
     } catch (err) {
-      const payload = (err as Error & { payload?: unknown }).payload as { error?: string; message?: string } | undefined;
-      setError(payload?.message ?? payload?.error ?? (err instanceof Error ? err.message : 'Report action failed.'));
+      setError(apiErrorMessage(err, 'Report action failed.'));
       return null;
     } finally {
       setBusy('');
@@ -4843,7 +4882,7 @@ export function ReportDetailPage({
       const contentType = response.headers.get('content-type') ?? '';
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        throw new Error(String(payload?.message ?? payload?.error ?? `Export returned ${response.status}`));
+        throw new Error(String(payload?.message ?? '').trim() || humanizeErrorCode(payload?.error) || `Export returned ${response.status}`);
       }
       if (format === 'json' || contentType.includes('application/json')) {
         const exported = await response.json();
@@ -4866,16 +4905,19 @@ export function ReportDetailPage({
           schemaVersion: getString(custody ?? {}, ['schema_version'], ''),
           verification
         });
+        // The export is returned inline; hand the operator the file as the list page does.
+        triggerJsonDownload(`${reportId}.json`, exported);
         await onRefresh();
         return exported;
       }
       const textPayload = await response.text();
-            setPreview({
+      setPreview({
         reportId,
         format,
         title: getString(report, ['title', 'id'], reportId),
         textPreview: textPayload.slice(0, 900)
       });
+      triggerTextDownload(`${reportId}.${format === 'markdown' ? 'md' : format}`, textPayload, format === 'markdown' ? 'text/markdown' : 'text/html');
       await onRefresh();
       return textPayload;
     }, `Report exported as ${format}.`);

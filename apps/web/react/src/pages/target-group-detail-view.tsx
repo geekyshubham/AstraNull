@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { Activity, Bot, CalendarClock, Check, Globe, Plus, Search, ShieldHalf, Target, Trash2, TriangleAlert } from 'lucide-react';
 import { requestJson } from '../lib/api';
+import { apiErrorMessage } from '../lib/error-messages';
 import { hasEvidenceBackedVerdict, publishedRunVerdict } from '../lib/environments';
 import { findingStatus } from '../lib/finding-lifecycle.mjs';
 import { buildDetailHref } from '../lib/route-params';
@@ -678,6 +679,9 @@ export function TargetGroupDetailView({
   const [dnsChallenges, setDnsChallenges] = useState<DataItem[]>([]);
   const dnsChallengesRef = useRef<DataItem[]>([]);
   const dnsIssueInFlightTargetRef = useRef('');
+  // A domain created here is selected before the parent refresh adds it to entity.targets.
+  // Remember it so the stale-selection effect below does not clear it (and its challenge) early.
+  const pendingCreatedDnsTargetRef = useRef('');
   const [copiedField, setCopiedField] = useState('');
   const [ladder, setLadder] = useState<DataItem | null>(null);
   const [ladderLoading, setLadderLoading] = useState(true);
@@ -878,6 +882,7 @@ export function TargetGroupDetailView({
   }, [config, session, entityId, data.validationScans]);
 
   useEffect(() => {
+    pendingCreatedDnsTargetRef.current = '';
     setSelectedDnsTargetId('');
     setDnsChallenge(null);
     setDnsVerifyResult(null);
@@ -887,11 +892,15 @@ export function TargetGroupDetailView({
   }, [entityId]);
 
   useEffect(() => {
-    if (selectedDnsTargetId && !fqdnTargets.some((target) => getString(target, ['id'], '') === selectedDnsTargetId)) {
-      setSelectedDnsTargetId('');
-      setDnsChallenge(null);
-      setDnsVerifyResult(null);
+    if (!selectedDnsTargetId) return;
+    if (fqdnTargets.some((target) => getString(target, ['id'], '') === selectedDnsTargetId)) {
+      if (pendingCreatedDnsTargetRef.current === selectedDnsTargetId) pendingCreatedDnsTargetRef.current = '';
+      return;
     }
+    if (pendingCreatedDnsTargetRef.current === selectedDnsTargetId) return;
+    setSelectedDnsTargetId('');
+    setDnsChallenge(null);
+    setDnsVerifyResult(null);
   }, [selectedDnsTargetId, entity.targets]);
 
   useEffect(() => { void loadDnsChallenges(); }, [loadDnsChallenges]);
@@ -1041,7 +1050,7 @@ export function TargetGroupDetailView({
       setMessage(typeof success === 'function' ? success() : success);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed.');
+      setError(apiErrorMessage(err, 'Action failed.'));
     } finally {
       setBusy('');
     }
@@ -1095,7 +1104,7 @@ export function TargetGroupDetailView({
       await onRefresh();
       return created;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to declare target.');
+      setError(apiErrorMessage(err, 'Failed to declare target.'));
       return null;
     } finally {
       setBusy('');
@@ -1134,6 +1143,7 @@ export function TargetGroupDetailView({
     );
     const targetId = getString(created, ['id'], '');
     if (!targetId) return;
+    pendingCreatedDnsTargetRef.current = targetId;
     setSelectedDnsTargetId(targetId);
     await issueDnsChallenge(targetId, getString(created, ['value'], targetId));
   }
@@ -1367,7 +1377,7 @@ export function TargetGroupDetailView({
       setInventoryMeta(payload.meta && typeof payload.meta === 'object' ? payload.meta as DataItem : null);
       setSelectedInventory(new Set());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Inventory request failed.');
+      setError(apiErrorMessage(err, 'Inventory request failed.'));
       setInventoryRows([]);
       setInventoryMeta({ empty_reason: err instanceof Error ? err.message : 'Inventory request failed.' });
     } finally {
@@ -1518,7 +1528,7 @@ export function TargetGroupDetailView({
         target_id: targetId,
         check_id: EDGE_DETECTION_CHECK_ID
       });
-      setError(err instanceof Error ? err.message : 'Edge detection could not be queued.');
+      setError(apiErrorMessage(err, 'Edge detection could not be queued.'));
     } finally {
       setBusy('');
     }
@@ -1582,7 +1592,7 @@ export function TargetGroupDetailView({
       formElement.reset();
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create the test policy.');
+      setError(apiErrorMessage(err, 'Failed to create the test policy.'));
     } finally {
       setBusy('');
     }
@@ -1643,7 +1653,7 @@ export function TargetGroupDetailView({
       setMessage(`LOA signed for ${scopeAck.length} target${scopeAck.length === 1 ? '' : 's'} and sealed as ${custodyArtifactId}.`);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to sign the LOA.');
+      setError(apiErrorMessage(err, 'Failed to sign the LOA.'));
     } finally {
       setBusy('');
     }
@@ -2616,9 +2626,11 @@ export function TargetGroupDetailView({
             options={ONBOARD_TAB_OPTIONS}
             onChange={(value) => setOnboardTab(value)}
             ariaLabel="Target onboarding method"
+            getTabId={(id) => `target-onboarding-method-tab-${id}`}
+            getPanelId={(id) => `target-onboarding-method-panel-${id}`}
           />
           {onboardTab === 'fqdn' ? (
-            <div className="stack-tight">
+            <div role="tabpanel" id="target-onboarding-method-panel-fqdn" aria-labelledby="target-onboarding-method-tab-fqdn" className="tab-panel"><div className="stack-tight">
               <p className="muted">Prove you control the domain by publishing a one-time TXT record. Verification is required before any probe runs.</p>
               <form className="product-form" onSubmit={(event) => void submitFqdnTarget(event)}>
                 <label className="full"><span>Domain</span><input name="value" className="mono" placeholder="origin.example.com" required /></label>
@@ -2661,13 +2673,13 @@ export function TargetGroupDetailView({
                 </div>
                 <div className="dns-footer row-actions">
                   <Button size="sm" variant="ghost" loading={busy === `dns-verify-${entityId}`} disabled={!activeChallengeId} onClick={() => void verifyDnsChallenge(activeChallengeId)}>Check now</Button>
-                  {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(dnsVerifyResult.checked_at ?? dnsVerifyResult.updated_at)}</span> : null}
+                  {dnsVerifyResult?.verified === false ? <span className="muted small">Last checked {formatDate(activeChallenge?.last_checked_at ?? asDataItem(dnsVerifyResult.challenge)?.last_checked_at)}</span> : null}
                 </div>
               </div>
-            </div>
+            </div></div>
           ) : null}
           {onboardTab === 'ip' ? (
-            <div className="stack-tight">
+            <div role="tabpanel" id="target-onboarding-method-panel-ip" aria-labelledby="target-onboarding-method-tab-ip" className="tab-panel"><div className="stack-tight">
               <p className="muted">You cannot prove control of an IP with DNS. Install an agent inside that instance. When the agent registers, its outbound call reveals the public IP and binds the target to a verified agent.</p>
               <form className="product-form" onSubmit={submitIpTarget}>
                 <label><span>IP address</span><input name="value" className="mono" placeholder="203.0.113.10" required /></label>
@@ -2700,10 +2712,10 @@ export function TargetGroupDetailView({
                   <li>Verified after a probe + agent correlation on the same nonce.</li>
                 </ol>
               </div>
-            </div>
+            </div></div>
           ) : null}
           {onboardTab === 'cloud' ? (
-            <div className="stack-tight">
+            <div role="tabpanel" id="target-onboarding-method-panel-cloud" aria-labelledby="target-onboarding-method-tab-cloud" className="tab-panel"><div className="stack-tight">
               <p className="muted">Connect a DNS provider once, then select exact zones for this target group. A current, secured provider check can verify an imported zone; manually supplied or older records remain pending and still require DNS proof.</p>
               {connectors.length === 0 ? (
                 <EmptyState
@@ -2734,7 +2746,7 @@ export function TargetGroupDetailView({
                   );
                 })}
               </div>
-            </div>
+            </div></div>
           ) : null}
         </DetailModal>
       ) : null}

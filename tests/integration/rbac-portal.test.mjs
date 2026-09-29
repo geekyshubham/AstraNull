@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { roleHasPermission } from '../../src/contracts/roles.mjs';
-import { STAFF_ROLES } from '../../src/contracts/staffRoles.mjs';
+import { STAFF_ROLES, staffRoleHasPermission } from '../../src/contracts/staffRoles.mjs';
 import { canAccessRoute } from '../../apps/web/react/src/lib/route-access.mjs';
 import { DETAIL_ROUTE_ITEMS, NAV_ITEMS } from '../../apps/web/react/src/lib/navigation.ts';
 
@@ -120,7 +120,10 @@ describe('portal RBAC matrix (FT-RBAC-01..03)', () => {
 describe('portal staff/customer surface separation (FT-RBAC-04)', () => {
   it('FT-RBAC-04 staff principals can reach only staff routes authorized for their staff role', () => {
     for (const staffRole of STAFF_ROLES) {
-      const expectedRoutes = new Set(['admin', 'tenant-detail']);
+      const expectedRoutes = new Set(['admin']);
+      // Tenant detail is backed by GET /internal/admin/tenants/:id (staff:tenant:read). Roles without
+      // that permission would only see fallback values, so the route follows the backend gate.
+      if (staffRoleHasPermission(staffRole, 'staff:tenant:read')) expectedRoutes.add('tenant-detail');
       if (STAFF_SOC_ROLES.includes(staffRole)) {
         expectedRoutes.add('internal-soc');
         expectedRoutes.add('queue-detail');

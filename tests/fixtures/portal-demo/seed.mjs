@@ -245,11 +245,14 @@ function enrichPortalDemoStore(store) {
     {
       id: ids.policyId,
       tenant_id: ids.tenantId,
-      name: 'Checkout hourly bypass check',
+      name: 'Checkout daily bypass check',
       target_group_id: ids.targetGroupId,
       target_id: ids.targetId,
       check_id: 'origin.direct_bypass.safe',
-      cadence: 'hourly',
+      // Must be a POLICY_CADENCES value: a PATCH re-validates the merged record, so an
+      // unsupported cadence ('hourly') made every Pause/Resume on this demo policy fail with 400.
+      cadence: 'daily',
+      state: 'active',
       enabled: true,
       created_at: FROZEN,
       updated_at: FROZEN,
@@ -263,6 +266,7 @@ function enrichPortalDemoStore(store) {
       target_id: ids.targetId,
       check_id: 'dns.authoritative_response.safe',
       cadence: 'weekly',
+      state: 'active',
       enabled: true,
       created_at: FROZEN,
       updated_at: FROZEN,

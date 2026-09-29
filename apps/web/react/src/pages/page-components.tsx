@@ -1406,9 +1406,11 @@ export function DashboardPage({
         <span className="tabular-nums">{data.loadErrors.evidence ? '—' : formatNumber(data.evidence.length)}</span>{' '}
         {`evidence ${pluralize(data.evidence.length, 'record')} · high-scale remains SOC-gated`}
       </PageContextSummary>
-      <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" ariaLabel="Dashboard sections" />
+      <Tabs value={tab} options={tabOptions} onChange={handleDashboardTabChange} className="tabs-wrap" ariaLabel="Dashboard sections"
+            getTabId={(id) => `dashboard-sections-tab-${id}`}
+            getPanelId={(id) => `dashboard-sections-panel-${id}`} />
       {tab === 'overview' ? (
-        workspaceHydrating ? (
+        <div role="tabpanel" id="dashboard-sections-panel-overview" aria-labelledby="dashboard-sections-tab-overview" className="tab-panel">{workspaceHydrating ? (
           <DashboardWorkspaceSkeleton />
         ) : (
         <>
@@ -1705,10 +1707,10 @@ export function DashboardPage({
             </CardContent>
           </Card>
         </>
-        )
+        )}</div>
       ) : null}
       {tab === 'risk-trends' ? (
-        <div className="risk-trends-stack">
+        <div role="tabpanel" id="dashboard-sections-panel-risk-trends" aria-labelledby="dashboard-sections-tab-risk-trends" className="tab-panel"><div className="risk-trends-stack">
           <div className="risk-trends-grid">
           <Card>
             <CardHeader>
@@ -1794,7 +1796,7 @@ export function DashboardPage({
               />
             </CardContent>
           </Card>
-        </div>
+        </div></div>
       ) : null}
 
     </div>
@@ -2953,7 +2955,9 @@ export function SettingsPage({
         ) : null}
         <span className="tabular-nums">{recordedMetadataRetentionDays === null ? 'not recorded' : `${recordedMetadataRetentionDays}d`}</span> metadata retention
       </PageContextSummary>
-      <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections" />
+      <Tabs value={tab} options={settingsTabOptions} onChange={setTab} className="tabs-wrap" ariaLabel="Settings sections"
+            getTabId={(id) => `settings-sections-tab-${id}`}
+            getPanelId={(id) => `settings-sections-panel-${id}`} />
       {(message || error) && (
         <div className={error ? 'form-banner error' : 'form-banner'}>
           {error || message}
@@ -2991,7 +2995,7 @@ export function SettingsPage({
       )}
 
       {tab === 'organization' && (
-        <>
+        <div role="tabpanel" id="settings-sections-panel-organization" aria-labelledby="settings-sections-tab-organization" className="tab-panel"><>
         <div className="split">
           <Card>
             <CardHeader>
@@ -3078,11 +3082,11 @@ export function SettingsPage({
             </CardContent>
           </Card>
         ) : null}
-        </>
+        </></div>
       )}
 
       {tab === 'access' && (
-        <>
+        <div role="tabpanel" id="settings-sections-panel-access" aria-labelledby="settings-sections-tab-access" className="tab-panel"><>
           {canCreateBootstrapToken || canCreateServiceAccount ? (
           <div className="split">
             {canCreateBootstrapToken ? (
@@ -3204,11 +3208,11 @@ export function SettingsPage({
             </CardContent>
           </Card>
           ) : <RoleRestrictedCard title="Service accounts are not available for your role." />}
-        </>
+        </></div>
       )}
 
       {tab === 'security' && (
-        <>
+        <div role="tabpanel" id="settings-sections-panel-security" aria-labelledby="settings-sections-tab-security" className="tab-panel"><>
           <Card>
             <CardHeader>
               <CardTitle>Enterprise SSO posture</CardTitle>
@@ -3310,11 +3314,11 @@ export function SettingsPage({
             </CardContent>
           </Card>
           ) : <RoleRestrictedCard title="Secret vault inventory is not available for your role." />}
-        </>
+        </></div>
       )}
 
       {tab === 'privacy' && (
-        <Card>
+        <div role="tabpanel" id="settings-sections-panel-privacy" aria-labelledby="settings-sections-tab-privacy" className="tab-panel"><Card>
           <CardHeader>
             <CardTitle>Privacy and retention</CardTitle>
             <CardDescription>Updates metadata and evidence retention for this tenant. Shorter windows can purge stored metadata immediately.</CardDescription>
@@ -3368,7 +3372,7 @@ export function SettingsPage({
             <SettingsNote icon={FileCheck2}>Metadata retention applies to events, evidence vault, reports, and notification events for the current tenant.</SettingsNote>
             <SettingsNote icon={ShieldCheck}>Audit logs, findings, test runs, and authorization artifacts follow separate production retention gates documented in the operations guide.</SettingsNote>
           </CardContent>
-        </Card>
+        </Card></div>
       )}
 
       <ConfirmModal
@@ -6623,9 +6627,11 @@ export function StaffSurfacePage({
       ) : (
         <>
           <CalloutNote icon={ShieldCheck} tone="warn">Staff-only scope. Every approval, rejection, support-owner change, and entitlement mutation is authorization-checked and audit-backed.</CalloutNote>
-          <Tabs value={activeAdminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections" />
+          <Tabs value={activeAdminTab} options={adminTabOptions} onChange={setAdminTab} className="tabs-wrap" ariaLabel="Staff administration sections"
+            getTabId={(id) => `staff-administration-sections-tab-${id}`}
+            getPanelId={(id) => `staff-administration-sections-panel-${id}`} />
           {activeAdminTab === 'overview' ? (
-            <>
+            <div role="tabpanel" id="staff-administration-sections-panel-overview" aria-labelledby="staff-administration-sections-tab-overview" className="tab-panel"><>
               <div className="kpi-row" aria-label="Staff operations summary">
                 <KpiCell label="Review queue" value={queueDepth === null ? '—' : formatNumber(queueDepth)} delta="Signup and approval work" />
                 {canReadSignups ? <KpiCell label="Pending signups" value={pendingSignups === null ? '—' : formatNumber(pendingSignups)} delta="Staff decision required" /> : null}
@@ -6640,10 +6646,10 @@ export function StaffSurfacePage({
                 </CardContent>
               </Card>
               ) : null}
-            </>
+            </></div>
           ) : null}
           {activeAdminTab === 'signup-queue' ? (
-            <Card density="compact" className="staff-queue-priority">
+            <div role="tabpanel" id="staff-administration-sections-panel-signup-queue" aria-labelledby="staff-administration-sections-tab-signup-queue" className="tab-panel"><Card density="compact" className="staff-queue-priority">
               <CardHeader>
                 <CardTitle>Signup queue</CardTitle>
                 <CardDescription>Requests in the staff-only signup review queue.</CardDescription>
@@ -6651,9 +6657,9 @@ export function StaffSurfacePage({
               <CardContent>
                 <DataTable columns={signupColumns} items={data.internalSignupRequests} empty={renderFriendlyEmptyState({ icon: ClipboardList, title: 'No signup requests.', body: 'Reviewed account intake records will appear here after customers submit requests.' })} loadError={data.loadErrors.internalSignupRequests} onRetry={() => void onRefresh()} />
               </CardContent>
-            </Card>
+            </Card></div>
           ) : null}
-          {activeAdminTab === 'tenants' ? (
+          {activeAdminTab === 'tenants' ? (<div role="tabpanel" id="staff-administration-sections-panel-tenants" aria-labelledby="staff-administration-sections-tab-tenants" className="tab-panel">
             <Card density="compact">
               <CardHeader>
                 <CardTitle>Tenant directory</CardTitle>
@@ -6663,30 +6669,6 @@ export function StaffSurfacePage({
                 <DataTable columns={tenantColumns} items={data.internalTenants} empty={renderFriendlyEmptyState({ icon: Target, title: 'No managed tenants.', body: 'Provisioned tenants appear here after staff approval creates account records.' })} loadError={data.loadErrors.internalTenants} onRetry={() => void onRefresh()} />
               </CardContent>
             </Card>
-          ) : null}
-          {activeAdminTab === 'approvals' ? (
-            <Card density="compact">
-              <CardHeader>
-                <CardTitle>Approval requests</CardTitle>
-                <CardDescription>Unified internal approvals, including subscription exceptions.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DataTable columns={approvalColumns} items={data.internalApprovalRequests} empty={renderFriendlyEmptyState({ icon: ShieldCheck, title: 'No internal approvals.', body: 'Pending approval records will appear here when backend workflows create them.' })} loadError={data.loadErrors.internalApprovalRequests} onRetry={onRefresh ? () => void onRefresh() : undefined} />
-              </CardContent>
-            </Card>
-          ) : null}
-          {activeAdminTab === 'audit' ? (
-            <Card density="compact">
-              <CardHeader>
-                <CardTitle>Internal audit</CardTitle>
-                <CardDescription>Recent actions in the internal audit record.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <DataTable columns={auditColumns} items={data.internalAudit} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions will be listed after they are recorded.' })} loadError={data.loadErrors.internalAudit} onRetry={onRefresh ? () => void onRefresh() : undefined} />
-              </CardContent>
-            </Card>
-          ) : null}
-          {activeAdminTab === 'tenants' ? (<>
           {canWriteTenants ? (
           <Card>
             <CardHeader>
@@ -6769,7 +6751,31 @@ export function StaffSurfacePage({
             </CardContent>
           </Card>
           ) : null}
-          </>) : null}
+            </div>
+          ) : null}
+          {activeAdminTab === 'approvals' ? (
+            <div role="tabpanel" id="staff-administration-sections-panel-approvals" aria-labelledby="staff-administration-sections-tab-approvals" className="tab-panel"><Card density="compact">
+              <CardHeader>
+                <CardTitle>Approval requests</CardTitle>
+                <CardDescription>Unified internal approvals, including subscription exceptions.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DataTable columns={approvalColumns} items={data.internalApprovalRequests} empty={renderFriendlyEmptyState({ icon: ShieldCheck, title: 'No internal approvals.', body: 'Pending approval records will appear here when backend workflows create them.' })} loadError={data.loadErrors.internalApprovalRequests} onRetry={onRefresh ? () => void onRefresh() : undefined} />
+              </CardContent>
+            </Card></div>
+          ) : null}
+          {activeAdminTab === 'audit' ? (
+            <div role="tabpanel" id="staff-administration-sections-panel-audit" aria-labelledby="staff-administration-sections-tab-audit" className="tab-panel"><Card density="compact">
+              <CardHeader>
+                <CardTitle>Internal audit</CardTitle>
+                <CardDescription>Recent actions in the internal audit record.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <DataTable columns={auditColumns} items={data.internalAudit} empty={renderFriendlyEmptyState({ icon: FileCheck2, title: 'No internal audit events.', body: 'Staff decisions and support actions will be listed after they are recorded.' })} loadError={data.loadErrors.internalAudit} onRetry={onRefresh ? () => void onRefresh() : undefined} />
+              </CardContent>
+            </Card></div>
+          ) : null}
+
         </>
       )}
     </div>
