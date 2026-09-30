@@ -901,6 +901,7 @@ describe('connector provider helpers', () => {
       observedAt: '2026-07-02T12:00:00.000Z',
       now: new Date('2026-07-02T12:00:00.000Z'),
       nonce: 'nonce-1',
+      includeRecordSets: false,
       fetchFn: async (url, init) => {
         request = { url: String(url), init };
         return { ok: true, status: 200, json: async () => ({ zones: [{ zone: 'Example.COM.' }] }) };
@@ -912,6 +913,75 @@ describe('connector provider helpers', () => {
     assert.equal(result.snapshots[0].snapshot_kind, 'dns_zone');
     assert.equal(result.snapshots[0].display_ref, 'example.com');
     assert.equal(JSON.stringify(result).includes('secret'), false);
+  });
+
+  it('fetches record sets for each zone in addition to zone inventory by default', async () => {
+    const requestedUrls = [];
+    const result = await pollAkamaiEdgeDns({
+      credentials: {
+        host: 'example.luna.akamaiapis.net',
+        access_token: 'access',
+        client_token: 'client',
+        client_secret: 'secret',
+      },
+      observedAt: '2026-07-02T12:00:00.000Z',
+      now: new Date('2026-07-02T12:00:00.000Z'),
+      nonce: 'nonce-1',
+      fetchFn: async (url) => {
+        requestedUrls.push(String(url));
+        if (String(url).endsWith('/zones?showAll=true')) {
+          return { ok: true, status: 200, json: async () => ({ zones: [{ zone: 'example.com' }] }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            recordsets: [
+              { name: 'example.com', type: 'A', ttl: 300, rdata: ['203.0.113.10'] },
+              { name: 'origin.example.com', type: 'A', ttl: 300, rdata: ['198.51.100.5'] },
+              { name: 'example.com', type: 'NS', ttl: 172800, rdata: ['a1.akamaidns.net.'] },
+            ],
+          }),
+        };
+      },
+    });
+    assert.ok(requestedUrls.some((url) => url.includes('/zones/example.com/recordsets?showAll=true')));
+    const dnsZoneSnapshots = result.snapshots.filter((s) => s.snapshot_kind === 'dns_zone');
+    const dnsRecordSnapshots = result.snapshots.filter((s) => s.snapshot_kind === 'dns_record');
+    assert.equal(dnsZoneSnapshots.length, 1);
+    assert.equal(dnsRecordSnapshots.length, 3);
+    const apexA = dnsRecordSnapshots.find((s) => s.display_ref === 'example.com A');
+    assert.equal(apexA.summary.record_type, 'A');
+    assert.deepEqual(apexA.summary.record_rdata, ['203.0.113.10']);
+    assert.equal(apexA.summary.record_ttl, 300);
+    assert.equal(apexA.summary.zone, 'example.com');
+    const originA = dnsRecordSnapshots.find((s) => s.display_ref === 'origin.example.com A');
+    assert.deepEqual(originA.summary.record_rdata, ['198.51.100.5']);
+    assert.equal(JSON.stringify(result).includes('secret'), false);
+  });
+
+  it('degrades health and reports a permission gap when record-set fetch fails but zone inventory succeeds', async () => {
+    const result = await pollAkamaiEdgeDns({
+      credentials: {
+        host: 'example.luna.akamaiapis.net',
+        access_token: 'access',
+        client_token: 'client',
+        client_secret: 'secret',
+      },
+      observedAt: '2026-07-02T12:00:00.000Z',
+      now: new Date('2026-07-02T12:00:00.000Z'),
+      nonce: 'nonce-1',
+      fetchFn: async (url) => {
+        if (String(url).endsWith('/zones?showAll=true')) {
+          return { ok: true, status: 200, json: async () => ({ zones: [{ zone: 'example.com' }] }) };
+        }
+        return { ok: false, status: 403, json: async () => ({ detail: 'forbidden' }) };
+      },
+    });
+    assert.equal(result.snapshots.filter((s) => s.snapshot_kind === 'dns_zone').length, 1);
+    assert.equal(result.snapshots.filter((s) => s.snapshot_kind === 'dns_record').length, 0);
+    assert.equal(result.health, 'degraded');
+    assert.ok(result.permission_gaps.includes('recordset_fetch_failed'));
   });
 
   it('requires Namecheap client IP and normalizes XML domain inventory', async () => {

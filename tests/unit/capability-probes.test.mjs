@@ -175,7 +175,7 @@ describe('capability probes P0/P1', () => {
     assert.equal(deadline.requests_sent, 1);
   });
 
-  it('origin leak scan reports leak signals from subdomain divergence', async () => {
+  it('origin leak scan records subdomain divergence as an observation without an edge_ip to corroborate it', async () => {
     const outcome = await probeOriginLeakScan(job(), {
       resolve4Fn: async (host) => {
         if (host === 'shop.example.test') return ['203.0.113.10'];
@@ -185,9 +185,26 @@ describe('capability probes P0/P1', () => {
       resolve6Fn: async () => ['2001:db8::1'],
       fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
     });
-    assert.equal(outcome.external_result, 'connected');
+    // No x-backend-ip header means no edge_ip observation exists to corroborate the divergence
+    // against, so this stays an uncorroborated observation rather than a confirmed leak.
+    assert.equal(outcome.external_result, 'blocked');
     assert.equal(outcome.metadata.leak_signals.includes('ipv6_present'), false);
     assert.ok(outcome.metadata.leak_signals.some((s) => s.startsWith('subdomain_origin_divergence:')));
+    assert.deepEqual(outcome.metadata.corroborated_leak_signals, []);
+  });
+
+  it('origin leak scan corroborates subdomain divergence when the divergent address is confirmed distinct from the edge_ip', async () => {
+    const outcome = await probeOriginLeakScan(job(), {
+      resolve4Fn: async (host) => {
+        if (host === 'shop.example.test') return ['203.0.113.10'];
+        if (host === 'origin.shop.example.test') return ['198.51.100.5'];
+        return [];
+      },
+      resolve6Fn: async () => [],
+      fetchFn: async () => ({ status: 200, headers: { get: (name) => (name === 'x-backend-ip' ? '203.0.113.10' : null) } }),
+    });
+    assert.equal(outcome.external_result, 'connected');
+    assert.ok(outcome.metadata.corroborated_leak_signals.some((s) => s.startsWith('subdomain_origin_divergence:')));
   });
 
   it('origin leak scan does not flag normal dual-stack DNS as a leak', async () => {
@@ -216,6 +233,27 @@ describe('capability probes P0/P1', () => {
     assert.equal(outcome.external_result, 'blocked');
     assert.deepEqual(outcome.metadata.leak_signals, []);
     assert.equal(outcome.metadata.subdomains_scanned.length, 1);
+  });
+
+  it('origin leak scan records IPv6-only apex DNS as an observation, not a confirmed leak, absent edge_ip corroboration', async () => {
+    const outcome = await probeOriginLeakScan(job(), {
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => ['2001:db8::1'],
+      fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
+    });
+    assert.equal(outcome.external_result, 'blocked');
+    assert.ok(outcome.metadata.leak_signals.includes('ipv6_only_dns'));
+    assert.deepEqual(outcome.metadata.corroborated_leak_signals, []);
+  });
+
+  it('origin leak scan corroborates IPv6-only apex DNS when the edge_ip is confirmed to be a different address', async () => {
+    const outcome = await probeOriginLeakScan(job(), {
+      resolve4Fn: async () => [],
+      resolve6Fn: async () => ['2001:db8::1'],
+      fetchFn: async () => ({ status: 200, headers: { get: (name) => (name === 'x-backend-ip' ? '203.0.113.99' : null) } }),
+    });
+    assert.equal(outcome.external_result, 'connected');
+    assert.ok(outcome.metadata.corroborated_leak_signals.includes('ipv6_only_dns'));
   });
 
   it('origin leak scan default budget covers the full bounded prefix list', async () => {
@@ -364,6 +402,47 @@ describe('capability probes P0/P1', () => {
     );
     assert.equal(outcome.external_result, 'connected');
     assert.equal(outcome.metadata.bypass_signal, true);
+  });
+
+  it('host/SNI bypass reports network reachability without confirming application bypass absent an echoed marker', async () => {
+    const outcome = await probeHostSniBypass(
+      job({
+        probe_profile: {
+          kind: 'host_sni_bypass',
+          protected_host: 'edge.example.test',
+          direct_ip: '198.51.100.7',
+          marker: 'astranull-safe-marker',
+        },
+      }),
+      {
+        // Something answered 200 on the direct IP, but it never echoed the marker this probe
+        // sent — an HTTP response alone does not prove this is the protected application.
+        fetchFn: async () => ({ status: 200, headers: { get: () => null } }),
+      },
+    );
+    assert.equal(outcome.metadata.network_reachable, true);
+    assert.equal(outcome.metadata.application_bypass_confirmed, false);
+  });
+
+  it('host/SNI bypass confirms application bypass when the destination echoes the sent marker', async () => {
+    const outcome = await probeHostSniBypass(
+      job({
+        probe_profile: {
+          kind: 'host_sni_bypass',
+          protected_host: 'edge.example.test',
+          direct_ip: '198.51.100.7',
+          marker: 'astranull-safe-marker',
+        },
+      }),
+      {
+        fetchFn: async () => ({
+          status: 200,
+          headers: { get: (name) => (name === 'x-astranull-marker-echo' ? 'astranull-safe-marker' : null) },
+        }),
+      },
+    );
+    assert.equal(outcome.metadata.network_reachable, true);
+    assert.equal(outcome.metadata.application_bypass_confirmed, true);
   });
 
   it('host/SNI bypass uses HTTPS with TLS SNI when no fetchFn is injected', async () => {

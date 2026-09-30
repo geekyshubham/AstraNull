@@ -609,6 +609,8 @@ export async function probeOriginLeakScan(job, deps = {}) {
   let resolverAttempts = 0;
   let httpAttempts = 0;
   const leak_signals = [];
+  const corroborated_leak_signals = [];
+  const subdomain_divergences = [];
   const subdomains_scanned = [];
   const origin_ips = new Set();
   const ipv6_addrs = new Set();
@@ -621,7 +623,9 @@ export async function probeOriginLeakScan(job, deps = {}) {
     ipv6_addrs: [...ipv6_addrs].slice(0, 8),
     subdomains_scanned,
     leak_signals,
-    leak_count: leak_signals.length,
+    leak_count: corroborated_leak_signals.length,
+    corroborated_leak_signals,
+    observed_signal_count: leak_signals.length,
     resolver_attempts: resolverAttempts,
     http_attempts: httpAttempts,
   });
@@ -659,9 +663,9 @@ export async function probeOriginLeakScan(job, deps = {}) {
     });
   }
   apex6.forEach((ip) => ipv6_addrs.add(ip));
-  if (apex6.length > 0 && apex4.length === 0) {
-    leak_signals.push('ipv6_only_dns');
-  }
+  // Observation only: an IPv6-only apex is common, legitimate dual-stack/CDN behavior on its
+  // own. It becomes a leak signal only once corroborated against the edge_ip below.
+  const ipv6OnlyDns = apex6.length > 0 && apex4.length === 0;
   if (remainingProbeTimeoutMs(job, deps) <= 0) return timeout();
 
   edgeProbe = await boundedFetch(baseUrlForHost(domain), {
@@ -725,22 +729,45 @@ export async function probeOriginLeakScan(job, deps = {}) {
       ips.forEach((ip) => origin_ips.add(ip));
       const unique = [...new Set(ips)];
       if (apex4.length && unique.some((ip) => !apex4.includes(ip))) {
-        leak_signals.push(`subdomain_origin_divergence:${prefix}`);
+        // Observation only here too: an alternate hostname resolving to a different address
+        // than the apex can be legitimate CDN/load-balancer routing. It is corroborated below
+        // only when that address is distinct from the apex's own observed edge_ip.
+        subdomain_divergences.push({ prefix, ips: unique });
       }
     }
     if (remainingProbeTimeoutMs(job, deps) <= 0) return timeout();
   }
 
   const directIps = [...origin_ips];
-  if (directIps.length && edge_ip && directIps.includes(edge_ip) === false) {
+  const edgeMismatch = Boolean(directIps.length && edge_ip && directIps.includes(edge_ip) === false);
+  if (edgeMismatch) {
     leak_signals.push('dns_points_not_edge');
   }
   if (directIps.length && !edgeProbe.res) {
     leak_signals.push('dns_only_no_edge_http');
   }
 
+  // Corroboration: an IPv6-only apex or a divergent subdomain address is treated as a leak
+  // signal only when there is an independent indication the address is not the CDN edge —
+  // i.e. we observed an edge_ip and the divergent/IPv6 address does not match it. Without an
+  // edge_ip to compare against, these remain recorded observations, not leak claims.
+  if (ipv6OnlyDns) {
+    leak_signals.push('ipv6_only_dns');
+    if (edge_ip && ![...ipv6_addrs].includes(edge_ip)) {
+      corroborated_leak_signals.push('ipv6_only_dns');
+    }
+  }
+  for (const { prefix, ips } of subdomain_divergences) {
+    const signal = `subdomain_origin_divergence:${prefix}`;
+    leak_signals.push(signal);
+    if (edge_ip && ips.every((ip) => ip !== edge_ip)) {
+      corroborated_leak_signals.push(signal);
+    }
+  }
+  if (edgeMismatch) corroborated_leak_signals.push('dns_points_not_edge');
+
   const durationMs = observedProbeDurationMs(deps);
-  const external = leak_signals.length > 0 ? 'connected' : 'blocked';
+  const external = corroborated_leak_signals.length > 0 ? 'connected' : 'blocked';
   return {
     external_result: external,
     metadata: withKind(job, kind, {
@@ -750,7 +777,9 @@ export async function probeOriginLeakScan(job, deps = {}) {
       ipv6_addrs: [...ipv6_addrs].slice(0, 8),
       subdomains_scanned,
       leak_signals,
-      leak_count: leak_signals.length,
+      leak_count: corroborated_leak_signals.length,
+      corroborated_leak_signals,
+      observed_signal_count: leak_signals.length,
       resolver_attempts: resolverAttempts,
       http_attempts: httpAttempts,
       request_counting_basis: 'logical_operations',
@@ -846,12 +875,26 @@ export async function probeHostSniBypass(job, deps = {}) {
     };
   }
   const bypassed = res.status >= 200 && res.status < 500;
+  // The HTTP response alone only proves network ingress to whatever answered on that IP/port —
+  // it does not prove the response came from the protected application. An application-level
+  // bypass claim additionally requires the destination to echo back the marker this probe sent,
+  // which only the target application (not an unrelated listener) would do.
+  const expectedMarker = job.probe_profile?.marker ? String(job.probe_profile.marker) : null;
+  const markerEchoed = Boolean(
+    expectedMarker && res.headers?.get?.('x-astranull-marker-echo') === expectedMarker,
+  );
+  const applicationBypassConfirmed = bypassed && markerEchoed;
   return {
     external_result: bypassed ? 'connected' : 'blocked',
     metadata: withKind(job, kind, {
       status_code: res.status,
       protected_host: hostname,
       direct_ip: directIp,
+      network_reachable: bypassed,
+      application_bypass_confirmed: applicationBypassConfirmed,
+      // Deprecated alias retained for existing consumers; now reflects the network-ingress
+      // signal only. Application-level access requires application_bypass_confirmed or
+      // corroborating agent_observation evidence per this check's verdict_logic.
       bypass_signal: bypassed,
       duration_ms: durationMs,
       request_counting_basis: 'logical_operations',

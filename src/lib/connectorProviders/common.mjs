@@ -82,6 +82,18 @@ export function buildNormalizedSnapshot({
     ...(Array.isArray(summary.permission_gaps)
       ? { permission_gaps: summary.permission_gaps.map((gap) => String(gap).trim()).filter(Boolean) }
       : {}),
+    ...(typeof summary.record_type === 'string' && summary.record_type.trim()
+      ? { record_type: summary.record_type.trim().toUpperCase() }
+      : {}),
+    ...(Number.isFinite(Number(summary.record_ttl))
+      ? { record_ttl: Math.max(0, Math.floor(Number(summary.record_ttl))) }
+      : {}),
+    ...(Array.isArray(summary.record_rdata)
+      ? { record_rdata: summary.record_rdata.map((v) => String(v).trim()).filter(Boolean) }
+      : {}),
+    ...(typeof summary.zone === 'string' && summary.zone.trim()
+      ? { zone: summary.zone.trim() }
+      : {}),
   };
   safeSummary.config_hash = computeConfigHash(safeSummary);
   const resourceRefHash = hashRef(`${provider}:${resourceRef}`);

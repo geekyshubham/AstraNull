@@ -699,6 +699,12 @@ export function classifyWafPosture({
   originBypassConfirmed = false,
   wafRequired = true,
   connectorMode = null,
+  // Absence of a WAF fingerprint proves nothing on its own — many WAFs suppress their
+  // signature. 'unprotected' requires configuration or behavioral evidence that coverage is
+  // actually missing (e.g. a completed probe cycle that found no enforcement, or a connector
+  // export confirming no security config is bound to this hostname). Without that evidence,
+  // "no WAF detected" stays 'unknown', not a claimed gap.
+  coverageGapEvidence = false,
 } = {}) {
   const reason_codes = [];
 
@@ -709,18 +715,23 @@ export function classifyWafPosture({
     reason_codes.push('marker_rule_not_blocking');
   }
   const modeKey = connectorMode ? String(connectorMode).trim().toLowerCase() : null;
-  if (modeKey && MONITOR_ONLY_CONNECTOR_MODES.has(modeKey)) {
+  const monitorOnly = Boolean(modeKey && MONITOR_ONLY_CONNECTOR_MODES.has(modeKey));
+  if (monitorOnly) {
     reason_codes.push('monitor_only_behavior');
   }
 
-  if (validationPassed && wafDetected && !originBypassConfirmed) {
+  // Monitor-only mode means the connector observes/logs but does not block, so a validated
+  // marker cannot be trusted as evidence of enforcement — check this before any 'protected'
+  // return, not after, or a monitor-only WAF that merely logged the marker would be reported
+  // as protected on this line before ever reaching the downgrade below.
+  if (validationPassed && wafDetected && !originBypassConfirmed && !monitorOnly) {
     return { status: 'protected', reason_codes };
   }
 
   if (
     originBypassConfirmed
     || validationFailed
-    || (wafDetected && modeKey && MONITOR_ONLY_CONNECTOR_MODES.has(modeKey))
+    || (wafDetected && monitorOnly)
   ) {
     return { status: 'underprotected', reason_codes };
   }
@@ -740,7 +751,12 @@ export function classifyWafPosture({
   }
 
   if (!wafDetected && wafRequired) {
-    return { status: 'unprotected', reason_codes };
+    return {
+      status: coverageGapEvidence ? 'unprotected' : 'unknown',
+      reason_codes: coverageGapEvidence
+        ? reason_codes
+        : [...new Set([...reason_codes, 'insufficient_validation_evidence'])],
+    };
   }
 
   return { status: 'unknown', reason_codes };

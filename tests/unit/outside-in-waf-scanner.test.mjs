@@ -582,7 +582,7 @@ describe('outside-in WAF scanner', () => {
     assert.equal(outcome.validation_failed, true);
   });
 
-  it('reports bypass risk when declared origin is reachable', async () => {
+  it('does not confirm bypass from direct-origin reachability alone when the responder does not match the edge application signature', async () => {
     const outcome = await runOutsideInWafScan({
       url: 'https://edge.example.test/',
       budget: 10,
@@ -595,12 +595,42 @@ describe('outside-in WAF scanner', () => {
         }
         return mockResponse(403, { server: 'cloudflare', 'cf-ray': '1', __body: 'blocked' });
       },
+      // A 200 from an unrelated nginx listener on the direct IP is network reachability, not
+      // proof this is the protected application — the server header does not match the edge
+      // baseline's ('cloudflare'), so this must not become a bypass finding.
       originBypassFn: async () => ({
         res: mockResponse(200, { server: 'origin-nginx' }),
         error: null,
       }),
     });
 
+    assert.equal(outcome.direct_origin_reachable, true);
+    assert.equal(outcome.origin_bypass_network_ingress_confirmed, true);
+    assert.equal(outcome.origin_bypass_application_signature_match, false);
+    assert.equal(outcome.origin_bypass_confirmed, false);
+    assert.notEqual(outcome.posture_label, 'Bypass Risk');
+  });
+
+  it('reports bypass risk when the direct origin echoes the same application signature as the edge', async () => {
+    const outcome = await runOutsideInWafScan({
+      url: 'https://edge.example.test/',
+      budget: 10,
+      timeoutMs: 1000,
+      directIp: '198.51.100.7',
+      hostname: 'edge.example.test',
+      fetchFn: async (url, init) => {
+        if (url === 'https://edge.example.test/' && init?.headers?.['User-Agent']) {
+          return mockResponse(200, { server: 'app-server-v2', 'cf-ray': '1' });
+        }
+        return mockResponse(403, { server: 'app-server-v2', 'cf-ray': '1', __body: 'blocked' });
+      },
+      originBypassFn: async () => ({
+        res: mockResponse(200, { server: 'app-server-v2' }),
+        error: null,
+      }),
+    });
+
+    assert.equal(outcome.origin_bypass_application_signature_match, true);
     assert.equal(outcome.origin_bypass_confirmed, true);
     assert.equal(outcome.posture_label, 'Bypass Risk');
   });

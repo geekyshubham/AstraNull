@@ -153,6 +153,47 @@ describe('WAF posture contract', () => {
     assert.ok(failed.reason_codes.includes('marker_rule_not_blocking'));
   });
 
+  it('classifyWafPosture downgrades a validated marker to underprotected when the connector is monitor-only', () => {
+    // A monitor-only (detect/log) connector mode means the WAF observes and logs but does not
+    // block. A validated marker under that mode must not be reported as 'protected' — the
+    // monitor-only downgrade must apply before, not after, the protected return.
+    const monitorOnly = classifyWafPosture({
+      wafDetected: true,
+      validationPassed: true,
+      wafRequired: true,
+      connectorMode: 'monitor',
+    });
+    assert.equal(monitorOnly.status, 'underprotected');
+    assert.ok(monitorOnly.reason_codes.includes('monitor_only_behavior'));
+
+    const blocking = classifyWafPosture({
+      wafDetected: true,
+      validationPassed: true,
+      wafRequired: true,
+      connectorMode: 'blocking',
+    });
+    assert.equal(blocking.status, 'protected');
+  });
+
+  it('classifyWafPosture keeps an unfingerprinted WAF unknown without coverage-gap evidence', () => {
+    // No detected fingerprint alone proves nothing — many WAFs suppress their signature.
+    // Without configuration/behavioral evidence establishing the gap, this must stay 'unknown'.
+    const noEvidence = classifyWafPosture({
+      wafDetected: false,
+      wafRequired: true,
+    });
+    assert.equal(noEvidence.status, 'unknown');
+    assert.ok(noEvidence.reason_codes.includes('insufficient_validation_evidence'));
+
+    const withEvidence = classifyWafPosture({
+      wafDetected: false,
+      wafRequired: true,
+      coverageGapEvidence: true,
+    });
+    assert.equal(withEvidence.status, 'unprotected');
+    assert.ok(!withEvidence.reason_codes.includes('insufficient_validation_evidence'));
+  });
+
   it('maps reason codes to control-bypass taxonomy classes', () => {
     assert.equal(CONTROL_BYPASS_CLASSES.length, 6);
     const classes = mapReasonCodesToControlBypassClasses(['origin_bypass_confirmed']);

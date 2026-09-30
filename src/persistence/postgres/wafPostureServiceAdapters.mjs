@@ -237,6 +237,10 @@ const WAF_CONNECTOR_SNAPSHOT_SUMMARY_ALLOWLIST = new Set([
   'tags',
   'config_hash',
   'permission_gaps',
+  'record_type',
+  'record_ttl',
+  'record_rdata',
+  'zone',
 ]);
 
 const WAF_CONNECTOR_SLICE_CAPABILITIES = Object.freeze([
@@ -1571,6 +1575,10 @@ export function createPostgresWafPostureServices(repositories, options = {}) {
           originBypassConfirmed,
           wafRequired: asset.expected_waf_required !== false,
           connectorMode,
+          // A completed external probe cycle (even one that found no enforcement) is
+          // behavioral evidence of the coverage gap; a client-supplied wafDetected=false with
+          // no probe evidence at all must not become an 'unprotected' claim.
+          coverageGapEvidence: sourceExternal,
         });
 
         const now = nowFn().toISOString();

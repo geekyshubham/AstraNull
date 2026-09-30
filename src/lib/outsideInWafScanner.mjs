@@ -510,6 +510,9 @@ export function buildOutsideInPostureReport({
     validationFailed,
     originBypassConfirmed,
     wafRequired,
+    // This report is only built after an outside-in probe scan actually executed against the
+    // target, so "no WAF detected" here reflects a completed check, not silence.
+    coverageGapEvidence: true,
   });
 
   const reason_codes = [...posture.reason_codes];
@@ -1318,6 +1321,8 @@ export async function runOutsideInWafScan(options = {}) {
   let directOriginReachable = false;
   let originBypassAttempted = false;
   let originBypassStatus = null;
+  let networkIngressConfirmed = false;
+  let applicationSignatureMatch = false;
   if (plannedPhases.has('origin_bypass') && directIp && hostname
     && requestsSent < budget && typeof options.originBypassFn === 'function') {
     requestsSent += 1;
@@ -1325,8 +1330,20 @@ export async function runOutsideInWafScan(options = {}) {
     const { res, error } = await options.originBypassFn({ directIp, hostname, timeoutMs, deps });
     originBypassStatus = error ? 0 : (res?.status ?? 0);
     directOriginReachable = !error && originBypassStatus >= 100;
-    originBypassConfirmed = directOriginReachable
+    // A response code alone only proves something answered on the direct IP/port — it does not
+    // prove that responder is the protected application rather than an unrelated listener,
+    // load balancer, or default page. Require the direct-origin server header to match the
+    // edge baseline's as corroboration; without it this stays a network-reachability signal.
+    // See docs/security/local-security-review.md — origin_bypass verdict_logic also requires
+    // agent_observation correlation before this becomes an application-bypass finding.
+    const originServerHeader = !error ? headerValue(res, 'server') : null;
+    const baselineServerHeader = baseline?.server_header ?? null;
+    applicationSignatureMatch = Boolean(
+      originServerHeader && baselineServerHeader && originServerHeader === baselineServerHeader,
+    );
+    networkIngressConfirmed = directOriginReachable
       && originBypassStatus >= 200 && originBypassStatus < 400;
+    originBypassConfirmed = networkIngressConfirmed && applicationSignatureMatch;
     if (error) {
       const errorClass = error.name ?? error.code ?? 'origin_probe_failed';
       if (!transportErrorClasses.includes(errorClass)) transportErrorClasses.push(errorClass);
@@ -1335,6 +1352,8 @@ export async function runOutsideInWafScan(options = {}) {
       phase: 'origin_bypass',
       status_code: originBypassStatus,
       reachable: directOriginReachable,
+      network_ingress_confirmed: networkIngressConfirmed,
+      application_signature_match: applicationSignatureMatch,
       bypass_signal: originBypassConfirmed,
       ...(error ? { error_class: error.name ?? error.code ?? 'origin_probe_failed' } : {}),
     });
@@ -1458,6 +1477,8 @@ export async function runOutsideInWafScan(options = {}) {
     origin_bypass_confirmed: originBypassConfirmed,
     direct_origin_reachable: directOriginReachable,
     origin_bypass_status_code: originBypassStatus,
+    origin_bypass_network_ingress_confirmed: networkIngressConfirmed,
+    origin_bypass_application_signature_match: applicationSignatureMatch,
     network_firewall: networkFirewall,
     ...(scanErrorClass ? { error_class: scanErrorClass } : {}),
     vendor_candidates: (vendorClassification.candidates ?? []).slice(0, 3),

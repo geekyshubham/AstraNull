@@ -6370,7 +6370,19 @@ describe('postgres WAF posture service adapters', () => {
                 return [];
               },
             }
-          : {},
+          // 'unprotected' requires coverage-gap evidence, not just a client-supplied
+          // waf_detected=false: a completed probe cycle that observed no WAF/CDN fingerprint
+          // supplies that evidence (see classifyWafPosture's coverageGapEvidence gate).
+          // 'timeout' is a recognized-but-neutral external_result: it establishes the probe
+          // ran (hasExternalProbeEvidence) without also flipping validationFailed/wafDetected.
+          : {
+              listRunEvents: async (_ctx, _runId, options = {}) => {
+                if (options.signalType === 'probe_result') {
+                  return [{ id: 'evt_fixture_probe_no_waf', nonce_hash: null, metadata: { external_result: 'timeout' } }];
+                }
+                return [];
+              },
+            },
       });
       let idSeq = 0;
       const svc = createPostgresWafPostureServices(repositories, {
@@ -6533,7 +6545,17 @@ describe('postgres WAF posture service adapters', () => {
                   return [];
                 },
               }
-            : {}),
+            // 'unprotected' requires coverage-gap evidence; a completed probe with a neutral
+            // (non-fail, non-fingerprint) external_result establishes the check ran and found
+            // no WAF, without also flipping validationFailed/wafDetected.
+            : {
+                listRunEvents: async (_ctx, _runId, options = {}) => {
+                  if (options.signalType === 'probe_result') {
+                    return [{ id: 'evt_drift_probe_no_waf', nonce_hash: null, metadata: { external_result: 'timeout' } }];
+                  }
+                  return [];
+                },
+              }),
         },
       });
       const svc = createPostgresWafPostureServices(repositories, {
@@ -6598,7 +6620,11 @@ describe('postgres WAF posture service adapters', () => {
         from: 'edge_protected',
         to: 'unprotected',
         expectedDriftType: 'fingerprint_lost',
-        probes: [],
+        // 'unprotected' requires coverage-gap evidence: a completed probe with a neutral
+        // (non-fail, non-fingerprint) external_result establishes the check ran and found no
+        // WAF/CDN signature this time, corroborating the drift from a prior edge_protected
+        // snapshot.
+        probes: [{ id: 'evt_edge_transition_probe_no_waf', nonce_hash: null, metadata: { external_result: 'timeout' } }],
         agents: [],
         reasonCodes: [],
         findingId: 'fnd_waf_1',

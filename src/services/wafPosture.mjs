@@ -1445,6 +1445,10 @@ export function finalizeWafValidation(ctx, id, body = {}) {
       originBypassConfirmed,
       wafRequired: asset.expected_waf_required !== false,
       connectorMode,
+      // A completed external probe cycle (even one that found no enforcement) is behavioral
+      // evidence of the coverage gap; a client-supplied wafDetected=false with no probe
+      // evidence at all must not become an 'unprotected' claim.
+      coverageGapEvidence: sourceExternal,
     });
 
     const now = new Date().toISOString();
@@ -1614,12 +1618,17 @@ const CONNECTOR_SNAPSHOT_SUMMARY_SAFE_KEYS = new Set([
   'tags',
   'config_hash',
   'permission_gaps',
+  'record_type',
+  'record_ttl',
+  'record_rdata',
+  'zone',
 ]);
 
 const CONNECTOR_SNAPSHOT_KINDS = new Set([
   'waf_policy',
   'cdn_property',
   'dns_zone',
+  'dns_record',
   'cloud_asset',
   'vulnerability',
 ]);
@@ -1748,6 +1757,15 @@ function normalizeConnectorSnapshotSummary(raw) {
     }
     if (normalized === 'permission_gaps' && Array.isArray(value)) {
       out.permission_gaps = value.map((g) => String(g).trim()).filter(Boolean);
+      continue;
+    }
+    if (normalized === 'record_rdata' && Array.isArray(value)) {
+      out.record_rdata = value.map((v) => String(v).trim()).filter(Boolean);
+      continue;
+    }
+    if (normalized === 'record_ttl') {
+      const n = Number(value);
+      if (Number.isFinite(n) && n >= 0) out.record_ttl = Math.floor(n);
       continue;
     }
     if (typeof value === 'string' && value.trim()) {

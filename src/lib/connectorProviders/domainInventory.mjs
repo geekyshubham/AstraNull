@@ -457,7 +457,75 @@ function normalizeAkamaiHost(value) {
   return host;
 }
 
-export async function pollAkamaiEdgeDns({ credentials, fetchFn = fetch, observedAt, fetchTimeoutMs, now, nonce }) {
+// Record types worth correlating against application/origin evidence. Excludes DNSSEC/SOA/NS
+// bookkeeping records that carry no hostname-to-origin signal.
+export const AKAMAI_RECORDSET_CORRELATION_TYPES = Object.freeze(['A', 'AAAA', 'CNAME']);
+
+function dnsRecordSetSnapshot(provider, zoneName, record, observedAt) {
+  const name = String(record?.name ?? '').trim().replace(/\.+$/, '').toLowerCase();
+  const type = String(record?.type ?? '').trim().toUpperCase();
+  if (!name || !type) return null;
+  const rdata = Array.isArray(record?.rdata)
+    ? record.rdata.map((value) => String(value).trim()).filter(Boolean).slice(0, 32)
+    : [];
+  const resourceRef = `${zoneName}:${name}:${type}`;
+  return buildNormalizedSnapshot({
+    provider,
+    snapshotKind: 'dns_record',
+    resourceRef,
+    displayRef: `${name} ${type}`,
+    summary: {
+      hostnames: [name],
+      record_type: type,
+      record_ttl: Number.isFinite(Number(record?.ttl)) ? Math.max(0, Math.floor(Number(record.ttl))) : null,
+      record_rdata: rdata,
+      zone: zoneName,
+      tags: ['provider_zone_recordset_inventory'],
+    },
+    observedAt,
+  });
+}
+
+async function fetchAkamaiZoneRecordSets({
+  host,
+  zoneName,
+  clientToken,
+  clientSecret,
+  accessToken,
+  fetchFn,
+  fetchTimeoutMs,
+  now,
+  nonce,
+  maxRecords,
+}) {
+  const path = `/config-dns/v2/zones/${encodeURIComponent(zoneName)}/recordsets?showAll=true`;
+  const authorization = buildAkamaiEdgeGridAuthorization({
+    host,
+    path,
+    clientToken,
+    clientSecret,
+    accessToken,
+    now: now ?? new Date(),
+    nonce,
+  });
+  const body = await boundedFetch(`https://${host}${path}`, {
+    headers: { Authorization: authorization },
+    fetchFn,
+    timeoutMs: fetchTimeoutMs,
+  });
+  const recordsets = Array.isArray(body?.recordsets) ? body.recordsets : [];
+  return recordsets.slice(0, maxRecords);
+}
+
+export async function pollAkamaiEdgeDns({
+  credentials,
+  fetchFn = fetch,
+  observedAt,
+  fetchTimeoutMs,
+  now,
+  nonce,
+  includeRecordSets = true,
+}) {
   requireStrings(credentials, ['host', 'client_token', 'client_secret', 'access_token'], 'Akamai EdgeDNS');
   const host = normalizeAkamaiHost(credentials.host);
   const path = '/config-dns/v2/zones?showAll=true';
@@ -476,9 +544,59 @@ export async function pollAkamaiEdgeDns({ credentials, fetchFn = fetch, observed
     timeoutMs: fetchTimeoutMs,
   });
   const zones = Array.isArray(body?.zones) ? body.zones : [];
-  return inventoryResult('akamai_edgedns', zones, observedAt, {
+  const zoneResult = inventoryResult('akamai_edgedns', zones, observedAt, {
     truncated: zones.length > CONNECTOR_POLL_MAX_INVENTORY_ITEMS,
   });
+  if (!includeRecordSets || zones.length === 0) return zoneResult;
+
+  // Zones, not their record sets, only establish that Akamai hosts the zone (EdgeDNS is a
+  // DNS host, not proof of CDN/WAF coverage on its own). Fetching record sets lets callers
+  // correlate application/alternate/legacy A/AAAA/CNAME records against declared targets.
+  const recordSnapshots = [];
+  const permissionGaps = new Set(zoneResult.permission_gaps);
+  let recordFetchFailed = false;
+  for (const zone of zones.slice(0, CONNECTOR_POLL_MAX_INVENTORY_ITEMS)) {
+    if (recordSnapshots.length >= CONNECTOR_POLL_MAX_INVENTORY_ITEMS) break;
+    const zoneName = String(zone?.name ?? zone?.zone ?? zone?.domain ?? '').trim().replace(/\.+$/, '').toLowerCase();
+    if (!zoneName) continue;
+    let recordsets;
+    try {
+      recordsets = await fetchAkamaiZoneRecordSets({
+        host,
+        zoneName,
+        clientToken: credentials.client_token,
+        clientSecret: credentials.client_secret,
+        accessToken: credentials.access_token,
+        fetchFn,
+        fetchTimeoutMs,
+        now,
+        nonce,
+        maxRecords: CONNECTOR_POLL_MAX_INVENTORY_ITEMS - recordSnapshots.length,
+      });
+    } catch (error) {
+      recordFetchFailed = true;
+      permissionGaps.add(error?.code === 'permission_insufficient' ? 'permission_insufficient' : 'recordset_fetch_failed');
+      continue;
+    }
+    for (const record of recordsets) {
+      if (recordSnapshots.length >= CONNECTOR_POLL_MAX_INVENTORY_ITEMS) break;
+      const snapshot = dnsRecordSetSnapshot('akamai_edgedns', zoneName, record, observedAt);
+      if (snapshot) recordSnapshots.push(snapshot);
+    }
+  }
+  const truncated = zoneResult.inventory_truncated || recordFetchFailed
+    || zones.some((zone) => {
+      const zoneName = String(zone?.name ?? zone?.zone ?? zone?.domain ?? '').trim();
+      return zoneName && recordSnapshots.length >= CONNECTOR_POLL_MAX_INVENTORY_ITEMS;
+    });
+  if (truncated) permissionGaps.add('truncated_inventory');
+  return {
+    snapshots: [...zoneResult.snapshots, ...recordSnapshots],
+    health: permissionGaps.size ? 'degraded' : 'active',
+    permission_gaps: [...permissionGaps],
+    inventory_complete: !truncated,
+    inventory_truncated: truncated,
+  };
 }
 
 function decodeXml(value) {
@@ -635,7 +753,7 @@ export async function pollIbmNs1({ credentials, fetchFn = fetch, observedAt, fet
 export const akamaiEdgeDnsProvider = {
   provider: 'akamai_edgedns',
   required_scopes: ['DNS—Zone Record Management:READ-ONLY'],
-  snapshot_kinds: ['dns_zone'],
+  snapshot_kinds: ['dns_zone', 'dns_record'],
   poll: pollAkamaiEdgeDns,
 };
 
