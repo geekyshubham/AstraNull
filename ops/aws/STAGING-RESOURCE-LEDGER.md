@@ -469,3 +469,59 @@ and run the same `compose up -d --no-build --force-recreate --wait` of the four 
 
 Still open: the `Deploy AWS` workflow on `912c8a6a` again timed out on SSH port 22, and GuardianBot fails on
 `main` (the last 60 runs all failed, independent of this release).
+
+## Production releases 2026-09-30 (`67faafc6` outside-in revamp, `0a4d22f8` follow-up)
+
+Commit `67faafc6c56ccc8845aec87b2a5acc42db00c5f6` implements ADR-0008 (outside-in only): agents,
+bootstrap tokens, placement diagnostics and environments are removed; targets carry tags; the
+dashboard, target detail and integrations pages are redesigned; connector provider logos added.
+Migration `0058_target_tags_from_environments` backfills `env:<name>` tags (4/4 live targets) and
+drops no tables. Commit `0a4d22f833ec0549a65571889baf197187036de1` relabels legacy `misplaced_agent`
+verdicts as "Inconclusive (legacy result)", masks password-invite/reset/session ids in the audit log,
+and aligns the Portal revamp suites with ADR-0008 (portal source, rebuilt bundle and tests only; no
+`db`/`ops`/`src` change). Before `0a4d22f8`: unit 3737/3737, integration 369/369, contract 6/6, e2e
+28/28 + Playwright 172, a11y 34/34, db-migrate idempotent. GitHub CI, Security scan and Portal revamp
+passed on `0a4d22f8` (Portal revamp had failed on `67faafc6` on the stale agent-model assertions that
+`0a4d22f8` fixes). Both released by hand; `deploy.sh` not used.
+
+| Step | `67faafc6` | `0a4d22f8` |
+|---|---|---|
+| Archive | `git archive` tar SHA-256 `47b96a6264a8ebe54feb97f0684ea436d83645ea2c276b27b454e3a8a8faa178` → `/opt/astranull-release-67faafc6c56ccc8845aec87b2a5acc42db00c5f6` | tar SHA-256 `efbf7caf1f98c3018d5ede86151747a9d42d4b228d427eafd5edeebf5b4d309d` → `/opt/astranull-release-0a4d22f833ec0549a65571889baf197187036de1`; per-file tree digest on host equals the local archive |
+| Image | `sha256:dee3e2b59e069719cc7a618fd83e41be79f802990be3002a2a778784e98cae1a` | `sha256:5cd7156a644ea0d7e1adf7ad26a52468751366dd4d329921a77567c9d85dc903`; `react-app.js` `c7dcfe3b…` / `.css` `5de7bb2b…` identical in commit, image and served response |
+| Backup | `postgres-2026-09-30T18-45-51-214Z-6bf1a4cbaeb9.dump.enc` (+ manifest), encrypted SHA-256 `c5742ab0658b…` | `postgres-2026-09-30T20-11-46-693Z-cc774f1a7e8c.dump.enc` (+ manifest), encrypted SHA-256 `0abefd3f87ca…`, restore-drill `--validate-only` ok, root-owned mode 600, link count 1, no plaintext left |
+| Compose | `docker-compose.yml.bak-pre-67faafc6` kept; new file drops `ASTRANULL_AGENT_IDENTITY_MODE` | `docker-compose.yml.bak-pre-0a4d22f8` kept; file unchanged |
+| Migrate | head `0057` → `0058_target_tags_from_environments` | none needed; head stays `0058` |
+| Activate | four app services, then `connector-poll-scheduler` and `connector-poll-runner` | same six services; postgres and caddy untouched in both |
+
+Connectors were enabled on the host during `67faafc6`. `.env` was backed up first to
+`/opt/astranull-backups/env.bak-pre-connectors-20260930T185312Z` (mode 600). Six keys changed
+(`ASTRANULL_CONNECTORS_ENABLED`, `ASTRANULL_CONNECTOR_JOB_PRIVATE_KEY`/`_PUBLIC_KEY`,
+`ASTRANULL_CONNECTOR_SECRET_ENCRYPTION_KEY`, `ASTRANULL_DATABASE_CONNECTOR_SCHEDULER_PASSWORD`/`_WORKER_PASSWORD`);
+the values were generated on the host and never left it. Roles `astranull_connector_scheduler` and
+`astranull_connector_worker` exist as non-superuser, non-BYPASSRLS logins.
+
+Live checks on `0a4d22f8`: all six app containers healthy on the new image with restarts=0 and 0
+error-level log lines since activation; `/health` ok, `/ready` ready (oidc-jwt, postgres,
+signed-worker); unauthenticated `/v1/targets` 401. Independent audit with short-lived role tokens
+(deleted afterwards): `scripts/live-portal-sweep.mjs` ran 6 roles × 35 route cases = 210 visits and 420
+screenshots with 0 findings in every category (page/console/API errors, machine tokens, jargon,
+overflow, unauthorized controls). The two P2s from the `67faafc6` sweep are gone (no "Misplaced agent"
+text; audit log shows "Password invite"). `/v1/agents` and `/v1/environments` 404; every target has a
+`tags` array; `deployment-features` connectors:true; `/v1/connectors` 200. An engineer high-scale
+`POST /v1/test-runs` returns 403 `soc_gated_check` and the run count stays at 100.
+
+Rollback to `67faafc6` (code only): export all three `ASTRANULL_*_IMAGE_ID` variables as
+`sha256:dee3e2b59e069719cc7a618fd83e41be79f802990be3002a2a778784e98cae1a`, then run
+`sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`
+and `... up -d --no-deps --no-build --force-recreate --wait connector-poll-scheduler connector-poll-runner`.
+Rolling back past `67faafc6` to `912c8a6a` (`sha256:e11e9630657597e4c0f602bc6e04515a695519ca42d63ba9da6e65c548941905`)
+also requires restoring `docker-compose.yml.bak-pre-67faafc6` and stopping the two connector services.
+0058 drops no tables or columns. It does set `validation_mode = 'external_only'` and clears
+`target_groups.environment_id`, so pre-revamp code would show groups without environments (not
+exercised). Restoring the pre-0058 data would need the `6bf1a4cbaeb9` backup through the restore
+runbook, which is destructive and needs operator sign-off.
+
+Still open: `Deploy AWS` still fails at SSH and GuardianBot still fails on its reusable-workflow SHA pin
+(same as earlier releases). The host `.env` has no `ASTRANULL_ALLOWED_ORIGINS` (compose warns and uses
+an empty value; this predates these releases). It also keeps an unused `ASTRANULL_AGENT_IDENTITY_MODE`
+line that the compose file no longer reads.
