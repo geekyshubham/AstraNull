@@ -783,6 +783,8 @@ describe('WAF posture API', () => {
       body: {
         waf_detected: false,
         validation_passed: false,
+        // 'unprotected' requires coverage-gap evidence; without it the posture stays 'unknown'.
+        source_external: true,
         detected_vendor: 'cloudflare',
         detected_product: 'Cloudflare WAF',
       },
@@ -1260,24 +1262,23 @@ describe('WAF drift events API', () => {
   it('emits fingerprint_lost drift when edge-protected posture becomes unprotected', async () => {
     const engineer = demoHeaders('engineer');
     const asset = await createDemoAsset(baseUrl, engineer);
-    const edgeOutcome = await finalizeEdgeProtectedPosture(baseUrl, engineer, asset);
-    const safeRun = edgeOutcome.safeRun;
-    getStore().events = getStore().events.filter(
-      (event) => !(
-        event.test_run_id === safeRun.id
-        && ['probe_result', 'agent_observation'].includes(event.signal_type)
-      ),
-    );
+    await finalizeEdgeProtectedPosture(baseUrl, engineer, asset);
 
+    // Merely deleting the prior probe evidence now yields 'unknown' (absence of a fingerprint is
+    // not a coverage gap), so the follow-up validation declares a completed external check that
+    // found no WAF.
     const validation = await request(baseUrl, 'POST', '/v1/waf/validations', {
       headers: engineer,
-      body: { waf_asset_id: asset.id, modes: ['marker'], test_run_id: safeRun.id },
+      body: { waf_asset_id: asset.id, modes: ['marker'] },
     });
     const finalize = await request(
       baseUrl,
       'POST',
       `/v1/waf/validations/${validation.json.validation_run.id}/finalize`,
-      { headers: engineer, body: { waf_detected: true, validation_passed: true } },
+      {
+        headers: engineer,
+        body: { waf_detected: false, validation_passed: false, source_external: true },
+      },
     );
 
     assert.equal(finalize.status, 200);
@@ -2547,6 +2548,8 @@ describe('WAF report export API', () => {
       body: {
         waf_detected: false,
         validation_passed: false,
+        // 'unprotected' requires coverage-gap evidence; without it the posture stays 'unknown'.
+        source_external: true,
         detected_vendor: 'cloudflare',
         detected_product: 'Cloudflare WAF',
       },
