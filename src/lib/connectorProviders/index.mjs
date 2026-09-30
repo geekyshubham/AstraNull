@@ -1,5 +1,6 @@
 import { awsWafProvider } from './awsWaf.mjs';
 import { cloudflareProvider } from './cloudflare.mjs';
+import { akamaiApplicationSecurityProvider } from './akamaiAppSec.mjs';
 import {
   akamaiEdgeDnsProvider,
   godaddyProvider,
@@ -10,6 +11,7 @@ import {
 const PROVIDERS = new Map([
   ['cloudflare', cloudflareProvider],
   ['akamai_edgedns', akamaiEdgeDnsProvider],
+  ['akamai_appsec', akamaiApplicationSecurityProvider],
   ['namecheap', namecheapProvider],
   ['godaddy', godaddyProvider],
   ['ibm_ns1', ibmNs1Provider],

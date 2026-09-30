@@ -94,6 +94,9 @@ export function buildNormalizedSnapshot({
     ...(typeof summary.zone === 'string' && summary.zone.trim()
       ? { zone: summary.zone.trim() }
       : {}),
+    ...(Number.isFinite(Number(summary.match_target_order))
+      ? { match_target_order: Math.floor(Number(summary.match_target_order)) }
+      : {}),
   };
   safeSummary.config_hash = computeConfigHash(safeSummary);
   const resourceRefHash = hashRef(`${provider}:${resourceRef}`);
@@ -135,7 +138,7 @@ export function parseProviderSecret(plaintext, provider) {
           };
         }
       }
-      if (provider === 'akamai_edgedns') {
+      if (provider === 'akamai_edgedns' || provider === 'akamai_appsec') {
         const fields = ['host', 'access_token', 'client_token', 'client_secret'];
         if (fields.every((field) => typeof parsed[field] === 'string' && parsed[field].trim())) {
           return Object.fromEntries(fields.map((field) => [field, parsed[field].trim()]));

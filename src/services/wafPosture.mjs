@@ -1580,6 +1580,7 @@ const CONNECTOR_PROVIDERS = new Set([
   'generic_waf',
   'cloudflare',
   'akamai_edgedns',
+  'akamai_appsec',
   'namecheap',
   'godaddy',
   'ibm_ns1',

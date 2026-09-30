@@ -1213,7 +1213,7 @@ export function createWafPostureRepository(pool, options = {}) {
                WHERE feature.tenant_id = c.tenant_id AND feature.enabled = TRUE
              )
              AND c.provider IN (
-               'cloudflare', 'aws_waf', 'akamai_edgedns', 'namecheap', 'godaddy', 'ibm_ns1'
+               'cloudflare', 'aws_waf', 'akamai_edgedns', 'akamai_appsec', 'namecheap', 'godaddy', 'ibm_ns1'
              )
              AND c.secret_id IS NOT NULL
              AND c.status NOT IN ('disabled', 'revoked')
