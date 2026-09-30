@@ -91,9 +91,9 @@ test.describe('portal executive clarity', () => {
     const defensePath = page.locator('.defense-path');
     await expect(defensePath).toBeVisible();
     await expect(defensePath).not.toContainText('coverage_summary_not_populated');
-    // WAF stage with no coverage evidence reads "Not measured", never a fabricated number.
+    // WAF stage with no coverage evidence reads plain language, never a fabricated number or raw code.
     const wafStage = defensePath.locator('.defense-stage').filter({ hasText: 'WAF' });
-    await expect(wafStage).toContainText('Not measured');
+    await expect(wafStage).toContainText('Not enough evidence');
   });
 
   test('Dashboard does not overflow at 375, 768, 1024, or 1440 pixels', async ({ page }) => {
@@ -118,7 +118,7 @@ test.describe('portal executive clarity', () => {
       }
 
       await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
-      await expect(page.getByTestId('target-protection-summary')).toBeVisible();
+      await expect(page.locator('.td-protection-lede')).toBeVisible();
       await expectNoPageOverflow(page);
     }
   });
@@ -160,40 +160,27 @@ test.describe('portal executive clarity', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
 
-    const protection = page.getByTestId('target-protection-summary');
-    const verification = page.getByRole('heading', { name: 'Verification ladder' });
+    // Post-revamp target detail: the "Protection path" tab leads with a plain-language lede that
+    // prefers the API-recorded edge summary, and the protection card sits above "Target facts".
+    const protection = page.locator('.td-protection-lede');
     await expect(protection).toBeVisible();
-    await expect(protection.getByText(recordedSummary, { exact: true })).toBeVisible();
-    await expect(protection.getByText('Recorded summary', { exact: true })).toBeVisible();
-    for (const layer of ['Web application firewall', 'CDN / edge network', 'Cloud hosting', 'Origin access / firewall']) {
-      await expect(protection.getByText(layer, { exact: true })).toBeVisible();
+    await expect(protection).toHaveText(recordedSummary);
+    for (const layer of ['Web application firewall', 'CDN / edge network', 'Cloud hosting', 'Origin access']) {
+      await expect(page.locator('.td-layer').filter({ hasText: layer })).toBeVisible();
     }
-    await expect(protection.getByText('9 of 10 safe probes blocked (90%)', { exact: true })).toBeVisible();
-    await expect(protection).toContainText('Behavior observed (E3)');
-    const positions = await Promise.all([
-      protection.boundingBox(),
-      verification.boundingBox(),
-    ]);
-    expect(positions[0]?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(positions[1]?.y ?? 0);
 
+    // E1 checks render as "Declaration only · E1" via the shared evidence-mode cell.
     const declarationOnly = page.locator('.evidence-mode-cell').filter({ hasText: 'Declaration only' });
-    await expect(declarationOnly).toHaveCount(2);
-    await expect(declarationOnly.first()).toContainText('No live traffic was sent');
     await expect(declarationOnly.first()).toContainText('E1');
-    await expect(page.getByText('Observed from inside', { exact: true }).first()).toBeVisible();
-    await expect(page.locator('.metric-card').filter({ hasText: 'Kind' })).toContainText('Domain name');
+
+    await expect(page.getByRole('heading', { name: 'Target facts' })).toBeVisible();
     await expect(page.getByText('Detected detected', { exact: true })).toHaveCount(0);
 
     const visible = await page.locator('#portal-main').innerText();
     expect(visible).not.toMatch(/\b(?:not_detected|not_tested|must_block_before_origin|coverage_summary_not_populated)\b/);
     expect(visible).not.toMatch(/\b(?:API|hydrator|canonical)\b|producer attribution/i);
-
-    const pillLines = await protection.locator('[data-ui="badge"]').evaluateAll((badges) => badges.map((badge) => {
-      const range = document.createRange();
-      range.selectNodeContents(badge);
-      return { text: badge.textContent?.trim(), lines: range.getClientRects().length };
-    }));
-    expect(pillLines.filter((pill) => pill.lines > 1), 'verdict and status pills must remain single-line').toEqual([]);
+    // ADR-0008: no internal-agent "observed from inside" language on the target detail.
+    expect(visible).not.toMatch(/Observed from inside/);
   });
 
   test('Target Detail does not repeat identical empty-state title and body copy', async ({ page }) => {
@@ -210,8 +197,11 @@ test.describe('portal executive clarity', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', getPortalPlaywrightBaseUrl());
 
-    const boundChecks = page.locator('[data-ui="card"]').filter({ has: page.getByRole('heading', { name: 'Bound checks' }) });
-    await expect(boundChecks.getByRole('heading', { name: 'No customer-runnable checks are bound to this target by a test policy yet' })).toHaveCount(1);
-    await expect(boundChecks.locator('.empty-state > p')).toHaveCount(0);
+    // Post-revamp target detail renders bound checks inside the "Choose a check" step; its empty
+    // state is the shared EmptyState (h2 title + optional p body). The body is suppressed when it
+    // duplicates the title, so title copy must not be echoed as a paragraph.
+    const emptyState = page.locator('.empty-state').filter({ hasText: 'No customer-runnable checks are bound to this target by a test policy yet' });
+    await expect(emptyState.getByRole('heading', { name: 'No customer-runnable checks are bound to this target by a test policy yet' })).toHaveCount(1);
+    await expect(emptyState.locator('p')).toHaveCount(0);
   });
 });

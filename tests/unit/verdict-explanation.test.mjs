@@ -17,6 +17,10 @@ import {
   summarizeExternalProbeEvidence,
   trafficHopState,
 } from '../../apps/web/react/src/lib/verdict-explanation.ts';
+import {
+  plainVerdictLabel,
+  plainVerdictDescription,
+} from '../../apps/web/react/src/lib/plain-language.mjs';
 
 const RACE_CTX = { tenantId: 'ten_demo', userId: 'system', role: 'system' };
 const FIXED_NOW = new Date('2026-01-01T00:00:00.000Z');
@@ -929,5 +933,14 @@ describe('verdict-explanation (React portal)', () => {
 
     const labels = fields.map((field) => field.label);
     assert.deepEqual(labels, ['External probe evidence', 'Conclusion', 'Remediation']);
+  });
+
+  it('relabels the removed-agent-era verdict as an inconclusive legacy result (ADR-0008)', () => {
+    // Historical rows stored verdict `misplaced_agent` before agents were removed.
+    assert.equal(plainVerdictLabel('misplaced_agent'), 'Inconclusive (legacy result)');
+    assert.match(plainVerdictDescription('misplaced_agent'), /rerun the check/i);
+    // It must never read as a pass and must carry a non-pass (warn) traffic-path tone.
+    assert.notEqual(plainVerdictLabel('misplaced_agent'), plainVerdictLabel('protected'));
+    assert.equal(trafficHopState('origin', 'misplaced_agent'), 'warn');
   });
 });

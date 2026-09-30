@@ -112,6 +112,23 @@ export function formatResourceTypeLabel(resourceType: string, fallback = 'Record
   return RESOURCE_TYPE_LABELS[key] ?? sentenceCase(key);
 }
 
+// Security follow-up: credential resource ids (password invites, reset tokens, sessions) are
+// secrets-adjacent. Operators need to know the action happened, not the raw handle, so the audit
+// UI shows this friendly label and keeps the id only in a tooltip. Targets/runs/findings stay
+// verbatim because operators pivot on them. Returns null for non-sensitive resource types.
+const SENSITIVE_RESOURCE_LABELS: Record<string, string> = {
+  user_password_invite: 'Password invite',
+  user_password_reset: 'Password reset',
+  password_invite: 'Password invite',
+  password_reset: 'Password reset',
+  session: 'Session',
+  user_session: 'Session'
+};
+
+export function sensitiveResourceLabel(resourceType: string): string | null {
+  return SENSITIVE_RESOURCE_LABELS[resourceType.trim().toLowerCase()] ?? null;
+}
+
 const EXPECTED_BEHAVIOR_LABELS: Record<string, string> = {
   must_block_before_origin: 'Must be blocked before origin',
   must_allow_baseline_health: 'Must allow baseline health',

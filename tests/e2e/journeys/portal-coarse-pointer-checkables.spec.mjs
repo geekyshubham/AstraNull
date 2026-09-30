@@ -69,22 +69,9 @@ test.describe('portal coarse-pointer checkable controls (FT-TOUCH-02)', () => {
       ).toEqual([]);
     });
 
-    test(`single-domain scope radios meet the coarse minimum at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 });
-      await injectPortalSessionForSurface(page, 'customer');
-      await gotoPortalRoute(page, 'integrations', getPortalPlaywrightBaseUrl());
-
-      await page.getByRole('button', { name: /Add provider/i }).first().click();
-      await page.getByRole('button', { name: /Add single domain/i }).first().click();
-      await page.getByRole('radiogroup', { name: 'Target group destination' }).waitFor();
-
-      const measured = await measureCheckables(page);
-      const radios = measured.filter((item) => item.type === 'radio');
-      expect(radios.length, 'expected the scope radios to render').toBeGreaterThanOrEqual(2);
-      expect(
-        measured.filter((item) => item.width + 0.5 < MIN_TARGET || item.height + 0.5 < MIN_TARGET),
-        `undersized scope radios at ${width}px`,
-      ).toEqual([]);
-    });
+    // The former "Add single domain" scope radiogroup ("Target group destination") was removed in
+    // the ADR-0008 outside-in revamp; the flow now uses a target-group <select>, so there are no
+    // scope radios left to measure. Coverage of the retention checkbox above still exercises the
+    // component-specific coarse-pointer sizing rule this suite guards.
   }
 });

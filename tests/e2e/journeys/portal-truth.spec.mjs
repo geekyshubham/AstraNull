@@ -75,11 +75,6 @@ test.describe('portal truth surfaces', () => {
         const verdict = store.verdicts.find((entry) => entry.test_run_id === runId);
         verdict.confidence = 'high';
         verdict.explanation = 'Signed probe evidence supports the edge-only conclusion.';
-        verdict.placement_confidence = {
-          level: 'high',
-          observation_mode: 'packet_metadata',
-          agent_id: PORTAL_BASELINE_IDS.agentId,
-        };
 
         const eventBase = {
           tenant_id: PORTAL_BASELINE_IDS.tenantId,
@@ -88,6 +83,8 @@ test.describe('portal truth surfaces', () => {
           target_id: PORTAL_BASELINE_IDS.targetId,
           timestamp: '2026-09-01T10:10:00.000Z',
         };
+        // Untrusted public_api events must never surface as signed probe evidence (ADR-0008
+        // removed internal agents; agent_observation lookalikes must also be ignored).
         store.events.push(
           {
             ...eventBase,
@@ -103,8 +100,6 @@ test.describe('portal truth surfaces', () => {
             signal_type: 'agent_observation',
             producer_kind: 'public_api',
             source: publicAgentMarker,
-            agent_id: PORTAL_BASELINE_IDS.agentId,
-            nonce_hash: 'nonce-public-decoy',
             metadata: { observation_mode: publicAgentMarker },
           },
           {
@@ -124,40 +119,31 @@ test.describe('portal truth surfaces', () => {
       entityIds: { 'run-detail': runId },
     });
 
-    // Probe and agent evidence lives on its own tab in the run detail view.
-    await page.getByRole('tab', { name: 'Probe & agent' }).click();
-
+    // Signed probe evidence lives on the "Probe evidence" tab; untrusted lookalikes must not appear.
+    await page.getByRole('tab', { name: 'Probe evidence' }).click();
     const probeCard = page.locator('.card').filter({
       has: page.getByRole('heading', { name: 'Probe result', exact: true }),
     });
-    await expect(probeCard).toContainText(/Blocked/i);
+    await expect(probeCard).toBeVisible();
     await expect(probeCard).not.toContainText(publicProbeMarker);
+    await expect(probeCard).not.toContainText(publicAgentMarker);
+    await expect(probeCard).not.toContainText(publicNoObservationMarker);
 
-    const agentCard = page.locator('.card').filter({
-      has: page.getByRole('heading', { name: 'Agent observation', exact: true }),
-    });
-    await expect(agentCard).toContainText('No trusted internal observation recorded.');
-    await expect(agentCard).not.toContainText(publicAgentMarker);
-    await expect(agentCard).not.toContainText(publicNoObservationMarker);
-
-    // The verdict explanation and truth table sit in the correlation matrix on the summary tab.
+    // The verdict explanation on the summary tab summarizes only trusted signed probe evidence.
     await page.getByRole('tab', { name: 'Summary' }).click();
     await page.getByText('Show technical evidence details', { exact: true }).first().click();
     const explanation = page.locator('.verdict-explanation');
-    const internalEvidence = explanation.locator('.verdict-explanation-item').filter({ hasText: 'Internal agent evidence' });
-    const placement = explanation.locator('.verdict-explanation-item').filter({ hasText: 'Placement confidence' });
-    await expect(internalEvidence).toContainText('No authenticated agent_observation events');
-    await expect(internalEvidence).not.toContainText(publicAgentMarker);
-    await expect(internalEvidence).not.toContainText(publicNoObservationMarker);
-    await expect(placement).toContainText('cannot be proven from trusted run events');
-    await expect(placement).not.toContainText('packet_metadata');
-    await expect(placement).not.toContainText(PORTAL_BASELINE_IDS.agentId);
+    const externalEvidence = explanation.locator('.verdict-explanation-item').filter({ hasText: 'External probe evidence' });
+    await expect(externalEvidence).not.toContainText(publicProbeMarker);
+    await expect(externalEvidence).not.toContainText(publicAgentMarker);
+    await expect(externalEvidence).not.toContainText(publicNoObservationMarker);
 
+    // ADR-0008: the verdict reports external-only confidence and never a positive internal placement.
     const verdictMetric = page.locator('.metric-card').filter({
       has: page.getByText('Verdict', { exact: true }),
     });
-    await expect(verdictMetric).toContainText('placement unproven');
-    await expect(verdictMetric).not.toContainText('placement high');
+    await expect(verdictMetric).toContainText('External-only confidence');
+    await expect(verdictMetric).not.toContainText(/placement/i);
   });
 
   test('run detail rebind hides prior-run events and ignores a late prior-run response', async ({ page }) => {
@@ -241,9 +227,9 @@ test.describe('portal truth surfaces', () => {
     await gotoPortalRoute(page, 'run-detail', getPortalPlaywrightBaseUrl(), {
       entityIds: { 'run-detail': runA },
     });
-    // Probe evidence markers render on the probe/agent tab; the tab selection persists across
+    // Probe evidence markers render on the "Probe evidence" tab; the tab selection persists across
     // run rebinding, so stale-response protection is still observed from a single place.
-    await page.getByRole('tab', { name: 'Probe & agent' }).click();
+    await page.getByRole('tab', { name: 'Probe evidence' }).click();
     await openTechnicalProbeEvidence(page);
     await expect(page.getByText(new RegExp(`^${markerA}$`, 'i'))).toBeVisible();
 
@@ -296,10 +282,12 @@ test.describe('portal truth surfaces', () => {
 
     await expect(page.getByText('Run event evidence unavailable.', { exact: true })).toBeVisible();
     await expect(page.getByText('No probe results yet.', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('No trusted internal observation recorded.', { exact: true })).toHaveCount(0);
     await expect(page.locator('.verdict-explanation')).toHaveCount(0);
     await expect(page.getByText('Correlation evidence unavailable because run event evidence could not be loaded.', { exact: true })).toBeVisible();
-    await expect(page.locator('.metric-card').filter({ has: page.getByText('Verdict', { exact: true }) })).toContainText('placement unavailable');
+    // ADR-0008: the verdict reports external-only confidence; there is no internal placement claim.
+    const verdictMetric = page.locator('.metric-card').filter({ has: page.getByText('Verdict', { exact: true }) });
+    await expect(verdictMetric).toContainText('External-only confidence');
+    await expect(verdictMetric).not.toContainText(/placement/i);
   });
 
   test('global and current-group run tables ignore unsupported run agent aliases', async ({ page }) => {

@@ -27,8 +27,10 @@ export const PROVENANCE_DNS_LADDER = Object.freeze({
   baselineDnsVerified: 3,
   mutatedDnsVerified: 4,
   total: 5,
-  promotedTargetId: 'tgt_checkout_2',
-  promotedTargetValue: 'pay.acme.com',
+  // Baseline seeds tgt_checkout_1..3 as dns_verified and tgt_checkout_4/5 as pending, so the
+  // mutation must promote a currently-pending target (cdn.acme.com) to move the count 3 -> 4.
+  promotedTargetId: 'tgt_checkout_4',
+  promotedTargetValue: 'cdn.acme.com',
 });
 
 export const PROVENANCE_WAF_POSTURE = Object.freeze({
@@ -98,9 +100,6 @@ function setTargetVerificationState(store, targetId, state) {
 
   target.verify_state = state;
   target.verification_state = state;
-  if (state === 'dns_verified') {
-    target.agent_binding = null;
-  }
 
   store.targetVerifications = store.targetVerifications.filter(
     (row) => row.target_id !== targetId || row.state === 'pending',
@@ -121,25 +120,6 @@ function setTargetVerificationState(store, targetId, state) {
       transitioned_by: 'system',
       audit_entry_id: `aud_${targetId}_dns_prov`,
     });
-  }
-
-  if (state === 'agent_verified') {
-    store.targetVerifications.push({
-      id: `tv_${targetId}_agent_prov`,
-      tenant_id: ids.tenantId,
-      target_id: targetId,
-      state: 'agent_verified',
-      source_kind: 'agent_observation',
-      source_ref: {
-        agent_id: ids.agentId,
-        observation_id: `obs_${targetId}_prov`,
-        correlated_at: FROZEN,
-      },
-      transitioned_at: FROZEN,
-      transitioned_by: 'system',
-      audit_entry_id: `aud_${targetId}_agent_prov`,
-    });
-    target.agent_binding = { agent_id: ids.agentId, bound_at: FROZEN };
   }
 }
 

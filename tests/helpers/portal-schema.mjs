@@ -156,7 +156,7 @@ export const EDGE_DETECTION_SHAPE = {
     status: 'string',
     label: 'string',
     evidence_tier: 'string',
-    agent_corroborated: 'boolean',
+    origin_lockdown_confirmed: 'boolean',
   },
   network_firewall: {
     status: 'string',
@@ -224,7 +224,6 @@ export const TARGET_DETAIL_SHAPE = {
     kind: 'string',
     value: 'string',
     expected_behavior: 'string',
-    agent_binding: { agent_id: 'string', bound_at: 'string' },
     created_at: 'string',
     eligibility: 'string',
     eligibility_reason: 'null',

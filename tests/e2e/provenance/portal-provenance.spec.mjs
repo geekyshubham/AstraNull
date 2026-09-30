@@ -120,7 +120,8 @@ test.describe('portal dynamic provenance', () => {
     const ladderMeta = page.locator('.verify-ladder .vl-meta');
     const promotedTargetRow = page.locator('tr').filter({ hasText: PROVENANCE_DNS_LADDER.promotedTargetValue });
     await expect(ladderMeta.filter({ hasText: `${PROVENANCE_DNS_LADDER.baselineDnsVerified} of ${PROVENANCE_DNS_LADDER.total}` })).toBeVisible();
-    await expect(promotedTargetRow).toContainText('Observed from inside');
+    // ADR-0008: pending targets read "Verification in progress" (no agent "observed from inside").
+    await expect(promotedTargetRow).toContainText('Verification in progress');
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceDnsLadderExpanded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -142,11 +143,11 @@ test.describe('portal dynamic provenance', () => {
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'target-detail', baseUrl);
 
-    const posturePanel = page.locator('.content').filter({ has: page.getByRole('heading', { name: 'WAF posture' }) });
-    await expect(posturePanel.getByText('Protection worked', { exact: true }).first()).toBeVisible();
-    await posturePanel.getByText('Show technical WAF record', { exact: true }).click();
-    await expect(posturePanel.locator('pre.codeblock')).toBeVisible();
-    await expect(posturePanel.locator('pre.codeblock')).toContainText(`"posture": "${PROVENANCE_WAF_POSTURE.baselinePosture}"`);
+    // Post-ADR-0008 target detail: WAF posture surfaces as the "Web application firewall" layer
+    // under the "Protection path" tab of the "Evidence & posture" card (no legacy "WAF posture"
+    // heading or technical-record codeblock).
+    const wafLayer = page.locator('.td-layer').filter({ hasText: 'Web application firewall' });
+    await expect(wafLayer.getByText('Protection worked', { exact: true })).toBeVisible();
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceWafPostureDrift });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -155,12 +156,8 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedDetail.waf_posture?.drift_reason).toBe(PROVENANCE_WAF_POSTURE.mutatedDriftReason);
 
     await page.goto(`${mutatedBaseUrl}/app#target-detail?id=${encodeURIComponent(PROVENANCE_WAF_POSTURE.targetId)}`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(posturePanel.getByText('Drift', { exact: true }).first()).toBeVisible();
-    await expect(posturePanel.getByText('Configuration changed', { exact: true })).toBeVisible();
-    await posturePanel.getByText('Show technical WAF record', { exact: true }).click();
-    await expect(posturePanel.locator('pre.codeblock')).toBeVisible();
-    await expect(posturePanel.locator('pre.codeblock')).toContainText(`"posture": "${PROVENANCE_WAF_POSTURE.mutatedPosture}"`);
-    await expect(posturePanel.locator('pre.codeblock')).toContainText(`"drift_reason": "${PROVENANCE_WAF_POSTURE.mutatedDriftReason}"`);
+    await expect(wafLayer.getByText('Drift', { exact: true })).toBeVisible();
+    await expect(wafLayer.getByText('Protection worked', { exact: true })).toHaveCount(0);
   });
 
   test('FT-PROV-dyn-05 dashboard WAF connectors tile updates after connector status mutation', async ({ page }) => {
@@ -171,11 +168,13 @@ test.describe('portal dynamic provenance', () => {
     expect(initialSummary.connectors_degraded).toBe(PROVENANCE_WAF_CONNECTORS.baselineDegraded);
 
     await injectPortalDevHeadersSession(page);
-    await gotoPortalRoute(page, 'dashboard', baseUrl);
+    await gotoPortalRoute(page, 'integrations', baseUrl);
 
-    const connectorsTile = page.locator('.kpi-row .kpi-cell').filter({ hasText: 'Connectors' });
-    await expect(connectorsTile.locator('.kpi-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.baselineActive));
-    await expect(connectorsTile.locator('.kpi-delta')).toContainText(`${PROVENANCE_WAF_CONNECTORS.baselineDegraded} degraded`);
+    // The dashboard WAF-summary connector tile was removed in the portal revamp; connector
+    // status now surfaces per-connector in the "Configured connectors" table on Integrations.
+    const connectorTable = page.locator('.card').filter({ hasText: 'Configured connectors' }).locator('table');
+    await expect(connectorTable.getByText('active', { exact: true })).toBeVisible();
+    await expect(connectorTable.getByText('degraded', { exact: true })).toHaveCount(0);
 
     await restartPortalPlaywrightServer({ mutate: applyPortalProvenanceConnectorDegraded });
     const mutatedBaseUrl = getPortalPlaywrightBaseUrl();
@@ -183,9 +182,9 @@ test.describe('portal dynamic provenance', () => {
     expect(mutatedSummary.connectors_active).toBe(PROVENANCE_WAF_CONNECTORS.mutatedActive);
     expect(mutatedSummary.connectors_degraded).toBe(PROVENANCE_WAF_CONNECTORS.mutatedDegraded);
 
-    await page.goto(`${mutatedBaseUrl}/app#dashboard`, { waitUntil: 'networkidle', timeout: 60_000 });
-    await expect(connectorsTile.locator('.kpi-value')).toHaveText(String(PROVENANCE_WAF_CONNECTORS.mutatedActive));
-    await expect(connectorsTile.locator('.kpi-delta')).toContainText(`${PROVENANCE_WAF_CONNECTORS.mutatedDegraded} degraded`);
+    await page.goto(`${mutatedBaseUrl}/app#integrations`, { waitUntil: 'networkidle', timeout: 60_000 });
+    await expect(connectorTable.getByText('degraded', { exact: true })).toBeVisible();
+    await expect(connectorTable.getByText('active', { exact: true })).toHaveCount(0);
   });
 
   test('FT-PROV-dyn-06 finding remediation badge and delivered_via line update after mutation', async ({ page }) => {

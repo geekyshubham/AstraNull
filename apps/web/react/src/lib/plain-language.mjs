@@ -129,6 +129,8 @@ const VERDICT_LABELS = Object.freeze({
   // Pill-length labels; the full meaning lives in VERDICT_DESCRIPTIONS.
   edge_protected: 'Blocked at the edge',
   unknown: 'No conclusion yet',
+  // ADR-0008: agents were removed. Legacy agent-era verdicts read as inconclusive (review tone), never pass.
+  misplaced_agent: 'Inconclusive (legacy result)',
 });
 
 const VERDICT_DESCRIPTIONS = Object.freeze({
@@ -137,6 +139,7 @@ const VERDICT_DESCRIPTIONS = Object.freeze({
   penetrated: 'Evidence confirms that the safe test traffic reached the protected server.',
   inconclusive: 'The available external probe evidence cannot prove an outcome.',
   edge_protected: 'The edge blocked the test traffic. Verdicts are external-only confidence.',
+  misplaced_agent: 'Recorded before outside-in validation; rerun the check for a current external-evidence verdict.',
 });
 
 export function plainVerdictLabel(value) {

@@ -21,7 +21,7 @@ import { isFindingOpen } from '../lib/finding-lifecycle.mjs';
 import type { DataItem, PortalConfig, PortalData, Session } from '../lib/types';
 import { buildDetailHref, getRouteTenantId } from '../lib/route-params';
 import { apiErrorMessage } from '../lib/error-messages';
-import { formatAuditAction, formatDate, formatNumber } from '../lib/utils';
+import { formatAuditAction, formatDate, formatNumber, sensitiveResourceLabel } from '../lib/utils';
 // @ts-ignore Plain ESM keeps machine-code labels directly testable with node:test.
 import { plainCodeLabel } from '../lib/plain-language.mjs';
 import { MetricCard, PageContextSummary, PageHeader } from './page-components';
@@ -1234,10 +1234,15 @@ export function AuditPage({
       key: 'target',
       label: 'Target',
       render: (item) => {
+        const resourceType = getString(item, ['resource_type'], '');
         const resourceId = getString(item, ['resource_id'], '');
+        const sensitiveLabel = sensitiveResourceLabel(resourceType);
+        if (sensitiveLabel) {
+          return <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>;
+        }
         const target = resourceId && resourceId !== '—'
           ? resourceId
-          : `${getString(item, ['resource_type'], '')} ${getString(item, ['resource_id'], '')}`.trim();
+          : `${resourceType} ${getString(item, ['resource_id'], '')}`.trim();
         return <span className="mono">{target || '—'}</span>;
       }
     },
@@ -1313,7 +1318,9 @@ export function AuditPage({
                 getRowId={(item) => auditEntrySelectionKey(item)}
                 getRowProps={(item) => {
                   const key = auditEntrySelectionKey(item);
-                  const label = `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${getString(item, ['resource_id', 'resource_type'], 'unknown resource')}`;
+                  const sensitiveLabel = sensitiveResourceLabel(getString(item, ['resource_type'], ''));
+                  const resourceLabel = sensitiveLabel ?? getString(item, ['resource_id', 'resource_type'], 'unknown resource');
+                  const label = `Inspect ${formatAuditAction(getString(item, ['action'], 'audit event'))} on ${resourceLabel}`;
                   return {
                     onClick: () => setSelectedId(key),
                     onKeyDown: (event) => {
@@ -1342,7 +1349,16 @@ export function AuditPage({
                 <KvField label="Actor">
                   {getString(selectedEntry, ['actor_user_id'])} ({getString(selectedEntry, ['actor_role'])})
                 </KvField>
-                <KvField label="Resource">{getString(selectedEntry, ['resource_id'])}</KvField>
+                <KvField label="Resource">
+                  {(() => {
+                    const resourceType = getString(selectedEntry, ['resource_type'], '');
+                    const resourceId = getString(selectedEntry, ['resource_id']);
+                    const sensitiveLabel = sensitiveResourceLabel(resourceType);
+                    return sensitiveLabel
+                      ? <span title={resourceId !== '—' ? resourceId : undefined}>{sensitiveLabel}</span>
+                      : resourceId;
+                  })()}
+                </KvField>
                 <KvField label="Timestamp">{formatDate(selectedEntry.timestamp ?? selectedEntry.created_at)}</KvField>
                 {getString(selectedEntry, ['entry_hash'], '') !== '—' ? (
                   <KvField label="Entry hash">

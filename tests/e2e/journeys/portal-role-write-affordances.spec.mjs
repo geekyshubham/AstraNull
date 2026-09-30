@@ -96,7 +96,7 @@ test.describe('portal mutation affordances follow backend RBAC', () => {
 
     await gotoPortalRoute(page, 'integrations', baseUrl);
     await page.getByRole('button', { name: 'Add provider' }).click();
-    await expect(page.getByRole('button', { name: '+ Add single domain' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Add single domain' })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Continue to connect' })).toBeDisabled();
   });
 

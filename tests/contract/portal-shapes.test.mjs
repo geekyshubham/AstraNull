@@ -116,7 +116,8 @@ describe('portal response shapes (FT-SHAPE-01..06)', () => {
     );
     assert.equal(live.status, 200);
     assertConforms('live verification ladder', live.json, VERIFICATION_LADDER_SHAPE);
-    assert.ok(Array.isArray(live.json.steps) && live.json.steps.length >= 4);
+    // ADR-0008 removed the agent rung: declared -> dns_verified -> user_confirmed (3 steps).
+    assert.ok(Array.isArray(live.json.steps) && live.json.steps.length === 3);
   });
 
   it('FT-SHAPE-05 list endpoints return { items, count, meta } envelope', async () => {

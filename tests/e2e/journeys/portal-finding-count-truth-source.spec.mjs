@@ -86,8 +86,8 @@ test.describe('finding-count truth from current React source', () => {
 
     await injectPortalDevHeadersSession(page);
     await gotoPortalRoute(page, 'dashboard', sourceBaseUrl);
-    const dashboardOpen = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
-    await expect(dashboardOpen.locator('.kpi-value')).toHaveText(String(expectedOpenFindings));
+    const dashboardOpen = page.locator('.dashboard-kpi').filter({ hasText: 'Open findings' });
+    await expect(dashboardOpen.locator('.dashboard-kpi-value')).toHaveText(String(expectedOpenFindings));
 
     await gotoPortalRoute(page, 'target-groups', sourceBaseUrl);
     const targetGroupsOpen = page.locator('.kpi-cell').filter({ hasText: 'Open findings' });
