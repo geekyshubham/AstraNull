@@ -415,3 +415,29 @@ Rollback (code only; no schema change in this release): from `/opt/astranull`, e
 
 Open: point the `ASTRANULL_AWS_HOST` / `ASTRANULL_AWS_KNOWN_HOSTS` secrets at this host and give the
 deploy job a reachable path (e.g. SSM instead of public SSH) so pushes to `main` deploy again.
+
+## Production release 2026-09-30 (`2d58cc48`)
+
+Commit `2d58cc489a0aa0a6239643ec3c190a87a43e5b71` (`579793b4` probe/classifier overclaim fixes and
+Akamai DNS record-set poller; `412f8538` protection-mapping reconciliation and Akamai Application
+Security poller; `2d58cc48` WAF posture integration tests aligned with the coverage-gap evidence
+rule) was released by hand from operator `/32` `123.252.204.182`, using the same steps as `db97b3ae`.
+`make verify` was green beforehand (unit 4091/4091, integration 396 pass / 0 fail, e2e 21/21).
+
+| Step | Detail |
+|---|---|
+| Archive | `git archive` SHA-256 `9ff6411f2c39d0c5a0d29f3e11818b6fd7c52d9798ad0e193356898f24c4511c`, verified on host, extracted to `/opt/astranull-release-2d58cc489a0aa0a6239643ec3c190a87a43e5b71` |
+| Image | `astranull:2d58cc48…` → `sha256:82fcaa6c90d11245838e0dea9cde728dfb29f27263702a5bcf8775444d7b2209` |
+| Backup | `/opt/astranull-backups/postgres-2026-09-30T10-17-13-077Z-ddc5c38f0fa3.dump.enc` (+ manifest), encrypted SHA-256 `b57b1eaef071…`, dumped as `astranull_backup`, `pg_restore --list` parsed, `postgres-restore-drill --validate-only` ok, root-owned mode 600, no plaintext left |
+| Migrate | `migrate-postgres: ok`, head unchanged at `0057_waf_offensive_workflow` (no new migrations); role grants re-applied |
+| Activate | `compose up --no-build --force-recreate --wait` of the four app services, all healthy on the new image with restarts=0; postgres and caddy untouched |
+| Live checks | `/health` ok, `/ready` ready (oidc-jwt, postgres, signed-worker); `react-app.js`/`.css` byte-identical to the commit; changed backend modules byte-identical inside control-plane and probe-worker; unauthenticated and header-auth API 401; CSP/COOP/Permissions-Policy/HSTS present; 0 control-plane errors |
+| Credential | `usr_admin` (`admin@demo.astranull.local`) password rotated through the app's invite → set-password flow (invite `pwi_fb9ae9f4aaeb6c7f`, `session_generation` 1 → 2, prior sessions invalidated). Password delivered out of band, not recorded here. Live login returns `role=admin`, `tenant_id=ten_demo` |
+
+Rollback (code only; no schema change): from `/opt/astranull`, export all three
+`ASTRANULL_*_IMAGE_ID` variables as `sha256:8040329d747649ca40cea835d6a2dc1c09c3acc8da9be84d524c045745471f81`
+(`astranull:db97b3ae…`), then
+`sudo -E docker compose -f ops/aws/docker-compose.yml --env-file ops/aws/.env up -d --no-build --force-recreate --wait control-plane probe-worker password-recovery-worker test-policy-runner`.
+A code rollback does not restore the prior admin password.
+
+CI auto-deploy is still blocked as recorded for `db97b3ae`: the `Deploy AWS` host/key secrets and the SSH allow-list must be fixed first.
